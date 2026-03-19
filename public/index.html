@@ -200,8 +200,13 @@
   .add-slot-btn:hover{color:var(--text2);border-color:var(--border2);}
 
   /* DISH LIST */
-  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:6px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
-  .dish-row{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:6px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
+  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:0;padding:5px 0;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .dish-list-hdr span{padding:4px 8px;}
+  .dish-list-hdr .sortable{cursor:pointer;user-select:none;border-radius:4px;transition:background .1s;}
+  .dish-list-hdr .sortable:hover{background:var(--bg2);color:var(--text);}
+  .dish-list-hdr .sortable.active{color:var(--blue);}
+  .dish-row{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:0;align-items:center;padding:8px 0;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
+  .dish-row > div{padding:4px 8px;}
   .dish-row:hover{border-color:var(--border2);}
   .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
   .dish-row.split-child{padding-left:10px;}
@@ -213,11 +218,16 @@
   .dish-row.log-centraal{border-left:3px solid #0F6E56;}
   .dish-row.log-twc{border-left:3px solid #97C459;}
   .dish-row.log-tww{border-left:3px solid #EF9F27;}
+  /* Cook date column highlight */
+  .dish-row .col-cook{background:var(--bg2);border-radius:4px;padding:6px 8px;}
   /* Section dividers */
   .dish-section-hdr{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:12px 0 6px;margin-top:8px;border-bottom:2px solid var(--border);color:var(--text2);display:flex;align-items:center;gap:8px;}
   .dish-section-hdr:first-child{margin-top:0;}
   .dish-section-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
   .dish-section-count{font-weight:400;color:var(--text3);}
+  /* Stock columns emphasis */
+  .col-stock-wrap{font-weight:600;}
+  .col-diff{font-weight:600;font-size:12px;border-radius:4px;padding:2px 4px;text-align:center;}
   @media(max-width:700px){
     .dish-list-hdr{display:none;}
     .dish-row{grid-template-columns:20px 1fr auto;gap:6px;}
@@ -1258,6 +1268,8 @@ function confirmAddDish(dishId, loc, day, meal) {
 }
 
 // ── DISH LIST ─────────────────────────────────────────────
+let dishSort = { col: 'default', dir: 'asc' };
+
 function renderDishes() {
   const f = S.filters;
   const filtered = S.dishes.filter(d => {
@@ -1270,6 +1282,30 @@ function renderDishes() {
     if (f.logistics !== 'all' && d.logistics !== f.logistics) return false;
     return true;
   });
+
+  // Sort
+  const sorted = dishSort.col === 'default' ? filtered : [...filtered].sort((a, b) => {
+    let va, vb;
+    switch (dishSort.col) {
+      case 'name': va = a.name.toLowerCase(); vb = b.name.toLowerCase(); break;
+      case 'date':
+        va = a.cookDate ? cookDateSortVal(a.cookDate) : '9999';
+        vb = b.cookDate ? cookDateSortVal(b.cookDate) : '9999';
+        break;
+      case 'type': va = a.type || ''; vb = b.type || ''; break;
+      case 'stock': va = a.stock || 0; vb = b.stock || 0; break;
+      case 'diff':
+        va = diffStr(a).diff; vb = diffStr(b).diff;
+        break;
+      default: va = 0; vb = 0;
+    }
+    if (va < vb) return dishSort.dir === 'asc' ? -1 : 1;
+    if (va > vb) return dishSort.dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const arrow = (col) => dishSort.col === col ? (dishSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  const sCls = (col) => `sortable${dishSort.col === col ? ' active' : ''}`;
 
   const html = `
   <div class="btn-row" style="margin-bottom:12px;">
@@ -1296,12 +1332,40 @@ function renderDishes() {
     </div>
   </div>
   <div id="split-bar-area"></div>
-  <div class="dish-list-hdr"><span></span><span>Dish</span><span class="col-cook">Cook / cooked</span><span>Stock</span><span class="col-req">Need</span><span class="col-diff">+/&minus;</span><span class="col-logistics">Location</span><span>Order</span><span></span></div>
-  <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${filtered.length} dish${filtered.length !== 1 ? 'es' : ''}</div>
-  ${filtered.length === 0 ? '<div class="empty">No dishes match these filters</div>' : renderDishGroups(filtered)}`;
+  <div class="dish-list-hdr">
+    <span></span>
+    <span class="${sCls('name')}" onclick="dishSortBy('name')">Dish${arrow('name')}</span>
+    <span class="${sCls('date')}" onclick="dishSortBy('date')">Cook date${arrow('date')}</span>
+    <span class="${sCls('stock')}" onclick="dishSortBy('stock')">Stock${arrow('stock')}</span>
+    <span>Need</span>
+    <span class="${sCls('diff')}" onclick="dishSortBy('diff')">+/&minus;${arrow('diff')}</span>
+    <span>Location</span>
+    <span>Order</span>
+    <span></span>
+  </div>
+  <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${sorted.length} dish${sorted.length !== 1 ? 'es' : ''}${dishSort.col !== 'default' ? ` · sorted by ${dishSort.col}` : ''}</div>
+  ${sorted.length === 0 ? '<div class="empty">No dishes match these filters</div>' : (dishSort.col !== 'default' ? sorted.map(d => renderDishRow(d)).join('') : renderDishGroups(sorted))}`;
 
   document.getElementById('screen-dishes').innerHTML = html;
   renderSplitBar();
+}
+
+function dishSortBy(col) {
+  if (dishSort.col === col) {
+    if (dishSort.dir === 'asc') dishSort.dir = 'desc';
+    else { dishSort.col = 'default'; dishSort.dir = 'asc'; } // third click resets
+  } else {
+    dishSort.col = col;
+    dishSort.dir = col === 'stock' || col === 'diff' ? 'desc' : 'asc';
+  }
+  renderDishes();
+}
+
+function cookDateSortVal(ddmmyyyy) {
+  if (!ddmmyyyy) return '9999-99-99';
+  const parts = ddmmyyyy.split('/');
+  if (parts.length === 3) return parts[2] + '-' + parts[1] + '-' + parts[0];
+  return ddmmyyyy;
 }
 
 function logisticsRowClass(l) {
