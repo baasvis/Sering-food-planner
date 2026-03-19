@@ -127,7 +127,7 @@ app.get('/api/auth/me', (req, res) => {
 
 // Protect all /api/* except auth + health
 function requireAuth(req, res, next) {
-  if (req.path.startsWith('/api/auth/') || req.path === '/api/health') return next();
+  if (req.path.startsWith('/auth/') || req.path === '/health') return next();
   if (!CONFIG.GOOGLE_CLIENT_ID) return next(); // dev mode
   const user = getSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Authentication required' });
@@ -485,4 +485,3 @@ app.listen(PORT, () => {
   console.log('  GOOGLE_CREDENTIALS:', CONFIG.GOOGLE_CREDENTIALS !== '{}' ? 'set' : 'NOT SET');
   console.log('  ALLOWED_EMAILS:', CONFIG.ALLOWED_EMAILS.length ? CONFIG.ALLOWED_EMAILS.join(', ') : 'NOT SET (anyone can log in)');
 });
-
