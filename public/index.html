@@ -176,8 +176,10 @@
   .day-hdr{text-align:center;padding:5px 2px;font-weight:600;color:var(--text2);font-size:11px;text-transform:uppercase;letter-spacing:.04em;}
   .day-hdr.today-hdr{color:var(--blue);border-bottom:2px solid var(--blue);}
   .meal-lbl{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.04em;background:var(--bg2);border-radius:var(--radius);padding:4px 2px;}
-  .slot-header{display:flex;align-items:center;justify-content:center;background:var(--bg2);border-radius:var(--radius);padding:4px;}
+  .slot-header{display:flex;align-items:center;justify-content:center;gap:4px;background:var(--bg2);border-radius:var(--radius);padding:4px;flex-wrap:wrap;}
   .slot-header.today{background:var(--blue-bg);}
+  .copy-slot-btn{font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--text3);cursor:pointer;white-space:nowrap;transition:all .1s;}
+  .copy-slot-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg);}
   .type-lbl{display:flex;align-items:center;gap:4px;font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.03em;padding:2px 4px;}
   .type-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
   .type-dot.chip-soup{background:var(--green);}
@@ -1178,8 +1180,15 @@ function renderPlanner() {
     html += `<div class="meal-lbl">${mealLabel}</div>`;
     for (let d = 0; d < 7; d++) {
       const gc = getGuests(loc, d, meal);
+      const k = `${loc}-${d}-${meal}`;
+      const hasDishes = (S.planner[k] || []).length > 0;
+      const otherLoc = loc === 'west' ? 'centraal' : 'west';
+      const otherLabel = loc === 'west' ? 'Centraal' : 'West';
       const isToday = d === (new Date().getDay() + 6) % 7;
-      html += `<div class="slot-header${isToday ? ' today' : ''}"><span style="font-size:10px;color:var(--text3);">${gc} guests</span></div>`;
+      html += `<div class="slot-header${isToday ? ' today' : ''}">
+        <span style="font-size:10px;color:var(--text3);">${gc} guests</span>
+        ${hasDishes ? `<button class="copy-slot-btn" onclick="copySlotToOther('${loc}',${d},'${meal}')" title="Copy to ${otherLabel}">→ ${otherLabel}</button>` : ''}
+      </div>`;
     }
 
     // One row per dish type
@@ -1216,6 +1225,32 @@ function removeDishFromSlot(dishId, loc, day, meal) {
   const dish = S.dishes.find(d => d.id === dishId);
   if (dish) { dish.services = (dish.services || []).filter(s => !(s.loc === loc && s.day === day && s.meal === meal)); }
   rebuildPlanner(); renderPlanner(); scheduleSave();
+}
+
+function copySlotToOther(fromLoc, day, meal) {
+  const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
+  const toLabel = toLoc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const k = `${fromLoc}-${day}-${meal}`;
+  const dishes = S.planner[k] || [];
+  if (!dishes.length) return;
+
+  let added = 0;
+  dishes.forEach(dish => {
+    // Check if this dish is already assigned to the target slot
+    const already = (dish.services || []).some(s => s.loc === toLoc && s.day === day && s.meal === meal);
+    if (!already) {
+      if (!dish.services) dish.services = [];
+      dish.services.push({ loc: toLoc, day, meal });
+      added++;
+    }
+  });
+
+  if (added > 0) {
+    rebuildPlanner(); renderPlanner(); scheduleSave();
+    toast(`${added} dish${added > 1 ? 'es' : ''} copied to ${toLabel} ${DAYS[day]} ${meal}`);
+  } else {
+    toast('All dishes already assigned there');
+  }
 }
 
 function openAddDishTyped(loc, day, meal, type) {
