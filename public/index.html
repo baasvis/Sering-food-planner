@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>De Sering — Food Planner</title>
+<!-- Google Sign-In SDK -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg2: #f7f6f3;
+    --bg3: #f0efe9;
+    --text: #1a1a18;
+    --text2: #6b6b66;
+    --text3: #a0a09a;
+    --border: rgba(0,0,0,0.12);
+    --border2: rgba(0,0,0,0.22);
+    --radius: 8px;
+    --radius-lg: 12px;
+    --green: #0F6E56; --green-bg: #E1F5EE;
+    --amber: #BA7517; --amber-bg: #FAEEDA;
+    --red: #993C1D;   --red-bg:   #FCEBEB;
+    --blue: #185FA5;  --blue-bg:  #E6F1FB;
+    --purple: #534AB7; --purple-bg: #EEEDFE;
+    --gray-bg: #F1EFE8; --gray-text: #444441;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#1c1c1a; --bg2:#252523; --bg3:#2e2e2b;
+      --text:#f0efe9; --text2:#a0a09a; --text3:#6b6b66;
+      --border:rgba(255,255,255,0.1); --border2:rgba(255,255,255,0.2);
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg3);color:var(--text);font-size:14px;line-height:1.5;}
+
+  /* LOGIN SCREEN */
+  .login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;}
+  .login-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:40px;max-width:380px;width:100%;text-align:center;}
+  .login-card h1{font-size:22px;margin-bottom:6px;}
+  .login-card p{font-size:14px;color:var(--text2);margin-bottom:24px;}
+  .login-card .login-error{font-size:13px;color:var(--red);background:var(--red-bg);padding:10px;border-radius:var(--radius);margin-bottom:16px;display:none;}
+  .login-card .dev-btn{margin-top:12px;font-size:12px;color:var(--text3);background:none;border:1px solid var(--border);border-radius:var(--radius);padding:8px 16px;cursor:pointer;}
+  .login-card .dev-btn:hover{background:var(--bg2);}
+
+  /* LAYOUT */
+  .app-shell{display:none;flex-direction:column;min-height:100vh;}
+  .app-shell.active{display:flex;}
+  .top-bar{background:var(--bg);border-bottom:1px solid var(--border);padding:0 16px;display:flex;align-items:center;gap:0;overflow-x:auto;flex-shrink:0;}
+  .top-bar h1{font-size:15px;font-weight:600;margin-right:24px;white-space:nowrap;color:var(--text);padding:14px 0;}
+  .nav-btn{padding:14px 14px;font-size:13px;font-weight:500;border:none;background:none;cursor:pointer;color:var(--text2);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s;}
+  .nav-btn.active{color:var(--text);border-bottom-color:var(--text);}
+  .nav-btn:hover:not(.active){color:var(--text);}
+  .content{flex:1;padding:16px;max-width:1100px;width:100%;margin:0 auto;}
+  .screen{display:none;}.screen.active{display:block;}
+
+  /* SAVE INDICATOR */
+  .save-indicator{margin-left:auto;display:flex;align-items:center;gap:6px;padding:6px 12px;font-size:12px;color:var(--text2);white-space:nowrap;flex-shrink:0;}
+  .save-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:background .3s;}
+  .save-dot.saved{background:var(--green);}
+  .save-dot.saving{background:var(--amber);animation:pulse 1s ease-in-out infinite;}
+  .save-dot.error{background:var(--red);}
+  .save-dot.unsaved{background:var(--amber);}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+
+  /* USER MENU */
+  .user-menu{display:flex;align-items:center;gap:8px;padding:6px 0 6px 12px;border-left:1px solid var(--border);margin-left:8px;flex-shrink:0;}
+  .user-menu img{width:28px;height:28px;border-radius:50%;}
+  .user-menu span{font-size:12px;color:var(--text2);white-space:nowrap;max-width:100px;overflow:hidden;text-overflow:ellipsis;}
+  .user-menu button{font-size:11px;color:var(--text3);background:none;border:none;cursor:pointer;padding:4px 6px;}
+  .user-menu button:hover{color:var(--text);}
+
+  /* CARDS & SURFACES */
+  .card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;}
+  .section-title{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+
+  /* BUTTONS */
+  .btn{font-size:12px;font-weight:500;padding:6px 13px;border:1px solid var(--border2);border-radius:var(--radius);cursor:pointer;background:transparent;color:var(--text);transition:all .1s;white-space:nowrap;}
+  .btn:hover{background:var(--bg2);}
+  .btn:active{transform:scale(.98);}
+  .btn-primary{background:var(--text);color:var(--bg);border-color:var(--text);}
+  .btn-primary:hover{opacity:.85;}
+  .btn-sm{font-size:11px;padding:3px 9px;}
+  .btn-danger{border-color:var(--red);color:var(--red);}
+  .btn-danger:hover{background:var(--red-bg);}
+  .btn-purple{background:var(--purple);color:#fff;border-color:var(--purple);}
+  .btn-purple:hover{opacity:.85;}
+  .btn-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+
+  /* BADGES */
+  .badge{font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;display:inline-block;white-space:nowrap;}
+  .b-soup{background:var(--green-bg);color:var(--green);}
+  .b-main{background:var(--blue-bg);color:var(--blue);}
+  .b-dessert{background:var(--purple-bg);color:var(--purple);}
+  .b-gastro{background:var(--amber-bg);color:var(--amber);}
+  .b-frozen{background:#D3D1C7;color:#2C2C2A;}
+  .b-vacpack{background:var(--purple-bg);color:var(--purple);}
+  .b-west{background:var(--gray-bg);color:var(--gray-text);}
+  .b-centraal{background:var(--green-bg);color:var(--green);}
+  .b-twc{background:var(--purple-bg);color:var(--purple);}
+  .b-tww{background:#FAECE7;color:#712B13;}
+  .allergen-pill{font-size:10px;padding:2px 6px;border-radius:10px;background:var(--red-bg);color:var(--red);display:inline-block;margin:1px;}
+
+  /* FILTERS */
+  .filter-bar{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;align-items:center;}
+  .filter-sep{width:1px;background:var(--border);margin:0 3px;align-self:stretch;min-height:20px;}
+  .fc{font-size:12px;padding:5px 11px;border:1px solid var(--border2);border-radius:20px;cursor:pointer;background:transparent;color:var(--text2);transition:all .1s;white-space:nowrap;}
+  .fc.on{background:var(--text);color:var(--bg);border-color:var(--text);}
+
+  /* GUESTS */
+  .guests-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:540px){.guests-grid{grid-template-columns:1fr;}}
+  .day-sect{margin-bottom:12px;}
+  .day-lbl{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;}
+  .svc-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;}
+  .svc-row label{font-size:13px;color:var(--text2);}
+  .svc-row input{width:64px;height:32px;font-size:13px;text-align:right;border:1px solid var(--border2);border-radius:var(--radius);padding:0 8px;background:var(--bg);color:var(--text);}
+
+  /* PLANNER */
+  .loc-tabs{display:flex;gap:6px;margin-bottom:12px;}
+  .loc-btn{padding:6px 16px;font-size:12px;font-weight:500;border:1px solid var(--border2);border-radius:20px;background:transparent;cursor:pointer;color:var(--text2);transition:all .15s;}
+  .loc-btn.active{background:var(--text);color:var(--bg);border-color:var(--text);}
+  .week-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  .week-grid{display:grid;grid-template-columns:44px repeat(7,minmax(90px,1fr));gap:3px;min-width:700px;}
+  .day-hdr{text-align:center;padding:5px 2px;font-weight:600;color:var(--text2);font-size:11px;text-transform:uppercase;letter-spacing:.04em;}
+  .meal-lbl{display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;}
+  .slot{min-height:72px;border:1px solid var(--border);border-radius:var(--radius);padding:5px;display:flex;flex-direction:column;gap:3px;background:var(--bg);transition:border-color .1s;}
+  .slot.today{border-color:var(--blue);}
+  .slot:hover{border-color:var(--border2);}
+  .dish-chip{border-radius:5px;padding:3px 6px;font-size:11px;font-weight:500;display:flex;justify-content:space-between;align-items:flex-start;gap:3px;cursor:default;}
+  .chip-soup{background:var(--green-bg);color:#085041;}
+  .chip-main{background:var(--blue-bg);color:#0C447C;}
+  .chip-dessert{background:var(--purple-bg);color:var(--purple);}
+  .chip-tr{background:var(--purple-bg);color:var(--purple);}
+  .chip-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
+  .chip-x{cursor:pointer;opacity:.5;flex-shrink:0;font-size:11px;line-height:1.4;}.chip-x:hover{opacity:1;}
+  .chip-sub{font-size:10px;color:var(--text3);padding:0 2px;}
+  .add-slot-btn{font-size:11px;color:var(--text3);border:1px dashed var(--border);border-radius:5px;padding:3px 5px;text-align:center;cursor:pointer;margin-top:auto;}
+  .add-slot-btn:hover{color:var(--text2);border-color:var(--border2);}
+
+  /* DISH LIST */
+  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 56px 68px 52px 100px 90px 48px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .dish-row{display:grid;grid-template-columns:20px 1fr 56px 68px 52px 100px 90px 48px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;cursor:pointer;transition:border-color .1s;}
+  .dish-row:hover{border-color:var(--border2);}
+  .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
+  .dish-row.split-child{border-left:2px solid var(--blue);padding-left:10px;}
+  .dish-row.transport-row{border-left:2px solid var(--purple);padding-left:10px;}
+  @media(max-width:700px){
+    .dish-list-hdr{display:none;}
+    .dish-row{grid-template-columns:20px 1fr auto;gap:6px;}
+    .dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-allergen,.dish-row .col-storage{display:none;}
+  }
+  .sel-box{width:16px;height:16px;border:1px solid var(--border2);border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .sel-box.checked{background:var(--text);border-color:var(--text);}
+  .sel-box.checked::after{content:'';width:8px;height:5px;border-left:2px solid var(--bg);border-bottom:2px solid var(--bg);transform:rotate(-45deg) translate(1px,-1px);display:block;}
+  .stock-ok{color:var(--green);font-weight:600;}
+  .stock-low{color:var(--amber);font-weight:600;}
+  .stock-miss{color:var(--red);font-weight:600;}
+
+  /* SPLIT BAR */
+  .split-bar{display:flex;gap:8px;align-items:center;padding:10px 14px;background:var(--blue-bg);border:1px solid var(--blue);border-radius:var(--radius);margin-bottom:12px;flex-wrap:wrap;}
+  .split-bar label{font-size:12px;color:var(--text2);white-space:nowrap;}
+  .split-bar select,.split-bar input[type=number]{font-size:13px;height:32px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 8px;background:var(--bg);color:var(--text);}
+  .split-bar input[type=number]{width:68px;}
+  .sbar-title{font-size:13px;font-weight:600;color:var(--blue);flex:0 0 auto;}
+
+  /* ORDER */
+  .order-toggle-bar{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
+  .order-toggle{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px 14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);}
+  .order-toggle.on{border-color:var(--blue);background:var(--blue-bg);}
+  .tbox{width:30px;height:18px;border-radius:9px;background:var(--border2);position:relative;transition:background .15s;flex-shrink:0;}
+  .tbox.on{background:var(--blue);}
+  .tknob{width:14px;height:14px;border-radius:50%;background:#fff;position:absolute;top:2px;left:2px;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.2);}
+  .tbox.on .tknob{left:14px;}
+  .ing-grid-hdr{display:grid;grid-template-columns:1fr 110px 80px 90px;gap:8px;padding:4px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .ing-row{display:grid;grid-template-columns:1fr 110px 80px 90px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:3px;}
+  .ing-row:hover{border-color:var(--border2);}
+  .order-shortfall-row{display:grid;grid-template-columns:1fr 100px 80px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:var(--radius);margin-bottom:3px;padding-left:10px;}
+
+  /* MODAL */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;z-index:300;padding:40px 16px 40px;overflow-y:auto;}
+  .modal{background:var(--bg);border:1px solid var(--border2);border-radius:var(--radius-lg);padding:22px;width:440px;max-width:100%;margin:auto;}
+  .modal h3{font-size:16px;font-weight:600;margin-bottom:16px;}
+  .fr{margin-bottom:12px;}
+  .fr label{display:block;font-size:12px;font-weight:500;color:var(--text2);margin-bottom:4px;}
+  .fr select,.fr input[type=text],.fr input[type=date],.fr input[type=number]{width:100%;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);}
+  .modal-note{font-size:12px;color:var(--text2);background:var(--bg2);border-radius:var(--radius);padding:8px 12px;margin:8px 0;}
+  .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);}
+  .cook-toggle{display:flex;gap:6px;margin-bottom:8px;}
+  .cook-toggle button{flex:1;font-size:12px;padding:6px;border:1px solid var(--border2);border-radius:var(--radius);cursor:pointer;background:transparent;color:var(--text2);}
+  .cook-toggle button.active{background:var(--bg2);color:var(--text);font-weight:500;}
+  .allergen-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;min-height:24px;}
+  .at-tag{font-size:11px;padding:3px 8px;border-radius:10px;display:flex;align-items:center;gap:5px;background:var(--red-bg);color:var(--red);}
+  .at-rm{cursor:pointer;opacity:.6;font-size:13px;line-height:1;}.at-rm:hover{opacity:1;}
+  .allergen-input-row{display:flex;gap:6px;margin-top:6px;}
+  .allergen-input-row input{flex:1;font-size:13px;height:32px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 8px;background:var(--bg);color:var(--text);}
+  .filter-toggle-row{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px 10px;background:var(--bg2);border-radius:var(--radius);margin-bottom:10px;}
+  .dish-opts-list{max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);}
+  .dish-opt{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);}
+  .dish-opt:last-child{border-bottom:none;}
+  .dish-opt:hover{background:var(--bg2);}
+  .dish-search{width:100%;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);margin-bottom:8px;}
+  .loading{padding:2rem;text-align:center;color:var(--text2);}
+  .empty{padding:2rem;text-align:center;color:var(--text2);}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 20px;border-radius:var(--radius);font-size:13px;z-index:999;opacity:0;transition:opacity .3s;}
+  .toast.show{opacity:1;}
+  .toast.error{background:var(--red);color:#fff;}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ LOGIN SCREEN ═══════════ -->
+<div id="login-screen" class="login-screen">
+  <div class="login-card">
+    <h1>De Sering</h1>
+    <p>Food planner — log in om verder te gaan</p>
+    <div id="login-error" class="login-error"></div>
+    <div class="g_id_signin" style="display:flex;justify-content:center;"></div>
+    <button class="dev-btn" id="dev-login-btn" style="display:none;" onclick="devLogin()">Dev mode login (no auth configured)</button>
+  </div>
+</div>
+
+<!-- ═══════════ MAIN APP ═══════════ -->
+<div class="app-shell" id="app-shell">
+  <div class="top-bar">
+    <h1>De Sering</h1>
+    <button class="nav-btn active" onclick="showScreen('guests',this)">Guest counts</button>
+    <button class="nav-btn" onclick="showScreen('planner',this)">Weekly planner</button>
+    <button class="nav-btn" onclick="showScreen('dishes',this)">Dish list</button>
+    <button class="nav-btn" onclick="showScreen('orders',this)">Order overview</button>
+    <div class="save-indicator" id="save-indicator">
+      <div class="save-dot saved" id="save-dot"></div>
+      <span id="save-text">Saved</span>
+    </div>
+    <div class="user-menu" id="user-menu">
+      <img id="user-avatar" src="" alt="" style="display:none;">
+      <span id="user-name"></span>
+      <button onclick="doLogout()">Logout</button>
+    </div>
+  </div>
+  <div class="content">
+    <div id="screen-guests" class="screen active"></div>
+    <div id="screen-planner" class="screen"></div>
+    <div id="screen-dishes" class="screen"></div>
+    <div id="screen-orders" class="screen"></div>
+  </div>
+</div>
+<div id="modal-root"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════
+const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const MEALS=['lunch','dinner'];
+const STORAGE=['Gastro','Frozen','Vac-packed'];
+const LOGISTICS=['Sering West','Transport to Sering Centraal','Transport to Sering West','Sering Centraal'];
+
+// ═══════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════
+let S = {
+  currentLoc:'west',
+  filters:{loc:'all',storage:'all',logistics:'all'},
+  selected:new Set(),
+  orderToggles:{dishes:true,standard:false},
+  guests:{
+    west:{Mon:{lunch:100,dinner:110},Tue:{lunch:100,dinner:110},Wed:{lunch:100,dinner:110},Thu:{lunch:100,dinner:110},Fri:{lunch:80,dinner:90},Sat:{lunch:0,dinner:0},Sun:{lunch:0,dinner:0}},
+    centraal:{Mon:{lunch:80,dinner:85},Tue:{lunch:80,dinner:85},Wed:{lunch:80,dinner:85},Thu:{lunch:80,dinner:85},Fri:{lunch:60,dinner:70},Sat:{lunch:0,dinner:0},Sun:{lunch:0,dinner:0}}
+  },
+  dishes:[],
+  planner:{},
+  user:null,
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════════════════
+
+// Google Sign-In callback (global, called by Google SDK)
+function handleGoogleLogin(response) {
+  loginWithToken(response.credential);
+}
+
+async function loginWithToken(idToken) {
+  try {
+    const res = await fetch('/api/auth/google', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ idToken }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const errEl = document.getElementById('login-error');
+      errEl.textContent = data.message || data.error || 'Login failed';
+      errEl.style.display = 'block';
+      return;
+    }
+    S.user = data.user;
+    showApp();
+  } catch (e) {
+    const errEl = document.getElementById('login-error');
+    errEl.textContent = 'Could not connect to server';
+    errEl.style.display = 'block';
+  }
+}
+
+async function devLogin() {
+  // For dev mode when no Google Client ID is configured
+  try {
+    const res = await fetch('/api/auth/google', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ idToken: 'dev' }),
+    });
+    const data = await res.json();
+    S.user = data.user;
+    showApp();
+  } catch (e) { alert('Could not connect to server'); }
+}
+
+async function doLogout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  S.user = null;
+  document.getElementById('app-shell').classList.remove('active');
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+async function checkSession() {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) {
+      const data = await res.json();
+      S.user = data.user;
+      showApp();
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app-shell').classList.add('active');
+  // Update user menu
+  document.getElementById('user-name').textContent = S.user?.name || '';
+  if (S.user?.picture) {
+    const img = document.getElementById('user-avatar');
+    img.src = S.user.picture;
+    img.style.display = 'block';
+  }
+  initApp();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// UUID GENERATION
+// ═══════════════════════════════════════════════════════════════════
+function newId() {
+  return crypto.randomUUID();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// API + SAVE SYSTEM
+// ═══════════════════════════════════════════════════════════════════
+
+async function apiGet(path) {
+  const r = await fetch(path);
+  if (r.status === 401) { doLogout(); throw new Error('Session expired'); }
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || 'Request failed'); }
+  return r.json();
+}
+
+async function apiPost(path, body) {
+  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  if (r.status === 401) { doLogout(); throw new Error('Session expired'); }
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || 'Save failed'); }
+  return r.json();
+}
+
+// Save state management
+let saveTimer = null;
+let saveState = 'saved'; // 'saved' | 'unsaved' | 'saving' | 'error'
+let retryCount = 0;
+const MAX_RETRIES = 3;
+
+function setSaveState(state, msg) {
+  saveState = state;
+  const dot = document.getElementById('save-dot');
+  const text = document.getElementById('save-text');
+  if (!dot || !text) return;
+  dot.className = 'save-dot ' + state;
+  text.textContent = msg || {saved:'Saved',unsaved:'Unsaved',saving:'Saving...',error:'Save failed'}[state];
+}
+
+function scheduleSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  setSaveState('unsaved');
+  // Debounce: wait 1.5s after last change before saving
+  saveTimer = setTimeout(doSave, 1500);
+}
+
+async function doSave() {
+  if (saveState === 'saving') return;
+  setSaveState('saving');
+  try {
+    const result = await apiPost('/api/data', { guests: S.guests, dishes: S.dishes });
+    setSaveState('saved', 'Saved');
+    retryCount = 0;
+  } catch (e) {
+    retryCount++;
+    if (retryCount <= MAX_RETRIES) {
+      setSaveState('error', `Retry ${retryCount}/${MAX_RETRIES}...`);
+      setTimeout(doSave, 2000 * retryCount); // exponential-ish backoff
+    } else {
+      setSaveState('error', 'Save failed — check connection');
+      toastError('Could not save changes. Check your internet connection and try again.');
+      retryCount = 0;
+    }
+  }
+}
+
+// Explicit save (for manual retry)
+function retrySave() {
+  retryCount = 0;
+  doSave();
+}
+
+async function loadData() {
+  try {
+    const data = await apiGet('/api/data');
+    if (data.guests) S.guests = data.guests;
+    if (data.dishes) S.dishes = data.dishes;
+    rebuildPlanner();
+  } catch (e) {
+    console.warn('Could not load from server, using defaults');
+    toastError('Could not load data: ' + e.message);
+  }
+}
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show';
+  setTimeout(() => t.className = 'toast', 2200);
+}
+
+function toastError(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast error show';
+  setTimeout(() => t.className = 'toast', 4000);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CORE LOGIC
+// ═══════════════════════════════════════════════════════════════════
+
+function rebuildPlanner() {
+  S.planner = {};
+  S.dishes.forEach(d => {
+    (d.services || []).forEach(svc => {
+      const k = `${svc.loc}-${svc.day}-${svc.meal}`;
+      if (!S.planner[k]) S.planner[k] = [];
+      if (!S.planner[k].find(x => x.id === d.id)) S.planner[k].push(d);
+    });
+  });
+}
+
+function getGuests(loc, dayIdx, meal) {
+  const lk = loc === 'west' ? 'west' : 'centraal';
+  const dn = DAYS[dayIdx];
+  return ((S.guests[lk] || {})[dn] || {})[meal] || 0;
+}
+
+function calcRequired(dish) {
+  let total = 0;
+  (dish.services || []).forEach(svc => {
+    const g = getGuests(svc.loc, svc.day, svc.meal);
+    const k = `${svc.loc}-${svc.day}-${svc.meal}`;
+    const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
+    const count = Math.max(peers.length, 1);
+    total += (g / count) * ((dish.serving || 280) / 1000);
+  });
+  return Math.round(total * 10) / 10;
+}
+
+function calcTotalGuests(dish) {
+  let g = 0;
+  (dish.services || []).forEach(svc => {
+    const total = getGuests(svc.loc, svc.day, svc.meal);
+    const k = `${svc.loc}-${svc.day}-${svc.meal}`;
+    const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
+    g += total / Math.max(peers.length, 1);
+  });
+  return Math.round(g);
+}
+
+function calcIngredientsFromRecipe(dish) {
+  if (!dish.recipeIngredients || !dish.recipeVolume) return [];
+  const totalGuests = calcTotalGuests(dish);
+  if (totalGuests === 0) return [];
+  const guestsPerRecipe = dish.recipeVolume / (dish.serving || 280);
+  const mult = totalGuests / guestsPerRecipe;
+  return dish.recipeIngredients.map(ing => ({
+    name: ing.name,
+    amount: Math.round(ing.amount * mult),
+    unit: ing.unit || 'g',
+    location: ing.location || ''
+  }));
+}
+
+function diffStr(d) {
+  const req = calcRequired(d);
+  const diff = Math.round((d.stock - req) * 10) / 10;
+  return { diff, str: (diff >= 0 ? '+' : '') + diff + 'L', cls: diff < 0 ? 'stock-miss' : diff < 5 ? 'stock-low' : 'stock-ok' };
+}
+
+function storageBadge(s) {
+  const m = { Gastro:'b-gastro', Frozen:'b-frozen', 'Vac-packed':'b-vacpack' };
+  return `<span class="badge ${m[s] || 'b-gastro'}">${s}</span>`;
+}
+function logisticsBadge(l) {
+  if (l === 'Sering Centraal') return `<span class="badge b-centraal">Centraal</span>`;
+  if (l === 'Transport to Sering Centraal') return `<span class="badge b-twc">&rarr; Centraal</span>`;
+  if (l === 'Transport to Sering West') return `<span class="badge b-tww">&rarr; West</span>`;
+  return `<span class="badge b-west">West</span>`;
+}
+function typeBadge(t) {
+  if (t === 'Dessert') return `<span class="badge b-dessert">Dessert</span>`;
+  return `<span class="badge ${t === 'Soup' ? 'b-soup' : 'b-main'}">${t}</span>`;
+}
+function chipClass(d) {
+  if ((d.logistics || '').startsWith('Transport')) return 'chip-tr';
+  if (d.type === 'Soup') return 'chip-soup';
+  if (d.type === 'Dessert') return 'chip-dessert';
+  return 'chip-main';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SCREENS
+// ═══════════════════════════════════════════════════════════════════
+
+function showScreen(name, btn) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  btn.classList.add('active');
+  rebuildPlanner();
+  if (name === 'guests') renderGuests();
+  if (name === 'planner') renderPlanner();
+  if (name === 'dishes') renderDishes();
+  if (name === 'orders') renderOrders();
+}
+
+// ── GUESTS ────────────────────────────────────────────────
+function renderGuests() {
+  const locs = [{ key:'west', label:'Sering West' }, { key:'centraal', label:'Sering Centraal' }];
+  let html = '<div class="guests-grid">';
+  locs.forEach(loc => {
+    html += `<div class="card"><h3 style="font-size:14px;font-weight:600;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border);">${loc.label}</h3>`;
+    DAYS.forEach(day => {
+      html += `<div class="day-sect"><div class="day-lbl">${day}</div>`;
+      MEALS.forEach(meal => {
+        const v = ((S.guests[loc.key] || {})[day] || {})[meal] || 0;
+        html += `<div class="svc-row"><label>${meal[0].toUpperCase() + meal.slice(1)}</label>
+          <input type="number" min="0" value="${v}" onchange="updateGuests('${loc.key}','${day}','${meal}',this.value)" /></div>`;
+      });
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  html += '</div>';
+  document.getElementById('screen-guests').innerHTML = html;
+}
+
+function updateGuests(loc, day, meal, val) {
+  if (!S.guests[loc]) S.guests[loc] = {};
+  if (!S.guests[loc][day]) S.guests[loc][day] = {};
+  S.guests[loc][day][meal] = parseInt(val) || 0;
+  scheduleSave();
+}
+
+// ── PLANNER ───────────────────────────────────────────────
+function renderPlanner() {
+  const loc = S.currentLoc;
+  let html = `<div class="loc-tabs">
+    <button class="loc-btn ${loc === 'west' ? 'active' : ''}" onclick="setPlannerLoc('west')">Sering West</button>
+    <button class="loc-btn ${loc === 'centraal' ? 'active' : ''}" onclick="setPlannerLoc('centraal')">Sering Centraal</button>
+  </div>
+  <div class="week-scroll"><div class="week-grid"><div></div>`;
+  DAYS.forEach(d => { html += `<div class="day-hdr">${d}</div>`; });
+  MEALS.forEach(meal => {
+    html += `<div class="meal-lbl">${meal}</div>`;
+    for (let d = 0; d < 7; d++) {
+      const k = `${loc}-${d}-${meal}`;
+      const slotDishes = S.planner[k] || [];
+      const gc = getGuests(loc, d, meal);
+      const isToday = d === (new Date().getDay() + 6) % 7;
+      html += `<div class="slot${isToday ? ' today' : ''}" onclick="openAddDish('${loc}',${d},'${meal}')">`;
+      slotDishes.forEach(dish => {
+        const req = calcRequired(dish);
+        html += `<div class="dish-chip ${chipClass(dish)}"><span class="chip-nm">${esc(dish.name)}</span><span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}',${d},'${meal}')">&#10005;</span></div>`;
+        html += `<div class="chip-sub">${req}L &middot; ${gc}g</div>`;
+      });
+      if (!slotDishes.length) html += `<div style="font-size:10px;color:var(--text3);padding:1px 2px;">${gc} guests</div>`;
+      html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDish('${loc}',${d},'${meal}')">+ add</div></div>`;
+    }
+  });
+  html += '</div></div>';
+  document.getElementById('screen-planner').innerHTML = html;
+}
+
+function setPlannerLoc(loc) { S.currentLoc = loc; rebuildPlanner(); renderPlanner(); }
+
+function removeDishFromSlot(dishId, loc, day, meal) {
+  const dish = S.dishes.find(d => d.id === dishId);
+  if (dish) { dish.services = (dish.services || []).filter(s => !(s.loc === loc && s.day === day && s.meal === meal)); }
+  rebuildPlanner(); renderPlanner(); scheduleSave();
+}
+
+function openAddDish(loc, day, meal) {
+  const existing = (S.planner[`${loc}-${day}-${meal}`] || []).map(d => d.id);
+  renderAddModal(loc, day, meal, existing, false, '');
+}
+
+function renderAddModal(loc, day, meal, existing, filterOn, searchQuery) {
+  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+  let avail = S.dishes.filter(d => !existing.includes(d.id));
+  if (filterOn) avail = avail.filter(d => d.logistics === locLabel);
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    avail = avail.filter(d => d.name.toLowerCase().includes(q));
+  }
+  const opts = avail.length === 0
+    ? `<div class="empty">No dishes available${filterOn ? ' at this location' : ''}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`
+    : avail.map(d => {
+      const { diff, str, cls } = diffStr(d);
+      return `<div class="dish-opt" onclick="confirmAddDish('${d.id}','${loc}',${day},'${meal}')">
+        <div><span style="font-weight:500;">${esc(d.name)}</span> ${typeBadge(d.type)}</div>
+        <div style="font-size:12px;" class="${cls}">${d.stock}L stock &middot; ${str}</div>
+      </div>`;
+    }).join('');
+  const existingJson = JSON.stringify(existing).replace(/'/g, "\\'");
+  showModal(`<h3>Add to ${DAYS[day]} ${meal} &middot; ${locLabel}</h3>
+    <input type="text" class="dish-search" placeholder="Search dishes..." value="${esc(searchQuery)}"
+      oninput="renderAddModal('${loc}',${day},'${meal}',${existingJson},${filterOn},this.value)" autofocus />
+    <div class="filter-toggle-row" onclick="renderAddModal('${loc}',${day},'${meal}',${existingJson},${!filterOn},'')">
+      <div class="tbox${filterOn ? ' on' : ''}"><div class="tknob"></div></div>
+      <span>Only show dishes at ${locLabel}</span>
+    </div>
+    <div class="dish-opts-list">${opts || '<div class="empty">No dishes yet. Add some in Dish list.</div>'}</div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+
+function confirmAddDish(dishId, loc, day, meal) {
+  const dish = S.dishes.find(d => d.id === dishId);
+  if (dish) { if (!dish.services) dish.services = []; dish.services.push({ loc, day, meal }); }
+  closeModal(); rebuildPlanner(); renderPlanner(); scheduleSave();
+  toast(`${dish.name} added to ${DAYS[day]} ${meal}`);
+}
+
+// ── DISH LIST ─────────────────────────────────────────────
+function renderDishes() {
+  const f = S.filters;
+  const filtered = S.dishes.filter(d => {
+    if (f.loc !== 'all') {
+      const ml = (f.loc === 'west' && (d.logistics === 'Sering West' || d.logistics === 'Transport to Sering Centraal')) || (f.loc === 'centraal' && (d.logistics === 'Sering Centraal' || d.logistics === 'Transport to Sering West'));
+      const sl = (d.services || []).some(s => s.loc === f.loc);
+      if (!ml && !sl) return false;
+    }
+    if (f.storage !== 'all' && d.storage !== f.storage) return false;
+    if (f.logistics !== 'all' && d.logistics !== f.logistics) return false;
+    return true;
+  });
+
+  const html = `
+  <div class="btn-row" style="margin-bottom:12px;">
+    <button class="btn btn-primary" onclick="openNewDish()">+ New dish</button>
+  </div>
+  <div class="filter-bar">
+    <div style="display:flex;gap:4px;flex-wrap:wrap;">
+      <button class="fc ${f.loc === 'all' ? 'on' : ''}" onclick="setFilter('loc','all')">All locations</button>
+      <button class="fc ${f.loc === 'west' ? 'on' : ''}" onclick="setFilter('loc','west')">Sering West</button>
+      <button class="fc ${f.loc === 'centraal' ? 'on' : ''}" onclick="setFilter('loc','centraal')">Sering Centraal</button>
+    </div>
+    <div class="filter-sep"></div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;">
+      <button class="fc ${f.storage === 'all' ? 'on' : ''}" onclick="setFilter('storage','all')">All storage</button>
+      ${STORAGE.map(s => `<button class="fc ${f.storage === s ? 'on' : ''}" onclick="setFilter('storage','${s}')">${s}</button>`).join('')}
+    </div>
+    <div class="filter-sep"></div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;">
+      <button class="fc ${f.logistics === 'all' ? 'on' : ''}" onclick="setFilter('logistics','all')">All logistics</button>
+      <button class="fc ${f.logistics === 'Sering West' ? 'on' : ''}" onclick="setFilter('logistics','Sering West')">At West</button>
+      <button class="fc ${f.logistics === 'Transport to Sering Centraal' ? 'on' : ''}" onclick="setFilter('logistics','Transport to Sering Centraal')">&rarr; Centraal</button>
+      <button class="fc ${f.logistics === 'Transport to Sering West' ? 'on' : ''}" onclick="setFilter('logistics','Transport to Sering West')">&rarr; West</button>
+      <button class="fc ${f.logistics === 'Sering Centraal' ? 'on' : ''}" onclick="setFilter('logistics','Sering Centraal')">At Centraal</button>
+    </div>
+  </div>
+  <div id="split-bar-area"></div>
+  <div class="dish-list-hdr"><span></span><span>Dish</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-storage">Storage</span><span>Order</span></div>
+  <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${filtered.length} dish${filtered.length !== 1 ? 'es' : ''}</div>
+  ${filtered.length === 0 ? '<div class="empty">No dishes match these filters</div>' : filtered.map(d => {
+    const req = calcRequired(d);
+    const { diff, str, cls } = diffStr(d);
+    const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
+    const ags = allAg.slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('') + (allAg.length > 3 ? `<span class="allergen-pill">+${allAg.length - 3}</span>` : '');
+    const svcLbls = (d.services || []).map(s => `${DAYS[s.day]} ${s.meal[0].toUpperCase()}`).join(' &middot; ');
+    const cookLbl = d.cookMode === 'date' && d.cookDate ? d.cookDate.slice(5) : d.cookDay || '';
+    const isSel = S.selected.has(d.id);
+    const isTr = (d.logistics || '').startsWith('Transport');
+    return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}" onclick="toggleSelect('${d.id}')">
+      <div class="sel-box${isSel ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelect('${d.id}')"></div>
+      <div>
+        <div style="font-weight:600;font-size:13px;margin-bottom:2px;">${esc(d.name)}
+          <button class="btn btn-sm" style="margin-left:6px;" onclick="event.stopPropagation();openEditDish('${d.id}')">Edit</button>
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px;">
+          ${typeBadge(d.type)}
+          ${storageBadge(d.storage || 'Gastro')}
+          ${logisticsBadge(d.logistics || 'Sering West')}
+          ${cookLbl ? `<span style="font-size:10px;color:var(--text2);">cook: ${cookLbl}</span>` : ''}
+          ${svcLbls ? `<span style="font-size:10px;color:var(--text2);">${svcLbls}</span>` : '<span style="font-size:10px;color:var(--text3);">no service</span>'}
+        </div>
+      </div>
+      <div class="col-stock" style="font-size:13px;">${d.stock || 0}L</div>
+      <div class="col-req" style="font-size:13px;">${req}L</div>
+      <div class="col-diff ${cls}">${str}</div>
+      <div class="col-allergen">${ags || '<span style="color:var(--text3);font-size:12px;">none</span>'}</div>
+      <div class="col-storage"></div>
+      <div style="font-size:12px;font-weight:600;color:${d.orderFor ? 'var(--green)' : 'var(--text3)'};">${d.orderFor ? 'Yes' : '&mdash;'}</div>
+    </div>`;
+  }).join('')}`;
+
+  document.getElementById('screen-dishes').innerHTML = html;
+  renderSplitBar();
+}
+
+function setFilter(group, val) { S.filters[group] = val; S.selected.clear(); renderDishes(); }
+function toggleSelect(id) { if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id); renderDishes(); }
+
+function renderSplitBar() {
+  const area = document.getElementById('split-bar-area');
+  if (!area || S.selected.size === 0) { if (area) area.innerHTML = ''; return; }
+  const selD = [...S.selected].map(id => S.dishes.find(d => d.id === id)).filter(Boolean);
+  const names = selD.map(d => d.name).join(', ');
+  const hasWest = selD.some(d => d.logistics === 'Sering West');
+  const hasCentraal = selD.some(d => d.logistics === 'Sering Centraal');
+  area.innerHTML = `<div class="split-bar">
+    <span class="sbar-title">Split stock</span>
+    <span style="font-size:12px;color:var(--text2);flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(names)}</span>
+    <label>Amount (L)</label><input type="number" id="sp-amt" min="0.1" step="0.5" value="10" style="width:68px;"/>
+    <label>Storage</label><select id="sp-storage">${STORAGE.map(s => `<option>${s}</option>`).join('')}</select>
+    <label>Logistics</label><select id="sp-logistics">${LOGISTICS.map(l => `<option>${l}</option>`).join('')}</select>
+    <button class="btn btn-primary" onclick="doSplit(false)">Split off</button>
+    ${hasWest ? `<button class="btn btn-purple" onclick="doTransportSplit('centraal')">Split &rarr; Centraal</button>` : ''}
+    ${hasCentraal ? `<button class="btn btn-purple" onclick="doTransportSplit('west')">Split &rarr; West</button>` : ''}
+    <button class="btn" onclick="S.selected.clear();renderDishes()">Cancel</button>
+  </div>`;
+}
+
+function doSplit(isTransport, targetLoc) {
+  const amt = parseFloat(document.getElementById('sp-amt').value);
+  const storage = document.getElementById('sp-storage').value;
+  const logistics = isTransport ? (targetLoc === 'centraal' ? 'Transport to Sering Centraal' : 'Transport to Sering West') : document.getElementById('sp-logistics').value;
+  if (!amt || amt <= 0) return;
+  let errors = [];
+  [...S.selected].forEach(id => {
+    const d = S.dishes.find(x => x.id === id);
+    if (!d) return;
+    if (amt > d.stock) { errors.push(`"${d.name}" only has ${d.stock}L`); return; }
+    d.stock = Math.round((d.stock - amt) * 10) / 10;
+    const targetLocName = targetLoc === 'centraal' ? 'centraal' : 'west';
+    const newDish = {
+      id: newId(), name: d.name, type: d.type, storage, logistics, stock: amt,
+      serving: d.serving || 280, recipeSheetId: d.recipeSheetId,
+      recipeVolume: d.recipeVolume,
+      recipeIngredients: d.recipeIngredients ? [...d.recipeIngredients] : undefined,
+      allergens: [...(d.allergens || [])], extraAllergens: [...(d.extraAllergens || [])],
+      orderFor: false, parentId: d.id, cookDate: d.cookDate, cookMode: d.cookMode,
+      cookDay: d.cookDay,
+      services: isTransport ? ((d.services || []).filter(s => s.loc === targetLocName)) : []
+    };
+    if (isTransport) d.services = (d.services || []).filter(s => s.loc !== targetLocName);
+    S.dishes.push(newDish);
+  });
+  if (errors.length) { alert('Cannot split: ' + errors.join(', ')); return; }
+  S.selected.clear(); rebuildPlanner(); renderDishes(); scheduleSave();
+  toast('Stock split created');
+}
+function doTransportSplit(tl) { doSplit(true, tl); }
+
+// ── NEW DISH ──────────────────────────────────────────────
+function openNewDish() {
+  showModal(`<h3>New dish</h3>
+    <div class="fr"><label>Name</label><input type="text" id="nd-name" placeholder="e.g. Mushroom soup" /></div>
+    <div class="fr"><label>Type</label><select id="nd-type">
+      <option>Soup</option><option>Main course</option><option>Dessert</option>
+    </select></div>
+    <div class="fr"><label>Stock (liters)</label><input type="number" id="nd-stock" value="0" step="0.5" min="0" /></div>
+    <div class="fr"><label>Serving size (ml per guest)</label><input type="number" id="nd-serving" value="280" /></div>
+    <div class="fr"><label>Storage state</label><select id="nd-storage">${STORAGE.map(s => `<option>${s}</option>`).join('')}</select></div>
+    <div class="fr"><label>Location</label><select id="nd-logistics">${LOGISTICS.map(l => `<option>${l}</option>`).join('')}</select></div>
+    <div class="fr"><label>Recipe Google Sheet ID (optional)</label>
+      <input type="text" id="nd-sheetid" placeholder="Paste the sheet ID from the URL" />
+      <div style="font-size:11px;color:var(--text2);margin-top:4px;">Found in the sheet URL: /spreadsheets/d/<strong>THIS_PART</strong>/edit</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveNewDish()">Create dish</button>
+    </div>`);
+}
+
+async function saveNewDish() {
+  const name = document.getElementById('nd-name').value.trim();
+  if (!name) { alert('Please enter a dish name'); return; }
+  const sheetId = document.getElementById('nd-sheetid').value.trim();
+  const newDish = {
+    id: newId(), name,
+    type: document.getElementById('nd-type').value,
+    stock: parseFloat(document.getElementById('nd-stock').value) || 0,
+    serving: parseInt(document.getElementById('nd-serving').value) || 280,
+    storage: document.getElementById('nd-storage').value,
+    logistics: document.getElementById('nd-logistics').value,
+    recipeSheetId: sheetId || null,
+    allergens: [], extraAllergens: [], orderFor: false, parentId: null,
+    cookMode: 'day', cookDay: null, cookDate: null, services: []
+  };
+  if (sheetId) {
+    try {
+      const recipe = await apiGet(`/api/recipe?sheetId=${sheetId}`);
+      if (recipe.allergens) newDish.allergens = recipe.allergens;
+      if (recipe.serving) newDish.serving = recipe.serving;
+      if (recipe.recipeVolume) newDish.recipeVolume = recipe.recipeVolume;
+      if (recipe.ingredients) newDish.recipeIngredients = recipe.ingredients;
+      toast('Recipe data loaded from Google Sheet');
+    } catch (e) { toastError('Could not fetch recipe: ' + e.message); }
+  }
+  S.dishes.push(newDish);
+  closeModal(); rebuildPlanner(); renderDishes(); scheduleSave();
+  toast(`"${name}" added`);
+}
+
+// ── EDIT DISH ─────────────────────────────────────────────
+function openEditDish(id) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
+  const agHtml = allAg.map(a => {
+    const isBase = (d.allergens || []).includes(a);
+    return `<div class="at-tag">${esc(a)}${isBase ? ` <span style="opacity:.4;font-size:9px;">base</span>` : ` <span class="at-rm" onclick="removeExtraAllergen('${id}','${esc(a)}')">&#215;</span>`}</div>`;
+  }).join('');
+  const cookModeDay = d.cookMode !== 'date';
+  showModal(`<h3>Edit &mdash; ${esc(d.name)}</h3>
+    <div class="fr"><label>Name</label><input type="text" id="ed-name" value="${esc(d.name)}" /></div>
+    <div class="fr"><label>Stock (liters)</label><input type="number" id="ed-stock" value="${d.stock || 0}" step="0.5" min="0" /></div>
+    <div class="fr"><label>Type</label><select id="ed-type">
+      ${['Soup','Main course','Dessert'].map(t => `<option${d.type === t ? ' selected' : ''}>${t}</option>`).join('')}
+    </select></div>
+    <div class="fr"><label>Storage state</label><select id="ed-storage">
+      ${STORAGE.map(s => `<option${d.storage === s ? ' selected' : ''}>${s}</option>`).join('')}
+    </select></div>
+    <div class="fr"><label>Logistics</label><select id="ed-logistics">
+      ${LOGISTICS.map(l => `<option${d.logistics === l ? ' selected' : ''}>${l}</option>`).join('')}
+    </select></div>
+    <div class="fr"><label>Cook date / day</label>
+      <div class="cook-toggle">
+        <button id="ct-day" class="${cookModeDay ? 'active' : ''}" onclick="setCookMode('${id}','day')">Plan a day</button>
+        <button id="ct-date" class="${!cookModeDay ? 'active' : ''}" onclick="setCookMode('${id}','date')">Actual date</button>
+      </div>
+      <div id="cook-input">${cookModeDay
+        ? `<select id="ed-cookday">${['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => `<option${d.cookDay === day ? ' selected' : ''}>${day}</option>`).join('')}</select>`
+        : `<input type="date" id="ed-cookdate" value="${d.cookDate || ''}" />`}
+      </div>
+    </div>
+    <div class="fr"><label>Allergens</label>
+      <div class="allergen-tags" id="ag-tags">${agHtml || '<span style="font-size:12px;color:var(--text3);">none</span>'}</div>
+      <div class="allergen-input-row">
+        <input type="text" id="ag-new" placeholder="Add allergen&hellip;" onkeydown="if(event.key==='Enter')addExtraAllergen('${id}')" />
+        <button class="btn btn-sm" onclick="addExtraAllergen('${id}')">Add</button>
+      </div>
+      <div class="modal-note">Allergens marked "base" come from the recipe sheet.</div>
+    </div>
+    <div class="fr"><label>Include in order list?</label>
+      <select id="ed-order">
+        <option value="true"${d.orderFor ? ' selected' : ''}>Yes &mdash; include in order list</option>
+        <option value="false"${!d.orderFor ? ' selected' : ''}>No</option>
+      </select>
+    </div>
+    ${d.recipeSheetId ? `<div class="modal-note">Recipe sheet linked. <button class="btn btn-sm" onclick="refreshRecipe('${id}')">Refresh from sheet</button></div>` : ''}
+    <div class="modal-actions">
+      <button class="btn btn-danger btn-sm" onclick="deleteDish('${id}')">Delete</button>
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditDish('${id}')">Save</button>
+    </div>`);
+}
+
+function setCookMode(id, mode) {
+  const d = S.dishes.find(x => x.id === id); if (!d) return;
+  d.cookMode = mode;
+  document.getElementById('ct-day').classList.toggle('active', mode === 'day');
+  document.getElementById('ct-date').classList.toggle('active', mode === 'date');
+  document.getElementById('cook-input').innerHTML = mode === 'day'
+    ? `<select id="ed-cookday">${['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => `<option${d.cookDay === day ? ' selected' : ''}>${day}</option>`).join('')}</select>`
+    : `<input type="date" id="ed-cookdate" value="${d.cookDate || ''}" />`;
+}
+
+function addExtraAllergen(id) {
+  const d = S.dishes.find(x => x.id === id); if (!d) return;
+  const inp = document.getElementById('ag-new');
+  const val = (inp.value || '').trim(); if (!val) return;
+  if (!d.extraAllergens) d.extraAllergens = [];
+  if (!d.extraAllergens.includes(val) && !(d.allergens || []).includes(val)) d.extraAllergens.push(val);
+  inp.value = '';
+  refreshAllergenTags(d);
+}
+
+function removeExtraAllergen(id, allergen) {
+  const d = S.dishes.find(x => x.id === id); if (!d) return;
+  d.extraAllergens = (d.extraAllergens || []).filter(a => a !== allergen);
+  refreshAllergenTags(d);
+}
+
+function refreshAllergenTags(d) {
+  const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
+  document.getElementById('ag-tags').innerHTML = allAg.map(a => {
+    const isBase = (d.allergens || []).includes(a);
+    return `<div class="at-tag">${esc(a)}${isBase ? ` <span style="opacity:.4;font-size:9px;">base</span>` : ` <span class="at-rm" onclick="removeExtraAllergen('${d.id}','${esc(a)}')">&#215;</span>`}</div>`;
+  }).join('') || '<span style="font-size:12px;color:var(--text3);">none</span>';
+}
+
+async function refreshRecipe(id) {
+  const d = S.dishes.find(x => x.id === id); if (!d || !d.recipeSheetId) return;
+  try {
+    const recipe = await apiGet(`/api/recipe?sheetId=${d.recipeSheetId}`);
+    if (recipe.allergens) d.allergens = recipe.allergens;
+    if (recipe.recipeVolume) d.recipeVolume = recipe.recipeVolume;
+    if (recipe.ingredients) d.recipeIngredients = recipe.ingredients;
+    scheduleSave();
+    closeModal(); openEditDish(id);
+    toast('Recipe refreshed from Google Sheet');
+  } catch (e) { toastError('Could not fetch recipe: ' + e.message); }
+}
+
+function saveEditDish(id) {
+  const d = S.dishes.find(x => x.id === id); if (!d) return;
+  d.name = document.getElementById('ed-name').value;
+  d.stock = parseFloat(document.getElementById('ed-stock').value) || 0;
+  d.type = document.getElementById('ed-type').value;
+  d.storage = document.getElementById('ed-storage').value;
+  d.logistics = document.getElementById('ed-logistics').value;
+  d.orderFor = document.getElementById('ed-order').value === 'true';
+  if (d.cookMode === 'day') { const el = document.getElementById('ed-cookday'); if (el) d.cookDay = el.value || null; }
+  else { const el = document.getElementById('ed-cookdate'); if (el) d.cookDate = el.value || null; }
+  closeModal(); rebuildPlanner(); renderDishes(); scheduleSave();
+  toast('Dish saved');
+}
+
+function deleteDish(id) {
+  if (!confirm('Delete this dish? This cannot be undone.')) return;
+  S.dishes = S.dishes.filter(d => d.id !== id);
+  closeModal(); rebuildPlanner(); renderDishes(); scheduleSave();
+  toast('Dish deleted');
+}
+
+// ── ORDER OVERVIEW ────────────────────────────────────────
+function renderOrders() {
+  const orderedDishes = S.dishes.filter(d => d.orderFor);
+  const shortfall = S.dishes.filter(d => d.stock < calcRequired(d) && calcRequired(d) > 0);
+
+  const combined = {};
+  orderedDishes.forEach(dish => {
+    const ings = calcIngredientsFromRecipe(dish);
+    ings.forEach(ing => {
+      if (!combined[ing.name]) combined[ing.name] = { amount: 0, unit: ing.unit, location: ing.location, dishes: [] };
+      combined[ing.name].amount += ing.amount;
+      combined[ing.name].dishes.push(dish.name);
+    });
+  });
+  const ingList = Object.entries(combined).sort((a, b) => a[0].localeCompare(b[0]));
+
+  let html = `<div class="order-toggle-bar">
+    <div class="order-toggle${S.orderToggles.dishes ? ' on' : ''}" onclick="toggleOrderSection('dishes')">
+      <div class="tbox${S.orderToggles.dishes ? ' on' : ''}"><div class="tknob"></div></div>
+      <span>Dish ingredients (${orderedDishes.length} dishes)</span>
+    </div>
+    <div class="order-toggle${S.orderToggles.standard ? ' on' : ''}" onclick="toggleOrderSection('standard')">
+      <div class="tbox${S.orderToggles.standard ? ' on' : ''}"><div class="tknob"></div></div>
+      <span>Standard inventory</span>
+    </div>
+  </div>`;
+
+  html += `<div style="margin-bottom:20px;"><div class="section-title">Stock shortfall &mdash; needs cooking or restock</div>`;
+  if (!shortfall.length) html += `<div class="empty" style="color:var(--green);">All dishes have sufficient stock</div>`;
+  else html += shortfall.map(d => {
+    const req = calcRequired(d); const { diff, str } = diffStr(d);
+    return `<div class="order-shortfall-row">
+      <div style="font-weight:600;">${esc(d.name)} <span style="font-weight:400;color:var(--text2);font-size:12px;">&middot; ${d.logistics}</span></div>
+      <div style="color:var(--red);font-weight:600;">${str}</div>
+      <div style="font-size:12px;color:var(--text2);">need ${req}L</div>
+    </div>`;
+  }).join('');
+  html += '</div>';
+
+  if (S.orderToggles.dishes) {
+    html += `<div style="margin-bottom:20px;"><div class="section-title" style="display:flex;justify-content:space-between;">
+      <span>Combined ingredient order</span>
+      <span style="font-weight:400;color:var(--text2);">${orderedDishes.map(d => esc(d.name)).join(' &middot; ')}</span>
+    </div>`;
+    if (!ingList.length) {
+      html += `<div class="empty">`;
+      if (orderedDishes.length === 0) html += `No dishes flagged for order. Go to Dish list and set "Order for" to Yes on the dishes you're making.`;
+      else html += `Dishes are flagged but have no recipe sheet linked. Edit a dish and add a Recipe Sheet ID to enable ingredient calculation.`;
+      html += `</div>`;
+    } else {
+      html += `<div class="ing-grid-hdr"><span>Ingredient</span><span>Total needed</span><span>Location</span><span>For dishes</span></div>`;
+      html += ingList.map(([name, data]) => `<div class="ing-row">
+        <div style="font-weight:600;">${esc(name)}</div>
+        <div style="font-weight:600;">${Math.round(data.amount).toLocaleString()} ${data.unit}</div>
+        <div style="font-size:12px;color:var(--text2);">${data.location || '&mdash;'}</div>
+        <div style="font-size:11px;color:var(--text2);">${[...new Set(data.dishes)].map(n => esc(n.split(' ').slice(0, 2).join(' '))).join(', ')}</div>
+      </div>`).join('');
+    }
+    html += '</div>';
+  }
+
+  if (S.orderToggles.standard) {
+    html += `<div><div class="section-title">Standard inventory</div>
+      <div class="empty">Standard inventory items will appear here once your inventory sheet is connected.</div>
+    </div>`;
+  }
+
+  document.getElementById('screen-orders').innerHTML = html;
+}
+
+function toggleOrderSection(key) { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }
+
+// ── MODAL ─────────────────────────────────────────────────
+function showModal(content) {
+  document.getElementById('modal-root').innerHTML = `<div class="modal-bg" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">${content}</div></div>`;
+}
+function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+// ── HTML ESCAPE ───────────────────────────────────────────
+function esc(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════════
+
+async function initApp() {
+  await loadData();
+  rebuildPlanner();
+  renderGuests();
+}
+
+// On page load: check for existing session, or show login
+(async () => {
+  const hasSession = await checkSession();
+  if (!hasSession) {
+    try {
+      const health = await (await fetch('/api/health')).json();
+      if (!health.authConfigured) {
+        // Dev mode: show dev login button, hide Google button
+        document.getElementById('dev-login-btn').style.display = 'inline-block';
+        document.querySelector('.g_id_signin').style.display = 'none';
+      } else {
+        // Initialize Google Sign-In with the client ID from server
+        const waitForGoogle = () => {
+          if (window.google && google.accounts) {
+            google.accounts.id.initialize({
+              client_id: health.googleClientId,
+              callback: handleGoogleLogin,
+            });
+            google.accounts.id.renderButton(
+              document.querySelector('.g_id_signin'),
+              { theme: 'outline', size: 'large', text: 'sign_in_with', shape: 'rectangular', width: 300 }
+            );
+          } else {
+            setTimeout(waitForGoogle, 100);
+          }
+        };
+        waitForGoogle();
+      }
+    } catch (e) {
+      document.getElementById('dev-login-btn').style.display = 'inline-block';
+      document.querySelector('.g_id_signin').style.display = 'none';
+    }
+  }
+})();
+</script>
+</body>
+</html>
