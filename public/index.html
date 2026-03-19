@@ -289,6 +289,20 @@
   .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 20px;border-radius:var(--radius);font-size:13px;z-index:999;opacity:0;transition:opacity .3s;}
   .toast.show{opacity:1;}
   .toast.error{background:var(--red);color:#fff;}
+
+  /* RECIPE INDEX */
+  .ri-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;}
+  .ri-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;transition:border-color .1s;position:relative;}
+  .ri-card:hover{border-color:var(--border2);}
+  .ri-name{font-size:14px;font-weight:600;margin-bottom:6px;}
+  .ri-meta{display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:6px;}
+  .ri-cost{font-size:12px;color:var(--text2);margin-top:4px;}
+  .ri-actions{display:flex;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);}
+  .ri-search{width:100%;max-width:400px;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);margin-bottom:12px;}
+  .ri-filter-bar{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;align-items:center;}
+  .ri-empty{text-align:center;padding:40px 20px;color:var(--text2);}
+  .ri-empty p{margin-bottom:12px;}
+  .ri-add-url{width:100%;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);}
 </style>
 </head>
 <body>
@@ -312,6 +326,7 @@
     <button class="nav-btn" onclick="showScreen('guests',this)">Guest counts</button>
     <button class="nav-btn" onclick="showScreen('planner',this)">Weekly planner</button>
     <button class="nav-btn" onclick="showScreen('dishes',this)">Menu planner</button>
+    <button class="nav-btn" onclick="showScreen('recipe-index',this)">Dish index</button>
     <button class="nav-btn" onclick="showScreen('orders',this)">Order overview</button>
     <div class="save-indicator" id="save-indicator">
       <div class="save-dot saved" id="save-dot"></div>
@@ -328,6 +343,7 @@
     <div id="screen-guests" class="screen"></div>
     <div id="screen-planner" class="screen"></div>
     <div id="screen-dishes" class="screen"></div>
+    <div id="screen-recipe-index" class="screen"></div>
     <div id="screen-orders" class="screen"></div>
   </div>
 </div>
@@ -357,6 +373,7 @@ let S = {
     centraal:{Mon:{lunch:80,dinner:85},Tue:{lunch:80,dinner:85},Wed:{lunch:80,dinner:85},Thu:{lunch:80,dinner:85},Fri:{lunch:60,dinner:70},Sat:{lunch:0,dinner:0},Sun:{lunch:0,dinner:0}}
   },
   dishes:[],
+  recipeIndex:[],
   planner:{},
   user:null,
 };
@@ -517,6 +534,7 @@ async function loadData() {
   try {
     const data = await apiGet('/api/data');
     if (data.guests) S.guests = data.guests;
+    if (data.recipeIndex) S.recipeIndex = data.recipeIndex;
     if (data.dishes) S.dishes = data.dishes;
     rebuildPlanner();
   } catch (e) {
@@ -752,6 +770,7 @@ function showScreen(name, btn) {
   if (name === 'guests') renderGuests();
   if (name === 'planner') renderPlanner();
   if (name === 'dishes') renderDishes();
+  if (name === 'recipe-index') renderRecipeIndex();
   if (name === 'orders') renderOrders();
 }
 
@@ -919,7 +938,7 @@ function renderDashboard() {
 
 function navTo(screen) {
   const btns = document.querySelectorAll('.nav-btn');
-  const labels = { dashboard:'Dashboard', guests:'Guest counts', planner:'Weekly planner', dishes:'Menu planner', orders:'Order overview' };
+  const labels = { dashboard:'Dashboard', guests:'Guest counts', planner:'Weekly planner', dishes:'Menu planner', 'recipe-index':'Dish index', orders:'Order overview' };
   btns.forEach(b => { if (b.textContent === labels[screen]) showScreen(screen, b); });
 }
 
@@ -1519,6 +1538,38 @@ function doTransportSplit(tl, smartAmt) { doSplit(true, tl, true); }
 
 // ── NEW DISH ──────────────────────────────────────────────
 function openNewDish() {
+  renderNewDishModal('');
+}
+
+function renderNewDishModal(searchQuery) {
+  let recipes = S.recipeIndex;
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    recipes = recipes.filter(r => r.name.toLowerCase().includes(q));
+  }
+  const recipeList = recipes.length > 0
+    ? recipes.slice(0, 20).map(r => {
+      const ags = (r.allergens||[]).slice(0,3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
+      return `<div class="dish-opt" onclick="addDishFromRecipe('${r.id}');closeModal();">
+        <div><span style="font-weight:500;">${esc(r.name)}</span> ${typeBadge(r.type||'Soup')} ${ags}</div>
+        <div style="font-size:11px;color:var(--text2);">${r.costPerServing || ''}</div>
+      </div>`;
+    }).join('')
+    : `<div class="empty" style="padding:12px;">${S.recipeIndex.length === 0 ? 'No recipes in index yet. Add some in the Dish index tab.' : 'No recipes match "' + esc(searchQuery) + '"'}</div>`;
+
+  showModal(`<h3>Add dish to menu</h3>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Pick from your recipe index:</div>
+    <input type="text" class="dish-search" placeholder="Search recipes..." value="${esc(searchQuery)}"
+      oninput="renderNewDishModal(this.value)" autofocus />
+    <div class="dish-opts-list" style="max-height:260px;">${recipeList}</div>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Or create from scratch:</div>
+      <button class="btn" onclick="openNewDishScratch()">Create blank dish</button>
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+
+function openNewDishScratch() {
   showModal(`<h3>New dish</h3>
     <div class="fr"><label>Name</label><input type="text" id="nd-name" placeholder="e.g. Mushroom soup" /></div>
     <div class="fr"><label>Type</label><select id="nd-type">
@@ -1688,6 +1739,206 @@ function deleteDish(id) {
   S.dishes = S.dishes.filter(d => d.id !== id);
   closeModal(); rebuildPlanner(); renderDishes(); scheduleSave();
   toast('Dish deleted');
+}
+
+// ── RECIPE INDEX ──────────────────────────────────────────
+let riSearch = '';
+let riTypeFilter = 'all';
+
+function renderRecipeIndex() {
+  let filtered = S.recipeIndex;
+  if (riTypeFilter !== 'all') filtered = filtered.filter(r => r.type === riTypeFilter);
+  if (riSearch) {
+    const q = riSearch.toLowerCase();
+    filtered = filtered.filter(r => r.name.toLowerCase().includes(q) || (r.allergens||[]).join(' ').toLowerCase().includes(q));
+  }
+
+  const types = [...new Set(S.recipeIndex.map(r => r.type).filter(Boolean))];
+
+  let html = `
+  <div class="btn-row" style="margin-bottom:12px;">
+    <button class="btn btn-primary" onclick="openAddRecipe()">+ Add recipe</button>
+    <span style="font-size:12px;color:var(--text2);margin-left:8px;">${S.recipeIndex.length} recipes in index</span>
+  </div>
+  <input class="ri-search" placeholder="Search recipes..." value="${esc(riSearch)}" oninput="riSearch=this.value;renderRecipeIndex()" />
+  <div class="ri-filter-bar">
+    <button class="fc ${riTypeFilter === 'all' ? 'on' : ''}" onclick="riTypeFilter='all';renderRecipeIndex()">All types</button>
+    ${types.map(t => `<button class="fc ${riTypeFilter === t ? 'on' : ''}" onclick="riTypeFilter='${t}';renderRecipeIndex()">${t}</button>`).join('')}
+  </div>`;
+
+  if (filtered.length === 0 && S.recipeIndex.length === 0) {
+    html += `<div class="ri-empty">
+      <p style="font-size:16px;font-weight:600;">No recipes yet</p>
+      <p>Add your first recipe by clicking "+ Add recipe" and pasting a Google Sheet link.</p>
+    </div>`;
+  } else if (filtered.length === 0) {
+    html += `<div class="ri-empty"><p>No recipes match your search</p></div>`;
+  } else {
+    html += `<div class="ri-grid">${filtered.map(r => {
+      const ags = (r.allergens||[]).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
+      return `<div class="ri-card">
+        <div class="ri-name">${esc(r.name)}</div>
+        <div class="ri-meta">
+          ${typeBadge(r.type || 'Soup')}
+          ${r.structure ? `<span class="badge b-gastro">${esc(r.structure)}</span>` : ''}
+          ${r.seasonality ? `<span style="font-size:10px;color:var(--text2);">${esc(r.seasonality)}</span>` : ''}
+        </div>
+        ${ags ? `<div style="margin-bottom:4px;">${ags}</div>` : ''}
+        ${r.costPerServing ? `<div class="ri-cost">Cost: ${esc(r.costPerServing)} per serving</div>` : ''}
+        <div class="ri-actions">
+          ${r.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(r.recipeSheetId)}/edit" target="_blank" rel="noopener" class="recipe-btn">Recipe &#8599;</a>` : ''}
+          <button class="btn btn-sm" onclick="addDishFromRecipe('${r.id}')">+ Add to menu</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteRecipeIndex('${r.id}','${esc(r.name)}')">Delete</button>
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+  }
+
+  document.getElementById('screen-recipe-index').innerHTML = html;
+}
+
+function openAddRecipe() {
+  showModal(`<h3>Add recipe to index</h3>
+    <div class="fr"><label>Paste Google Sheet URL</label>
+      <input type="text" id="ri-url" class="ri-add-url" placeholder="https://docs.google.com/spreadsheets/d/..." />
+      <div style="font-size:11px;color:var(--text2);margin-top:4px;">Paste the full URL of the recipe Google Sheet</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="fetchAndAddRecipe()">Fetch recipe</button>
+    </div>`);
+}
+
+function extractSheetId(url) {
+  const m = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : null;
+}
+
+async function fetchAndAddRecipe() {
+  const url = document.getElementById('ri-url').value.trim();
+  if (!url) { alert('Please paste a URL'); return; }
+  const sheetId = extractSheetId(url);
+  if (!sheetId) { alert('Could not find a valid Google Sheet ID in that URL'); return; }
+
+  // Check if already in index
+  if (S.recipeIndex.find(r => r.recipeSheetId === sheetId)) {
+    alert('This recipe is already in your index');
+    return;
+  }
+
+  try {
+    toast('Fetching recipe data...');
+    const recipe = await apiGet('/api/recipe?sheetId=' + sheetId);
+    const newRecipe = {
+      id: newId(),
+      name: recipe.dishName || 'Unnamed recipe',
+      type: 'Soup', // default, user can change
+      recipeSheetId: sheetId,
+      allergens: recipe.allergens || [],
+      costPerServing: '',
+      structure: '',
+      seasonality: '',
+      servingTemp: '',
+      servingSize: recipe.serving || 280,
+      recipeVolume: recipe.recipeVolume || null,
+      recipeIngredients: recipe.ingredients || null,
+      createdAt: new Date().toISOString(),
+    };
+
+    // Save to server
+    await apiPost('/api/recipe-index', newRecipe);
+    S.recipeIndex.push(newRecipe);
+
+    closeModal();
+    renderRecipeIndex();
+    toast(esc(newRecipe.name) + ' added to dish index');
+
+    // Open edit modal to set type, etc
+    openEditRecipe(newRecipe.id);
+  } catch (e) {
+    toastError('Could not fetch recipe: ' + e.message);
+  }
+}
+
+function openEditRecipe(id) {
+  const r = S.recipeIndex.find(x => x.id === id);
+  if (!r) return;
+  showModal(`<h3>Edit recipe &mdash; ${esc(r.name)}</h3>
+    <div class="fr"><label>Name</label><input type="text" id="re-name" value="${esc(r.name)}" /></div>
+    <div class="fr"><label>Type</label><select id="re-type">
+      ${['Soup','Main course','Dessert'].map(t => `<option${r.type === t ? ' selected' : ''}>${t}</option>`).join('')}
+    </select></div>
+    <div class="fr"><label>Structure</label><select id="re-structure">
+      ${['','Open structure','Closed structure'].map(s => `<option${r.structure === s ? ' selected' : ''}>${s}</option>`).join('')}
+    </select></div>
+    <div class="fr"><label>Seasonality</label><select id="re-season">
+      ${['','Year round','Spring','Summer','Fall','Winter'].map(s => `<option${r.seasonality === s ? ' selected' : ''}>${s}</option>`).join('')}
+    </select></div>
+    <div class="fr"><label>Cost per serving</label><input type="text" id="re-cost" value="${esc(r.costPerServing || '')}" placeholder="e.g. €0.55" /></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditRecipe('${r.id}')">Save</button>
+    </div>`);
+}
+
+async function saveEditRecipe(id) {
+  const r = S.recipeIndex.find(x => x.id === id);
+  if (!r) return;
+  r.name = document.getElementById('re-name').value.trim() || r.name;
+  r.type = document.getElementById('re-type').value;
+  r.structure = document.getElementById('re-structure').value;
+  r.seasonality = document.getElementById('re-season').value;
+  r.costPerServing = document.getElementById('re-cost').value.trim();
+  try {
+    await apiPost('/api/recipe-index', r);
+    closeModal();
+    renderRecipeIndex();
+    toast('Recipe updated');
+  } catch (e) { toastError('Could not save: ' + e.message); }
+}
+
+async function deleteRecipeIndex(id, name) {
+  if (!confirm('Remove "' + name + '" from the dish index?')) return;
+  try {
+    const r = await fetch('/api/recipe-index/' + id, { method: 'DELETE' });
+    if (r.status === 401) { doLogout(); return; }
+    S.recipeIndex = S.recipeIndex.filter(x => x.id !== id);
+    renderRecipeIndex();
+    toast('Recipe removed from index');
+  } catch (e) { toastError('Could not delete: ' + e.message); }
+}
+
+// Add a dish to the menu planner from a recipe in the index
+async function addDishFromRecipe(recipeId) {
+  const r = S.recipeIndex.find(x => x.id === recipeId);
+  if (!r) return;
+  const newDish = {
+    id: newId(),
+    name: r.name,
+    type: r.type || 'Soup',
+    stock: 0,
+    serving: r.servingSize || 280,
+    storage: 'Gastro',
+    logistics: 'Sering West',
+    recipeSheetId: r.recipeSheetId || null,
+    recipeVolume: r.recipeVolume || null,
+    recipeIngredients: r.recipeIngredients ? [...r.recipeIngredients] : null,
+    allergens: [...(r.allergens || [])],
+    extraAllergens: [],
+    orderFor: false,
+    parentId: null,
+    cookMode: 'day',
+    cookDay: null,
+    cookDate: null,
+    cookConfirmed: false,
+    services: [],
+    createdAt: new Date().toISOString(),
+  };
+  S.dishes.push(newDish);
+  rebuildPlanner();
+  scheduleSave();
+  toast(esc(r.name) + ' added to menu planner');
+  navTo('dishes');
 }
 
 // ── ORDER OVERVIEW ────────────────────────────────────────

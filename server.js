@@ -209,6 +209,40 @@ const DISH_HEADERS = [
 ];
 const SERVICE_HEADERS = ['id','dish_id','location','day','meal'];
 const GUEST_HEADERS   = ['location','day','lunch','dinner'];
+const RECIPE_INDEX_HEADERS = [
+  'id','name','type','recipe_sheet_id','allergens','cost_per_serving',
+  'structure','seasonality','serving_temp','serving_size','recipe_volume',
+  'recipe_ingredients','created_at'
+];
+
+function rowToRecipeIndex(row) {
+  return {
+    id: row.id,
+    name: row.name || '',
+    type: row.type || 'Soup',
+    recipeSheetId: row.recipe_sheet_id || null,
+    allergens: row.allergens ? row.allergens.split('|').filter(Boolean) : [],
+    costPerServing: row.cost_per_serving || '',
+    structure: row.structure || '',
+    seasonality: row.seasonality || '',
+    servingTemp: row.serving_temp || '',
+    servingSize: parseInt(row.serving_size) || 280,
+    recipeVolume: parseFloat(row.recipe_volume) || null,
+    recipeIngredients: row.recipe_ingredients ? JSON.parse(row.recipe_ingredients) : null,
+    createdAt: row.created_at || new Date().toISOString(),
+  };
+}
+
+function recipeIndexToRow(r) {
+  return [
+    r.id, r.name, r.type, r.recipeSheetId || '',
+    (r.allergens || []).join('|'), r.costPerServing || '',
+    r.structure || '', r.seasonality || '', r.servingTemp || '',
+    r.servingSize || 280, r.recipeVolume || '',
+    r.recipeIngredients ? JSON.stringify(r.recipeIngredients) : '',
+    r.createdAt || new Date().toISOString()
+  ];
+}
 
 function rowToDish(row) {
   return {
@@ -258,14 +292,15 @@ function getDefaultGuests() {
 async function dbReadAll() {
   const sheets = getSheetsClient();
   if (!sheets || !CONFIG.DB_SHEET_ID) {
-    return { dishes: [], guests: getDefaultGuests() };
+    return { dishes: [], guests: getDefaultGuests(), recipeIndex: [] };
   }
   try {
-    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log']);
-    const [dishRows, serviceRows, guestRows] = await Promise.all([
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log','recipe_index']);
+    const [dishRows, serviceRows, guestRows, recipeRows] = await Promise.all([
       readTab(sheets, CONFIG.DB_SHEET_ID, 'dishes'),
       readTab(sheets, CONFIG.DB_SHEET_ID, 'services'),
       readTab(sheets, CONFIG.DB_SHEET_ID, 'guests'),
+      readTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index'),
     ]);
     const dishes = dishRows.map(rowToDish);
     serviceRows.forEach(svcRow => {
@@ -279,10 +314,11 @@ async function dbReadAll() {
         guests[row.location][row.day].dinner = parseInt(row.dinner) || 0;
       }
     });
-    return { dishes, guests };
+    const recipeIndex = recipeRows.map(rowToRecipeIndex);
+    return { dishes, guests, recipeIndex };
   } catch (e) {
     console.error('dbReadAll error:', e.message);
-    return { dishes: [], guests: getDefaultGuests() };
+    return { dishes: [], guests: getDefaultGuests(), recipeIndex: [] };
   }
 }
 
@@ -415,6 +451,51 @@ app.post('/api/data', async (req, res) => {
     dbAppendLog(user.email, user.name, 'save', `${dishes.length} dishes`);
 
     res.json({ ok: true, savedAt: new Date().toISOString() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/recipe-index', async (req, res) => {
+  const sheets = getSheetsClient();
+  if (!sheets || !CONFIG.DB_SHEET_ID) return res.json([]);
+  try {
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['recipe_index']);
+    const rows = await readTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index');
+    res.json(rows.map(rowToRecipeIndex));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/recipe-index', async (req, res) => {
+  const recipe = req.body;
+  if (!recipe || !recipe.id || !recipe.name) return res.status(400).json({ error: 'id and name required' });
+  try {
+    await withWriteLock(async () => {
+      const sheets = getSheetsClient();
+      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
+      await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['recipe_index']);
+      const existing = await readTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index');
+      const all = existing.map(rowToRecipeIndex);
+      const idx = all.findIndex(r => r.id === recipe.id);
+      if (idx >= 0) all[idx] = recipe;
+      else all.push(recipe);
+      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index', RECIPE_INDEX_HEADERS, all.map(recipeIndexToRow));
+    });
+    const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+    dbAppendLog(user.email, user.name, 'recipe-index', `saved "${recipe.name}"`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/recipe-index/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await withWriteLock(async () => {
+      const sheets = getSheetsClient();
+      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
+      const existing = await readTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index');
+      const all = existing.map(rowToRecipeIndex).filter(r => r.id !== id);
+      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index', RECIPE_INDEX_HEADERS, all.map(recipeIndexToRow));
+    });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
