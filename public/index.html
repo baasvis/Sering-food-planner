@@ -2153,12 +2153,16 @@ function renderOrders() {
   });
 
   // Enrich with ingredient DB data
+  function normalizeSupplier(s) {
+    if (!s) return 'Unknown';
+    return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  }
   const ingList = Object.values(combined).map(ing => {
     const db = lookupIngredient(ing.name);
     return {
       ...ing,
       db,
-      supplier: (db && db.source) || ing.source || 'Unknown',
+      supplier: normalizeSupplier((db && db.source) || ing.source || ''),
       orderCode: db ? db.orderCode : '',
       orderType: db ? db.orderType : '',
       orderCalc: db ? calcOrderUnits(ing.amount, db) : null,
@@ -2169,9 +2173,7 @@ function renderOrders() {
   // Group by supplier
   const bySupplier = {};
   ingList.forEach(ing => {
-    // Normalize supplier name: capitalize first letter for consistent grouping
-    const rawSupplier = ing.supplier || 'Unknown';
-    const s = rawSupplier.charAt(0).toUpperCase() + rawSupplier.slice(1).toLowerCase();
+    const s = ing.supplier;
     if (!bySupplier[s]) bySupplier[s] = [];
     bySupplier[s].push(ing);
   });
