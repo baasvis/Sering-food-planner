@@ -188,9 +188,20 @@
   .dish-row{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:6px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
   .dish-row:hover{border-color:var(--border2);}
   .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
-  .dish-row.split-child{border-left:2px solid var(--blue);padding-left:10px;}
-  .dish-row.transport-row{border-left:2px solid var(--purple);padding-left:10px;}
+  .dish-row.split-child{padding-left:10px;}
   .dish-row.stale-row{border-color:var(--red);background:var(--red-bg);}
+  .dish-row.frozen-row{background:#E8F4FD;border-color:#85B7EB;}
+  @media(prefers-color-scheme:dark){.dish-row.frozen-row{background:#0C2A44;border-color:#2A6BA8;}}
+  /* Logistics left border */
+  .dish-row.log-west{border-left:3px solid #BA7517;}
+  .dish-row.log-centraal{border-left:3px solid #0F6E56;}
+  .dish-row.log-twc{border-left:3px solid #97C459;}
+  .dish-row.log-tww{border-left:3px solid #EF9F27;}
+  /* Section dividers */
+  .dish-section-hdr{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:12px 0 6px;margin-top:8px;border-bottom:2px solid var(--border);color:var(--text2);display:flex;align-items:center;gap:8px;}
+  .dish-section-hdr:first-child{margin-top:0;}
+  .dish-section-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+  .dish-section-count{font-weight:400;color:var(--text3);}
   @media(max-width:700px){
     .dish-list-hdr{display:none;}
     .dish-row{grid-template-columns:20px 1fr auto;gap:6px;}
@@ -1060,49 +1071,84 @@ function renderDishes() {
   <div id="split-bar-area"></div>
   <div class="dish-list-hdr"><span></span><span>Dish</span><span class="col-cook">Cook / cooked</span><span>Stock</span><span class="col-req">Need</span><span class="col-diff">+/&minus;</span><span class="col-logistics">Location</span><span>Order</span><span></span></div>
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${filtered.length} dish${filtered.length !== 1 ? 'es' : ''}</div>
-  ${filtered.length === 0 ? '<div class="empty">No dishes match these filters</div>' : filtered.map(d => {
-    const req = calcRequired(d);
-    const { diff, str, cls } = diffStr(d);
-    const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
-    const svcLbls = (d.services || []).map(s => {
-      const ml = s.meal === 'lunch' ? 'L' : 'D';
-      const lc = s.loc === 'west' ? 'SW' : 'SC';
-      return `${DAYS[s.day]} ${ml} ${lc}`;
-    }).join(' · ');
-    const isSel = S.selected.has(d.id);
-    const isTr = (d.logistics || '').startsWith('Transport');
-    const isFrozen = d.storage === 'Frozen';
-    const cookHtml = getCookCellHtml(d);
-    const isStale = isDishStale(d);
-    return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}${isStale ? ' stale-row' : ''}${isFrozen ? ' frozen-row' : ''}">
-      <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
-      <div>
-        <input class="inline-edit inline-edit-name" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
-        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px;padding-left:6px;">
-          <span class="${typeBadgeClass(d.type)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleType('${d.id}')" title="Click to change">${d.type}</span>
-          <span class="${storageBadgeClass(d.storage || 'Gastro')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleStorage('${d.id}')" title="Click to change">${d.storage || 'Gastro'}</span>
-          ${d.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="recipe-btn">Recipe &#8599;</a>` : ''}
-          <div class="allergen-inline" id="ag-inline-${d.id}" style="display:inline-flex;">
-            ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
-            <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}')" title="Add allergen">+</button>
-          </div>
-          ${svcLbls ? `<span style="font-size:10px;color:var(--text2);">${svcLbls}</span>` : '<span style="font-size:10px;color:var(--text3);">no service</span>'}
-        </div>
-      </div>
-      <div class="col-cook">${cookHtml}</div>
-      <div class="col-stock"><input class="inline-edit inline-edit-stock" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" /></div>
-      <div class="col-req" style="font-size:13px;">${req}L</div>
-      <div class="col-diff ${cls}">${str}</div>
-      <div class="col-logistics">
-        <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLogistics('${d.id}')" title="Click to change">${logisticsShort(d.logistics || 'Sering West')}</span>
-      </div>
-      <div><button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button></div>
-      <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
-    </div>`;
-  }).join('')}`;
+  ${filtered.length === 0 ? '<div class="empty">No dishes match these filters</div>' : renderDishGroups(filtered)}`;
 
   document.getElementById('screen-dishes').innerHTML = html;
   renderSplitBar();
+}
+
+function logisticsRowClass(l) {
+  if (l === 'Sering West') return 'log-west';
+  if (l === 'Sering Centraal') return 'log-centraal';
+  if (l === 'Transport to Sering Centraal') return 'log-twc';
+  if (l === 'Transport to Sering West') return 'log-tww';
+  return 'log-west';
+}
+
+function renderDishGroups(dishes) {
+  const toCook = dishes.filter(d => !d.cookConfirmed && d.storage !== 'Frozen');
+  const cooked = dishes.filter(d => d.cookConfirmed && d.storage !== 'Frozen');
+  const frozen = dishes.filter(d => d.storage === 'Frozen');
+
+  let html = '';
+
+  if (toCook.length) {
+    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--amber);"></div>To cook <span class="dish-section-count">(${toCook.length})</span></div>`;
+    html += toCook.map(d => renderDishRow(d)).join('');
+  }
+
+  if (cooked.length) {
+    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--green);"></div>Cooked <span class="dish-section-count">(${cooked.length})</span></div>`;
+    html += cooked.map(d => renderDishRow(d)).join('');
+  }
+
+  if (frozen.length) {
+    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:#378ADD;"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
+    html += frozen.map(d => renderDishRow(d)).join('');
+  }
+
+  return html;
+}
+
+function renderDishRow(d) {
+  const req = calcRequired(d);
+  const { diff, str, cls } = diffStr(d);
+  const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
+  const svcLbls = (d.services || []).map(s => {
+    const ml = s.meal === 'lunch' ? 'L' : 'D';
+    const lc = s.loc === 'west' ? 'SW' : 'SC';
+    return `${DAYS[s.day]} ${ml} ${lc}`;
+  }).join(' · ');
+  const isSel = S.selected.has(d.id);
+  const isFrozen = d.storage === 'Frozen';
+  const cookHtml = getCookCellHtml(d);
+  const isStale = isDishStale(d);
+  const logClass = logisticsRowClass(d.logistics || 'Sering West');
+  return `<div class="dish-row ${logClass}${d.parentId ? ' split-child' : ''}${isSel ? ' selected' : ''}${isStale ? ' stale-row' : ''}${isFrozen ? ' frozen-row' : ''}">
+    <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
+    <div>
+      <input class="inline-edit inline-edit-name" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
+      <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px;padding-left:6px;">
+        <span class="${typeBadgeClass(d.type)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleType('${d.id}')" title="Click to change">${d.type}</span>
+        <span class="${storageBadgeClass(d.storage || 'Gastro')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleStorage('${d.id}')" title="Click to change">${d.storage || 'Gastro'}</span>
+        ${d.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="recipe-btn">Recipe &#8599;</a>` : ''}
+        <div class="allergen-inline" id="ag-inline-${d.id}" style="display:inline-flex;">
+          ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
+          <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}')" title="Add allergen">+</button>
+        </div>
+        ${svcLbls ? `<span style="font-size:10px;color:var(--text2);">${svcLbls}</span>` : '<span style="font-size:10px;color:var(--text3);">no service</span>'}
+      </div>
+    </div>
+    <div class="col-cook">${cookHtml}</div>
+    <div class="col-stock"><input class="inline-edit inline-edit-stock" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" /></div>
+    <div class="col-req" style="font-size:13px;">${req}L</div>
+    <div class="col-diff ${cls}">${str}</div>
+    <div class="col-logistics">
+      <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLogistics('${d.id}')" title="Click to change">${logisticsShort(d.logistics || 'Sering West')}</span>
+    </div>
+    <div><button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button></div>
+    <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
+  </div>`;
 }
 
 function inlineEdit(id, field, value) {
