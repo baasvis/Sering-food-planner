@@ -567,12 +567,23 @@ let ingredientDbLoaded = false;
 let ingredientDbError = '';
 async function loadIngredientDb() {
   try {
-    const ings = await apiGet('/api/ingredients');
-    S.ingredientDb = ings || [];
+    const result = await apiGet('/api/ingredients');
+    // Handle error-as-data response
+    if (result && result.error) {
+      console.error('Ingredient DB API error:', result.error);
+      S.ingredientDb = [];
+      ingredientDbError = result.error;
+    } else if (Array.isArray(result)) {
+      S.ingredientDb = result;
+      ingredientDbError = '';
+      console.log('Ingredient DB loaded:', S.ingredientDb.length, 'items');
+      if (S.ingredientDb.length > 0) console.log('Sample:', S.ingredientDb[0].name, '| code:', S.ingredientDb[0].orderCode);
+    } else {
+      console.error('Ingredient DB unexpected response:', result);
+      S.ingredientDb = [];
+      ingredientDbError = 'Unexpected response format';
+    }
     ingredientDbLoaded = true;
-    ingredientDbError = '';
-    console.log('Ingredient DB loaded:', S.ingredientDb.length, 'items');
-    if (S.ingredientDb.length > 0) console.log('Sample:', S.ingredientDb[0].name, '| code:', S.ingredientDb[0].orderCode);
   } catch (e) {
     console.error('Failed to load ingredient DB:', e);
     S.ingredientDb = [];

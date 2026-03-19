@@ -552,7 +552,7 @@ app.get('/api/recipe', async (req, res) => {
 app.get('/api/ingredients', async (req, res) => {
   const sheets = getSheetsClient();
   if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
-  if (!CONFIG.INGREDIENT_DB_SHEET_ID) return res.json([]);
+  if (!CONFIG.INGREDIENT_DB_SHEET_ID) return res.json({ error: 'INGREDIENT_DB_SHEET_ID not set', items: [] });
   try {
     // First get the sheet metadata to find the correct tab name
     const meta = await sheets.spreadsheets.get({
@@ -571,23 +571,24 @@ app.get('/api/ingredients', async (req, res) => {
     console.log('Ingredient DB filtered rows:', rows.length);
     if (rows.length > 0) console.log('First ingredient:', rows[0][0], '| orderCode:', rows[0][5]);
     res.json(rows.map(r => ({
-      name: r[0] || '',             // B: Name
-      unit: r[1] || 'g',            // C: Grams or ML
-      source: r[2] || '',           // D: Source/supplier
-      costPer100: r[3] || '',       // E: price per 100g/ml
-      orderType: r[4] || '',        // F: order type
-      orderCode: r[5] || '',        // G: product code / link
-      actualUnit: r[6] || '',       // H: Actual unit type
-      orderAmount: parseFloat(r[7]) || 0, // I: single order amount
-      notes: r[8] || '',            // J: recalculation notes
-      orderPrice: r[9] || '',       // K: price per single order
-      unitRecalc: parseFloat(r[10]) || 0, // L: unit price recalculated (grams)
-      allergens: r[13] || '',       // O: allergens (index 13 = col O minus col B = 13)
-      storageLocation: r[16] || '', // R: storage location (index 16)
+      name: r[0] || '',
+      unit: r[1] || 'g',
+      source: r[2] || '',
+      costPer100: r[3] || '',
+      orderType: r[4] || '',
+      orderCode: r[5] || '',
+      actualUnit: r[6] || '',
+      orderAmount: parseFloat(r[7]) || 0,
+      notes: r[8] || '',
+      orderPrice: r[9] || '',
+      unitRecalc: parseFloat(r[10]) || 0,
+      allergens: r[13] || '',
+      storageLocation: r[16] || '',
     })));
   } catch (e) {
     console.error('Ingredient DB error:', e.message);
-    res.status(500).json({ error: e.message });
+    // Return the error as data so frontend can display it
+    res.json({ error: e.message, items: [] });
   }
 });
 
