@@ -556,10 +556,24 @@ async function loadData() {
     if (data.dishes) S.dishes = data.dishes;
     rebuildPlanner();
     // Load ingredient DB in background (for order overview)
-    apiGet('/api/ingredients').then(ings => { S.ingredientDb = ings || []; }).catch(() => {});
+    loadIngredientDb();
   } catch (e) {
     console.warn('Could not load from server, using defaults');
     toastError('Could not load data: ' + e.message);
+  }
+}
+
+let ingredientDbLoaded = false;
+async function loadIngredientDb() {
+  try {
+    const ings = await apiGet('/api/ingredients');
+    S.ingredientDb = ings || [];
+    ingredientDbLoaded = true;
+    console.log('Ingredient DB loaded:', S.ingredientDb.length, 'items');
+  } catch (e) {
+    console.error('Failed to load ingredient DB:', e);
+    S.ingredientDb = [];
+    ingredientDbLoaded = true;
   }
 }
 
@@ -2100,6 +2114,13 @@ function calcOrderUnits(amountGrams, dbEntry) {
 }
 
 function renderOrders() {
+  // If ingredient DB hasn't loaded yet, wait and retry
+  if (!ingredientDbLoaded) {
+    document.getElementById('screen-orders').innerHTML = '<div class="empty">Loading ingredient database...</div>';
+    setTimeout(renderOrders, 500);
+    return;
+  }
+
   const orderedDishes = S.dishes.filter(d => d.orderFor);
   const shortfall = S.dishes.filter(d => d.stock < calcRequired(d) && calcRequired(d) > 0);
 
@@ -2251,6 +2272,13 @@ function renderOrders() {
     });
   }
   html += '</div>';
+
+  // Debug info
+  const matchCount = ingList.filter(i => i.db).length;
+  const totalCount = ingList.length;
+  html += `<div style="font-size:11px;color:var(--text2);margin-top:12px;padding:8px;border-top:1px solid var(--border);">
+    Ingredient DB: ${S.ingredientDb.length} items loaded · ${matchCount}/${totalCount} ingredients matched
+  </div>`;
 
   document.getElementById('screen-orders').innerHTML = html;
 }
