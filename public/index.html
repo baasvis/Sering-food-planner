@@ -1883,7 +1883,7 @@ function renderRecipeIndex() {
         <td style="text-align:center;">${r.timesServed || '—'}</td>
         <td style="white-space:nowrap;">
           <button class="btn btn-sm" onclick="addDishFromRecipe('${r.id}')">+ Menu</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteRecipeIndex('${r.id}','${esc(r.name)}')">✕</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteRecipeIndex('${r.id}')">✕</button>
         </td>
       </tr>`;
     });
@@ -1949,6 +1949,7 @@ async function fetchAndAddRecipe() {
       recipeVolume: recipe.recipeVolume || null,
       recipeIngredients: recipe.ingredients || null,
       createdAt: new Date().toISOString(),
+      avgSkill: 0, avgSpeed: 0, avgBanger: 0, timesServed: 0,
     };
 
     // Save to server
@@ -2000,7 +2001,9 @@ async function saveEditRecipe(id) {
   } catch (e) { toastError('Could not save: ' + e.message); }
 }
 
-async function deleteRecipeIndex(id, name) {
+async function deleteRecipeIndex(id) {
+  const entry = S.recipeIndex.find(x => x.id === id);
+  const name = entry ? entry.name : 'this recipe';
   if (!confirm('Remove "' + name + '" from the dish index?')) return;
   try {
     const r = await fetch('/api/recipe-index/' + id, { method: 'DELETE' });
