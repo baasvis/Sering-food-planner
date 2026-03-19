@@ -34,9 +34,17 @@ function cookieOpts() {
 // Set these as environment variables (e.g. in Replit Secrets, .env, or hosting panel)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Extract just the sheet ID if a full URL was pasted
+function cleanSheetId(val) {
+  if (!val) return '';
+  const m = val.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  return val.replace(/\/.*$/, '').trim();
+}
+
 const CONFIG = {
-  DB_SHEET_ID: process.env.DB_SHEET_ID || '',
-  INGREDIENT_DB_SHEET_ID: process.env.INGREDIENT_DB_SHEET_ID || '1yrYRECESZf6kP5GHwDDR9CmxBtm5G9-gRCPUJqgkzQc',
+  DB_SHEET_ID: cleanSheetId(process.env.DB_SHEET_ID || ''),
+  INGREDIENT_DB_SHEET_ID: cleanSheetId(process.env.INGREDIENT_DB_SHEET_ID || '1yrYRECESZf6kP5GHwDDR9CmxBtm5G9-gRCPUJqgkzQc'),
   GOOGLE_CREDENTIALS: process.env.GOOGLE_CREDENTIALS || '{}',
 
   // Google Sign-In: your Google Cloud OAuth client ID
