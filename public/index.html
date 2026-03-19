@@ -81,7 +81,7 @@
   .nav-btn{padding:14px 14px;font-size:13px;font-weight:500;border:none;background:none;cursor:pointer;color:var(--text2);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s;}
   .nav-btn.active{color:var(--text);border-bottom-color:var(--text);}
   .nav-btn:hover:not(.active){color:var(--text);}
-  .content{flex:1;padding:16px;max-width:1100px;width:100%;margin:0 auto;}
+  .content{flex:1;padding:16px;max-width:1200px;width:100%;margin:0 auto;}
   .screen{display:none;}.screen.active{display:block;}
 
   /* SAVE INDICATOR */
@@ -323,7 +323,7 @@
   .dish-opt:hover{background:var(--bg2);}
   .dish-search{width:100%;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);margin-bottom:8px;}
   .loading{padding:2rem;text-align:center;color:var(--text2);}
-  .empty{padding:2rem;text-align:center;color:var(--text2);}
+  .empty{padding:2rem;text-align:center;color:var(--text2);font-size:13px;background:var(--bg);border:1px dashed var(--border);border-radius:var(--radius-lg);}
   .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 20px;border-radius:var(--radius);font-size:13px;z-index:999;opacity:0;transition:opacity .3s;}
   .toast.show{opacity:1;}
   .toast.error{background:var(--red);color:#fff;}
@@ -1020,17 +1020,17 @@ function renderDashboard() {
     </div>
 
     <div class="dash-actions">
-      <div class="dash-action-btn" onclick="navTo('planner')">&#8594; Weekly planner</div>
-      <div class="dash-action-btn" onclick="navTo('dishes')">&#43; Menu planner</div>
-      <div class="dash-action-btn" onclick="navTo('orders')">&#128203; Order overview${orderDishes.length ? ' (' + orderDishes.length + ')' : ''}</div>
-      <div class="dash-action-btn" onclick="navTo('guests')">&#9998; Edit guest counts</div>
+      <div class="dash-action-btn" onclick="navTo('planner')">&#8594; Week plan</div>
+      <div class="dash-action-btn" onclick="navTo('dishes')">&#43; Dishes</div>
+      <div class="dash-action-btn" onclick="navTo('orders')">&#128203; Orders${orderDishes.length ? ' (' + orderDishes.length + ')' : ''}</div>
+      <div class="dash-action-btn" onclick="navTo('guests')">&#9998; Guests</div>
     </div>
   `;
 }
 
 function navTo(screen) {
   const btns = document.querySelectorAll('.nav-btn');
-  const labels = { dashboard:'Dashboard', guests:'Guest counts', planner:'Weekly planner', dishes:'Menu planner', 'recipe-index':'Dish index', orders:'Order overview' };
+  const labels = { dashboard:'Dashboard', guests:'Guests', planner:'Week plan', dishes:'Dishes', 'recipe-index':'Recipes', orders:'Orders' };
   btns.forEach(b => { if (b.textContent === labels[screen]) showScreen(screen, b); });
 }
 
@@ -1169,9 +1169,16 @@ function renderPlanner() {
     <button class="loc-btn ${loc === 'centraal' ? 'active' : ''}" onclick="setPlannerLoc('centraal')">Sering Centraal</button>
   </div>
   <div class="week-scroll"><div class="week-grid"><div></div>`;
+  // Calculate week dates
+  const today = getToday();
+  const todayDow = today.getDay();
+  const mondayOff = todayDow === 0 ? -6 : 1 - todayDow;
+  const monday = new Date(today); monday.setDate(today.getDate() + mondayOff);
   DAYS.forEach((d, i) => {
     const isToday = i === (new Date().getDay() + 6) % 7;
-    html += `<div class="day-hdr${isToday ? ' today-hdr' : ''}">${d}</div>`;
+    const dt = new Date(monday); dt.setDate(monday.getDate() + i);
+    const dateStr = `${dt.getDate()}/${dt.getMonth()+1}`;
+    html += `<div class="day-hdr${isToday ? ' today-hdr' : ''}">${d}<span class="gt-date">${dateStr}</span></div>`;
   });
 
   MEALS.forEach(meal => {
