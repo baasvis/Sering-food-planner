@@ -1348,6 +1348,19 @@ function confirmCooked(id) {
 function setFilter(group, val) { S.filters[group] = val; S.selected.clear(); renderDishes(); }
 function toggleSelect(id) { if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id); renderDishes(); }
 
+function calcRequiredForLoc(dish, loc) {
+  let total = 0;
+  (dish.services || []).forEach(svc => {
+    if (svc.loc !== loc) return;
+    const g = getGuests(svc.loc, svc.day, svc.meal);
+    const k = `${svc.loc}-${svc.day}-${svc.meal}`;
+    const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
+    const count = Math.max(peers.length, 1);
+    total += (g / count) * ((dish.serving || 280) / 1000);
+  });
+  return Math.round(total * 10) / 10;
+}
+
 function renderSplitBar() {
   const area = document.getElementById('split-bar-area');
   if (!area || S.selected.size === 0) { if (area) area.innerHTML = ''; return; }
@@ -1355,6 +1368,17 @@ function renderSplitBar() {
   const names = selD.map(d => d.name).join(', ');
   const hasWest = selD.some(d => d.logistics === 'Sering West');
   const hasCentraal = selD.some(d => d.logistics === 'Sering Centraal');
+
+  // Calculate smart amounts for transport splits
+  let smartCentraalAmt = 0;
+  let smartWestAmt = 0;
+  selD.forEach(d => {
+    if (d.logistics === 'Sering West') smartCentraalAmt += calcRequiredForLoc(d, 'centraal');
+    if (d.logistics === 'Sering Centraal') smartWestAmt += calcRequiredForLoc(d, 'west');
+  });
+  smartCentraalAmt = Math.round(smartCentraalAmt * 10) / 10;
+  smartWestAmt = Math.round(smartWestAmt * 10) / 10;
+
   area.innerHTML = `<div class="split-bar">
     <span class="sbar-title">Split stock</span>
     <span style="font-size:12px;color:var(--text2);flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(names)}</span>
@@ -1362,22 +1386,31 @@ function renderSplitBar() {
     <label>Storage</label><select id="sp-storage">${STORAGE.map(s => `<option>${s}</option>`).join('')}</select>
     <label>Logistics</label><select id="sp-logistics">${LOGISTICS.map(l => `<option>${l}</option>`).join('')}</select>
     <button class="btn btn-primary" onclick="doSplit(false)">Split off</button>
-    ${hasWest ? `<button class="btn btn-purple" onclick="doTransportSplit('centraal')">Split &rarr; Centraal</button>` : ''}
-    ${hasCentraal ? `<button class="btn btn-purple" onclick="doTransportSplit('west')">Split &rarr; West</button>` : ''}
+    ${hasWest ? `<button class="btn btn-purple" onclick="doTransportSplit('centraal',${smartCentraalAmt})">Split ${smartCentraalAmt}L &rarr; Centraal</button>` : ''}
+    ${hasCentraal ? `<button class="btn btn-purple" onclick="doTransportSplit('west',${smartWestAmt})">Split ${smartWestAmt}L &rarr; West</button>` : ''}
     <button class="btn" onclick="S.selected.clear();renderDishes()">Cancel</button>
   </div>`;
 }
 
-function doSplit(isTransport, targetLoc) {
-  const amt = parseFloat(document.getElementById('sp-amt').value);
+function doSplit(isTransport, targetLoc, smartAmounts) {
+  const manualAmt = parseFloat(document.getElementById('sp-amt').value);
   const storage = document.getElementById('sp-storage').value;
   const logistics = isTransport ? (targetLoc === 'centraal' ? 'Transport to Sering Centraal' : 'Transport to Sering West') : document.getElementById('sp-logistics').value;
-  if (!amt || amt <= 0) return;
   let errors = [];
   [...S.selected].forEach(id => {
     const d = S.dishes.find(x => x.id === id);
     if (!d) return;
-    if (amt > d.stock) { errors.push(`"${d.name}" only has ${d.stock}L`); return; }
+    // For transport splits, calculate per-dish amount based on target location needs
+    let amt;
+    if (isTransport && smartAmounts) {
+      const targetLocKey = targetLoc === 'centraal' ? 'centraal' : 'west';
+      amt = calcRequiredForLoc(d, targetLocKey);
+      if (amt <= 0) { errors.push(`"${d.name}" has no services at ${targetLoc}`); return; }
+    } else {
+      amt = manualAmt;
+    }
+    if (!amt || amt <= 0) return;
+    if (amt > d.stock) { errors.push(`"${d.name}" only has ${d.stock}L (need ${amt}L)`); return; }
     d.stock = Math.round((d.stock - amt) * 10) / 10;
     const targetLocName = targetLoc === 'centraal' ? 'centraal' : 'west';
     const newDish = {
@@ -1387,7 +1420,7 @@ function doSplit(isTransport, targetLoc) {
       recipeIngredients: d.recipeIngredients ? [...d.recipeIngredients] : undefined,
       allergens: [...(d.allergens || [])], extraAllergens: [...(d.extraAllergens || [])],
       orderFor: false, parentId: d.id, cookDate: d.cookDate, cookMode: d.cookMode,
-      cookDay: d.cookDay,
+      cookDay: d.cookDay, cookConfirmed: d.cookConfirmed || false,
       services: isTransport ? ((d.services || []).filter(s => s.loc === targetLocName)) : []
     };
     if (isTransport) d.services = (d.services || []).filter(s => s.loc !== targetLocName);
@@ -1397,7 +1430,7 @@ function doSplit(isTransport, targetLoc) {
   S.selected.clear(); rebuildPlanner(); renderDishes(); scheduleSave();
   toast('Stock split created');
 }
-function doTransportSplit(tl) { doSplit(true, tl); }
+function doTransportSplit(tl, smartAmt) { doSplit(true, tl, true); }
 
 // ── NEW DISH ──────────────────────────────────────────────
 function openNewDish() {
