@@ -212,7 +212,7 @@ async function ensureTabsExist(sheets, sheetId, tabNames) {
 const DISH_HEADERS = [
   'id','name','type','stock','serving','storage','logistics',
   'allergens','extra_allergens','order_for','cook_mode','cook_day',
-  'cook_date','recipe_sheet_id','recipe_volume','recipe_ingredients',
+  'cook_date','cook_confirmed','recipe_sheet_id','recipe_volume','recipe_ingredients',
   'parent_id','created_at'
 ];
 const SERVICE_HEADERS = ['id','dish_id','location','day','meal'];
@@ -270,6 +270,7 @@ function rowToDish(row) {
     cookMode: row.cook_mode || 'day',
     cookDay: row.cook_day || null,
     cookDate: row.cook_date || null,
+    cookConfirmed: row.cook_confirmed === 'true',
     recipeSheetId: row.recipe_sheet_id || null,
     recipeVolume: parseFloat(row.recipe_volume) || null,
     recipeIngredients: row.recipe_ingredients ? JSON.parse(row.recipe_ingredients) : null,
@@ -285,7 +286,8 @@ function dishToRow(dish) {
     dish.storage || 'Gastro', dish.logistics || 'Sering West',
     (dish.allergens || []).join('|'), (dish.extraAllergens || []).join('|'),
     dish.orderFor ? 'true' : 'false', dish.cookMode || 'day',
-    dish.cookDay || '', dish.cookDate || '', dish.recipeSheetId || '',
+    dish.cookDay || '', dish.cookDate || '', dish.cookConfirmed ? 'true' : 'false',
+    dish.recipeSheetId || '',
     dish.recipeVolume || '',
     dish.recipeIngredients ? JSON.stringify(dish.recipeIngredients) : '',
     dish.parentId || '', dish.createdAt || new Date().toISOString()
@@ -546,10 +548,25 @@ app.get('/api/recipe', async (req, res) => {
       // Skip instruction/note rows: if name is very long or amount column has no number
       if (row[0].length > 80) return;
       const afterCooking = row[3] ? parseFloat(String(row[3]).replace(',','.')) : null;
+      let amount = (afterCooking && afterCooking > 0) ? afterCooking : rawAmt;
+      let unit = (unitRows[i] && unitRows[i][0]) || 'Grams';
+      // Normalize: convert kilos to grams, liters to ml
+      const unitLower = unit.toLowerCase().replace(/'/g, '');
+      if (unitLower === 'kilos' || unitLower === 'kilo' || unitLower === 'kg') {
+        amount = amount * 1000;
+        unit = 'Grams';
+      } else if (unitLower === 'liters' || unitLower === 'liter' || unitLower === 'litres' || unitLower === 'l') {
+        amount = amount * 1000;
+        unit = 'ML';
+      } else if (unitLower === 'grams' || unitLower === 'gram' || unitLower === 'g') {
+        unit = 'Grams';
+      } else if (unitLower === 'ml') {
+        unit = 'ML';
+      }
       ingredients.push({
         name: row[0],
-        amount: (afterCooking && afterCooking > 0) ? afterCooking : rawAmt,
-        unit: (unitRows[i] && unitRows[i][0]) || 'g',
+        amount,
+        unit,
         source: (sourceRows[i] && sourceRows[i][0]) || '',
       });
     });

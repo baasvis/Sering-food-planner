@@ -195,20 +195,18 @@
   .chip-main{background:var(--blue-bg);color:#0C447C;}
   .chip-dessert{background:var(--purple-bg);color:var(--purple);}
   .chip-tr{background:var(--purple-bg);color:var(--purple);}
-  .chip-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
+  .chip-nm{overflow:hidden;text-overflow:ellipsis;flex:1;word-break:break-word;}
   .chip-x{cursor:pointer;opacity:.5;flex-shrink:0;font-size:11px;line-height:1.4;}.chip-x:hover{opacity:1;}
   .chip-sub{font-size:10px;color:var(--text3);padding:0 2px;}
   .add-slot-btn{font-size:11px;color:var(--text3);border:1px dashed var(--border);border-radius:5px;padding:2px 4px;text-align:center;cursor:pointer;margin-top:auto;}
   .add-slot-btn:hover{color:var(--text2);border-color:var(--border2);}
 
   /* DISH LIST */
-  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:0;padding:5px 0;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
-  .dish-list-hdr span{padding:4px 8px;}
-  .dish-list-hdr .sortable{cursor:pointer;user-select:none;border-radius:4px;transition:background .1s;}
+  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:6px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .dish-list-hdr .sortable{cursor:pointer;user-select:none;border-radius:4px;padding:2px 4px;transition:background .1s;}
   .dish-list-hdr .sortable:hover{background:var(--bg2);color:var(--text);}
   .dish-list-hdr .sortable.active{color:var(--blue);}
-  .dish-row{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:0;align-items:center;padding:8px 0;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
-  .dish-row > div{padding:4px 8px;}
+  .dish-row{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:6px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
   .dish-row:hover{border-color:var(--border2);}
   .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
   .dish-row.split-child{padding-left:10px;}
@@ -221,7 +219,7 @@
   .dish-row.log-twc{border-left:3px solid #97C459;}
   .dish-row.log-tww{border-left:3px solid #EF9F27;}
   /* Cook date column highlight */
-  .dish-row .col-cook{background:var(--bg2);border-radius:4px;padding:6px 8px;}
+  .dish-row .col-cook{border-left:2px solid var(--border);padding-left:8px;}
   /* Section dividers */
   .dish-section-hdr{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:12px 0 6px;margin-top:8px;border-bottom:2px solid var(--border);color:var(--text2);display:flex;align-items:center;gap:8px;}
   .dish-section-hdr:first-child{margin-top:0;}
@@ -1283,16 +1281,20 @@ function renderAddModal(loc, day, meal, existing, filterOn, searchQuery, typeFil
       </div>`;
     }).join('');
   const existingJson = JSON.stringify(existing).replace(/'/g, "\\'");
-  const tf = typeFilter ? `,'${typeFilter}'` : `,''`;
+  const tfEsc = typeFilter ? typeFilter.replace(/'/g, "\\'") : '';
+  const tf = `,'${tfEsc}'`;
   showModal(`<h3>Add${typeLabel} to ${DAYS[day]} ${meal} &middot; ${locLabel}</h3>
-    <input type="text" class="dish-search" placeholder="Search dishes..." value="${esc(searchQuery)}"
-      oninput="renderAddModal('${loc}',${day},'${meal}',${existingJson},${filterOn},this.value${tf})" autofocus />
+    <input type="text" class="dish-search" id="planner-search" placeholder="Search dishes..." value="${esc(searchQuery)}"
+      oninput="renderAddModal('${loc}',${day},'${meal}',${existingJson},${filterOn},this.value${tf})" />
     <div class="filter-toggle-row" onclick="renderAddModal('${loc}',${day},'${meal}',${existingJson},${!filterOn},''${tf})">
       <div class="tbox${filterOn ? ' on' : ''}"><div class="tknob"></div></div>
       <span>Only show dishes at ${locLabel}</span>
     </div>
     <div class="dish-opts-list">${opts || '<div class="empty">No dishes yet. Add some in Menu planner.</div>'}</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+  // Restore focus and cursor position to search input
+  const si = document.getElementById('planner-search');
+  if (si) { si.focus(); si.setSelectionRange(si.value.length, si.value.length); }
 }
 
 function confirmAddDish(dishId, loc, day, meal) {
