@@ -169,17 +169,25 @@
   .add-slot-btn:hover{color:var(--text2);border-color:var(--border2);}
 
   /* DISH LIST */
-  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 70px 68px 52px 120px 110px 48px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
-  .dish-row{display:grid;grid-template-columns:20px 1fr 70px 68px 52px 120px 110px 48px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
+  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 120px 70px 68px 52px 120px 110px 48px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .dish-row{display:grid;grid-template-columns:20px 1fr 120px 70px 68px 52px 120px 110px 48px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
   .dish-row:hover{border-color:var(--border2);}
   .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
   .dish-row.split-child{border-left:2px solid var(--blue);padding-left:10px;}
   .dish-row.transport-row{border-left:2px solid var(--purple);padding-left:10px;}
+  .dish-row.stale-row{border-color:var(--red);background:var(--red-bg);}
   @media(max-width:700px){
     .dish-list-hdr{display:none;}
     .dish-row{grid-template-columns:20px 1fr auto;gap:6px;}
-    .dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-allergen,.dish-row .col-logistics,.dish-row .col-storage{display:none;}
+    .dish-row .col-cook,.dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-allergen,.dish-row .col-logistics,.dish-row .col-storage{display:none;}
   }
+  .cook-select{font-size:11px;height:26px;border:1px solid transparent;border-radius:4px;padding:0 4px;background:transparent;color:var(--text2);cursor:pointer;transition:border-color .15s;width:100%;}
+  .cook-select:hover{border-color:var(--border);background:var(--bg2);}
+  .cook-select:focus{outline:none;border-color:var(--blue);}
+  .cook-today-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;border:1px solid var(--green);background:var(--green-bg);color:var(--green);cursor:pointer;white-space:nowrap;transition:all .12s;}
+  .cook-today-btn:hover{background:var(--green);color:#fff;}
+  .cook-date{font-size:11px;color:var(--text2);}
+  .cook-stale{font-size:10px;font-weight:600;color:var(--red);}
   .inline-edit{font-size:13px;border:1px solid transparent;border-radius:4px;padding:2px 6px;background:transparent;color:var(--text);width:100%;transition:border-color .15s,background .15s;cursor:text;}
   .inline-edit:hover{border-color:var(--border);background:var(--bg2);}
   .inline-edit:focus{outline:none;border-color:var(--blue);background:var(--bg);}
@@ -274,7 +282,7 @@
     <button class="nav-btn active" onclick="showScreen('dashboard',this)">Dashboard</button>
     <button class="nav-btn" onclick="showScreen('guests',this)">Guest counts</button>
     <button class="nav-btn" onclick="showScreen('planner',this)">Weekly planner</button>
-    <button class="nav-btn" onclick="showScreen('dishes',this)">Dish list</button>
+    <button class="nav-btn" onclick="showScreen('dishes',this)">Menu planner</button>
     <button class="nav-btn" onclick="showScreen('orders',this)">Order overview</button>
     <div class="save-indicator" id="save-indicator">
       <div class="save-dot saved" id="save-dot"></div>
@@ -759,7 +767,7 @@ function renderDashboard() {
 
     <div class="dash-actions">
       <div class="dash-action-btn" onclick="navTo('planner')">&#8594; Weekly planner</div>
-      <div class="dash-action-btn" onclick="navTo('dishes')">&#43; Manage dishes</div>
+      <div class="dash-action-btn" onclick="navTo('dishes')">&#43; Menu planner</div>
       <div class="dash-action-btn" onclick="navTo('orders')">&#128203; Order overview${orderDishes.length ? ' (' + orderDishes.length + ')' : ''}</div>
       <div class="dash-action-btn" onclick="navTo('guests')">&#9998; Edit guest counts</div>
     </div>
@@ -768,7 +776,7 @@ function renderDashboard() {
 
 function navTo(screen) {
   const btns = document.querySelectorAll('.nav-btn');
-  const labels = { dashboard:'Dashboard', guests:'Guest counts', planner:'Weekly planner', dishes:'Dish list', orders:'Order overview' };
+  const labels = { dashboard:'Dashboard', guests:'Guest counts', planner:'Weekly planner', dishes:'Menu planner', orders:'Order overview' };
   btns.forEach(b => { if (b.textContent === labels[screen]) showScreen(screen, b); });
 }
 
@@ -923,7 +931,7 @@ function renderDishes() {
     </div>
   </div>
   <div id="split-bar-area"></div>
-  <div class="dish-list-hdr"><span></span><span>Dish</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-logistics">Logistics</span><span>More</span></div>
+  <div class="dish-list-hdr"><span></span><span>Dish</span><span class="col-cook">Cook</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-logistics">Logistics</span><span>More</span></div>
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${filtered.length} dish${filtered.length !== 1 ? 'es' : ''}</div>
   ${filtered.length === 0 ? '<div class="empty">No dishes match these filters</div>' : filtered.map(d => {
     const req = calcRequired(d);
@@ -932,7 +940,9 @@ function renderDishes() {
     const svcLbls = (d.services || []).map(s => `${DAYS[s.day]} ${s.meal[0].toUpperCase()}`).join(' · ');
     const isSel = S.selected.has(d.id);
     const isTr = (d.logistics || '').startsWith('Transport');
-    return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}">
+    const cookHtml = getCookCellHtml(d);
+    const isStale = isDishStale(d);
+    return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}${isStale ? ' stale-row' : ''}">
       <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
       <div>
         <div style="display:flex;align-items:center;gap:4px;">
@@ -945,6 +955,7 @@ function renderDishes() {
           ${svcLbls ? `<span style="font-size:10px;color:var(--text2);">${svcLbls}</span>` : '<span style="font-size:10px;color:var(--text3);">no service</span>'}
         </div>
       </div>
+      <div class="col-cook">${cookHtml}</div>
       <div class="col-stock"><input class="inline-edit inline-edit-stock" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" />
       </div>
       <div class="col-req" style="font-size:13px;">${req}L</div>
@@ -1050,6 +1061,134 @@ function inlineAddAllergenConfirm(id, value) {
   if (!allExisting.includes(val)) d.extraAllergens.push(val);
   scheduleSave();
   renderDishes();
+}
+
+// ── COOK DATE/DAY LOGIC ──────────────────────────────────
+function getToday() {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function dateToStr(d) {
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const yyyy = d.getFullYear();
+  return dd+'/'+mm+'/'+yyyy;
+}
+
+function strToDate(s) {
+  if (!s) return null;
+  // handle dd/mm/yyyy
+  const parts = s.split('/');
+  if (parts.length === 3) return new Date(parseInt(parts[2]), parseInt(parts[1])-1, parseInt(parts[0]));
+  // handle yyyy-mm-dd (legacy)
+  return new Date(s);
+}
+
+function getCookDayOptions() {
+  const today = getToday();
+  const todayDow = (today.getDay() + 6) % 7; // 0=Mon
+  const dayNames = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  const opts = [];
+  // This week: today through Sunday
+  for (let i = todayDow; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() + (i - todayDow));
+    const label = i === todayDow ? 'Today (' + dayNames[i] + ')' : dayNames[i];
+    opts.push({ value: dateToStr(d), label });
+  }
+  // Next week: Monday through Sunday
+  const daysUntilNextMon = 7 - todayDow;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() + daysUntilNextMon + i);
+    opts.push({ value: dateToStr(d), label: 'Next ' + dayNames[i] });
+  }
+  return opts;
+}
+
+function isDishCooked(d) {
+  if (!d.cookDate) return false;
+  const cd = strToDate(d.cookDate);
+  if (!cd) return false;
+  return cd <= getToday() && d.cookConfirmed;
+}
+
+function isCookDayToday(d) {
+  if (!d.cookDate) return false;
+  const cd = strToDate(d.cookDate);
+  if (!cd) return false;
+  const today = getToday();
+  return cd.getTime() === today.getTime() && !d.cookConfirmed;
+}
+
+function isDishStale(d) {
+  if (!d.cookConfirmed || !d.cookDate) return false;
+  if (d.storage === 'Frozen') return false;
+  const cd = strToDate(d.cookDate);
+  if (!cd) return false;
+  const diff = (getToday() - cd) / (1000*60*60*24);
+  return diff >= 3;
+}
+
+function daysSinceCooked(d) {
+  if (!d.cookConfirmed || !d.cookDate) return 0;
+  const cd = strToDate(d.cookDate);
+  if (!cd) return 0;
+  return Math.floor((getToday() - cd) / (1000*60*60*24));
+}
+
+function getCookCellHtml(d) {
+  // Already cooked — show date + stale warning
+  if (d.cookConfirmed && d.cookDate) {
+    const stale = isDishStale(d);
+    const days = daysSinceCooked(d);
+    let html = `<span class="cook-date">${esc(d.cookDate)}</span>`;
+    if (stale) {
+      html += `<div class="cook-stale">${days}d ago — serve or freeze</div>`;
+    }
+    return html;
+  }
+  // Planned for today — show confirm button
+  if (isCookDayToday(d)) {
+    return `<button class="cook-today-btn" onclick="event.stopPropagation();confirmCooked('${d.id}')">Today — mark cooked</button>`;
+  }
+  // Future planned day — show the selected day label
+  if (d.cookDate && !d.cookConfirmed) {
+    const opts = getCookDayOptions();
+    const match = opts.find(o => o.value === d.cookDate);
+    // If it's a future date, show as day name via dropdown
+    return `<select class="cook-select" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
+      <option value="">Plan cook...</option>
+      ${opts.map(o => `<option value="${o.value}"${d.cookDate === o.value ? ' selected' : ''}>${o.label}</option>`).join('')}
+    </select>`;
+  }
+  // No plan yet — show dropdown
+  const opts = getCookDayOptions();
+  return `<select class="cook-select" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
+    <option value="">Plan cook...</option>
+    ${opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
+  </select>`;
+}
+
+function setCookDay(id, value) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  d.cookDate = value || null;
+  d.cookConfirmed = false;
+  d.cookMode = 'day';
+  scheduleSave();
+  renderDishes();
+}
+
+function confirmCooked(id) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  d.cookDate = dateToStr(getToday());
+  d.cookConfirmed = true;
+  scheduleSave();
+  renderDishes();
+  toast(esc(d.name) + ' marked as cooked');
 }
 
 function setFilter(group, val) { S.filters[group] = val; S.selected.clear(); renderDishes(); }
