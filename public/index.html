@@ -267,6 +267,10 @@
   .order-units{font-size:11px;color:var(--text2);white-space:nowrap;}
   .copy-all-btn{font-size:12px;padding:6px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin-left:8px;}
   .copy-all-btn:hover{border-color:var(--blue);color:var(--blue);}
+  .order-stock-input{width:70px;font-size:12px;height:28px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 6px;background:var(--bg);color:var(--text);text-align:right;}
+  .order-stock-input:focus{border-color:var(--blue);outline:none;}
+  .to-order-positive{color:var(--red);font-weight:600;}
+  .to-order-zero{color:var(--green);font-weight:500;}
   .order-shortfall-row{display:grid;grid-template-columns:1fr 100px 80px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:var(--radius);margin-bottom:3px;padding-left:10px;}
 
   /* MODAL */
@@ -2063,6 +2067,9 @@ async function addDishFromRecipe(recipeId) {
 
 // ── ORDER OVERVIEW ────────────────────────────────────────
 
+// In-stock amounts entered by cook (keyed by ingredient name lowercase)
+let orderInventory = {};
+
 function lookupIngredient(name) {
   if (!S.ingredientDb.length) return null;
   const q = name.toLowerCase().trim();
@@ -2156,7 +2163,6 @@ function renderOrders() {
     // Render per supplier
     supplierOrder.forEach(supplier => {
       const items = bySupplier[supplier];
-      const hasCodes = items.some(i => i.orderCode);
       const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
 
       html += `<div style="margin-bottom:16px;">
@@ -2169,27 +2175,55 @@ function renderOrders() {
         <thead><tr>
           <th>Ingredient</th>
           <th>Amount needed</th>
-          ${hasCodes ? '<th>Order code</th>' : ''}
+          <th>Order code / link</th>
+          <th>In stock</th>
+          <th>To order</th>
           <th>Order units</th>
           <th>For dishes</th>
         </tr></thead><tbody>`;
 
       items.forEach(ing => {
-        const isUrl = ing.orderCode && ing.orderCode.startsWith('http');
-        const codeDisplay = ing.orderCode
-          ? (isUrl
-            ? `<a href="${esc(ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link ↗</a>`
-            : `<span class="order-code" title="Click to select, then Ctrl+C" data-supplier="${esc(supplier)}">${esc(ing.orderCode)}</span>`)
-          : '<span style="color:var(--text2);font-size:11px;">—</span>';
+        const key = ing.name.toLowerCase().trim();
+        const isUrl = ing.orderCode && (ing.orderCode.startsWith('http') || ing.orderCode.startsWith('www'));
+        const dbUnit = (ing.db && ing.db.unit) || ing.unit || 'g';
+        const amtNeeded = Math.round(ing.amount);
 
-        const orderUnits = ing.orderCalc
-          ? `<span class="order-amt">${ing.orderCalc.units}x</span> <span class="order-units">(${ing.orderCalc.perUnit}${ing.orderCalc.unitType})</span>`
-          : '<span style="color:var(--text2);font-size:11px;">—</span>';
+        // Order code display
+        let codeDisplay;
+        if (!ing.orderCode) {
+          codeDisplay = '<span style="color:var(--text2);font-size:11px;">—</span>';
+        } else if (isUrl) {
+          codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link ↗</a>`;
+        } else {
+          codeDisplay = `<span class="order-code" title="Click to select">${esc(ing.orderCode)}</span>`;
+        }
 
-        html += `<tr>
+        // In stock input
+        const stockVal = orderInventory[key] !== undefined ? orderInventory[key] : '';
+        const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" />`;
+
+        // To order calculation
+        const inStock = parseFloat(orderInventory[key]) || 0;
+        const toOrder = Math.max(0, amtNeeded - inStock);
+        const toOrderDisplay = orderInventory[key] !== undefined
+          ? (toOrder > 0
+            ? `<span class="to-order-positive">${toOrder.toLocaleString()} ${esc(dbUnit)}</span>`
+            : `<span class="to-order-zero">✓ enough</span>`)
+          : `<span style="color:var(--text2);font-size:11px;">enter stock →</span>`;
+
+        // Order units (based on to-order amount, not total needed)
+        const orderAmt = orderInventory[key] !== undefined ? toOrder : amtNeeded;
+        const orderCalc = ing.db ? calcOrderUnits(orderAmt, ing.db) : null;
+        const orderUnits = orderCalc && orderCalc.units > 0
+          ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`
+          : (orderAmt === 0 ? '<span class="to-order-zero">—</span>' : '<span style="color:var(--text2);font-size:11px;">—</span>');
+
+        html += `<tr data-stock-key="${esc(key)}" data-needed="${amtNeeded}" data-unit="${esc(dbUnit)}">
           <td style="font-weight:500;">${esc(ing.name)}</td>
-          <td><span class="order-amt">${Math.round(ing.amount).toLocaleString()}</span> <span class="order-units">${esc(ing.unit)}</span></td>
-          ${hasCodes ? `<td>${codeDisplay}</td>` : ''}
+          <td><span class="order-amt">${amtNeeded.toLocaleString()}</span> <span class="order-units">${esc(dbUnit)}</span></td>
+          <td>${codeDisplay}</td>
+          <td>${stockInput}</td>
+          <td class="to-order-cell">${toOrderDisplay}</td>
           <td>${orderUnits}</td>
           <td style="font-size:11px;color:var(--text2);">${ing.dishes.map(n => esc(n.length > 20 ? n.slice(0,18) + '…' : n)).join(', ')}</td>
         </tr>`;
@@ -2219,6 +2253,33 @@ function copyOrderCodes(supplier) {
 }
 
 function toggleOrderSection(key) { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }
+
+function updateOrderStock(key, val) {
+  if (val === '' || val === null) {
+    delete orderInventory[key];
+  } else {
+    orderInventory[key] = parseFloat(val) || 0;
+  }
+  // Update just the to-order and order-units cells without full re-render (to keep focus)
+  // We do a lightweight re-render of the to-order cells
+  const row = document.querySelector(`[data-stock-key="${key}"]`);
+  if (!row) return;
+  // Find the ingredient data to recalculate
+  const needed = parseFloat(row.dataset.needed) || 0;
+  const inStock = parseFloat(val) || 0;
+  const toOrder = Math.max(0, needed - inStock);
+  const toOrderEl = row.querySelector('.to-order-cell');
+  const dbUnit = row.dataset.unit || 'g';
+  if (toOrderEl) {
+    if (val === '' || val === null || val === undefined) {
+      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock →</span>';
+    } else if (toOrder > 0) {
+      toOrderEl.innerHTML = `<span class="to-order-positive">${toOrder.toLocaleString()} ${esc(dbUnit)}</span>`;
+    } else {
+      toOrderEl.innerHTML = '<span class="to-order-zero">✓ enough</span>';
+    }
+  }
+}
 
 async function refreshAllRecipes() {
   const dishes = S.dishes.filter(d => d.orderFor && d.recipeSheetId);
