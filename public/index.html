@@ -564,16 +564,20 @@ async function loadData() {
 }
 
 let ingredientDbLoaded = false;
+let ingredientDbError = '';
 async function loadIngredientDb() {
   try {
     const ings = await apiGet('/api/ingredients');
     S.ingredientDb = ings || [];
     ingredientDbLoaded = true;
+    ingredientDbError = '';
     console.log('Ingredient DB loaded:', S.ingredientDb.length, 'items');
+    if (S.ingredientDb.length > 0) console.log('Sample:', S.ingredientDb[0].name, '| code:', S.ingredientDb[0].orderCode);
   } catch (e) {
     console.error('Failed to load ingredient DB:', e);
     S.ingredientDb = [];
     ingredientDbLoaded = true;
+    ingredientDbError = e.message || 'Unknown error';
   }
 }
 
@@ -2278,6 +2282,8 @@ function renderOrders() {
   const totalCount = ingList.length;
   html += `<div style="font-size:11px;color:var(--text2);margin-top:12px;padding:8px;border-top:1px solid var(--border);">
     Ingredient DB: ${S.ingredientDb.length} items loaded · ${matchCount}/${totalCount} ingredients matched
+    ${ingredientDbError ? ` · <span style="color:var(--red);">Error: ${esc(ingredientDbError)}</span>` : ''}
+    ${S.ingredientDb.length === 0 && !ingredientDbError ? ' · <button class="btn btn-sm" onclick="loadIngredientDb().then(renderOrders)">Retry load</button>' : ''}
   </div>`;
 
   document.getElementById('screen-orders').innerHTML = html;

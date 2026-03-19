@@ -552,11 +552,24 @@ app.get('/api/recipe', async (req, res) => {
 app.get('/api/ingredients', async (req, res) => {
   const sheets = getSheetsClient();
   if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
+  if (!CONFIG.INGREDIENT_DB_SHEET_ID) return res.json([]);
   try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, range: 'B3:R300',
+    // First get the sheet metadata to find the correct tab name
+    const meta = await sheets.spreadsheets.get({
+      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, fields: 'sheets.properties.title',
     });
-    const rows = (response.data.values||[]).slice(1).filter(r=>r[0]); // skip header row
+    const tabs = meta.data.sheets.map(s => s.properties.title);
+    console.log('Ingredient DB tabs:', tabs);
+    // Use first tab
+    const tabName = tabs[0] || 'Sheet1';
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, range: `'${tabName}'!B3:R300`,
+    });
+    const allRows = response.data.values || [];
+    console.log('Ingredient DB raw rows:', allRows.length);
+    const rows = allRows.slice(1).filter(r => r[0]); // skip header row
+    console.log('Ingredient DB filtered rows:', rows.length);
+    if (rows.length > 0) console.log('First ingredient:', rows[0][0], '| orderCode:', rows[0][5]);
     res.json(rows.map(r => ({
       name: r[0] || '',             // B: Name
       unit: r[1] || 'g',            // C: Grams or ML
@@ -572,7 +585,10 @@ app.get('/api/ingredients', async (req, res) => {
       allergens: r[13] || '',       // O: allergens (index 13 = col O minus col B = 13)
       storageLocation: r[16] || '', // R: storage location (index 16)
     })));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error('Ingredient DB error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/log', async (req, res) => {
