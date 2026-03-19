@@ -195,7 +195,8 @@
   .allergen-add-btn:hover{border-color:var(--text2);color:var(--text2);background:var(--bg2);}
   .allergen-add-input{font-size:11px;width:80px;height:20px;border:1px solid var(--blue);border-radius:4px;padding:0 5px;background:var(--bg);color:var(--text);outline:none;}
   .allergen-add-select{font-size:11px;height:22px;border:1px solid var(--blue);border-radius:4px;padding:0 3px;background:var(--bg);color:var(--text);outline:none;cursor:pointer;}
-  .recipe-link:hover{color:var(--blue) !important;}
+  .recipe-btn{flex-shrink:0;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;background:var(--green-bg);color:var(--green);text-decoration:none;white-space:nowrap;transition:all .12s;border:1px solid transparent;}
+  .recipe-btn:hover{background:var(--green);color:#fff;border-color:var(--green);}
   .sel-box{width:16px;height:16px;border:1px solid var(--border2);border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .sel-box.checked{background:var(--text);border-color:var(--text);}
   .sel-box.checked::after{content:'';width:8px;height:5px;border-left:2px solid var(--bg);border-bottom:2px solid var(--bg);transform:rotate(-45deg) translate(1px,-1px);display:block;}
@@ -936,7 +937,7 @@ function renderDishes() {
       <div>
         <div style="display:flex;align-items:center;gap:4px;">
           <input class="inline-edit inline-edit-name" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
-          ${d.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open recipe sheet" style="flex-shrink:0;color:var(--text3);text-decoration:none;font-size:14px;line-height:1;padding:2px;transition:color .1s;">&#8599;</a>` : ''}
+          ${d.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="recipe-btn">Recipe &#8599;</a>` : ''}
         </div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px;padding-left:6px;">
           ${typeBadge(d.type)}
