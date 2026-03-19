@@ -35,6 +35,35 @@
   *{box-sizing:border-box;margin:0;padding:0;}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg3);color:var(--text);font-size:14px;line-height:1.5;}
 
+  /* DASHBOARD */
+  .dash-greeting{font-size:20px;font-weight:600;margin-bottom:4px;}
+  .dash-date{font-size:13px;color:var(--text2);margin-bottom:20px;}
+  .dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
+  @media(max-width:640px){.dash-grid{grid-template-columns:1fr;}}
+  .dash-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;position:relative;overflow:hidden;}
+  .dash-card-title{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;display:flex;align-items:center;gap:6px;}
+  .dash-card-title .dash-icon{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0;}
+  .dash-loc-section{margin-bottom:12px;}
+  .dash-loc-section:last-child{margin-bottom:0;}
+  .dash-loc-label{font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;}
+  .dash-meal-row{display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;}
+  .dash-meal-label{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;width:48px;flex-shrink:0;padding-top:2px;}
+  .dash-meal-dishes{display:flex;flex-wrap:wrap;gap:4px;flex:1;}
+  .dash-meal-empty{font-size:12px;color:var(--text3);font-style:italic;}
+  .dash-guest-num{font-size:22px;font-weight:600;color:var(--text);line-height:1;}
+  .dash-guest-label{font-size:11px;color:var(--text2);}
+  .dash-guest-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .dash-guest-box{text-align:center;padding:8px;background:var(--bg2);border-radius:var(--radius);}
+  .dash-alert{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:var(--radius);margin-bottom:6px;}
+  .dash-alert-name{font-weight:600;font-size:13px;flex:1;}
+  .dash-alert-detail{font-size:12px;color:var(--red);font-weight:600;white-space:nowrap;}
+  .dash-ok{display:flex;align-items:center;gap:8px;padding:14px;color:var(--green);font-size:13px;font-weight:500;}
+  .dash-ok-dot{width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0;}
+  .dash-actions{display:flex;gap:8px;flex-wrap:wrap;}
+  .dash-action-btn{display:flex;align-items:center;gap:6px;padding:10px 16px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;font-size:13px;color:var(--text);font-weight:500;transition:all .1s;}
+  .dash-action-btn:hover{border-color:var(--border2);background:var(--bg2);}
+  .dash-full-width{grid-column:1/-1;}
+
   /* LOGIN SCREEN */
   .login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;}
   .login-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:40px;max-width:380px;width:100%;text-align:center;}
@@ -225,7 +254,8 @@
 <div class="app-shell" id="app-shell">
   <div class="top-bar">
     <h1>De Sering</h1>
-    <button class="nav-btn active" onclick="showScreen('guests',this)">Guest counts</button>
+    <button class="nav-btn active" onclick="showScreen('dashboard',this)">Dashboard</button>
+    <button class="nav-btn" onclick="showScreen('guests',this)">Guest counts</button>
     <button class="nav-btn" onclick="showScreen('planner',this)">Weekly planner</button>
     <button class="nav-btn" onclick="showScreen('dishes',this)">Dish list</button>
     <button class="nav-btn" onclick="showScreen('orders',this)">Order overview</button>
@@ -240,7 +270,8 @@
     </div>
   </div>
   <div class="content">
-    <div id="screen-guests" class="screen active"></div>
+    <div id="screen-dashboard" class="screen active"></div>
+    <div id="screen-guests" class="screen"></div>
     <div id="screen-planner" class="screen"></div>
     <div id="screen-dishes" class="screen"></div>
     <div id="screen-orders" class="screen"></div>
@@ -548,10 +579,179 @@ function showScreen(name, btn) {
   document.getElementById('screen-' + name).classList.add('active');
   btn.classList.add('active');
   rebuildPlanner();
+  if (name === 'dashboard') renderDashboard();
   if (name === 'guests') renderGuests();
   if (name === 'planner') renderPlanner();
   if (name === 'dishes') renderDishes();
   if (name === 'orders') renderOrders();
+}
+
+// ── DASHBOARD ────────────────────────────────────────────
+function getTodayIndex() {
+  return (new Date().getDay() + 6) % 7; // 0=Mon ... 6=Sun
+}
+
+function renderDashboard() {
+  const todayIdx = getTodayIndex();
+  const todayName = DAYS[todayIdx];
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-GB', { weekday:'long', day:'numeric', month:'long' });
+
+  // Greeting based on time of day
+  const hour = now.getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const userName = S.user?.name ? ', ' + S.user.name.split(' ')[0] : '';
+
+  // Today's dishes per location and meal
+  const locations = [
+    { key:'west', label:'Sering West' },
+    { key:'centraal', label:'Sering Centraal' }
+  ];
+
+  // Build today's service overview
+  let servingHtml = '';
+  locations.forEach(loc => {
+    servingHtml += `<div class="dash-loc-section"><div class="dash-loc-label">${loc.label}</div>`;
+    MEALS.forEach(meal => {
+      const k = `${loc.key}-${todayIdx}-${meal}`;
+      const slotDishes = S.planner[k] || [];
+      const gc = getGuests(loc.key, todayIdx, meal);
+      servingHtml += `<div class="dash-meal-row">
+        <div class="dash-meal-label">${meal}</div>
+        <div class="dash-meal-dishes">`;
+      if (slotDishes.length === 0) {
+        servingHtml += `<span class="dash-meal-empty">No dishes planned${gc > 0 ? ' (' + gc + ' guests expected)' : ''}</span>`;
+      } else {
+        slotDishes.forEach(d => {
+          const { cls } = diffStr(d);
+          servingHtml += `<div class="dish-chip ${chipClass(d)}" style="cursor:pointer;" onclick="navTo('dishes')">
+            <span class="chip-nm">${esc(d.name)}</span>
+          </div>`;
+        });
+        servingHtml += `<span style="font-size:11px;color:var(--text3);align-self:center;margin-left:2px;">${gc} guests</span>`;
+      }
+      servingHtml += `</div></div>`;
+    });
+    servingHtml += '</div>';
+  });
+
+  // Guest count summary for today
+  let totalLunch = 0, totalDinner = 0;
+  locations.forEach(loc => {
+    totalLunch += getGuests(loc.key, todayIdx, 'lunch');
+    totalDinner += getGuests(loc.key, todayIdx, 'dinner');
+  });
+
+  // Stock alerts — dishes with shortfalls
+  const shortfalls = S.dishes.filter(d => {
+    const req = calcRequired(d);
+    return req > 0 && d.stock < req;
+  });
+
+  let alertHtml = '';
+  if (shortfalls.length === 0) {
+    alertHtml = `<div class="dash-ok"><div class="dash-ok-dot"></div> All dishes have sufficient stock for this week</div>`;
+  } else {
+    shortfalls.slice(0, 5).forEach(d => {
+      const req = calcRequired(d);
+      const { str } = diffStr(d);
+      alertHtml += `<div class="dash-alert">
+        <div class="dash-alert-name">${esc(d.name)} <span style="font-weight:400;color:var(--text2);font-size:11px;">${d.logistics}</span></div>
+        <div class="dash-alert-detail">${str} (need ${req}L, have ${d.stock}L)</div>
+      </div>`;
+    });
+    if (shortfalls.length > 5) {
+      alertHtml += `<div style="font-size:12px;color:var(--text2);padding:6px 0;">+ ${shortfalls.length - 5} more &mdash; <a href="#" onclick="event.preventDefault();navTo('dishes')" style="color:var(--blue);">view all</a></div>`;
+    }
+  }
+
+  // Week overview — how many dishes per day
+  let weekHtml = '<div style="display:flex;gap:4px;">';
+  DAYS.forEach((day, idx) => {
+    let count = 0;
+    locations.forEach(loc => {
+      MEALS.forEach(meal => {
+        count += (S.planner[`${loc.key}-${idx}-${meal}`] || []).length;
+      });
+    });
+    const isToday = idx === todayIdx;
+    weekHtml += `<div style="flex:1;text-align:center;padding:8px 4px;border-radius:var(--radius);${isToday ? 'background:var(--text);color:var(--bg);font-weight:600;' : 'background:var(--bg2);color:var(--text2);'}">
+      <div style="font-size:11px;font-weight:600;">${day}</div>
+      <div style="font-size:16px;font-weight:600;margin-top:2px;">${count}</div>
+      <div style="font-size:10px;opacity:.7;">${count === 1 ? 'dish' : 'dishes'}</div>
+    </div>`;
+  });
+  weekHtml += '</div>';
+
+  // Dishes that need ordering
+  const orderDishes = S.dishes.filter(d => d.orderFor);
+
+  document.getElementById('screen-dashboard').innerHTML = `
+    <div class="dash-greeting">${greeting}${esc(userName)}</div>
+    <div class="dash-date">${dateStr} &mdash; ${S.dishes.length} dishes in planner</div>
+
+    <div class="dash-grid">
+      <div class="dash-card">
+        <div class="dash-card-title">
+          <div class="dash-icon" style="background:var(--blue-bg);color:var(--blue);">&#9734;</div>
+          Today's menu
+        </div>
+        ${servingHtml}
+      </div>
+
+      <div class="dash-card">
+        <div class="dash-card-title">
+          <div class="dash-icon" style="background:var(--green-bg);color:var(--green);">&#9829;</div>
+          Today's guests
+        </div>
+        <div class="dash-guest-grid">
+          <div class="dash-guest-box">
+            <div class="dash-guest-num">${totalLunch}</div>
+            <div class="dash-guest-label">Lunch</div>
+          </div>
+          <div class="dash-guest-box">
+            <div class="dash-guest-num">${totalDinner}</div>
+            <div class="dash-guest-label">Dinner</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          ${locations.map(loc => `<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);padding:3px 0;">
+            <span>${loc.label}</span>
+            <span>${getGuests(loc.key, todayIdx, 'lunch')}L / ${getGuests(loc.key, todayIdx, 'dinner')}D</span>
+          </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="dash-card dash-full-width">
+        <div class="dash-card-title">
+          <div class="dash-icon" style="background:${shortfalls.length ? 'var(--red-bg);color:var(--red)' : 'var(--green-bg);color:var(--green)'};">${shortfalls.length ? '!' : '&#10003;'}</div>
+          Stock alerts${shortfalls.length ? ' (' + shortfalls.length + ')' : ''}
+        </div>
+        ${alertHtml}
+      </div>
+
+      <div class="dash-card dash-full-width">
+        <div class="dash-card-title">
+          <div class="dash-icon" style="background:var(--purple-bg);color:var(--purple);">&#9632;</div>
+          Week at a glance
+        </div>
+        ${weekHtml}
+      </div>
+    </div>
+
+    <div class="dash-actions">
+      <div class="dash-action-btn" onclick="navTo('planner')">&#8594; Weekly planner</div>
+      <div class="dash-action-btn" onclick="navTo('dishes')">&#43; Manage dishes</div>
+      <div class="dash-action-btn" onclick="navTo('orders')">&#128203; Order overview${orderDishes.length ? ' (' + orderDishes.length + ')' : ''}</div>
+      <div class="dash-action-btn" onclick="navTo('guests')">&#9998; Edit guest counts</div>
+    </div>
+  `;
+}
+
+function navTo(screen) {
+  const btns = document.querySelectorAll('.nav-btn');
+  const labels = { dashboard:'Dashboard', guests:'Guest counts', planner:'Weekly planner', dishes:'Dish list', orders:'Order overview' };
+  btns.forEach(b => { if (b.textContent === labels[screen]) showScreen(screen, b); });
 }
 
 // ── GUESTS ────────────────────────────────────────────────
@@ -1056,7 +1256,7 @@ function esc(str) {
 async function initApp() {
   await loadData();
   rebuildPlanner();
-  renderGuests();
+  renderDashboard();
 }
 
 // On page load: check for existing session, or show login
