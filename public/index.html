@@ -169,8 +169,8 @@
   .add-slot-btn:hover{color:var(--text2);border-color:var(--border2);}
 
   /* DISH LIST */
-  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 56px 68px 52px 100px 90px 48px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
-  .dish-row{display:grid;grid-template-columns:20px 1fr 56px 68px 52px 100px 90px 48px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;cursor:pointer;transition:border-color .1s;}
+  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 70px 68px 52px 120px 110px 48px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .dish-row{display:grid;grid-template-columns:20px 1fr 70px 68px 52px 120px 110px 48px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
   .dish-row:hover{border-color:var(--border2);}
   .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
   .dish-row.split-child{border-left:2px solid var(--blue);padding-left:10px;}
@@ -178,8 +178,22 @@
   @media(max-width:700px){
     .dish-list-hdr{display:none;}
     .dish-row{grid-template-columns:20px 1fr auto;gap:6px;}
-    .dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-allergen,.dish-row .col-storage{display:none;}
+    .dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-allergen,.dish-row .col-logistics,.dish-row .col-storage{display:none;}
   }
+  .inline-edit{font-size:13px;border:1px solid transparent;border-radius:4px;padding:2px 6px;background:transparent;color:var(--text);width:100%;transition:border-color .15s,background .15s;cursor:text;}
+  .inline-edit:hover{border-color:var(--border);background:var(--bg2);}
+  .inline-edit:focus{outline:none;border-color:var(--blue);background:var(--bg);}
+  .inline-edit-name{font-weight:600;font-size:13px;}
+  .inline-edit-stock{width:60px;text-align:right;}
+  .inline-select{font-size:11px;border:1px solid transparent;border-radius:4px;padding:2px 4px;background:transparent;color:var(--text);cursor:pointer;transition:border-color .15s;appearance:none;-webkit-appearance:none;}
+  .inline-select:hover{border-color:var(--border);background:var(--bg2);}
+  .inline-select:focus{outline:none;border-color:var(--blue);}
+  .allergen-inline{display:flex;flex-wrap:wrap;gap:3px;align-items:center;min-height:22px;}
+  .allergen-inline .allergen-pill{cursor:pointer;transition:opacity .1s;}
+  .allergen-inline .allergen-pill:hover{opacity:.6;}
+  .allergen-add-btn{font-size:10px;width:18px;height:18px;border-radius:50%;border:1px dashed var(--border2);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text3);background:transparent;transition:all .1s;flex-shrink:0;}
+  .allergen-add-btn:hover{border-color:var(--text2);color:var(--text2);background:var(--bg2);}
+  .allergen-add-input{font-size:11px;width:80px;height:20px;border:1px solid var(--blue);border-radius:4px;padding:0 5px;background:var(--bg);color:var(--text);outline:none;}
   .sel-box{width:16px;height:16px;border:1px solid var(--border2);border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .sel-box.checked{background:var(--text);border-color:var(--text);}
   .sel-box.checked::after{content:'';width:8px;height:5px;border-left:2px solid var(--bg);border-bottom:2px solid var(--bg);transform:rotate(-45deg) translate(1px,-1px);display:block;}
@@ -875,6 +889,11 @@ function renderDishes() {
     return true;
   });
 
+  const logisticsOpts = LOGISTICS.map(l => {
+    const short = l === 'Sering West' ? 'West' : l === 'Sering Centraal' ? 'Centraal' : l === 'Transport to Sering Centraal' ? '→ Centraal' : '→ West';
+    return { val: l, label: short };
+  });
+
   const html = `
   <div class="btn-row" style="margin-bottom:12px;">
     <button class="btn btn-primary" onclick="openNewDish()">+ New dish</button>
@@ -900,42 +919,108 @@ function renderDishes() {
     </div>
   </div>
   <div id="split-bar-area"></div>
-  <div class="dish-list-hdr"><span></span><span>Dish</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-storage">Storage</span><span>Order</span></div>
+  <div class="dish-list-hdr"><span></span><span>Dish</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-logistics">Logistics</span><span>More</span></div>
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${filtered.length} dish${filtered.length !== 1 ? 'es' : ''}</div>
   ${filtered.length === 0 ? '<div class="empty">No dishes match these filters</div>' : filtered.map(d => {
     const req = calcRequired(d);
     const { diff, str, cls } = diffStr(d);
     const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
-    const ags = allAg.slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('') + (allAg.length > 3 ? `<span class="allergen-pill">+${allAg.length - 3}</span>` : '');
-    const svcLbls = (d.services || []).map(s => `${DAYS[s.day]} ${s.meal[0].toUpperCase()}`).join(' &middot; ');
-    const cookLbl = d.cookMode === 'date' && d.cookDate ? d.cookDate.slice(5) : d.cookDay || '';
+    const svcLbls = (d.services || []).map(s => `${DAYS[s.day]} ${s.meal[0].toUpperCase()}`).join(' · ');
     const isSel = S.selected.has(d.id);
     const isTr = (d.logistics || '').startsWith('Transport');
-    return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}" onclick="toggleSelect('${d.id}')">
-      <div class="sel-box${isSel ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelect('${d.id}')"></div>
+    return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}">
+      <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
       <div>
-        <div style="font-weight:600;font-size:13px;margin-bottom:2px;">${esc(d.name)}
-          <button class="btn btn-sm" style="margin-left:6px;" onclick="event.stopPropagation();openEditDish('${d.id}')">Edit</button>
-        </div>
-        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px;">
+        <input class="inline-edit inline-edit-name" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
+        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px;padding-left:6px;">
           ${typeBadge(d.type)}
           ${storageBadge(d.storage || 'Gastro')}
-          ${logisticsBadge(d.logistics || 'Sering West')}
-          ${cookLbl ? `<span style="font-size:10px;color:var(--text2);">cook: ${cookLbl}</span>` : ''}
           ${svcLbls ? `<span style="font-size:10px;color:var(--text2);">${svcLbls}</span>` : '<span style="font-size:10px;color:var(--text3);">no service</span>'}
         </div>
       </div>
-      <div class="col-stock" style="font-size:13px;">${d.stock || 0}L</div>
+      <div class="col-stock"><input class="inline-edit inline-edit-stock" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" />
+      </div>
       <div class="col-req" style="font-size:13px;">${req}L</div>
       <div class="col-diff ${cls}">${str}</div>
-      <div class="col-allergen">${ags || '<span style="color:var(--text3);font-size:12px;">none</span>'}</div>
-      <div class="col-storage"></div>
-      <div style="font-size:12px;font-weight:600;color:${d.orderFor ? 'var(--green)' : 'var(--text3)'};">${d.orderFor ? 'Yes' : '&mdash;'}</div>
+      <div class="col-allergen">
+        <div class="allergen-inline" id="ag-inline-${d.id}">
+          ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
+          <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}')" title="Add allergen">+</button>
+        </div>
+      </div>
+      <div class="col-logistics">
+        <select class="inline-select" onchange="inlineEdit('${d.id}','logistics',this.value)" onclick="event.stopPropagation()">
+          ${logisticsOpts.map(o => `<option value="${o.val}"${d.logistics === o.val ? ' selected' : ''}>${o.label}</option>`).join('')}
+        </select>
+      </div>
+      <div><button class="btn btn-sm" onclick="event.stopPropagation();openEditDish('${d.id}')">···</button></div>
     </div>`;
   }).join('')}`;
 
   document.getElementById('screen-dishes').innerHTML = html;
   renderSplitBar();
+}
+
+function inlineEdit(id, field, value) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  if (field === 'name') { d.name = value.trim() || d.name; }
+  else if (field === 'stock') { d.stock = parseFloat(value) || 0; }
+  else if (field === 'logistics') { d.logistics = value; }
+  rebuildPlanner();
+  scheduleSave();
+  // Re-render only the computed columns without full re-render (to keep focus)
+  const row = document.querySelector(`.dish-row input[onchange*="'${id}','stock'"]`);
+  if (row) {
+    const rowEl = row.closest('.dish-row');
+    const req = calcRequired(d);
+    const { str, cls } = diffStr(d);
+    const reqEl = rowEl.querySelector('.col-req');
+    const diffEl = rowEl.querySelector('.col-diff');
+    if (reqEl) reqEl.textContent = req + 'L';
+    if (diffEl) { diffEl.textContent = str; diffEl.className = 'col-diff ' + cls; }
+  }
+}
+
+function inlineRemoveAllergen(id, allergen) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  d.allergens = (d.allergens || []).filter(a => a !== allergen);
+  d.extraAllergens = (d.extraAllergens || []).filter(a => a !== allergen);
+  scheduleSave();
+  renderDishes();
+}
+
+function inlineAddAllergenStart(id) {
+  const container = document.getElementById('ag-inline-' + id);
+  if (!container || container.querySelector('.allergen-add-input')) return;
+  const btn = container.querySelector('.allergen-add-btn');
+  const input = document.createElement('input');
+  input.className = 'allergen-add-input';
+  input.placeholder = 'type...';
+  input.onkeydown = function(e) {
+    if (e.key === 'Enter') { inlineAddAllergenConfirm(id, this.value); }
+    if (e.key === 'Escape') { renderDishes(); }
+  };
+  input.onblur = function() {
+    if (this.value.trim()) inlineAddAllergenConfirm(id, this.value);
+    else renderDishes();
+  };
+  container.insertBefore(input, btn);
+  btn.style.display = 'none';
+  input.focus();
+}
+
+function inlineAddAllergenConfirm(id, value) {
+  const val = value.trim();
+  if (!val) { renderDishes(); return; }
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  if (!d.extraAllergens) d.extraAllergens = [];
+  const allExisting = [...(d.allergens || []), ...d.extraAllergens];
+  if (!allExisting.includes(val)) d.extraAllergens.push(val);
+  scheduleSave();
+  renderDishes();
 }
 
 function setFilter(group, val) { S.filters[group] = val; S.selected.clear(); renderDishes(); }
