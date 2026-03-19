@@ -256,9 +256,17 @@
   .tbox.on{background:var(--blue);}
   .tknob{width:14px;height:14px;border-radius:50%;background:#fff;position:absolute;top:2px;left:2px;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.2);}
   .tbox.on .tknob{left:14px;}
-  .ing-grid-hdr{display:grid;grid-template-columns:1fr 110px 80px 90px;gap:8px;padding:4px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
-  .ing-row{display:grid;grid-template-columns:1fr 110px 80px 90px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:3px;}
-  .ing-row:hover{border-color:var(--border2);}
+  .ing-table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;}
+  .ing-table th{text-align:left;padding:6px 8px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--border);background:var(--bg2);position:sticky;top:0;}
+  .ing-table td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  .ing-table tr:hover td{background:var(--bg2);}
+  .ing-supplier-hdr td{background:var(--bg2);font-weight:600;font-size:13px;border-bottom:2px solid var(--border);padding:10px 8px;}
+  .order-code{font-family:monospace;font-size:12px;background:var(--bg2);padding:2px 6px;border-radius:3px;cursor:pointer;display:inline-block;border:1px solid var(--border);transition:all .1s;user-select:all;}
+  .order-code:hover{border-color:var(--blue);background:var(--blue-bg);}
+  .order-amt{font-weight:600;white-space:nowrap;}
+  .order-units{font-size:11px;color:var(--text2);white-space:nowrap;}
+  .copy-all-btn{font-size:12px;padding:6px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin-left:8px;}
+  .copy-all-btn:hover{border-color:var(--blue);color:var(--blue);}
   .order-shortfall-row{display:grid;grid-template-columns:1fr 100px 80px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:var(--radius);margin-bottom:3px;padding-left:10px;}
 
   /* MODAL */
@@ -379,6 +387,7 @@ let S = {
   },
   dishes:[],
   recipeIndex:[],
+  ingredientDb:[],
   planner:{},
   user:null,
 };
@@ -542,6 +551,8 @@ async function loadData() {
     if (data.recipeIndex) S.recipeIndex = data.recipeIndex;
     if (data.dishes) S.dishes = data.dishes;
     rebuildPlanner();
+    // Load ingredient DB in background (for order overview)
+    apiGet('/api/ingredients').then(ings => { S.ingredientDb = ings || []; }).catch(() => {});
   } catch (e) {
     console.warn('Could not load from server, using defaults');
     toastError('Could not load data: ' + e.message);
@@ -616,7 +627,7 @@ function calcIngredientsFromRecipe(dish) {
     name: ing.name,
     amount: Math.round(ing.amount * mult),
     unit: ing.unit || 'g',
-    location: ing.location || ''
+    source: ing.source || '',
   }));
 }
 
@@ -2048,36 +2059,72 @@ async function addDishFromRecipe(recipeId) {
 }
 
 // ── ORDER OVERVIEW ────────────────────────────────────────
+
+function lookupIngredient(name) {
+  if (!S.ingredientDb.length) return null;
+  const q = name.toLowerCase().trim();
+  return S.ingredientDb.find(i => i.name.toLowerCase().trim() === q) || null;
+}
+
+function calcOrderUnits(amountGrams, dbEntry) {
+  if (!dbEntry || !dbEntry.orderAmount || dbEntry.orderAmount <= 0) return null;
+  const unitGrams = dbEntry.unitRecalc || dbEntry.orderAmount;
+  const units = Math.ceil(amountGrams / unitGrams);
+  return { units, perUnit: dbEntry.orderAmount, unitType: dbEntry.actualUnit || dbEntry.unit || 'g' };
+}
+
 function renderOrders() {
   const orderedDishes = S.dishes.filter(d => d.orderFor);
   const shortfall = S.dishes.filter(d => d.stock < calcRequired(d) && calcRequired(d) > 0);
 
+  // Combine ingredients across all ordered dishes
   const combined = {};
   orderedDishes.forEach(dish => {
     const ings = calcIngredientsFromRecipe(dish);
     ings.forEach(ing => {
-      if (!combined[ing.name]) combined[ing.name] = { amount: 0, unit: ing.unit, location: ing.location, dishes: [] };
-      combined[ing.name].amount += ing.amount;
-      combined[ing.name].dishes.push(dish.name);
+      const key = ing.name.toLowerCase().trim();
+      if (!combined[key]) combined[key] = { name: ing.name, amount: 0, unit: ing.unit, source: ing.source, dishes: [] };
+      combined[key].amount += ing.amount;
+      if (!combined[key].dishes.includes(dish.name)) combined[key].dishes.push(dish.name);
+      if (!combined[key].source && ing.source) combined[key].source = ing.source;
     });
   });
-  const ingList = Object.entries(combined).sort((a, b) => a[0].localeCompare(b[0]));
 
-  let html = `<div class="order-toggle-bar">
-    <div class="order-toggle${S.orderToggles.dishes ? ' on' : ''}" onclick="toggleOrderSection('dishes')">
-      <div class="tbox${S.orderToggles.dishes ? ' on' : ''}"><div class="tknob"></div></div>
-      <span>Dish ingredients (${orderedDishes.length} dishes)</span>
-    </div>
-    <div class="order-toggle${S.orderToggles.standard ? ' on' : ''}" onclick="toggleOrderSection('standard')">
-      <div class="tbox${S.orderToggles.standard ? ' on' : ''}"><div class="tknob"></div></div>
-      <span>Standard inventory</span>
-    </div>
-  </div>`;
+  // Enrich with ingredient DB data
+  const ingList = Object.values(combined).map(ing => {
+    const db = lookupIngredient(ing.name);
+    return {
+      ...ing,
+      db,
+      supplier: (db && db.source) || ing.source || 'Unknown',
+      orderCode: db ? db.orderCode : '',
+      orderType: db ? db.orderType : '',
+      orderCalc: db ? calcOrderUnits(ing.amount, db) : null,
+      storageLocation: db ? db.storageLocation : '',
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name));
 
+  // Group by supplier
+  const bySupplier = {};
+  ingList.forEach(ing => {
+    const s = ing.supplier || 'Unknown';
+    if (!bySupplier[s]) bySupplier[s] = [];
+    bySupplier[s].push(ing);
+  });
+  // Sort suppliers: Hanos first, then alphabetical
+  const supplierOrder = Object.keys(bySupplier).sort((a, b) => {
+    if (a.toLowerCase().includes('hanos')) return -1;
+    if (b.toLowerCase().includes('hanos')) return 1;
+    return a.localeCompare(b);
+  });
+
+  let html = '';
+
+  // Shortfall section
   html += `<div style="margin-bottom:20px;"><div class="section-title">Stock shortfall &mdash; needs cooking or restock</div>`;
   if (!shortfall.length) html += `<div class="empty" style="color:var(--green);">All dishes have sufficient stock</div>`;
   else html += shortfall.map(d => {
-    const req = calcRequired(d); const { diff, str } = diffStr(d);
+    const req = calcRequired(d); const { str } = diffStr(d);
     return `<div class="order-shortfall-row">
       <div style="font-weight:600;">${esc(d.name)} <span style="font-weight:400;color:var(--text2);font-size:12px;">&middot; ${d.logistics}</span></div>
       <div style="color:var(--red);font-weight:600;">${str}</div>
@@ -2086,35 +2133,82 @@ function renderOrders() {
   }).join('');
   html += '</div>';
 
-  if (S.orderToggles.dishes) {
-    html += `<div style="margin-bottom:20px;"><div class="section-title" style="display:flex;justify-content:space-between;">
-      <span>Combined ingredient order</span>
-      <span style="font-weight:400;color:var(--text2);">${orderedDishes.map(d => esc(d.name)).join(' &middot; ')}</span>
-    </div>`;
-    if (!ingList.length) {
-      html += `<div class="empty">`;
-      if (orderedDishes.length === 0) html += `No dishes flagged for order. Go to Dish list and set "Order for" to Yes on the dishes you're making.`;
-      else html += `Dishes are flagged but have no recipe sheet linked. Edit a dish and add a Recipe Sheet ID to enable ingredient calculation.`;
-      html += `</div>`;
-    } else {
-      html += `<div class="ing-grid-hdr"><span>Ingredient</span><span>Total needed</span><span>Location</span><span>For dishes</span></div>`;
-      html += ingList.map(([name, data]) => `<div class="ing-row">
-        <div style="font-weight:600;">${esc(name)}</div>
-        <div style="font-weight:600;">${Math.round(data.amount).toLocaleString()} ${data.unit}</div>
-        <div style="font-size:12px;color:var(--text2);">${data.location || '&mdash;'}</div>
-        <div style="font-size:11px;color:var(--text2);">${[...new Set(data.dishes)].map(n => esc(n.split(' ').slice(0, 2).join(' '))).join(', ')}</div>
-      </div>`).join('');
-    }
-    html += '</div>';
-  }
+  // Ingredient order section
+  html += `<div style="margin-bottom:20px;"><div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
+    <span>Ingredient order (${orderedDishes.length} dish${orderedDishes.length !== 1 ? 'es' : ''} flagged)</span>
+    <span style="font-weight:400;font-size:12px;color:var(--text2);">${orderedDishes.map(d => esc(d.name)).join(' · ')}</span>
+  </div>`;
 
-  if (S.orderToggles.standard) {
-    html += `<div><div class="section-title">Standard inventory</div>
-      <div class="empty">Standard inventory items will appear here once your inventory sheet is connected.</div>
-    </div>`;
+  if (!ingList.length) {
+    if (orderedDishes.length === 0) {
+      html += `<div class="empty">No dishes flagged for order. In Menu planner, click the order toggle on dishes you want to order ingredients for.</div>`;
+    } else {
+      html += `<div class="empty">Dishes are flagged but have no recipe data. Make sure they have a linked recipe sheet with ingredients.</div>`;
+    }
+  } else {
+    // Render per supplier
+    supplierOrder.forEach(supplier => {
+      const items = bySupplier[supplier];
+      const hasCodes = items.some(i => i.orderCode);
+      const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
+
+      html += `<div style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span style="font-weight:600;font-size:14px;">${esc(supplier)}</span>
+          <span style="font-size:12px;color:var(--text2);">(${items.length} item${items.length !== 1 ? 's' : ''})</span>
+          ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyOrderCodes('${esc(supplier)}')">Copy all codes</button>` : ''}
+        </div>
+        <div style="overflow-x:auto;"><table class="ing-table">
+        <thead><tr>
+          <th>Ingredient</th>
+          <th>Amount needed</th>
+          ${hasCodes ? '<th>Order code</th>' : ''}
+          <th>Order units</th>
+          <th>For dishes</th>
+        </tr></thead><tbody>`;
+
+      items.forEach(ing => {
+        const isUrl = ing.orderCode && ing.orderCode.startsWith('http');
+        const codeDisplay = ing.orderCode
+          ? (isUrl
+            ? `<a href="${esc(ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link ↗</a>`
+            : `<span class="order-code" title="Click to select, then Ctrl+C" data-supplier="${esc(supplier)}">${esc(ing.orderCode)}</span>`)
+          : '<span style="color:var(--text2);font-size:11px;">—</span>';
+
+        const orderUnits = ing.orderCalc
+          ? `<span class="order-amt">${ing.orderCalc.units}x</span> <span class="order-units">(${ing.orderCalc.perUnit}${ing.orderCalc.unitType})</span>`
+          : '<span style="color:var(--text2);font-size:11px;">—</span>';
+
+        html += `<tr>
+          <td style="font-weight:500;">${esc(ing.name)}</td>
+          <td><span class="order-amt">${Math.round(ing.amount).toLocaleString()}</span> <span class="order-units">${esc(ing.unit)}</span></td>
+          ${hasCodes ? `<td>${codeDisplay}</td>` : ''}
+          <td>${orderUnits}</td>
+          <td style="font-size:11px;color:var(--text2);">${ing.dishes.map(n => esc(n.length > 20 ? n.slice(0,18) + '…' : n)).join(', ')}</td>
+        </tr>`;
+      });
+
+      html += `</tbody></table></div></div>`;
+    });
   }
+  html += '</div>';
 
   document.getElementById('screen-orders').innerHTML = html;
+}
+
+function copyOrderCodes(supplier) {
+  const items = [];
+  S.dishes.filter(d => d.orderFor).forEach(dish => {
+    calcIngredientsFromRecipe(dish).forEach(ing => {
+      const db = lookupIngredient(ing.name);
+      if (db && db.orderCode && !db.orderCode.startsWith('http') && (db.source || '').toLowerCase().includes(supplier.toLowerCase())) {
+        if (!items.includes(db.orderCode)) items.push(db.orderCode);
+      }
+    });
+  });
+  if (items.length) {
+    navigator.clipboard.writeText(items.join('\n')).then(() => toast(items.length + ' order codes copied'));
+  }
 }
 
 function toggleOrderSection(key) { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }

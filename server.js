@@ -513,7 +513,7 @@ app.get('/api/recipe', async (req, res) => {
   if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
   try {
     const response = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: sheetId, ranges: ['C1','B3','D3','F3','H3','K2','K4','O3','O4','J6:N40'],
+      spreadsheetId: sheetId, ranges: ['C1','B3','D3','F3','H3','K2','K4','O3','O4','J6:N40','X6:X40','K6:K40'],
     });
     const vals = response.data.valueRanges;
     const dishName    = vals[0].values?.[0]?.[0] || '';
@@ -526,9 +526,16 @@ app.get('/api/recipe', async (req, res) => {
     const seasonality = vals[7].values?.[0]?.[0] || '';
     const costPerServing = vals[8].values?.[0]?.[0] || '';
     const ingRows     = vals[9].values || [];
+    const sourceRows  = vals[10].values || [];
+    const unitRows    = vals[11].values || [];
     const ingredients = ingRows
       .filter(row => row[0] && row[1] && parseFloat(row[1]) > 0)
-      .map(row => ({ name: row[0], amount: parseFloat(row[2]||row[1])||0, unit:'g', location:'' }));
+      .map((row, i) => ({
+        name: row[0],
+        amount: parseFloat(row[2]||row[1])||0,
+        unit: (unitRows[i] && unitRows[i][0]) || 'g',
+        source: (sourceRows[i] && sourceRows[i][0]) || '',
+      }));
     res.json({ dishName, serving, allergens, servingTemp, structure, dishType, recipeVolume: recipeVol, seasonality, costPerServing, ingredients });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -538,10 +545,24 @@ app.get('/api/ingredients', async (req, res) => {
   if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
   try {
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, range: 'A2:F300',
+      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, range: 'B3:R300',
     });
-    const rows = (response.data.values||[]).filter(r=>r[0]);
-    res.json(rows.map(r => ({ name:r[0], unit:r[1]||'g', costPer100:parseFloat(r[2])||0, location:r[3]||'', supplier:r[4]||'' })));
+    const rows = (response.data.values||[]).slice(1).filter(r=>r[0]); // skip header row
+    res.json(rows.map(r => ({
+      name: r[0] || '',             // B: Name
+      unit: r[1] || 'g',            // C: Grams or ML
+      source: r[2] || '',           // D: Source/supplier
+      costPer100: r[3] || '',       // E: price per 100g/ml
+      orderType: r[4] || '',        // F: order type
+      orderCode: r[5] || '',        // G: product code / link
+      actualUnit: r[6] || '',       // H: Actual unit type
+      orderAmount: parseFloat(r[7]) || 0, // I: single order amount
+      notes: r[8] || '',            // J: recalculation notes
+      orderPrice: r[9] || '',       // K: price per single order
+      unitRecalc: parseFloat(r[10]) || 0, // L: unit price recalculated (grams)
+      allergens: r[13] || '',       // O: allergens (index 13 = col O minus col B = 13)
+      storageLocation: r[16] || '', // R: storage location (index 16)
+    })));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
