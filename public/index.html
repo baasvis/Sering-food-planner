@@ -169,8 +169,8 @@
   .add-slot-btn:hover{color:var(--text2);border-color:var(--border2);}
 
   /* DISH LIST */
-  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 120px 70px 68px 52px 120px 110px 48px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
-  .dish-row{display:grid;grid-template-columns:20px 1fr 120px 70px 68px 52px 120px 110px 48px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
+  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 155px 70px 68px 52px 120px 110px 48px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .dish-row{display:grid;grid-template-columns:20px 1fr 155px 70px 68px 52px 120px 110px 48px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
   .dish-row:hover{border-color:var(--border2);}
   .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
   .dish-row.split-child{border-left:2px solid var(--blue);padding-left:10px;}
@@ -186,7 +186,10 @@
   .cook-select:focus{outline:none;border-color:var(--blue);}
   .cook-today-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;border:1px solid var(--green);background:var(--green-bg);color:var(--green);cursor:pointer;white-space:nowrap;transition:all .12s;}
   .cook-today-btn:hover{background:var(--green);color:#fff;}
-  .cook-date{font-size:11px;color:var(--text2);}
+  .cook-date{font-size:11px;color:var(--text2);display:flex;align-items:center;gap:4px;}
+  .cook-date-input{font-size:11px;width:100%;height:24px;border:1px solid transparent;border-radius:4px;padding:0 4px;background:transparent;color:var(--text2);cursor:pointer;transition:border-color .15s;}
+  .cook-date-input:hover{border-color:var(--border);background:var(--bg2);}
+  .cook-date-input:focus{outline:none;border-color:var(--blue);background:var(--bg);}
   .cook-stale{font-size:10px;font-weight:600;color:var(--red);}
   .inline-edit{font-size:13px;border:1px solid transparent;border-radius:4px;padding:2px 6px;background:transparent;color:var(--text);width:100%;transition:border-color .15s,background .15s;cursor:text;}
   .inline-edit:hover{border-color:var(--border);background:var(--bg2);}
@@ -931,7 +934,7 @@ function renderDishes() {
     </div>
   </div>
   <div id="split-bar-area"></div>
-  <div class="dish-list-hdr"><span></span><span>Dish</span><span class="col-cook">Cook</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-logistics">Logistics</span><span>More</span></div>
+  <div class="dish-list-hdr"><span></span><span>Dish</span><span class="col-cook">Cook / cooked</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-logistics">Logistics</span><span>More</span></div>
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${filtered.length} dish${filtered.length !== 1 ? 'es' : ''}</div>
   ${filtered.length === 0 ? '<div class="empty">No dishes match these filters</div>' : filtered.map(d => {
     const req = calcRequired(d);
@@ -1139,11 +1142,13 @@ function daysSinceCooked(d) {
 }
 
 function getCookCellHtml(d) {
-  // Already cooked — show date + stale warning
+  const opts = getCookDayOptions();
+
+  // Already cooked (confirmed) — show date + stale warning + editable date
   if (d.cookConfirmed && d.cookDate) {
     const stale = isDishStale(d);
     const days = daysSinceCooked(d);
-    let html = `<span class="cook-date">${esc(d.cookDate)}</span>`;
+    let html = `<input type="date" class="cook-date-input" value="${cookDateToISO(d.cookDate)}" onchange="setCookDateDirect('${d.id}',this.value)" onclick="event.stopPropagation()" title="Change cooked date" />`;
     if (stale) {
       html += `<div class="cook-stale">${days}d ago — serve or freeze</div>`;
     }
@@ -1151,34 +1156,78 @@ function getCookCellHtml(d) {
   }
   // Planned for today — show confirm button
   if (isCookDayToday(d)) {
-    return `<button class="cook-today-btn" onclick="event.stopPropagation();confirmCooked('${d.id}')">Today — mark cooked</button>`;
+    return `<button class="cook-today-btn" onclick="event.stopPropagation();confirmCooked('${d.id}')">Click to mark as cooked</button>`;
   }
-  // Future planned day — show the selected day label
+  // Has a planned future day — show dropdown (with option to switch to date)
   if (d.cookDate && !d.cookConfirmed) {
-    const opts = getCookDayOptions();
-    const match = opts.find(o => o.value === d.cookDate);
-    // If it's a future date, show as day name via dropdown
     return `<select class="cook-select" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
       <option value="">Plan cook...</option>
       ${opts.map(o => `<option value="${o.value}"${d.cookDate === o.value ? ' selected' : ''}>${o.label}</option>`).join('')}
+      <option value="__date">Pick a date...</option>
     </select>`;
   }
   // No plan yet — show dropdown
-  const opts = getCookDayOptions();
   return `<select class="cook-select" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
     <option value="">Plan cook...</option>
     ${opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
+    <option value="__date">Pick a date...</option>
   </select>`;
+}
+
+function cookDateToISO(ddmmyyyy) {
+  if (!ddmmyyyy) return '';
+  const parts = ddmmyyyy.split('/');
+  if (parts.length === 3) return parts[2]+'-'+parts[1]+'-'+parts[0];
+  return ddmmyyyy;
+}
+
+function isoToCookDate(iso) {
+  if (!iso) return '';
+  const parts = iso.split('-');
+  if (parts.length === 3) return parts[2]+'/'+parts[1]+'/'+parts[0];
+  return iso;
 }
 
 function setCookDay(id, value) {
   const d = S.dishes.find(x => x.id === id);
   if (!d) return;
+  if (value === '__date') {
+    // Replace the select with a date input
+    const row = document.querySelector(`[onchange="setCookDay('${id}',this.value)"]`);
+    if (row) {
+      const input = document.createElement('input');
+      input.type = 'date';
+      input.className = 'cook-date-input';
+      input.style.width = '100%';
+      input.onchange = function() {
+        setCookDateDirect(id, this.value);
+      };
+      input.onclick = function(e) { e.stopPropagation(); };
+      row.replaceWith(input);
+      input.focus();
+      input.showPicker && input.showPicker();
+    }
+    return;
+  }
   d.cookDate = value || null;
   d.cookConfirmed = false;
   d.cookMode = 'day';
   scheduleSave();
   renderDishes();
+}
+
+function setCookDateDirect(id, isoDate) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  d.cookDate = isoToCookDate(isoDate);
+  // If the date is today or in the past, mark as confirmed
+  const picked = new Date(isoDate);
+  const today = getToday();
+  d.cookConfirmed = picked <= today;
+  d.cookMode = 'date';
+  scheduleSave();
+  renderDishes();
+  if (d.cookConfirmed) toast(esc(d.name) + ' marked as cooked');
 }
 
 function confirmCooked(id) {
