@@ -263,9 +263,9 @@
   .sel-box{width:16px;height:16px;border:1px solid var(--border2);border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .sel-box.checked{background:var(--text);border-color:var(--text);}
   .sel-box.checked::after{content:'';width:8px;height:5px;border-left:2px solid var(--bg);border-bottom:2px solid var(--bg);transform:rotate(-45deg) translate(1px,-1px);display:block;}
-  .stock-ok{color:var(--green);font-weight:600;}
-  .stock-low{color:var(--amber);font-weight:600;}
-  .stock-miss{color:var(--red);font-weight:600;}
+  .stock-ok{color:var(--green);font-weight:600;background:var(--green-bg);padding:2px 6px;border-radius:4px;text-align:center;font-size:12px;}
+  .stock-low{color:var(--amber);font-weight:600;background:var(--amber-bg);padding:2px 6px;border-radius:4px;text-align:center;font-size:12px;}
+  .stock-miss{color:var(--red);font-weight:600;background:var(--red-bg);padding:2px 6px;border-radius:4px;text-align:center;font-size:12px;}
 
   /* SPLIT BAR */
   .split-bar{display:flex;gap:8px;align-items:center;padding:10px 14px;background:var(--blue-bg);border:1px solid var(--blue);border-radius:var(--radius);margin-bottom:12px;flex-wrap:wrap;}
@@ -366,11 +366,11 @@
   <div class="top-bar">
     <h1>De Sering</h1>
     <button class="nav-btn active" onclick="showScreen('dashboard',this)">Dashboard</button>
-    <button class="nav-btn" onclick="showScreen('guests',this)">Guest counts</button>
-    <button class="nav-btn" onclick="showScreen('planner',this)">Weekly planner</button>
-    <button class="nav-btn" onclick="showScreen('dishes',this)">Menu planner</button>
-    <button class="nav-btn" onclick="showScreen('recipe-index',this)">Dish index</button>
-    <button class="nav-btn" onclick="showScreen('orders',this)">Order overview</button>
+    <button class="nav-btn" onclick="showScreen('guests',this)">Guests</button>
+    <button class="nav-btn" onclick="showScreen('planner',this)">Week plan</button>
+    <button class="nav-btn" onclick="showScreen('dishes',this)">Dishes</button>
+    <button class="nav-btn" onclick="showScreen('recipe-index',this)">Recipes</button>
+    <button class="nav-btn" onclick="showScreen('orders',this)">Orders</button>
     <div class="save-indicator" id="save-indicator">
       <div class="save-dot saved" id="save-dot"></div>
       <span id="save-text">Saved</span>
@@ -1051,7 +1051,9 @@ function renderGuests() {
   });
   const shortDate = d => `${d.getDate()}/${d.getMonth()+1}`;
 
-  let html = '<div class="guests-grid">';
+  let html = `<div style="margin-bottom:16px;"><span style="font-size:16px;font-weight:600;">Expected guests this week</span>
+    <span style="font-size:12px;color:var(--text2);margin-left:8px;">Edit the numbers below. Totals update automatically.</span>
+  </div><div class="guests-grid">`;
 
   locs.forEach(loc => {
     // Weekly total
@@ -1367,6 +1369,12 @@ function renderDishes() {
       <button class="fc ${f.logistics === 'Transport to Sering West' ? 'on' : ''}" onclick="setFilter('logistics','Transport to Sering West')">&rarr; West</button>
       <button class="fc ${f.logistics === 'Sering Centraal' ? 'on' : ''}" onclick="setFilter('logistics','Sering Centraal')">At Centraal</button>
     </div>
+  </div>
+  <div style="display:flex;gap:12px;font-size:10px;color:var(--text3);margin-bottom:8px;padding:4px 0;">
+    <span><span style="display:inline-block;width:10px;height:10px;background:#BA7517;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>At West</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#0F6E56;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>At Centraal</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#97C459;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Transport → Centraal</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#EF9F27;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Transport → West</span>
   </div>
   <div id="split-bar-area"></div>
   <div class="dish-list-hdr">
@@ -2651,14 +2659,13 @@ function renderOrders() {
   }
   html += '</div>';
 
-  // Debug info
-  const matchCount = ingList.filter(i => i.db).length;
-  const totalCount = ingList.length;
-  html += `<div style="font-size:11px;color:var(--text2);margin-top:12px;padding:8px;border-top:1px solid var(--border);">
-    Ingredient DB: ${S.ingredientDb.length} items loaded · ${matchCount}/${totalCount} ingredients matched
-    ${ingredientDbError ? ` · <span style="color:var(--red);">Error: ${esc(ingredientDbError)}</span>` : ''}
-    ${S.ingredientDb.length === 0 && !ingredientDbError ? ' · <button class="btn btn-sm" onclick="loadIngredientDb().then(renderOrders)">Retry load</button>' : ''}
-  </div>`;
+  // Show status only if there's a problem
+  if (ingredientDbError || S.ingredientDb.length === 0) {
+    html += `<div style="font-size:11px;color:var(--text2);margin-top:12px;padding:8px;border-top:1px solid var(--border);">
+      ${ingredientDbError ? `<span style="color:var(--red);">Ingredient DB error: ${esc(ingredientDbError)}</span>` : ''}
+      ${S.ingredientDb.length === 0 && !ingredientDbError ? 'Ingredient database is empty. <button class="btn btn-sm" onclick="loadIngredientDb().then(renderOrders)">Retry</button>' : ''}
+    </div>`;
+  }
 
   document.getElementById('screen-orders').innerHTML = html;
 }
