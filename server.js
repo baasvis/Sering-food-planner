@@ -16,7 +16,18 @@ const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 
 const app = express();
+app.set('trust proxy', 1); // Trust Railway's proxy so secure cookies work
 app.use(express.json({ limit: '2mb' }));
+
+// Cookie options: secure when behind HTTPS (production), lax otherwise (dev)
+function cookieOpts() {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.RAILWAY_ENVIRONMENT === 'production' || !!process.env.RAILWAY_PUBLIC_DOMAIN,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURATION
@@ -81,7 +92,7 @@ app.post('/api/auth/google', async (req, res) => {
   if (!CONFIG.GOOGLE_CLIENT_ID) {
     const sessionId = generateSessionId();
     sessions.set(sessionId, { email: 'dev@local', name: 'Dev Mode', picture: null });
-    res.cookie('session', sessionId, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
+    res.cookie('session', sessionId, cookieOpts());
     return res.json({ ok: true, user: { email: 'dev@local', name: 'Dev Mode' } });
   }
 
@@ -93,7 +104,7 @@ app.post('/api/auth/google', async (req, res) => {
     }
     const sessionId = generateSessionId();
     sessions.set(sessionId, user);
-    res.cookie('session', sessionId, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
+    res.cookie('session', sessionId, cookieOpts());
     return res.json({ ok: true, user: { email: user.email, name: user.name, picture: user.picture } });
   } catch (e) {
     console.error('Auth error:', e.message);
@@ -466,4 +477,12 @@ app.get('/api/health', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('De Sering app v4 running on port ' + PORT));
+app.listen(PORT, () => {
+  console.log('De Sering app v4 running on port ' + PORT);
+  console.log('Config check:');
+  console.log('  GOOGLE_CLIENT_ID:', CONFIG.GOOGLE_CLIENT_ID ? `set (${CONFIG.GOOGLE_CLIENT_ID.slice(0, 12)}...)` : 'NOT SET — running in dev mode');
+  console.log('  DB_SHEET_ID:', CONFIG.DB_SHEET_ID ? 'set' : 'NOT SET');
+  console.log('  GOOGLE_CREDENTIALS:', CONFIG.GOOGLE_CREDENTIALS !== '{}' ? 'set' : 'NOT SET');
+  console.log('  ALLOWED_EMAILS:', CONFIG.ALLOWED_EMAILS.length ? CONFIG.ALLOWED_EMAILS.join(', ') : 'NOT SET (anyone can log in)');
+});
+
