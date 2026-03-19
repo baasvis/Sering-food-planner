@@ -194,6 +194,8 @@
   .allergen-add-btn{font-size:10px;width:18px;height:18px;border-radius:50%;border:1px dashed var(--border2);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text3);background:transparent;transition:all .1s;flex-shrink:0;}
   .allergen-add-btn:hover{border-color:var(--text2);color:var(--text2);background:var(--bg2);}
   .allergen-add-input{font-size:11px;width:80px;height:20px;border:1px solid var(--blue);border-radius:4px;padding:0 5px;background:var(--bg);color:var(--text);outline:none;}
+  .allergen-add-select{font-size:11px;height:22px;border:1px solid var(--blue);border-radius:4px;padding:0 3px;background:var(--bg);color:var(--text);outline:none;cursor:pointer;}
+  .recipe-link:hover{color:var(--blue) !important;}
   .sel-box{width:16px;height:16px;border:1px solid var(--border2);border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .sel-box.checked{background:var(--text);border-color:var(--text);}
   .sel-box.checked::after{content:'';width:8px;height:5px;border-left:2px solid var(--bg);border-bottom:2px solid var(--bg);transform:rotate(-45deg) translate(1px,-1px);display:block;}
@@ -302,6 +304,7 @@ const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const MEALS=['lunch','dinner'];
 const STORAGE=['Gastro','Frozen','Vac-packed'];
 const LOGISTICS=['Sering West','Transport to Sering Centraal','Transport to Sering West','Sering Centraal'];
+const ALLERGENS=['Gluten','Soy','Nuts','Peanuts','Sesame','Celery','Mustard','Sulphites','Lupin','Onion','Garlic','Paprika'];
 
 // ═══════════════════════════════════════════════════════════════════
 // STATE
@@ -890,7 +893,7 @@ function renderDishes() {
   });
 
   const logisticsOpts = LOGISTICS.map(l => {
-    const short = l === 'Sering West' ? 'West' : l === 'Sering Centraal' ? 'Centraal' : l === 'Transport to Sering Centraal' ? '→ Centraal' : '→ West';
+    const short = l === 'Sering West' ? 'Sering West' : l === 'Sering Centraal' ? 'Sering Centraal' : l === 'Transport to Sering Centraal' ? '→ Sering Centraal' : '→ Sering West';
     return { val: l, label: short };
   });
 
@@ -931,7 +934,10 @@ function renderDishes() {
     return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}">
       <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
       <div>
-        <input class="inline-edit inline-edit-name" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
+        <div style="display:flex;align-items:center;gap:4px;">
+          <input class="inline-edit inline-edit-name" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
+          ${d.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open recipe sheet" style="flex-shrink:0;color:var(--text3);text-decoration:none;font-size:14px;line-height:1;padding:2px;transition:color .1s;">&#8599;</a>` : ''}
+        </div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px;padding-left:6px;">
           ${typeBadge(d.type)}
           ${storageBadge(d.storage || 'Gastro')}
@@ -992,23 +998,45 @@ function inlineRemoveAllergen(id, allergen) {
 }
 
 function inlineAddAllergenStart(id) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
   const container = document.getElementById('ag-inline-' + id);
-  if (!container || container.querySelector('.allergen-add-input')) return;
+  if (!container || container.querySelector('.allergen-add-select')) return;
   const btn = container.querySelector('.allergen-add-btn');
-  const input = document.createElement('input');
-  input.className = 'allergen-add-input';
-  input.placeholder = 'type...';
-  input.onkeydown = function(e) {
-    if (e.key === 'Enter') { inlineAddAllergenConfirm(id, this.value); }
-    if (e.key === 'Escape') { renderDishes(); }
+  const allExisting = [...(d.allergens || []), ...(d.extraAllergens || [])];
+  const available = ALLERGENS.filter(a => !allExisting.includes(a));
+  const select = document.createElement('select');
+  select.className = 'allergen-add-select allergen-add-input';
+  select.style.width = '90px';
+  select.innerHTML = '<option value="">pick...</option>'
+    + available.map(a => `<option value="${a}">${a}</option>`).join('')
+    + '<option value="__custom">Other...</option>';
+  select.onchange = function() {
+    if (this.value === '__custom') {
+      this.remove();
+      const input = document.createElement('input');
+      input.className = 'allergen-add-input';
+      input.placeholder = 'type...';
+      input.onkeydown = function(e) {
+        if (e.key === 'Enter') { inlineAddAllergenConfirm(id, this.value); }
+        if (e.key === 'Escape') { renderDishes(); }
+      };
+      input.onblur = function() {
+        if (this.value.trim()) inlineAddAllergenConfirm(id, this.value);
+        else renderDishes();
+      };
+      container.insertBefore(input, btn);
+      input.focus();
+    } else if (this.value) {
+      inlineAddAllergenConfirm(id, this.value);
+    }
   };
-  input.onblur = function() {
-    if (this.value.trim()) inlineAddAllergenConfirm(id, this.value);
-    else renderDishes();
+  select.onblur = function() {
+    if (!this.value) renderDishes();
   };
-  container.insertBefore(input, btn);
+  container.insertBefore(select, btn);
   btn.style.display = 'none';
-  input.focus();
+  select.focus();
 }
 
 function inlineAddAllergenConfirm(id, value) {
