@@ -2071,9 +2071,25 @@ async function addDishFromRecipe(recipeId) {
 let orderInventory = {};
 
 function lookupIngredient(name) {
-  if (!S.ingredientDb.length) return null;
+  if (!S.ingredientDb.length || !name) return null;
   const q = name.toLowerCase().trim();
-  return S.ingredientDb.find(i => i.name.toLowerCase().trim() === q) || null;
+  // Exact match first
+  let match = S.ingredientDb.find(i => i.name.toLowerCase().trim() === q);
+  if (match) return match;
+  // Try without parenthetical qualifiers: "potato (slightly starchy)" matches "potato"
+  // But prefer the other direction: recipe says "onion", DB has "onion (yellow)"
+  match = S.ingredientDb.find(i => {
+    const dn = i.name.toLowerCase().trim();
+    // DB name starts with recipe name (e.g. DB:"Sunflower oil (1L)" matches recipe:"Sunflower oil")
+    return dn.startsWith(q) || q.startsWith(dn);
+  });
+  if (match) return match;
+  // Try matching the base name (before any parenthesis)
+  const qBase = q.replace(/\s*\(.*\)\s*$/, '').trim();
+  if (qBase !== q) {
+    match = S.ingredientDb.find(i => i.name.toLowerCase().trim().replace(/\s*\(.*\)\s*$/, '').trim() === qBase);
+  }
+  return match || null;
 }
 
 function calcOrderUnits(amountGrams, dbEntry) {
@@ -2190,8 +2206,10 @@ function renderOrders() {
 
         // Order code display
         let codeDisplay;
-        if (!ing.orderCode) {
-          codeDisplay = '<span style="color:var(--text2);font-size:11px;">—</span>';
+        if (!ing.db) {
+          codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
+        } else if (!ing.orderCode) {
+          codeDisplay = '<span style="color:var(--text2);font-size:11px;">no code</span>';
         } else if (isUrl) {
           codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link ↗</a>`;
         } else {
