@@ -548,21 +548,8 @@ app.get('/api/recipe', async (req, res) => {
       // Skip instruction/note rows: if name is very long or amount column has no number
       if (row[0].length > 80) return;
       const afterCooking = row[3] ? parseFloat(String(row[3]).replace(',','.')) : null;
-      let amount = (afterCooking && afterCooking > 0) ? afterCooking : rawAmt;
-      let unit = (unitRows[i] && unitRows[i][0]) || 'Grams';
-      // Normalize: convert kilos to grams, liters to ml
-      const unitLower = unit.toLowerCase().replace(/'/g, '');
-      if (unitLower === 'kilos' || unitLower === 'kilo' || unitLower === 'kg') {
-        amount = amount * 1000;
-        unit = 'Grams';
-      } else if (unitLower === 'liters' || unitLower === 'liter' || unitLower === 'litres' || unitLower === 'l') {
-        amount = amount * 1000;
-        unit = 'ML';
-      } else if (unitLower === 'grams' || unitLower === 'gram' || unitLower === 'g') {
-        unit = 'Grams';
-      } else if (unitLower === 'ml') {
-        unit = 'ML';
-      }
+      const amount = (afterCooking && afterCooking > 0) ? afterCooking : rawAmt;
+      const unit = (unitRows[i] && unitRows[i][0]) || 'Grams';
       ingredients.push({
         name: row[0],
         amount,
