@@ -138,6 +138,9 @@
   /* SERVED BUTTON */
   .served-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;border:1px solid var(--red);background:transparent;color:var(--red);cursor:pointer;white-space:nowrap;transition:all .12s;}
   .served-btn:hover{background:var(--red);color:#fff;}
+  .order-toggle-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text3);cursor:pointer;white-space:nowrap;transition:all .12s;}
+  .order-toggle-btn:hover{border-color:var(--green);color:var(--green);}
+  .order-toggle-btn.on{background:var(--green-bg);color:var(--green);border-color:var(--green);}
   .rating-row{display:flex;gap:4px;margin-top:4px;}
   .rating-btn{width:32px;height:32px;border-radius:var(--radius);border:1px solid var(--border2);background:transparent;color:var(--text2);font-size:13px;font-weight:600;cursor:pointer;transition:all .1s;}
   .rating-btn:hover{border-color:var(--amber);color:var(--amber);}
@@ -181,8 +184,8 @@
   .add-slot-btn:hover{color:var(--text2);border-color:var(--border2);}
 
   /* DISH LIST */
-  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 155px 70px 68px 52px 120px 120px 48px 52px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
-  .dish-row{display:grid;grid-template-columns:20px 1fr 155px 70px 68px 52px 120px 120px 48px 52px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
+  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:6px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .dish-row{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:6px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
   .dish-row:hover{border-color:var(--border2);}
   .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
   .dish-row.split-child{border-left:2px solid var(--blue);padding-left:10px;}
@@ -191,7 +194,7 @@
   @media(max-width:700px){
     .dish-list-hdr{display:none;}
     .dish-row{grid-template-columns:20px 1fr auto;gap:6px;}
-    .dish-row .col-cook,.dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-allergen,.dish-row .col-logistics,.dish-row .col-storage,.dish-row .served-btn{display:none;}
+    .dish-row .col-cook,.dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-logistics{display:none;}
   }
   .cook-select{font-size:11px;height:26px;border:1px solid transparent;border-radius:4px;padding:0 4px;background:transparent;color:var(--text2);cursor:pointer;transition:border-color .15s;width:100%;}
   .cook-select:hover{border-color:var(--border);background:var(--bg2);}
@@ -697,6 +700,26 @@ function typeBadge(t) {
   if (t === 'Dessert') return `<span class="badge b-dessert">Dessert</span>`;
   return `<span class="badge ${t === 'Soup' ? 'b-soup' : 'b-main'}">${t}</span>`;
 }
+function typeBadgeClass(t) {
+  if (t === 'Dessert') return 'badge b-dessert';
+  return 'badge ' + (t === 'Soup' ? 'b-soup' : 'b-main');
+}
+const TYPES = ['Soup','Main course','Dessert'];
+function cycleType(id) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  const idx = TYPES.indexOf(d.type || 'Soup');
+  d.type = TYPES[(idx + 1) % TYPES.length];
+  scheduleSave();
+  renderDishes();
+}
+function toggleOrder(id) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  d.orderFor = !d.orderFor;
+  scheduleSave();
+  renderDishes();
+}
 function chipClass(d) {
   if ((d.logistics || '').startsWith('Transport')) return 'chip-tr';
   if (d.type === 'Soup') return 'chip-soup';
@@ -1035,7 +1058,7 @@ function renderDishes() {
     </div>
   </div>
   <div id="split-bar-area"></div>
-  <div class="dish-list-hdr"><span></span><span>Dish</span><span class="col-cook">Cook / cooked</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-logistics">Logistics</span><span>More</span><span></span></div>
+  <div class="dish-list-hdr"><span></span><span>Dish</span><span class="col-cook">Cook / cooked</span><span>Stock</span><span class="col-req">Need</span><span class="col-diff">+/&minus;</span><span class="col-logistics">Location</span><span>Order</span><span></span></div>
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${filtered.length} dish${filtered.length !== 1 ? 'es' : ''}</div>
   ${filtered.length === 0 ? '<div class="empty">No dishes match these filters</div>' : filtered.map(d => {
     const req = calcRequired(d);
@@ -1054,31 +1077,26 @@ function renderDishes() {
     return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}${isStale ? ' stale-row' : ''}${isFrozen ? ' frozen-row' : ''}">
       <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
       <div>
-        <div style="display:flex;align-items:center;gap:4px;">
-          <input class="inline-edit inline-edit-name" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
-          ${d.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="recipe-btn">Recipe &#8599;</a>` : ''}
-        </div>
+        <input class="inline-edit inline-edit-name" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px;padding-left:6px;">
-          ${typeBadge(d.type)}
+          <span class="${typeBadgeClass(d.type)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleType('${d.id}')" title="Click to change">${d.type}</span>
           <span class="${storageBadgeClass(d.storage || 'Gastro')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleStorage('${d.id}')" title="Click to change">${d.storage || 'Gastro'}</span>
+          ${d.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="recipe-btn">Recipe &#8599;</a>` : ''}
+          <div class="allergen-inline" id="ag-inline-${d.id}" style="display:inline-flex;">
+            ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
+            <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}')" title="Add allergen">+</button>
+          </div>
           ${svcLbls ? `<span style="font-size:10px;color:var(--text2);">${svcLbls}</span>` : '<span style="font-size:10px;color:var(--text3);">no service</span>'}
         </div>
       </div>
       <div class="col-cook">${cookHtml}</div>
-      <div class="col-stock"><input class="inline-edit inline-edit-stock" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" />
-      </div>
+      <div class="col-stock"><input class="inline-edit inline-edit-stock" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" /></div>
       <div class="col-req" style="font-size:13px;">${req}L</div>
       <div class="col-diff ${cls}">${str}</div>
-      <div class="col-allergen">
-        <div class="allergen-inline" id="ag-inline-${d.id}">
-          ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
-          <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}')" title="Add allergen">+</button>
-        </div>
-      </div>
       <div class="col-logistics">
         <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLogistics('${d.id}')" title="Click to change">${logisticsShort(d.logistics || 'Sering West')}</span>
       </div>
-      <div><button class="btn btn-sm" onclick="event.stopPropagation();openEditDish('${d.id}')">···</button></div>
+      <div><button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button></div>
       <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
     </div>`;
   }).join('')}`;
