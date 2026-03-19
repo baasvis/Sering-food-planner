@@ -2169,7 +2169,9 @@ function renderOrders() {
   // Group by supplier
   const bySupplier = {};
   ingList.forEach(ing => {
-    const s = ing.supplier || 'Unknown';
+    // Normalize supplier name: capitalize first letter for consistent grouping
+    const rawSupplier = ing.supplier || 'Unknown';
+    const s = rawSupplier.charAt(0).toUpperCase() + rawSupplier.slice(1).toLowerCase();
     if (!bySupplier[s]) bySupplier[s] = [];
     bySupplier[s].push(ing);
   });
