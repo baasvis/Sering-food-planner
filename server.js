@@ -513,7 +513,7 @@ app.get('/api/recipe', async (req, res) => {
   if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
   try {
     const response = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: sheetId, ranges: ['C1','B3','D3','F3','H3','K2','K4','N3','O4','J6:N40'],
+      spreadsheetId: sheetId, ranges: ['C1','B3','D3','F3','H3','K2','K4','O3','O4','J6:N40'],
     });
     const vals = response.data.valueRanges;
     const dishName    = vals[0].values?.[0]?.[0] || '';
