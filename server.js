@@ -212,7 +212,7 @@ const GUEST_HEADERS   = ['location','day','lunch','dinner'];
 const RECIPE_INDEX_HEADERS = [
   'id','name','type','recipe_sheet_id','allergens','cost_per_serving',
   'structure','seasonality','serving_temp','serving_size','recipe_volume',
-  'recipe_ingredients','created_at'
+  'recipe_ingredients','created_at','avg_skill','avg_speed','avg_banger','times_served'
 ];
 
 function rowToRecipeIndex(row) {
@@ -230,6 +230,10 @@ function rowToRecipeIndex(row) {
     recipeVolume: parseFloat(row.recipe_volume) || null,
     recipeIngredients: row.recipe_ingredients ? JSON.parse(row.recipe_ingredients) : null,
     createdAt: row.created_at || new Date().toISOString(),
+    avgSkill: parseFloat(row.avg_skill) || 0,
+    avgSpeed: parseFloat(row.avg_speed) || 0,
+    avgBanger: parseFloat(row.avg_banger) || 0,
+    timesServed: parseInt(row.times_served) || 0,
   };
 }
 
@@ -240,7 +244,8 @@ function recipeIndexToRow(r) {
     r.structure || '', r.seasonality || '', r.servingTemp || '',
     r.servingSize || 280, r.recipeVolume || '',
     r.recipeIngredients ? JSON.stringify(r.recipeIngredients) : '',
-    r.createdAt || new Date().toISOString()
+    r.createdAt || new Date().toISOString(),
+    r.avgSkill || 0, r.avgSpeed || 0, r.avgBanger || 0, r.timesServed || 0
   ];
 }
 
@@ -508,7 +513,7 @@ app.get('/api/recipe', async (req, res) => {
   if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
   try {
     const response = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: sheetId, ranges: ['C1','B3','D3','F3','H3','K2','K4','N3','N4','J6:N40'],
+      spreadsheetId: sheetId, ranges: ['C1','B3','D3','F3','H3','K2','K4','N3','O4','J6:N40'],
     });
     const vals = response.data.valueRanges;
     const dishName    = vals[0].values?.[0]?.[0] || '';

@@ -290,19 +290,24 @@
   .toast.show{opacity:1;}
   .toast.error{background:var(--red);color:#fff;}
 
-  /* RECIPE INDEX */
-  .ri-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;}
-  .ri-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;transition:border-color .1s;position:relative;}
-  .ri-card:hover{border-color:var(--border2);}
-  .ri-name{font-size:14px;font-weight:600;margin-bottom:6px;}
-  .ri-meta{display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:6px;}
-  .ri-cost{font-size:12px;color:var(--text2);margin-top:4px;}
-  .ri-actions{display:flex;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);}
+  /* RECIPE INDEX TABLE */
+  .ri-table{width:100%;border-collapse:collapse;font-size:13px;}
+  .ri-table th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:8px 6px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap;}
+  .ri-table th:hover{color:var(--text);}
+  .ri-table th .sort-arrow{font-size:10px;margin-left:2px;opacity:.4;}
+  .ri-table th.sorted .sort-arrow{opacity:1;color:var(--amber);}
+  .ri-table td{padding:6px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  .ri-table tr:hover td{background:var(--bg2);}
+  .ri-table .ri-name-cell{font-weight:500;}
+  .ri-cost-cell{font-weight:600;font-size:12px;padding:3px 8px;border-radius:4px;text-align:center;white-space:nowrap;}
+  .ri-rating{display:inline-flex;align-items:center;gap:1px;font-size:11px;font-weight:600;color:var(--text2);}
+  .ri-rating-val{background:var(--bg2);padding:1px 5px;border-radius:3px;min-width:22px;text-align:center;}
   .ri-search{width:100%;max-width:400px;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);margin-bottom:12px;}
   .ri-filter-bar{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;align-items:center;}
   .ri-empty{text-align:center;padding:40px 20px;color:var(--text2);}
   .ri-empty p{margin-bottom:12px;}
   .ri-add-url{width:100%;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);}
+  .ri-table-wrap{overflow-x:auto;}
 </style>
 </head>
 <body>
@@ -716,6 +721,20 @@ function archiveDish(id, withRating) {
     archivedDate: dateToStr(getToday()),
     rating,
   });
+  // Update recipe index with running average of ratings
+  if (rating && d.recipeSheetId) {
+    const ri = S.recipeIndex.find(r => r.recipeSheetId === d.recipeSheetId);
+    if (ri) {
+      const n = ri.timesServed || 0;
+      const newN = n + 1;
+      ri.avgSkill = ((ri.avgSkill || 0) * n + (rating.skill || 0)) / newN;
+      ri.avgSpeed = ((ri.avgSpeed || 0) * n + (rating.speed || 0)) / newN;
+      ri.avgBanger = ((ri.avgBanger || 0) * n + (rating.banger || 0)) / newN;
+      ri.timesServed = newN;
+      // Save updated recipe index entry
+      apiPost('/api/recipe-index', ri).catch(e => console.error('Failed to update recipe ratings:', e));
+    }
+  }
   // Remove from active dishes
   S.dishes = S.dishes.filter(x => x.id !== id);
   pendingRatings = { skill:0, speed:0, banger:0 };
@@ -1744,6 +1763,29 @@ function deleteDish(id) {
 // ── RECIPE INDEX ──────────────────────────────────────────
 let riSearch = '';
 let riTypeFilter = 'all';
+let riSort = { col: 'name', dir: 'asc' };
+
+function parseCost(s) {
+  if (!s) return null;
+  const m = s.toString().replace(/[^0-9.,]/g,'').replace(',','.');
+  return parseFloat(m) || null;
+}
+
+function costColor(cost, allCosts) {
+  if (cost === null || allCosts.length < 2) return '';
+  const min = Math.min(...allCosts);
+  const max = Math.max(...allCosts);
+  if (max === min) return 'background:hsl(45,80%,85%);color:#333;';
+  const t = (cost - min) / (max - min); // 0=cheapest, 1=most expensive
+  // green(120) → orange(30) → red(0)
+  const hue = 120 - t * 120;
+  return `background:hsl(${hue},70%,82%);color:#333;`;
+}
+
+function avgRating(r) {
+  if (!r.timesServed) return 0;
+  return ((r.avgSkill || 0) + (r.avgSpeed || 0) + (r.avgBanger || 0)) / 3;
+}
 
 function renderRecipeIndex() {
   let filtered = S.recipeIndex;
@@ -1753,7 +1795,39 @@ function renderRecipeIndex() {
     filtered = filtered.filter(r => r.name.toLowerCase().includes(q) || (r.allergens||[]).join(' ').toLowerCase().includes(q));
   }
 
+  // Sort
+  const sorted = [...filtered].sort((a, b) => {
+    let va, vb;
+    switch (riSort.col) {
+      case 'name': va = a.name.toLowerCase(); vb = b.name.toLowerCase(); break;
+      case 'type': va = a.type||''; vb = b.type||''; break;
+      case 'cost': va = parseCost(a.costPerServing) ?? 999; vb = parseCost(b.costPerServing) ?? 999; break;
+      case 'rating': va = avgRating(a); vb = avgRating(b); break;
+      case 'banger': va = a.avgBanger||0; vb = b.avgBanger||0; break;
+      case 'served': va = a.timesServed||0; vb = b.timesServed||0; break;
+      case 'structure': va = a.structure||''; vb = b.structure||''; break;
+      case 'season': va = a.seasonality||''; vb = b.seasonality||''; break;
+      default: va = a.name; vb = b.name;
+    }
+    if (va < vb) return riSort.dir === 'asc' ? -1 : 1;
+    if (va > vb) return riSort.dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
   const types = [...new Set(S.recipeIndex.map(r => r.type).filter(Boolean))];
+
+  // Compute cost ranges per type for conditional formatting
+  const costsByType = {};
+  filtered.forEach(r => {
+    const c = parseCost(r.costPerServing);
+    if (c !== null) {
+      if (!costsByType[r.type]) costsByType[r.type] = [];
+      costsByType[r.type].push(c);
+    }
+  });
+
+  const arrow = (col) => riSort.col === col ? (riSort.dir === 'asc' ? '▲' : '▼') : '↕';
+  const thCls = (col) => riSort.col === col ? 'sorted' : '';
 
   let html = `
   <div class="btn-row" style="margin-bottom:12px;">
@@ -1766,39 +1840,67 @@ function renderRecipeIndex() {
     ${types.map(t => `<button class="fc ${riTypeFilter === t ? 'on' : ''}" onclick="riTypeFilter='${t}';renderRecipeIndex()">${t}</button>`).join('')}
   </div>`;
 
-  if (filtered.length === 0 && S.recipeIndex.length === 0) {
+  if (sorted.length === 0 && S.recipeIndex.length === 0) {
     html += `<div class="ri-empty">
       <p style="font-size:16px;font-weight:600;">No recipes yet</p>
       <p>Add your first recipe by clicking "+ Add recipe" and pasting a Google Sheet link.</p>
     </div>`;
-  } else if (filtered.length === 0) {
+  } else if (sorted.length === 0) {
     html += `<div class="ri-empty"><p>No recipes match your search</p></div>`;
   } else {
-    html += `<div class="ri-grid">${filtered.map(r => {
-      const ags = (r.allergens||[]).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
-      return `<div class="ri-card">
-        <div class="ri-name">${esc(r.name)}</div>
-        <div class="ri-meta">
-          ${typeBadge(r.type || 'Soup')}
-          ${r.structure ? `<span class="badge b-gastro">${esc(r.structure)}</span>` : ''}
-          ${r.servingTemp ? `<span class="badge b-frozen">${esc(r.servingTemp)}</span>` : ''}
-          ${r.seasonality ? `<span style="font-size:10px;color:var(--text2);">${esc(r.seasonality)}</span>` : ''}
-        </div>
-        ${ags ? `<div style="margin-bottom:4px;">${ags}</div>` : ''}
-        <div style="display:flex;gap:12px;font-size:12px;color:var(--text2);margin-top:4px;">
-          ${r.costPerServing ? `<span>Cost: <strong>${esc(r.costPerServing)}</strong></span>` : ''}
-          ${r.servingSize ? `<span>Serving: <strong>${r.servingSize}ml</strong></span>` : ''}
-        </div>
-        <div class="ri-actions">
-          ${r.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(r.recipeSheetId)}/edit" target="_blank" rel="noopener" class="recipe-btn">Recipe &#8599;</a>` : ''}
-          <button class="btn btn-sm" onclick="addDishFromRecipe('${r.id}')">+ Add to menu</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteRecipeIndex('${r.id}','${esc(r.name)}')">Delete</button>
-        </div>
-      </div>`;
-    }).join('')}</div>`;
+    html += `<div class="ri-table-wrap"><table class="ri-table">
+    <thead><tr>
+      <th class="${thCls('name')}" onclick="riSortBy('name')">Name <span class="sort-arrow">${arrow('name')}</span></th>
+      <th class="${thCls('type')}" onclick="riSortBy('type')">Type <span class="sort-arrow">${arrow('type')}</span></th>
+      <th class="${thCls('structure')}" onclick="riSortBy('structure')">Structure <span class="sort-arrow">${arrow('structure')}</span></th>
+      <th class="${thCls('cost')}" onclick="riSortBy('cost')">Cost <span class="sort-arrow">${arrow('cost')}</span></th>
+      <th class="${thCls('season')}" onclick="riSortBy('season')">Season <span class="sort-arrow">${arrow('season')}</span></th>
+      <th>Allergens</th>
+      <th class="${thCls('banger')}" onclick="riSortBy('banger')">Banger <span class="sort-arrow">${arrow('banger')}</span></th>
+      <th class="${thCls('rating')}" onclick="riSortBy('rating')">Avg <span class="sort-arrow">${arrow('rating')}</span></th>
+      <th class="${thCls('served')}" onclick="riSortBy('served')">Served <span class="sort-arrow">${arrow('served')}</span></th>
+      <th>Actions</th>
+    </tr></thead><tbody>`;
+
+    sorted.forEach(r => {
+      const cost = parseCost(r.costPerServing);
+      const typeCosts = costsByType[r.type] || [];
+      const cStyle = cost !== null ? costColor(cost, typeCosts) : '';
+      const ags = (r.allergens||[]).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join(' ');
+      const avg = avgRating(r);
+
+      html += `<tr>
+        <td class="ri-name-cell">
+          ${r.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(r.recipeSheetId)}/edit" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;">${esc(r.name)} <span style="font-size:10px;color:var(--green);">↗</span></a>` : esc(r.name)}
+        </td>
+        <td>${typeBadge(r.type || 'Soup')}</td>
+        <td style="font-size:12px;">${esc(r.structure || '—')}</td>
+        <td>${cost !== null ? `<span class="ri-cost-cell" style="${cStyle}">${esc(r.costPerServing)}</span>` : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
+        <td style="font-size:12px;">${esc(r.seasonality || '—')}</td>
+        <td>${ags || '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
+        <td>${r.timesServed ? `<span class="ri-rating"><span class="ri-rating-val">${(r.avgBanger||0).toFixed(1)}</span></span>` : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
+        <td>${r.timesServed ? `<span class="ri-rating"><span class="ri-rating-val">${avg.toFixed(1)}</span></span>` : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
+        <td style="text-align:center;">${r.timesServed || '—'}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-sm" onclick="addDishFromRecipe('${r.id}')">+ Menu</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteRecipeIndex('${r.id}','${esc(r.name)}')">✕</button>
+        </td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
   }
 
   document.getElementById('screen-recipe-index').innerHTML = html;
+}
+
+function riSortBy(col) {
+  if (riSort.col === col) {
+    riSort.dir = riSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    riSort.col = col;
+    riSort.dir = col === 'cost' || col === 'rating' || col === 'banger' || col === 'served' ? 'desc' : 'asc';
+  }
+  renderRecipeIndex();
 }
 
 function openAddRecipe() {
