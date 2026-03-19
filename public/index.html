@@ -1951,15 +1951,48 @@ function riSortBy(col) {
 }
 
 function openAddRecipe() {
-  showModal(`<h3>Add recipe to index</h3>
-    <div class="fr"><label>Paste Google Sheet URL</label>
-      <input type="text" id="ri-url" class="ri-add-url" placeholder="https://docs.google.com/spreadsheets/d/..." />
-      <div style="font-size:11px;color:var(--text2);margin-top:4px;">Paste the full URL of the recipe Google Sheet</div>
+  showModal(`<h3>Add recipes to index</h3>
+    <div style="margin-bottom:12px;">
+      <div class="ri-filter-bar">
+        <button class="fc on" id="ri-mode-single" onclick="setRiMode('single')">Single recipe</button>
+        <button class="fc" id="ri-mode-bulk" onclick="setRiMode('bulk')">Bulk import</button>
+      </div>
     </div>
+    <div id="ri-input-area">
+      <div class="fr"><label>Paste Google Sheet URL</label>
+        <input type="text" id="ri-url" class="ri-add-url" placeholder="https://docs.google.com/spreadsheets/d/..." />
+        <div style="font-size:11px;color:var(--text2);margin-top:4px;">Paste the full URL of the recipe Google Sheet</div>
+      </div>
+    </div>
+    <div id="ri-bulk-progress" style="display:none;margin-top:12px;"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="fetchAndAddRecipe()">Fetch recipe</button>
+      <button class="btn btn-primary" id="ri-submit-btn" onclick="fetchAndAddRecipe()">Fetch recipe</button>
     </div>`);
+}
+
+function setRiMode(mode) {
+  document.getElementById('ri-mode-single').className = 'fc' + (mode === 'single' ? ' on' : '');
+  document.getElementById('ri-mode-bulk').className = 'fc' + (mode === 'bulk' ? ' on' : '');
+  const area = document.getElementById('ri-input-area');
+  const btn = document.getElementById('ri-submit-btn');
+  if (mode === 'single') {
+    area.innerHTML = `<div class="fr"><label>Paste Google Sheet URL</label>
+      <input type="text" id="ri-url" class="ri-add-url" placeholder="https://docs.google.com/spreadsheets/d/..." />
+      <div style="font-size:11px;color:var(--text2);margin-top:4px;">Paste the full URL of the recipe Google Sheet</div>
+    </div>`;
+    btn.textContent = 'Fetch recipe';
+    btn.onclick = fetchAndAddRecipe;
+  } else {
+    area.innerHTML = `<div class="fr"><label>Paste multiple Google Sheet URLs (one per line)</label>
+      <textarea id="ri-urls" rows="8" style="width:100%;font-size:12px;font-family:monospace;border:1px solid var(--border2);border-radius:var(--radius);padding:8px;background:var(--bg);color:var(--text);resize:vertical;" placeholder="https://docs.google.com/spreadsheets/d/abc123/edit&#10;https://docs.google.com/spreadsheets/d/def456/edit&#10;https://docs.google.com/spreadsheets/d/ghi789/edit"></textarea>
+      <div style="font-size:11px;color:var(--text2);margin-top:4px;">One URL per line. Duplicates and invalid URLs will be skipped.</div>
+    </div>`;
+    btn.textContent = 'Import all';
+    btn.onclick = bulkAddRecipes;
+  }
+  document.getElementById('ri-bulk-progress').style.display = 'none';
+  document.getElementById('ri-bulk-progress').innerHTML = '';
 }
 
 function extractSheetId(url) {
@@ -2009,6 +2042,81 @@ async function fetchAndAddRecipe() {
   } catch (e) {
     toastError('Could not fetch recipe: ' + e.message);
   }
+}
+
+async function bulkAddRecipes() {
+  const textarea = document.getElementById('ri-urls');
+  if (!textarea) return;
+  const lines = textarea.value.split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) { alert('Please paste at least one URL'); return; }
+
+  // Extract sheet IDs and deduplicate
+  const entries = [];
+  const seen = new Set();
+  lines.forEach(line => {
+    const sheetId = extractSheetId(line);
+    if (!sheetId) return;
+    if (seen.has(sheetId)) return;
+    if (S.recipeIndex.find(r => r.recipeSheetId === sheetId)) return; // already in index
+    seen.add(sheetId);
+    entries.push({ url: line, sheetId });
+  });
+
+  const skipped = lines.length - entries.length;
+  if (!entries.length) {
+    alert(skipped > 0 ? 'All URLs are either invalid, duplicates, or already in your index.' : 'No valid Google Sheet URLs found.');
+    return;
+  }
+
+  const progress = document.getElementById('ri-bulk-progress');
+  progress.style.display = 'block';
+  const btn = document.getElementById('ri-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Importing...';
+
+  let ok = 0, fail = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const { sheetId } = entries[i];
+    progress.innerHTML = `<div style="font-size:12px;margin-bottom:4px;">Fetching ${i + 1}/${entries.length}...</div>
+      <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+        <div style="height:100%;width:${Math.round(((i + 1) / entries.length) * 100)}%;background:var(--blue);transition:width .2s;"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:4px;">${ok} added · ${fail} failed${skipped ? ' · ' + skipped + ' skipped' : ''}</div>`;
+
+    try {
+      const recipe = await apiGet('/api/recipe?sheetId=' + sheetId);
+      const newRecipe = {
+        id: newId(),
+        name: recipe.dishName || 'Unnamed recipe',
+        type: recipe.dishType || 'Soup',
+        recipeSheetId: sheetId,
+        allergens: recipe.allergens || [],
+        costPerServing: recipe.costPerServing || '',
+        structure: recipe.structure || '',
+        seasonality: recipe.seasonality || '',
+        servingTemp: recipe.servingTemp || '',
+        servingSize: recipe.serving || 280,
+        recipeVolume: recipe.recipeVolume || null,
+        recipeIngredients: recipe.ingredients || null,
+        createdAt: new Date().toISOString(),
+        avgSkill: 0, avgSpeed: 0, avgBanger: 0, timesServed: 0,
+      };
+      await apiPost('/api/recipe-index', newRecipe);
+      S.recipeIndex.push(newRecipe);
+      ok++;
+    } catch (e) {
+      console.error('Failed to import', sheetId, e);
+      fail++;
+    }
+  }
+
+  progress.innerHTML = `<div style="font-size:13px;font-weight:500;color:var(--green);margin-bottom:4px;">
+    Import complete: ${ok} added${fail ? ', ' + fail + ' failed' : ''}${skipped ? ', ' + skipped + ' skipped' : ''}
+  </div>`;
+  btn.disabled = false;
+  btn.textContent = 'Done';
+  btn.onclick = () => { closeModal(); renderRecipeIndex(); };
+  renderRecipeIndex();
 }
 
 function openEditRecipe(id) {
