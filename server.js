@@ -529,10 +529,13 @@ app.get('/api/recipe', async (req, res) => {
     const sourceRows  = vals[10].values || [];
     const unitRows    = vals[11].values || [];
     const ingredients = ingRows
-      .filter(row => row[0] && row[1] && parseFloat(row[1]) > 0)
+      .filter(row => row[0] && row[2] && parseFloat(row[2]) > 0)
       .map((row, i) => ({
         name: row[0],
-        amount: parseFloat(row[2]||row[1])||0,
+        // row[3] = column M = amount after cooking (accounts for reduction)
+        // row[2] = column L = raw amount (before cooking)
+        // Prefer after-cooking amount as that's the actual volume contribution
+        amount: parseFloat(row[3]||row[2])||0,
         unit: (unitRows[i] && unitRows[i][0]) || 'g',
         source: (sourceRows[i] && sourceRows[i][0]) || '',
       }));

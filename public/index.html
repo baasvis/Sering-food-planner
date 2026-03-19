@@ -621,7 +621,10 @@ function calcIngredientsFromRecipe(dish) {
   if (!dish.recipeIngredients || !dish.recipeVolume) return [];
   const totalGuests = calcTotalGuests(dish);
   if (totalGuests === 0) return [];
-  const guestsPerRecipe = dish.recipeVolume / (dish.serving || 280);
+  // recipeVolume is in liters (e.g. 10.78), serving is in ml (e.g. 240)
+  // Convert recipe volume to ml to match serving size units
+  const recipeVolumeMl = dish.recipeVolume * 1000;
+  const guestsPerRecipe = recipeVolumeMl / (dish.serving || 280);
   const mult = totalGuests / guestsPerRecipe;
   return dish.recipeIngredients.map(ing => ({
     name: ing.name,
