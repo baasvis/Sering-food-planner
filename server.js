@@ -508,18 +508,23 @@ app.get('/api/recipe', async (req, res) => {
   if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
   try {
     const response = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: sheetId, ranges: ['C1','B3','D3','K4','J6:N40'],
+      spreadsheetId: sheetId, ranges: ['C1','B3','D3','F3','H3','K2','K4','N3','N4','J6:N40'],
     });
     const vals = response.data.valueRanges;
-    const dishName  = vals[0].values?.[0]?.[0] || '';
-    const serving   = parseFloat((vals[1].values?.[0]?.[0]||'280').toString().replace(',','.')) || 280;
-    const allergens = (vals[2].values?.[0]?.[0]||'').split(',').map(s=>s.trim()).filter(Boolean);
-    const recipeVol = parseFloat((vals[3].values?.[0]?.[0]||'0').toString().replace(',','.')) || 0;
-    const ingRows   = vals[4].values || [];
+    const dishName    = vals[0].values?.[0]?.[0] || '';
+    const serving     = parseFloat((vals[1].values?.[0]?.[0]||'280').toString().replace(',','.')) || 280;
+    const allergens   = (vals[2].values?.[0]?.[0]||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const servingTemp = vals[3].values?.[0]?.[0] || '';
+    const structure   = vals[4].values?.[0]?.[0] || '';
+    const dishType    = vals[5].values?.[0]?.[0] || '';
+    const recipeVol   = parseFloat((vals[6].values?.[0]?.[0]||'0').toString().replace(',','.')) || 0;
+    const seasonality = vals[7].values?.[0]?.[0] || '';
+    const costPerServing = vals[8].values?.[0]?.[0] || '';
+    const ingRows     = vals[9].values || [];
     const ingredients = ingRows
       .filter(row => row[0] && row[1] && parseFloat(row[1]) > 0)
       .map(row => ({ name: row[0], amount: parseFloat(row[2]||row[1])||0, unit:'g', location:'' }));
-    res.json({ dishName, serving, allergens, recipeVolume: recipeVol, ingredients });
+    res.json({ dishName, serving, allergens, servingTemp, structure, dishType, recipeVolume: recipeVol, seasonality, costPerServing, ingredients });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

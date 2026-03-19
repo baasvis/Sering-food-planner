@@ -1781,10 +1781,14 @@ function renderRecipeIndex() {
         <div class="ri-meta">
           ${typeBadge(r.type || 'Soup')}
           ${r.structure ? `<span class="badge b-gastro">${esc(r.structure)}</span>` : ''}
+          ${r.servingTemp ? `<span class="badge b-frozen">${esc(r.servingTemp)}</span>` : ''}
           ${r.seasonality ? `<span style="font-size:10px;color:var(--text2);">${esc(r.seasonality)}</span>` : ''}
         </div>
         ${ags ? `<div style="margin-bottom:4px;">${ags}</div>` : ''}
-        ${r.costPerServing ? `<div class="ri-cost">Cost: ${esc(r.costPerServing)} per serving</div>` : ''}
+        <div style="display:flex;gap:12px;font-size:12px;color:var(--text2);margin-top:4px;">
+          ${r.costPerServing ? `<span>Cost: <strong>${esc(r.costPerServing)}</strong></span>` : ''}
+          ${r.servingSize ? `<span>Serving: <strong>${r.servingSize}ml</strong></span>` : ''}
+        </div>
         <div class="ri-actions">
           ${r.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(r.recipeSheetId)}/edit" target="_blank" rel="noopener" class="recipe-btn">Recipe &#8599;</a>` : ''}
           <button class="btn btn-sm" onclick="addDishFromRecipe('${r.id}')">+ Add to menu</button>
@@ -1832,13 +1836,13 @@ async function fetchAndAddRecipe() {
     const newRecipe = {
       id: newId(),
       name: recipe.dishName || 'Unnamed recipe',
-      type: 'Soup', // default, user can change
+      type: recipe.dishType || 'Soup',
       recipeSheetId: sheetId,
       allergens: recipe.allergens || [],
-      costPerServing: '',
-      structure: '',
-      seasonality: '',
-      servingTemp: '',
+      costPerServing: recipe.costPerServing || '',
+      structure: recipe.structure || '',
+      seasonality: recipe.seasonality || '',
+      servingTemp: recipe.servingTemp || '',
       servingSize: recipe.serving || 280,
       recipeVolume: recipe.recipeVolume || null,
       recipeIngredients: recipe.ingredients || null,
@@ -1852,9 +1856,6 @@ async function fetchAndAddRecipe() {
     closeModal();
     renderRecipeIndex();
     toast(esc(newRecipe.name) + ' added to dish index');
-
-    // Open edit modal to set type, etc
-    openEditRecipe(newRecipe.id);
   } catch (e) {
     toastError('Could not fetch recipe: ' + e.message);
   }
