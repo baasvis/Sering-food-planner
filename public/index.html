@@ -581,6 +581,18 @@ function storageBadge(s) {
   const m = { Gastro:'b-gastro', Frozen:'b-frozen', 'Vac-packed':'b-vacpack' };
   return `<span class="badge ${m[s] || 'b-gastro'}">${s}</span>`;
 }
+function storageBadgeClass(s) {
+  const m = { Gastro:'b-gastro', Frozen:'b-frozen', 'Vac-packed':'b-vacpack' };
+  return 'badge ' + (m[s] || 'b-gastro');
+}
+function cycleStorage(id) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  const idx = STORAGE.indexOf(d.storage || 'Gastro');
+  d.storage = STORAGE[(idx + 1) % STORAGE.length];
+  scheduleSave();
+  renderDishes();
+}
 function logisticsBadge(l) {
   if (l === 'Sering Centraal') return `<span class="badge b-centraal">Centraal</span>`;
   if (l === 'Transport to Sering Centraal') return `<span class="badge b-twc">&rarr; Centraal</span>`;
@@ -940,7 +952,11 @@ function renderDishes() {
     const req = calcRequired(d);
     const { diff, str, cls } = diffStr(d);
     const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
-    const svcLbls = (d.services || []).map(s => `${DAYS[s.day]} ${s.meal[0].toUpperCase()}`).join(' · ');
+    const svcLbls = (d.services || []).map(s => {
+      const ml = s.meal === 'lunch' ? 'L' : 'D';
+      const lc = s.loc === 'west' ? 'SW' : 'SC';
+      return `${DAYS[s.day]} ${ml} ${lc}`;
+    }).join(' · ');
     const isSel = S.selected.has(d.id);
     const isTr = (d.logistics || '').startsWith('Transport');
     const cookHtml = getCookCellHtml(d);
@@ -954,7 +970,7 @@ function renderDishes() {
         </div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px;padding-left:6px;">
           ${typeBadge(d.type)}
-          ${storageBadge(d.storage || 'Gastro')}
+          <span class="${storageBadgeClass(d.storage || 'Gastro')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleStorage('${d.id}')" title="Click to change">${d.storage || 'Gastro'}</span>
           ${svcLbls ? `<span style="font-size:10px;color:var(--text2);">${svcLbls}</span>` : '<span style="font-size:10px;color:var(--text3);">no service</span>'}
         </div>
       </div>
@@ -1161,14 +1177,14 @@ function getCookCellHtml(d) {
   // Has a planned future day — show dropdown (with option to switch to date)
   if (d.cookDate && !d.cookConfirmed) {
     return `<select class="cook-select" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
-      <option value="">Plan cook...</option>
+      <option value="">Select day/date</option>
       ${opts.map(o => `<option value="${o.value}"${d.cookDate === o.value ? ' selected' : ''}>${o.label}</option>`).join('')}
       <option value="__date">Pick a date...</option>
     </select>`;
   }
   // No plan yet — show dropdown
   return `<select class="cook-select" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
-    <option value="">Plan cook...</option>
+    <option value="">Select day/date</option>
     ${opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
     <option value="__date">Pick a date...</option>
   </select>`;
