@@ -122,14 +122,26 @@
   .b-soup{background:var(--green-bg);color:var(--green);}
   .b-main{background:var(--blue-bg);color:var(--blue);}
   .b-dessert{background:var(--purple-bg);color:var(--purple);}
-  .b-gastro{background:var(--amber-bg);color:var(--amber);}
-  .b-frozen{background:#D3D1C7;color:#2C2C2A;}
-  .b-vacpack{background:var(--purple-bg);color:var(--purple);}
-  .b-west{background:var(--gray-bg);color:var(--gray-text);}
-  .b-centraal{background:var(--green-bg);color:var(--green);}
-  .b-twc{background:var(--purple-bg);color:var(--purple);}
-  .b-tww{background:#FAECE7;color:#712B13;}
+  .b-gastro{background:var(--amber-bg);color:var(--amber);font-size:11px;font-weight:700;}
+  .b-frozen{background:#D0EAFC;color:#0C447C;font-size:11px;font-weight:700;}
+  .b-vacpack{background:var(--purple-bg);color:var(--purple);font-size:11px;font-weight:700;}
+  .b-west{background:#FFF3E0;color:#BA7517;font-size:11px;font-weight:700;padding:3px 9px;}
+  .b-centraal{background:#E1F5EE;color:#0F6E56;font-size:11px;font-weight:700;padding:3px 9px;}
+  .b-twc{background:#EEEDFE;color:#534AB7;font-size:11px;font-weight:700;padding:3px 9px;}
+  .b-tww{background:#FAECE7;color:#993C1D;font-size:11px;font-weight:700;padding:3px 9px;}
   .allergen-pill{font-size:10px;padding:2px 6px;border-radius:10px;background:var(--red-bg);color:var(--red);display:inline-block;margin:1px;}
+
+  /* FROZEN ROW */
+  .dish-row.frozen-row{background:#E8F4FD;border-color:#85B7EB;border-left:3px solid #378ADD;}
+  @media(prefers-color-scheme:dark){.dish-row.frozen-row{background:#0C2A44;border-color:#2A6BA8;border-left-color:#378ADD;}}
+
+  /* SERVED BUTTON */
+  .served-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;border:1px solid var(--red);background:transparent;color:var(--red);cursor:pointer;white-space:nowrap;transition:all .12s;}
+  .served-btn:hover{background:var(--red);color:#fff;}
+  .rating-row{display:flex;gap:4px;margin-top:4px;}
+  .rating-btn{width:32px;height:32px;border-radius:var(--radius);border:1px solid var(--border2);background:transparent;color:var(--text2);font-size:13px;font-weight:600;cursor:pointer;transition:all .1s;}
+  .rating-btn:hover{border-color:var(--amber);color:var(--amber);}
+  .rating-btn.on{background:var(--amber);color:#fff;border-color:var(--amber);}
 
   /* FILTERS */
   .filter-bar{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;align-items:center;}
@@ -169,8 +181,8 @@
   .add-slot-btn:hover{color:var(--text2);border-color:var(--border2);}
 
   /* DISH LIST */
-  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 155px 70px 68px 52px 120px 110px 48px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
-  .dish-row{display:grid;grid-template-columns:20px 1fr 155px 70px 68px 52px 120px 110px 48px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
+  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 155px 70px 68px 52px 120px 120px 48px 52px;gap:8px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .dish-row{display:grid;grid-template-columns:20px 1fr 155px 70px 68px 52px 120px 120px 48px 52px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
   .dish-row:hover{border-color:var(--border2);}
   .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
   .dish-row.split-child{border-left:2px solid var(--blue);padding-left:10px;}
@@ -179,7 +191,7 @@
   @media(max-width:700px){
     .dish-list-hdr{display:none;}
     .dish-row{grid-template-columns:20px 1fr auto;gap:6px;}
-    .dish-row .col-cook,.dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-allergen,.dish-row .col-logistics,.dish-row .col-storage{display:none;}
+    .dish-row .col-cook,.dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-allergen,.dish-row .col-logistics,.dish-row .col-storage,.dish-row .served-btn{display:none;}
   }
   .cook-select{font-size:11px;height:26px;border:1px solid transparent;border-radius:4px;padding:0 4px;background:transparent;color:var(--text2);cursor:pointer;transition:border-color .15s;width:100%;}
   .cook-select:hover{border-color:var(--border);background:var(--bg2);}
@@ -594,10 +606,92 @@ function cycleStorage(id) {
   renderDishes();
 }
 function logisticsBadge(l) {
-  if (l === 'Sering Centraal') return `<span class="badge b-centraal">Centraal</span>`;
-  if (l === 'Transport to Sering Centraal') return `<span class="badge b-twc">&rarr; Centraal</span>`;
-  if (l === 'Transport to Sering West') return `<span class="badge b-tww">&rarr; West</span>`;
-  return `<span class="badge b-west">West</span>`;
+  if (l === 'Sering Centraal') return `<span class="badge b-centraal">Sering Centraal</span>`;
+  if (l === 'Transport to Sering Centraal') return `<span class="badge b-twc">&rarr; Sering Centraal</span>`;
+  if (l === 'Transport to Sering West') return `<span class="badge b-tww">&rarr; Sering West</span>`;
+  return `<span class="badge b-west">Sering West</span>`;
+}
+function logisticsBadgeClass(l) {
+  if (l === 'Sering Centraal') return 'badge b-centraal';
+  if (l === 'Transport to Sering Centraal') return 'badge b-twc';
+  if (l === 'Transport to Sering West') return 'badge b-tww';
+  return 'badge b-west';
+}
+function logisticsShort(l) {
+  if (l === 'Sering Centraal') return 'Sering Centraal';
+  if (l === 'Transport to Sering Centraal') return '→ Sering Centraal';
+  if (l === 'Transport to Sering West') return '→ Sering West';
+  return 'Sering West';
+}
+function cycleLogistics(id) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  const idx = LOGISTICS.indexOf(d.logistics || 'Sering West');
+  d.logistics = LOGISTICS[(idx + 1) % LOGISTICS.length];
+  rebuildPlanner();
+  scheduleSave();
+  renderDishes();
+}
+
+// ── SERVED / ARCHIVE ─────────────────────────────────────
+function openServedDialog(id) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  showModal(`<h3>Mark "${esc(d.name)}" as served</h3>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">This will remove it from the menu planner. Optionally rate it first:</p>
+    <div class="fr"><label>Skill required (1-5)</label>
+      <div class="rating-row" id="rate-skill">${ratingButtons('skill',0)}</div>
+    </div>
+    <div class="fr"><label>Speed of prep (1-5)</label>
+      <div class="rating-row" id="rate-speed">${ratingButtons('speed',0)}</div>
+    </div>
+    <div class="fr"><label>Banger rating (1-5)</label>
+      <div class="rating-row" id="rate-banger">${ratingButtons('banger',0)}</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="archiveDish('${d.id}',false)">Skip rating</button>
+      <button class="btn btn-primary" onclick="archiveDish('${d.id}',true)">Save &amp; archive</button>
+    </div>`);
+}
+
+let pendingRatings = { skill:0, speed:0, banger:0 };
+
+function ratingButtons(key, val) {
+  pendingRatings[key] = val;
+  return [1,2,3,4,5].map(n =>
+    `<button class="rating-btn${n <= val ? ' on' : ''}" onclick="setRating('${key}',${n})">${n}</button>`
+  ).join('');
+}
+
+function setRating(key, val) {
+  pendingRatings[key] = val;
+  document.getElementById('rate-'+key).innerHTML = ratingButtons(key, val);
+}
+
+function archiveDish(id, withRating) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  const rating = withRating ? { ...pendingRatings } : null;
+  // Store in archive (in state for now)
+  if (!S.archive) S.archive = [];
+  S.archive.push({
+    id: d.id,
+    name: d.name,
+    recipeSheetId: d.recipeSheetId || null,
+    type: d.type,
+    cookedDate: d.cookDate || null,
+    archivedDate: dateToStr(getToday()),
+    rating,
+  });
+  // Remove from active dishes
+  S.dishes = S.dishes.filter(x => x.id !== id);
+  pendingRatings = { skill:0, speed:0, banger:0 };
+  closeModal();
+  rebuildPlanner();
+  renderDishes();
+  scheduleSave();
+  toast(esc(d.name) + ' archived');
 }
 function typeBadge(t) {
   if (t === 'Dessert') return `<span class="badge b-dessert">Dessert</span>`;
@@ -916,11 +1010,6 @@ function renderDishes() {
     return true;
   });
 
-  const logisticsOpts = LOGISTICS.map(l => {
-    const short = l === 'Sering West' ? 'Sering West' : l === 'Sering Centraal' ? 'Sering Centraal' : l === 'Transport to Sering Centraal' ? '→ Sering Centraal' : '→ Sering West';
-    return { val: l, label: short };
-  });
-
   const html = `
   <div class="btn-row" style="margin-bottom:12px;">
     <button class="btn btn-primary" onclick="openNewDish()">+ New dish</button>
@@ -946,7 +1035,7 @@ function renderDishes() {
     </div>
   </div>
   <div id="split-bar-area"></div>
-  <div class="dish-list-hdr"><span></span><span>Dish</span><span class="col-cook">Cook / cooked</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-logistics">Logistics</span><span>More</span></div>
+  <div class="dish-list-hdr"><span></span><span>Dish</span><span class="col-cook">Cook / cooked</span><span>Stock</span><span class="col-req">Required</span><span class="col-diff">+/&minus;</span><span class="col-allergen">Allergens</span><span class="col-logistics">Logistics</span><span>More</span><span></span></div>
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${filtered.length} dish${filtered.length !== 1 ? 'es' : ''}</div>
   ${filtered.length === 0 ? '<div class="empty">No dishes match these filters</div>' : filtered.map(d => {
     const req = calcRequired(d);
@@ -959,9 +1048,10 @@ function renderDishes() {
     }).join(' · ');
     const isSel = S.selected.has(d.id);
     const isTr = (d.logistics || '').startsWith('Transport');
+    const isFrozen = d.storage === 'Frozen';
     const cookHtml = getCookCellHtml(d);
     const isStale = isDishStale(d);
-    return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}${isStale ? ' stale-row' : ''}">
+    return `<div class="dish-row${d.parentId ? ' split-child' : ''}${isTr ? ' transport-row' : ''}${isSel ? ' selected' : ''}${isStale ? ' stale-row' : ''}${isFrozen ? ' frozen-row' : ''}">
       <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
       <div>
         <div style="display:flex;align-items:center;gap:4px;">
@@ -986,11 +1076,10 @@ function renderDishes() {
         </div>
       </div>
       <div class="col-logistics">
-        <select class="inline-select" onchange="inlineEdit('${d.id}','logistics',this.value)" onclick="event.stopPropagation()">
-          ${logisticsOpts.map(o => `<option value="${o.val}"${d.logistics === o.val ? ' selected' : ''}>${o.label}</option>`).join('')}
-        </select>
+        <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLogistics('${d.id}')" title="Click to change">${logisticsShort(d.logistics || 'Sering West')}</span>
       </div>
       <div><button class="btn btn-sm" onclick="event.stopPropagation();openEditDish('${d.id}')">···</button></div>
+      <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
     </div>`;
   }).join('')}`;
 
