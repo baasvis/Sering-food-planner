@@ -1369,12 +1369,22 @@ function renderSplitBar() {
   const hasWest = selD.some(d => d.logistics === 'Sering West');
   const hasCentraal = selD.some(d => d.logistics === 'Sering Centraal');
 
-  // Calculate smart amounts for transport splits
+  // Calculate smart amounts for transport splits (capped at surplus)
   let smartCentraalAmt = 0;
   let smartWestAmt = 0;
   selD.forEach(d => {
-    if (d.logistics === 'Sering West') smartCentraalAmt += calcRequiredForLoc(d, 'centraal');
-    if (d.logistics === 'Sering Centraal') smartWestAmt += calcRequiredForLoc(d, 'west');
+    if (d.logistics === 'Sering West') {
+      const neededHere = calcRequiredForLoc(d, 'west');
+      const surplus = Math.max(0, d.stock - neededHere);
+      const neededThere = calcRequiredForLoc(d, 'centraal');
+      smartCentraalAmt += Math.min(neededThere, surplus);
+    }
+    if (d.logistics === 'Sering Centraal') {
+      const neededHere = calcRequiredForLoc(d, 'centraal');
+      const surplus = Math.max(0, d.stock - neededHere);
+      const neededThere = calcRequiredForLoc(d, 'west');
+      smartWestAmt += Math.min(neededThere, surplus);
+    }
   });
   smartCentraalAmt = Math.round(smartCentraalAmt * 10) / 10;
   smartWestAmt = Math.round(smartWestAmt * 10) / 10;
@@ -1394,12 +1404,19 @@ function renderSplitBar() {
 
 function doSplit(isTransport, targetLoc, smartAmounts) {
   const manualAmt = parseFloat(document.getElementById('sp-amt').value);
-  const storage = document.getElementById('sp-storage').value;
+  const defaultStorage = document.getElementById('sp-storage').value;
   const logistics = isTransport ? (targetLoc === 'centraal' ? 'Transport to Sering Centraal' : 'Transport to Sering West') : document.getElementById('sp-logistics').value;
   let errors = [];
   [...S.selected].forEach(id => {
     const d = S.dishes.find(x => x.id === id);
     if (!d) return;
+    // Inherit storage from source dish (frozen stays frozen)
+    const storage = isTransport ? (d.storage || defaultStorage) : defaultStorage;
+    // Calculate how much is needed at the current location
+    const currentLoc = d.logistics === 'Sering West' ? 'west' : 'centraal';
+    const neededHere = calcRequiredForLoc(d, currentLoc);
+    // Surplus = what can be split off (never more than stock minus local need)
+    const surplus = Math.max(0, Math.round((d.stock - neededHere) * 10) / 10);
     // For transport splits, calculate per-dish amount based on target location needs
     let amt;
     if (isTransport && smartAmounts) {
@@ -1410,7 +1427,11 @@ function doSplit(isTransport, targetLoc, smartAmounts) {
       amt = manualAmt;
     }
     if (!amt || amt <= 0) return;
-    if (amt > d.stock) { errors.push(`"${d.name}" only has ${d.stock}L (need ${amt}L)`); return; }
+    // Cap at surplus — can't split off more than what's not needed here
+    if (amt > surplus) {
+      if (surplus <= 0) { errors.push(`"${d.name}" needs all ${d.stock}L at ${d.logistics} (${neededHere}L required)`); return; }
+      amt = surplus;
+    }
     d.stock = Math.round((d.stock - amt) * 10) / 10;
     const targetLocName = targetLoc === 'centraal' ? 'centraal' : 'west';
     const newDish = {
