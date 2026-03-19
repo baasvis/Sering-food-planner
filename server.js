@@ -528,17 +528,23 @@ app.get('/api/recipe', async (req, res) => {
     const ingRows     = vals[9].values || [];
     const sourceRows  = vals[10].values || [];
     const unitRows    = vals[11].values || [];
-    const ingredients = ingRows
-      .filter(row => row[0] && row[2] && parseFloat(row[2]) > 0)
-      .map((row, i) => ({
+    const ingredients = [];
+    ingRows.forEach((row, i) => {
+      // row[0]=name(J), row[1]=measurement(K), row[2]=amount(L), row[3]=amount_after_cooking(M), row[4]=cost(N)
+      // Skip rows without a name, or without a numeric amount in column L
+      if (!row[0] || !row[2]) return;
+      const rawAmt = parseFloat(String(row[2]).replace(',','.'));
+      if (!rawAmt || rawAmt <= 0) return;
+      // Skip instruction/note rows: if name is very long or amount column has no number
+      if (row[0].length > 80) return;
+      const afterCooking = row[3] ? parseFloat(String(row[3]).replace(',','.')) : null;
+      ingredients.push({
         name: row[0],
-        // row[3] = column M = amount after cooking (accounts for reduction)
-        // row[2] = column L = raw amount (before cooking)
-        // Prefer after-cooking amount as that's the actual volume contribution
-        amount: parseFloat(row[3]||row[2])||0,
+        amount: (afterCooking && afterCooking > 0) ? afterCooking : rawAmt,
         unit: (unitRows[i] && unitRows[i][0]) || 'g',
         source: (sourceRows[i] && sourceRows[i][0]) || '',
-      }));
+      });
+    });
     res.json({ dishName, serving, allergens, servingTemp, structure, dishType, recipeVolume: recipeVol, seasonality, costPerServing, ingredients });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

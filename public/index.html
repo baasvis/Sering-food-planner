@@ -2137,9 +2137,13 @@ function renderOrders() {
   html += '</div>';
 
   // Ingredient order section
-  html += `<div style="margin-bottom:20px;"><div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
+  const dishesWithSheets = orderedDishes.filter(d => d.recipeSheetId);
+  html += `<div style="margin-bottom:20px;"><div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
     <span>Ingredient order (${orderedDishes.length} dish${orderedDishes.length !== 1 ? 'es' : ''} flagged)</span>
-    <span style="font-weight:400;font-size:12px;color:var(--text2);">${orderedDishes.map(d => esc(d.name)).join(' · ')}</span>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="font-weight:400;font-size:12px;color:var(--text2);">${orderedDishes.map(d => esc(d.name)).join(' · ')}</span>
+      ${dishesWithSheets.length ? `<button class="copy-all-btn" onclick="refreshAllRecipes()">↻ Refresh recipe data</button>` : ''}
+    </div>
   </div>`;
 
   if (!ingList.length) {
@@ -2215,6 +2219,26 @@ function copyOrderCodes(supplier) {
 }
 
 function toggleOrderSection(key) { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }
+
+async function refreshAllRecipes() {
+  const dishes = S.dishes.filter(d => d.orderFor && d.recipeSheetId);
+  if (!dishes.length) { toast('No dishes with recipe sheets to refresh'); return; }
+  toast('Refreshing ' + dishes.length + ' recipe(s)...');
+  let ok = 0;
+  for (const d of dishes) {
+    try {
+      const recipe = await apiGet(`/api/recipe?sheetId=${d.recipeSheetId}`);
+      if (recipe.allergens) d.allergens = recipe.allergens;
+      if (recipe.recipeVolume) d.recipeVolume = recipe.recipeVolume;
+      if (recipe.serving) d.serving = recipe.serving;
+      if (recipe.ingredients) d.recipeIngredients = recipe.ingredients;
+      ok++;
+    } catch (e) { console.error('Failed to refresh ' + d.name, e); }
+  }
+  scheduleSave();
+  renderOrders();
+  toast(ok + ' recipe(s) refreshed');
+}
 
 // ── MODAL ─────────────────────────────────────────────────
 function showModal(content) {
