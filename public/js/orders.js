@@ -2,6 +2,7 @@
 
 // State
 let orderInventory = {};        // in-stock amounts for dish ingredients (keyed by name lowercase)
+let combinedOrderStock = {};   // in-stock amounts for combined order tab (grams, keyed by name lowercase)
 let standardInventory = [];     // [{id, name, amount, unit}] — the weekly base order
 let siLoaded = false;
 let siLoadCalled = false;
@@ -463,10 +464,13 @@ function renderCombinedOrderTab() {
         <th>Total needed</th>
         <th>Breakdown</th>
         <th>Order code / link</th>
+        <th>In stock</th>
+        <th>To order</th>
         <th>Order units</th>
       </tr></thead><tbody>`;
 
     items.forEach(ing => {
+      const key = ing.name.toLowerCase().trim();
       const fmt = formatGrams(ing.totalGrams);
       const isUrl = ing.orderCode && (ing.orderCode.startsWith('http') || ing.orderCode.startsWith('www'));
 
@@ -476,10 +480,24 @@ function renderCombinedOrderTab() {
       else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link ↗</a>`;
       else codeDisplay = `<span class="order-code">${esc(ing.orderCode)}</span>`;
 
-      const orderCalc = ing.orderCalc;
+      // In stock + to order
+      const stockVal = combinedOrderStock[key] !== undefined ? combinedOrderStock[key] : '';
+      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateCombinedOrderStock('${esc(key)}',this.value)" />`;
+
+      const inStockGrams = parseFloat(combinedOrderStock[key]) || 0;
+      const toOrderGrams = Math.max(0, ing.totalGrams - inStockGrams);
+      const toOrderDisplay = combinedOrderStock[key] !== undefined
+        ? (toOrderGrams > 0
+          ? `<span class="to-order-positive">${formatGrams(toOrderGrams).amount} ${formatGrams(toOrderGrams).unit}</span>`
+          : `<span class="to-order-zero">✓ enough</span>`)
+        : `<span style="color:var(--text2);font-size:11px;">enter stock →</span>`;
+
+      // Order units based on stock-adjusted amount
+      const orderAmtGrams = combinedOrderStock[key] !== undefined ? toOrderGrams : ing.totalGrams;
+      const orderCalc = ing.db ? calcOrderUnits(orderAmtGrams, ing.db) : null;
       const orderUnitsDisplay = orderCalc && orderCalc.units > 0
         ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`
-        : '<span style="color:var(--text2);font-size:11px;">—</span>';
+        : (orderAmtGrams === 0 ? '<span class="to-order-zero">—</span>' : '<span style="color:var(--text2);font-size:11px;">—</span>');
 
       const parts = [];
       if (ing.standardGrams > 0) {
@@ -492,12 +510,14 @@ function renderCombinedOrderTab() {
         parts.push(`<span class="combined-part combined-dishes" title="${esc(ing.dishes.join(', '))}">${f.amount}${f.unit} dishes</span>`);
       }
 
-      html += `<tr>
+      html += `<tr data-combined-key="${esc(key)}" data-needed="${ing.totalGrams}" data-dbname="${esc(ing.name)}">
         <td style="font-weight:500;">${esc(ing.name)}</td>
         <td><span class="order-amt">${fmt.amount}</span> <span class="order-units">${fmt.unit}</span></td>
         <td>${parts.join(' + ')}</td>
         <td>${codeDisplay}</td>
-        <td>${orderUnitsDisplay}</td>
+        <td>${stockInput}</td>
+        <td class="to-order-cell">${toOrderDisplay}</td>
+        <td class="order-units-cell">${orderUnitsDisplay}</td>
       </tr>`;
     });
 
@@ -546,6 +566,48 @@ function copyCombinedOrderCodes(supplier) {
 // ── Existing helpers ──────────────────────────────────────
 
 function toggleOrderSection(key) { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }
+
+function updateCombinedOrderStock(key, val) {
+  if (val === '' || val === null) {
+    delete combinedOrderStock[key];
+  } else {
+    combinedOrderStock[key] = parseFloat(val) || 0;
+  }
+  const row = document.querySelector(`[data-combined-key="${key}"]`);
+  if (!row) return;
+  const neededGrams = parseFloat(row.dataset.needed) || 0;
+  const inStockGrams = parseFloat(val) || 0;
+  const toOrderGrams = Math.max(0, neededGrams - inStockGrams);
+
+  // Update "To order" cell
+  const toOrderEl = row.querySelector('.to-order-cell');
+  if (toOrderEl) {
+    if (val === '' || val === null || val === undefined) {
+      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock →</span>';
+    } else if (toOrderGrams > 0) {
+      const f = formatGrams(toOrderGrams);
+      toOrderEl.innerHTML = `<span class="to-order-positive">${f.amount} ${esc(f.unit)}</span>`;
+    } else {
+      toOrderEl.innerHTML = '<span class="to-order-zero">✓ enough</span>';
+    }
+  }
+
+  // Update "Order units" cell
+  const orderUnitsEl = row.querySelector('.order-units-cell');
+  if (orderUnitsEl) {
+    const dbName = row.dataset.dbname || '';
+    const db = dbName ? lookupIngredient(dbName) : null;
+    const orderAmt = (val === '' || val === null || val === undefined) ? neededGrams : toOrderGrams;
+    const orderCalc = db ? calcOrderUnits(orderAmt, db) : null;
+    if (orderCalc && orderCalc.units > 0) {
+      orderUnitsEl.innerHTML = `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`;
+    } else if (orderAmt === 0) {
+      orderUnitsEl.innerHTML = '<span class="to-order-zero">—</span>';
+    } else {
+      orderUnitsEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">—</span>';
+    }
+  }
+}
 
 function updateOrderStock(key, val) {
   if (val === '' || val === null) {
