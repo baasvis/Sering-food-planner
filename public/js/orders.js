@@ -90,19 +90,32 @@ function updateSiSearch(val) {
   const query = val.toLowerCase().trim();
   const addedNames = new Set(standardInventory.map(i => i.name.toLowerCase().trim()));
   const suggestions = query.length >= 2
-    ? S.ingredientDb.filter(i => i.name.toLowerCase().includes(query)).slice(0, 8)
+    ? S.ingredientDb.filter(i => i.name.toLowerCase().includes(query) || (i.orderCode && i.orderCode.toLowerCase().includes(query))).slice(0, 8)
     : [];
-  sugContainer.innerHTML = suggestions.length ? suggestions.map(ing => {
+  const queryRaw = val.trim();
+  const alreadyAdded = addedNames.has(queryRaw.toLowerCase());
+  const exactMatch = suggestions.some(i => i.name.toLowerCase().trim() === query);
+
+  let html = suggestions.map(ing => {
     const isAdded = addedNames.has(ing.name.toLowerCase().trim());
     const nameAttr = esc(ing.name);
     const unitAttr = esc(ing.unit || 'g');
     return `<div class="si-suggestion${isAdded ? ' si-suggestion-added' : ''}" ${!isAdded ? `onclick="addToStandardInventory('${nameAttr}', '${unitAttr}')"` : ''}>
       <span class="si-sug-name">${esc(ing.name)}</span>
-      <span class="si-sug-meta">${ing.source ? esc(ing.source) + ' · ' : ''}${ing.unit || 'g'}</span>
+      <span class="si-sug-meta">${ing.source ? esc(ing.source) + ' · ' : ''}${ing.orderCode ? esc(ing.orderCode) + ' · ' : ''}${ing.unit || 'g'}</span>
       ${isAdded ? '<span style="color:var(--green);font-size:11px;font-weight:600;">✓ added</span>' : ''}
     </div>`;
-  }).join('') : '';
-  sugContainer.style.display = suggestions.length ? 'block' : 'none';
+  }).join('');
+
+  // Always show "Add as custom" when there's a query and no exact match
+  if (queryRaw.length >= 2 && !exactMatch && !alreadyAdded) {
+    html += `<div class="si-suggestion si-suggestion-custom" onclick="addToStandardInventory('${esc(queryRaw)}', 'g')">
+      <span class="si-sug-name" style="color:var(--blue);">+ Add &ldquo;${esc(queryRaw)}&rdquo; as custom item</span>
+    </div>`;
+  }
+
+  sugContainer.innerHTML = html;
+  sugContainer.style.display = html ? 'block' : 'none';
 }
 
 function hideSiSuggestions() {
