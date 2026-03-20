@@ -193,6 +193,21 @@
   .copy-day-btn{display:block;font-size:8px;font-weight:600;padding:1px 4px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--text3);cursor:pointer;white-space:nowrap;transition:all .1s;margin:2px auto 0;}
   .copy-day-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg);}
   .collapse-arrow{font-size:11px;color:var(--text3);margin-left:4px;}
+  /* INVENTORY */
+  .inv-btn{font-weight:700;font-size:13px;padding:8px 16px;border-radius:var(--radius);border:2px solid var(--border2);background:var(--bg);color:var(--text);cursor:pointer;transition:all .15s;}
+  .inv-btn:hover{border-color:var(--text2);background:var(--bg2);}
+  .inv-urgent{border-color:var(--red) !important;background:var(--red-bg) !important;color:var(--red) !important;animation:inv-pulse 1.5s ease-in-out infinite;}
+  .inv-done{border-color:var(--green) !important;color:var(--green) !important;opacity:.6;cursor:default !important;}
+  @keyframes inv-pulse{0%,100%{opacity:1;}50%{opacity:.7;}}
+  .inv-list{max-height:400px;overflow-y:auto;margin-bottom:12px;}
+  .inv-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+  .inv-row:last-child{border-bottom:none;}
+  .inv-name{flex:1;display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:150px;}
+  .inv-controls{display:flex;align-items:center;gap:6px;flex-shrink:0;}
+  .inv-stock-input{width:70px;font-size:13px;height:32px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 8px;background:var(--bg);color:var(--text);text-align:right;}
+  .inv-stock-input:focus{border-color:var(--blue);outline:none;}
+  .inv-served-btn{font-size:11px;color:var(--text2);border-color:var(--border2);}
+  .inv-served-btn:hover{color:var(--red);border-color:var(--red);}
   .type-lbl{display:flex;align-items:center;gap:4px;font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.03em;padding:2px 4px;}
   .type-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
   .type-dot.chip-soup{background:var(--green);}

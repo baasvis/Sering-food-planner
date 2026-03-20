@@ -58,8 +58,10 @@ function renderLocationPlan(loc) {
   const mondayOff = todayDow === 0 ? -6 : 1 - todayDow;
   const monday = new Date(today); monday.setDate(today.getDate() + mondayOff);
 
-  let html = `<div class="btn-row" style="margin-bottom:12px;">
+  const invBtn = getInventoryButton(loc);
+  let html = `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
     <button class="btn btn-primary" onclick="openNewDish()">+ New dish</button>
+    ${invBtn}
   </div>
   <div id="split-bar-area"></div>`;
 
@@ -464,3 +466,133 @@ function addRecipeToSlot(recipeId, loc, day, meal) {
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`${r.name} added to ${DAYS[day]} ${meal}`);
 }
+
+// ── INVENTORY ────────────────────────────────────────────
+function getAmsterdamNow() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+}
+
+function getInventoryState(loc) {
+  const now = getAmsterdamNow();
+  const h = now.getHours(), m = now.getMinutes();
+  const mins = h * 60 + m;
+  const lunchDeadline = 13 * 60 + 45; // 13:45
+  const dinnerDeadline = 20 * 60 + 15; // 20:15
+  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const inv = S.inventoryDone[loc] || {};
+  const lunchDone = inv.lunch === todayStr;
+  const dinnerDone = inv.dinner === todayStr;
+
+  // Determine current window
+  if (!lunchDone && mins < lunchDeadline) {
+    // Before lunch deadline, lunch not done
+    return { window: 'lunch', label: '13:45', done: false, urgent: mins >= lunchDeadline - 60 };
+  }
+  if (!lunchDone && mins >= lunchDeadline && mins < dinnerDeadline) {
+    // Past lunch deadline, lunch not done
+    return { window: 'lunch', label: 'DO INVENTORY', done: false, urgent: true };
+  }
+  if (lunchDone && mins < dinnerDeadline) {
+    // Lunch done, before dinner deadline
+    const urgent = mins >= dinnerDeadline - 60;
+    return { window: 'dinner', label: dinnerDone ? 'Inventory done' : '20:15', done: dinnerDone, urgent: !dinnerDone && urgent };
+  }
+  if (!dinnerDone && mins >= dinnerDeadline) {
+    // Past dinner deadline, dinner not done
+    return { window: 'dinner', label: 'DO INVENTORY', done: false, urgent: true };
+  }
+  // Both done
+  return { window: 'done', label: 'Inventory done', done: true, urgent: false };
+}
+
+function getInventoryButton(loc) {
+  const st = getInventoryState(loc);
+  if (st.done && st.window === 'done') {
+    return `<button class="btn inv-btn inv-done" disabled>&#10003; Inventory done</button>`;
+  }
+  const cls = st.urgent ? 'inv-btn inv-urgent' : 'inv-btn';
+  return `<button class="btn ${cls}" onclick="openInventory('${loc}')">${st.label}</button>`;
+}
+
+function openInventory(loc) {
+  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const dishes = S.dishes.filter(d => {
+    const atLoc = (d.services || []).some(s => s.loc === loc);
+    const logMatch = d.logistics === locLabel || d.logistics === 'Transport to ' + (loc === 'west' ? 'Sering Centraal' : 'Sering West');
+    return atLoc || logMatch;
+  });
+
+  if (dishes.length === 0) {
+    toast('No dishes at ' + locLabel);
+    return;
+  }
+
+  let html = `<h3>Inventory — ${locLabel}</h3>`;
+  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Update stock for each dish, or mark as served.</div>`;
+  html += `<div class="inv-list">`;
+
+  const sorted = [...dishes].sort((a, b) => {
+    const typeOrder = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+    return (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0);
+  });
+
+  let lastType = '';
+  sorted.forEach(d => {
+    if (d.type !== lastType) {
+      lastType = d.type;
+      html += `<div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text2);padding:8px 0 4px;border-bottom:1px solid var(--border);">${d.type}</div>`;
+    }
+    const { str, cls } = diffStr(d);
+    html += `<div class="inv-row" id="inv-row-${d.id}">
+      <div class="inv-name">
+        <span style="font-weight:500;">${esc(d.name)}</span>
+        ${storageBadge(d.storage || 'Gastro')}
+        <span class="${cls}" style="font-size:11px;">${str}</span>
+      </div>
+      <div class="inv-controls">
+        <label style="font-size:11px;color:var(--text2);">Stock (L)</label>
+        <input type="number" class="inv-stock-input" id="inv-stock-${d.id}" value="${d.stock || 0}" step="0.5" min="0" onchange="updateInventoryStock('${d.id}',this.value)" />
+        <button class="btn btn-sm inv-served-btn" onclick="openServedFromInventory('${d.id}','${loc}')">Served</button>
+      </div>
+    </div>`;
+  });
+
+  html += `</div>`;
+  html += `<div class="modal-actions">
+    <button class="btn" onclick="S._inventoryLoc=null;closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="finishInventory('${loc}')">Finish inventory</button>
+  </div>`;
+
+  showModal(html);
+  // Widen the modal for inventory
+  const modal = document.querySelector('.modal');
+  if (modal) modal.style.width = '560px';
+}
+
+function updateInventoryStock(id, value) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  d.stock = parseFloat(value) || 0;
+  scheduleSave();
+}
+
+function openServedFromInventory(id, loc) {
+  // Store that we came from inventory so we can reopen it
+  S._inventoryLoc = loc;
+  openServedDialog(id);
+}
+
+function finishInventory(loc) {
+  const now = getAmsterdamNow();
+  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const st = getInventoryState(loc);
+  if (!S.inventoryDone[loc]) S.inventoryDone[loc] = {};
+  S.inventoryDone[loc][st.window] = todayStr;
+  S._inventoryLoc = null;
+  closeModal();
+  rebuildPlanner();
+  rerenderCurrentView();
+  scheduleSave();
+  toast('Inventory complete!');
+}
+

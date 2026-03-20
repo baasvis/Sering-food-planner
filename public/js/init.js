@@ -2,7 +2,15 @@
 function showModal(content) {
   document.getElementById('modal-root').innerHTML = `<div class="modal-bg" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">${content}</div></div>`;
 }
-function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+function closeModal() {
+  document.getElementById('modal-root').innerHTML = '';
+  // Reopen inventory if we came from served dialog
+  if (S._inventoryLoc) {
+    const loc = S._inventoryLoc;
+    S._inventoryLoc = null;
+    setTimeout(() => openInventory(loc), 200);
+  }
+}
 
 // ── HTML ESCAPE ───────────────────────────────────────────
 function esc(str) {
