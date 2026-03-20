@@ -63,6 +63,37 @@
   .dash-action-btn{display:flex;align-items:center;gap:6px;padding:10px 16px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;font-size:13px;color:var(--text);font-weight:500;transition:all .1s;}
   .dash-action-btn:hover{border-color:var(--border2);background:var(--bg2);}
   .dash-full-width{grid-column:1/-1;}
+  .dash-tab-bar{display:flex;gap:4px;margin-bottom:14px;}
+  .dash-tab{padding:8px 16px;font-size:12px;font-weight:500;border:1px solid var(--border2);border-radius:20px;background:transparent;cursor:pointer;color:var(--text2);white-space:nowrap;transition:all .15s;}
+  .dash-tab.active{background:var(--text);color:var(--bg);border-color:var(--text);}
+  .dash-tab:hover:not(.active){color:var(--text);border-color:var(--text3);}
+  .dash-section{margin-bottom:6px;}
+  .dash-section-hdr{font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin:10px 0 6px;}
+  .dash-dish-row{display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:var(--bg2);border-radius:var(--radius);margin-bottom:4px;gap:8px;}
+  .dash-dish-row .chip-nm{font-size:12px;font-weight:500;}
+  .dash-liters{font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;flex-shrink:0;}
+  .dash-veg-list{display:flex;flex-direction:column;gap:2px;}
+  .dash-veg-item{display:flex;justify-content:space-between;padding:4px 8px;font-size:12px;border-bottom:1px solid var(--border);gap:8px;}
+  .dash-veg-item:last-child{border-bottom:none;}
+  .dash-veg-name{color:var(--text);font-weight:500;}
+  .dash-veg-amt{color:var(--text2);font-weight:600;white-space:nowrap;}
+  .dash-veg-dish-hdr{font-size:11px;font-weight:600;color:var(--text);padding:6px 8px 2px;background:var(--bg2);border-radius:var(--radius) var(--radius) 0 0;margin-top:6px;}
+  .dash-toggle-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--text3);cursor:pointer;transition:all .1s;margin-left:auto;}
+  .dash-toggle-btn:hover{border-color:var(--text2);color:var(--text2);}
+  .dash-toggle-btn.on{background:var(--bg2);color:var(--text);border-color:var(--text3);}
+  .dash-rice-row{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:var(--bg2);border-radius:var(--radius);margin-bottom:4px;}
+  .dash-rice-name{font-size:13px;font-weight:600;color:var(--text);}
+  .dash-rice-total{font-size:15px;font-weight:700;color:var(--text);}
+  .dash-rice-detail{font-size:11px;color:var(--text2);margin-top:2px;}
+  .dash-empty{font-size:12px;color:var(--text3);font-style:italic;padding:10px 8px;}
+  .dash-cook-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;}
+  .dash-cook-name{font-size:13px;font-weight:500;flex:1;}
+  .dash-cook-liters{font-size:12px;font-weight:600;color:var(--amber);white-space:nowrap;}
+  .dash-starch-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:10px;border:1px dashed var(--border2);background:transparent;color:var(--text3);cursor:pointer;white-space:nowrap;transition:all .12s;flex-shrink:0;}
+  .dash-starch-btn:hover{border-color:var(--amber);color:var(--amber);}
+  .dash-starch-btn.on{border-style:solid;border-color:var(--amber);background:var(--amber-bg);color:var(--amber);}
+  .dash-starch-summary{display:flex;gap:10px;padding:6px 8px;margin-top:2px;border-top:1px dashed var(--border);flex-wrap:wrap;}
+  .dash-starch-total{font-size:12px;font-weight:700;color:var(--amber);}
 
   /* LOGIN SCREEN */
   .login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;}

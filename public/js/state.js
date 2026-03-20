@@ -5,6 +5,10 @@ const MEALS=['lunch','dinner'];
 const STORAGE=['Gastro','Frozen','Vac-packed'];
 const LOGISTICS=['Sering West','Transport to Sering Centraal','Transport to Sering West','Sering Centraal'];
 const ALLERGENS=['Gluten','Soy','Nuts','Peanuts','Sesame','Celery','Mustard','Sulphites','Lupin','Onion','Garlic','Paprika'];
+const ACCOMPANIMENTS=[
+  { name:'Rice', gramsPerGuest:80 },
+  { name:'Pasta', gramsPerGuest:80 },
+];
 
 // ═══════════════════════════════════════════════════════════════════
 // STATE
@@ -26,6 +30,9 @@ let S = {
   ingredientDb:[],
   planner:{},
   user:null,
+  dashboardLoc:'west',
+  dashVegMode:'combined',
+  dashVegModeTomorrow:'combined',
 };
 
 // ═══════════════════════════════════════════════════════════════════
