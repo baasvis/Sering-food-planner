@@ -81,7 +81,10 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Weekly planner grid (days × meals × dish types: Soups/Mains/Desserts) with copy-to-other-location
 - Dish management with inline editing, cook date tracking, stock levels, +/- status pills, sortable columns
 - Recipe index (library) with single + bulk import from Google Sheets, ratings, conditional cost colouring
-- Order overview with ingredient aggregation, supplier grouping (Hanos first), order codes, in-stock input, to-order calculation
+- Order overview with 3-tab layout: Combined Order (default), Standard Inventory, Dish Ingredients
+  - Standard Inventory: cooks build a weekly base order (persistent, server-side JSON), searchable from ingredient DB, shows order codes per item
+  - Dish Ingredients: per-dish ingredient aggregation from recipe sheets, in-stock input, to-order calculation
+  - Combined Order: merges both lists, sums overlapping ingredients, grouped by supplier (Hanos first)
 - Ingredient database integration (separate Google Sheet with supplier codes, units, prices)
 - Feedback system (floating purple button, structured form with 4 types, stores to Google Sheets)
 - Mobile responsive layout (card-based dishes on phone, bottom-sheet modals, compact nav)
@@ -90,7 +93,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 **File structure:**
 ```
 public/
-  index.html           (~480 lines — HTML + CSS skeleton)
+  index.html           (~500 lines — HTML + CSS skeleton)
   js/
     state.js           — Constants, app state
     auth.js            — Google Sign-In, sessions
@@ -101,10 +104,13 @@ public/
     planner.js         — Weekly planner screen
     dishes.js          — Dishes screen (~750 lines, largest module)
     recipes.js         — Recipe index screen
-    orders.js          — Order overview screen
+    orders.js          — Order overview (3-tab: Combined Order / Standard Inventory / Dish Ingredients)
     feedback.js        — Feedback button and form
     init.js            — Modal, HTML escape, app init
-server.js              — Express server (~670 lines)
+server.js              — Express server
+data/
+  standard-inventory.json  — Standard inventory (gitignored, persisted on server)
+.env                   — Local environment variables (gitignored)
 DESIGN.md              — This document
 SETUP_GUIDE.md         — Installation instructions
 ```
@@ -119,6 +125,7 @@ SETUP_GUIDE.md         — Installation instructions
 | Recipe Index | id, name, type, recipeSheetId, allergens, costPerServing, structure, seasonality, ratings, timesServed | recipe_index |
 | Feedback | timestamp, user, type, screen, text, userAgent | feedback |
 | Ingredient DB | name, unit, source, costPer100, orderType, orderCode, orderAmount, allergens, storageLocation | separate sheet |
+| Standard Inventory | id, name, amount, unit | data/standard-inventory.json (server-side) |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -146,7 +153,7 @@ The food planner is live and working. Current priorities to expand it:
 - [ ] **Toppings/sides/bread**: currently only soups, mains, desserts. Need to handle the standard accompaniments (bread, aioli, toppings, dips) that go with every service.
 - [ ] **Basic budgeting per service**: simple cost indicator per meal service — how much are we spending on ingredients for this lunch vs how many guests are paying.
 - [ ] Import all existing recipes from old spreadsheet
-- [ ] Standard inventory items (always-in-stock list separate from per-dish ingredients)
+- [x] Standard inventory items (always-in-stock list separate from per-dish ingredients)
 - [ ] TestTafel menu planning variant (7-course format, cost/labour per course, portion sizing, collective planning)
 
 ### Next: Drinks System
@@ -207,7 +214,8 @@ The order of everything below is flexible. Build thin slices first, deepen based
 
 ### Current: Simple Monolith (good for many more modules)
 ```
-Browser ←→ Express Server ←→ Google Sheets
+Browser ←→ Express Server ←→ Google Sheets (dishes, guests, recipes, ingredient DB)
+                            ←→ data/ JSON files (standard inventory)
 ```
 - Single Node.js app on Railway
 - Google Sheets as database

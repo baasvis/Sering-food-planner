@@ -9,11 +9,18 @@
 //   - Sheet ID sanitization on recipe endpoint
 // ─────────────────────────────────────────────────────────────────────────────
 
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const { google } = require('googleapis');
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
+
+// Persistent data directory (for server-side storage not in Google Sheets)
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const STD_INV_FILE = path.join(DATA_DIR, 'standard-inventory.json');
 
 const app = express();
 app.set('trust proxy', 1); // Trust Railway's proxy so secure cookies work
@@ -611,6 +618,30 @@ app.get('/api/log', async (req, res) => {
     const rows = await readTab(sheets, CONFIG.DB_SHEET_ID, 'log');
     res.json(rows.slice(-50).reverse());
   } catch (e) { res.json([]); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STANDARD INVENTORY (server-side JSON storage)
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/standard-inventory', (req, res) => {
+  try {
+    const items = fs.existsSync(STD_INV_FILE) ? JSON.parse(fs.readFileSync(STD_INV_FILE, 'utf8')) : [];
+    res.json(items);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+app.post('/api/standard-inventory', (req, res) => {
+  const items = req.body;
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'Expected array' });
+  try {
+    fs.writeFileSync(STD_INV_FILE, JSON.stringify(items, null, 2));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/health', (req, res) => {
