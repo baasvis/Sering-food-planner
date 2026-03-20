@@ -620,7 +620,7 @@ app.get('/api/ingredients', async (req, res) => {
     // Use first tab
     const tabName = tabs[0] || 'Sheet1';
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, range: `'${tabName}'!B3:R300`,
+      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, range: `'${tabName}'!B3:R1000`,
     });
     const allRows = response.data.values || [];
     console.log('Ingredient DB raw rows:', allRows.length);
