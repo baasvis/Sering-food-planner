@@ -21,6 +21,12 @@ const { OAuth2Client } = require('google-auth-library');
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const STD_INV_FILE = path.join(DATA_DIR, 'standard-inventory.json');
+const STD_INV_SEED = path.join(__dirname, 'seeds', 'standard-inventory.json');
+// Seed from default inventory on first deploy if no data file exists yet
+if (!fs.existsSync(STD_INV_FILE) && fs.existsSync(STD_INV_SEED)) {
+  fs.copyFileSync(STD_INV_SEED, STD_INV_FILE);
+  console.log('Standard inventory seeded from seeds/standard-inventory.json');
+}
 
 const app = express();
 app.set('trust proxy', 1); // Trust Railway's proxy so secure cookies work
