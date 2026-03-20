@@ -344,6 +344,24 @@
 
   .m-stock-row{display:none;}
 
+  /* FEEDBACK BUTTON */
+  .feedback-fab{position:fixed;bottom:20px;right:20px;z-index:200;background:var(--purple);color:#fff;border:none;border-radius:50px;padding:12px 20px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2);display:flex;align-items:center;gap:8px;transition:all .15s;}
+  .feedback-fab:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.25);}
+  .feedback-fab .fab-icon{font-size:16px;line-height:1;}
+  .feedback-form{display:flex;flex-direction:column;gap:14px;}
+  .feedback-type-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .feedback-type-btn{padding:12px 10px;border:2px solid var(--border);border-radius:var(--radius);background:var(--bg);cursor:pointer;text-align:center;transition:all .1s;}
+  .feedback-type-btn:hover{border-color:var(--border2);background:var(--bg2);}
+  .feedback-type-btn.selected{border-color:var(--purple);background:var(--purple-bg);}
+  .feedback-type-btn .ft-icon{font-size:20px;display:block;margin-bottom:4px;}
+  .feedback-type-btn .ft-label{font-size:12px;font-weight:600;color:var(--text);}
+  .feedback-type-btn.selected .ft-label{color:var(--purple);}
+  .feedback-prompt{font-size:12px;color:var(--text2);background:var(--bg2);padding:10px 12px;border-radius:var(--radius);line-height:1.5;display:none;}
+  .feedback-prompt.visible{display:block;}
+  .feedback-textarea{width:100%;height:120px;font-size:13px;font-family:inherit;border:1px solid var(--border2);border-radius:var(--radius);padding:10px;background:var(--bg);color:var(--text);resize:vertical;line-height:1.5;}
+  .feedback-textarea:focus{outline:none;border-color:var(--purple);}
+  .feedback-screen-tag{display:inline-block;font-size:11px;padding:3px 8px;border-radius:10px;background:var(--bg2);color:var(--text2);}
+
   /* ═══════════ MOBILE ═══════════ */
   @media(max-width:600px){
     /* Tighter padding */
@@ -408,6 +426,10 @@
     .modal{width:100%;border-radius:var(--radius-lg) var(--radius-lg) 0 0;margin:auto 0 0 0;max-height:85vh;overflow-y:auto;}
     .modal-bg{align-items:flex-end;padding:0;}
 
+    /* Feedback button on mobile */
+    .feedback-fab{bottom:12px;right:12px;padding:10px 14px;font-size:12px;}
+    .feedback-fab .fab-icon{font-size:14px;}
+
     /* Buttons bigger for touch */
     .btn{padding:8px 14px;font-size:13px;}
     .btn-sm{padding:5px 10px;font-size:12px;}
@@ -462,6 +484,9 @@
 </div>
 <div id="modal-root"></div>
 <div class="toast" id="toast"></div>
+<button class="feedback-fab" id="feedback-fab" onclick="openFeedback()" style="display:none;">
+  <span class="fab-icon">&#9997;</span> Feedback
+</button>
 
 <script src="js/state.js"></script>
 <script src="js/auth.js"></script>
@@ -473,6 +498,7 @@
 <script src="js/dishes.js"></script>
 <script src="js/recipes.js"></script>
 <script src="js/orders.js"></script>
+<script src="js/feedback.js"></script>
 <script src="js/init.js"></script>
 </body>
 </html>

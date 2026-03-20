@@ -74,6 +74,7 @@ function showApp() {
     img.style.display = 'block';
   }
   initApp();
+  if (typeof showFeedbackFab === 'function') showFeedbackFab();
 }
 
 // ═══════════════════════════════════════════════════════════════════
