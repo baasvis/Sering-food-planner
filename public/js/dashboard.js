@@ -192,27 +192,28 @@ function renderDashboardContent() {
     if (dishes.length === 0) {
       menuHtml += `<div class="dash-empty">No dishes planned</div>`;
     } else {
-      dishes.forEach(d => {
+      // Sort: Soup first, then Main course, then Dessert
+      const typeOrder = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+      const sorted = [...dishes].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
+      sorted.forEach(d => {
         const liters = calcLitersForService(d, loc, todayIdx, meal);
         const isMain = d.type === 'Main course';
         const starch = d.starch || null;
         const starchLabel = starch || 'Pasta or rice?';
         const starchCls = starch ? 'dash-starch-btn on' : 'dash-starch-btn';
-        menuHtml += `<div class="dash-dish-row">
-          <div class="dish-chip ${chipClass(d)}" style="flex:1;cursor:pointer;" onclick="navTo('planner','overview')">
-            <span class="chip-nm">${esc(d.name)}</span>
-          </div>
-          ${isMain ? `<button class="${starchCls}" onclick="cycleDishStarch('${d.id}')">${starchLabel}</button>` : ''}
-          <div class="dash-liters">${liters}L</div>
+        menuHtml += `<div class="dash-dish-row ${chipClass(d)}" onclick="navTo('planner','overview')" style="cursor:pointer;">
+          <span class="chip-nm">${esc(d.name)}</span>
+          <span class="dash-liters">${liters}L</span>
+          ${isMain ? `<button class="${starchCls}" onclick="event.stopPropagation();cycleDishStarch('${d.id}')">${starchLabel}</button>` : ''}
         </div>`;
       });
 
       // Starch totals for this meal
-      const mainDishes = dishes.filter(d => d.type === 'Main course' && d.starch);
+      const mainDishes = sorted.filter(d => d.type === 'Main course' && d.starch);
       if (mainDishes.length > 0) {
         const starchTotals = {};
         mainDishes.forEach(d => {
-          const peers = dishes.filter(p => p.type === 'Main course');
+          const peers = sorted.filter(p => p.type === 'Main course');
           const guestsForDish = Math.round(gc / Math.max(peers.length, 1));
           const acc = ACCOMPANIMENTS.find(a => a.name === d.starch);
           if (!acc) return;
