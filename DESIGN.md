@@ -259,7 +259,7 @@ Browser (React/Next.js) ←→ API Server ←→ PostgreSQL + Google Sheets
 - Gradual migration: one screen at a time
 - Same API server underneath
 
-### Scaling to 6 Locations
+### Scaling to many Locations
 From Phase 3 onward, locations are database-driven (not hardcoded):
 - Location table in PostgreSQL with settings, suppliers, operating hours
 - All operational data filtered by location_id
