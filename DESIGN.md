@@ -136,100 +136,64 @@ SETUP_GUIDE.md         — Installation instructions
 
 ## 4. Module Roadmap
 
-### Phase 1: Complete the Food Planner ✅ (mostly done)
-- [x] Core meal planning, guest counts, dish management
-- [x] Recipe index with bulk import
-- [x] Order overview with ingredient DB
-- [x] Mobile responsive
-- [x] Code split into modules
-- [x] Feedback system
+### Approach: Thin Slices, Not Big Phases
+Rather than building each module to completion before starting the next, we build the **simplest useful version** of what's needed now, then deepen based on real usage and feedback. The order below reflects current priorities but is deliberately flexible — what comes next depends on what the team actually needs.
+
+### Now: Deepen the Food Planner
+The food planner is live and working. Current priorities to expand it:
+
+- [ ] **Caterings module**: name, date, guest count, pickup/delivery/on-location, dish list from recipe index, logistics notes. Separate from the weekly meal planner.
+- [ ] **Toppings/sides/bread**: currently only soups, mains, desserts. Need to handle the standard accompaniments (bread, aioli, toppings, dips) that go with every service.
+- [ ] **Basic budgeting per service**: simple cost indicator per meal service — how much are we spending on ingredients for this lunch vs how many guests are paying.
 - [ ] Import all existing recipes from old spreadsheet
 - [ ] Standard inventory items (always-in-stock list separate from per-dish ingredients)
 - [ ] TestTafel menu planning variant (7-course format, cost/labour per course, portion sizing, collective planning)
 
-### Phase 2: Inventory & Drinks
-**Goal**: Complete picture of everything in the kitchens and bars.
+### Next: Drinks System
+A unified drinks system across all locations.
 
-**Non-food inventory**
-- Cleaning supplies, equipment, disposables
-- Par levels (minimum stock), reorder triggers
-- Per-location tracking
-- Simple check-in/check-out for shared equipment between locations
+**Start simple (v1)**:
+- A list: name, type (wine/beer/spirit/cocktail/non-alcoholic/homemade), supplier, cost price, selling price, stock per location
+- Basic margin calculation (cost vs selling price)
 
-**Drinks system** (unified across all locations)
-- Each drink: name, type (wine/beer/spirit/cocktail/non-alcoholic/homemade), supplier, cost, selling price, margin
-- Wine specifics: tasting notes, region, producer, natural/organic certification, pairing suggestions
+**Deepen later**:
+- Wine: tasting notes, region, producer, natural/organic, pairing suggestions
 - Cocktails & homemade drinks: recipe with ingredients, prep time, cost calculation
 - Automatic pricing suggestions based on cost + target margin
-- Stock tracking per location's bar
 - Supplier ordering (same pattern as food ingredient ordering)
 - **Key use case**: TestTafel's head waiter can freely experiment with homemade drinks, seeing immediately what it costs and what it should be priced at
 
-**Technical**: Still on Google Sheets DB. New JS modules (drinks.js, inventory.js). New server routes. Same app, new tabs.
+### Then: Build What's Most Needed
+The order of everything below is flexible. Build thin slices first, deepen based on feedback and urgency.
 
-### Phase 3: Finance & Reporting ← DATABASE MIGRATION POINT
-**Goal**: Daily/weekly financial insight. Replace the current Google Sheets finance tracking.
+**Task management** (could come early — high daily impact)
+- v1: Daily checklists per location/role. Open app, see tasks, tick them off. Manager sets up the lists.
+- v2: Recurring tasks, completion tracking, one-click-deeper instructions, kitchen-friendly big buttons
+- v3: Teaching built in (tasks double as training materials)
 
-**⚠️ Before starting this phase: migrate from Google Sheets to PostgreSQL.**
-Financial data needs real transactions, proper queries, aggregations, and audit trails.
+**Basic finance tracking** (useful early even in simple form)
+- v1: Daily revenue input per location per service. One simple graph showing the week.
+- v2: Cost tracking, cost per guest, budget vs actual
+- v3: Full P&L, supplier analysis, waste tracking, automated reports
+- ⚠️ Full finance module (v2+) triggers the PostgreSQL migration
 
-- Revenue tracking per location, per service type (lunch/dinner/bar/events/catering)
-- Cost tracking: food costs, drink costs, labour costs, fixed costs
-- Cost per guest (food + labour), per location, per service
-- Budget vs actual per week/month
-- Supplier spend analysis (trends, who costs most, where to negotiate)
-- Simple P&L per location + consolidated organisation-wide
-- Cash flow overview
-- Waste tracking (what got thrown away, why, cost impact)
-- Weekly auto-generated operations report
-- **Integration**: pulls from food planner (ingredient costs, guest counts), drinks (bar revenue/costs), and later scheduling (labour hours)
+**Non-food inventory**
+- v1: A list with par levels. "We have 3 rolls of cling film, minimum is 10, need to order."
+- v2: Per-location tracking, reorder triggers, check-in/check-out for shared equipment
 
-**Technical**: PostgreSQL on Railway. Migration of existing data. Keep Google Sheets for recipe imports + ingredient DB. New finance.js module. Possibly first use of charts (Chart.js).
-
-### Phase 4: Staff Scheduling & Management
-**Goal**: Replace paid scheduling software for ~25-35 paid staff across 3 locations.
-
-*Volunteer scheduling stays on schedule.desering.org — this is for paid staff only.*
-
-- Staff profiles: name, email, phone, locations, skills/certifications, contract (hours/week)
-- Weekly schedule grid (familiar pattern from the meal planner)
-- Shift templates (recurring patterns, e.g. "TestTafel service Wed-Sat")
-- Availability submission (staff mark when they're free/unavailable)
-- Open shifts (unfilled slots staff can claim)
-- Shift swap requests (staff-initiated, manager-approved)
-- Time tracking: clock in/out via web app (tablet at each location)
-- Hour approval workflow (manager reviews → approves)
-- Leave balance tracking (vacation, sick days)
-- Labour cost calculation (hours × rate → feeds into finance module)
-- Skills matrix (who's trained on: cooking, FOH, bar, cargo bike, events, specific equipment)
-- GDPR: privacy notice, data deletion capability, minimal data collection
-
-**Technical**: PostgreSQL (already migrated in Phase 3). New scheduling.js, staff.js modules. Progressive Web App consideration for push notifications about schedule changes.
-
-### Phase 5: Project & Task Management
-**Goal**: Lightweight system for organising work beyond daily operations. Replaces Notion.
-
-**Task management** (daily operations)
-- Daily task checklists per location/role (opening, closing, cleaning, prep)
-- Recurring tasks (weekly deep clean, monthly equipment check, quarterly reviews)
-- One-click depth: summary at a glance, detailed instructions one tap deeper
-- Task completion tracking (who, when)
-- Kitchen-friendly: big buttons, works with wet hands, minimal reading
-- Teaching built in: tasks double as training materials for new people
+**Staff scheduling** (replaces €200-300/month software)
+- v1: Weekly grid, assign people to shifts, people see their schedule
+- v2: Availability, open shifts, swap requests
+- v3: Time tracking, hour approval, leave balances, labour cost integration
 
 **Project management** (lightweight, transparency-focused)
-- Anyone can create a project (visible to all by default, can be made private)
-- Guided project creation: structured conversation to define goal → steps → resources → timeline
-- Designed around the "office guide" workflow: 5-60 min talk → structured project in the system
-- Not perfect, but "60% of perfect" — enough to be legible and move forward
-- Note-taking built into each project
-- Resource/budget allocation visible
+- v1: Simple project cards visible to all. Goal, steps, owner.
+- v2: Guided creation workflow, notes, resource allocation
+- v3: AI-assisted project structuring
 
-**Technical**: PostgreSQL. May benefit from React at this point if the UI complexity warrants it. AI assistance could help with the guided project creation flow.
-
-### Phase 6: Advanced Features (future, not planned in detail)
+### Future Ideas (not planned)
 - Guest-facing allergen lookup / digital menu board
-- Catering management module (quotes, logistics, billing)
+- Catering management (quotes, logistics, billing) — beyond the basic catering module
 - Equipment maintenance scheduling
 - Volunteer onboarding with training modules
 - Donation tracking and donor management
@@ -241,27 +205,26 @@ Financial data needs real transactions, proper queries, aggregations, and audit 
 
 ## 5. Technical Architecture Evolution
 
-### Current (Phase 1-2): Simple Monolith
+### Current: Simple Monolith (good for many more modules)
 ```
 Browser ←→ Express Server ←→ Google Sheets
 ```
 - Single Node.js app on Railway
 - Google Sheets as database
-- Vanilla JS frontend, 12 module files
-- Good for: up to ~4-5 modules, <30 users
+- Vanilla JS frontend, 12+ module files
+- Good for: food planner + drinks + tasks + basic finance + non-food inventory
 
-### Phase 3: Database Migration ← KEY TRANSITION
+### When Needed: Database Migration ← triggered by full finance module
 ```
 Browser ←→ Express Server ←→ PostgreSQL (primary data)
                             ←→ Google Sheets (recipe imports, ingredient DB)
 ```
-- Add PostgreSQL on Railway
-- Migrate operational data (dishes, services, guests, recipe index, feedback, finance)
-- Keep Google Sheets for: recipe sheet imports, ingredient DB (cooks edit directly in Sheets)
-- Add database migrations (version-controlled schema changes)
+- Add PostgreSQL on Railway when we need real queries, aggregations, audit trails
+- Likely trigger: finance module going beyond simple revenue tracking
+- Migrate operational data; keep Google Sheets for recipe/ingredient imports
 - Stack unchanged: Node.js + Express + vanilla JS
 
-### Phase 4: User Roles
+### When Needed: User Roles ← triggered by scheduling or multi-location growth
 ```
 Same architecture + role-based access control
 ```
@@ -270,7 +233,7 @@ Same architecture + role-based access control
 - **Staff**: own schedule, own location's operations, read access to organisation-wide data
 - **Cook/FOH**: operational tools for their role + transparency views
 
-### Phase 5+: Consider Frontend Framework (only if needed)
+### When Needed: Frontend Framework ← only if vanilla JS becomes a genuine bottleneck
 ```
 Browser (React/Next.js) ←→ API Server ←→ PostgreSQL + Google Sheets
 ```
@@ -299,11 +262,32 @@ From Phase 3 onward, locations are database-driven (not hardcoded):
 
 ### Recommended Workflow Evolution
 
-| Phase | Tool | Why |
-|-------|------|-----|
-| 1-2 (now) | Claude.ai chat | Works for current scale. Limitation: context window resets each session. |
-| 2-3 | Claude Code (transition point) | Full filesystem access, sees all files, runs server, tests changes. Same natural language. Needs: Node.js + git on your computer (~1 hour setup). |
-| 4+ | Claude Code + local dev | Multiple contributors possible. Code review. Automated testing. |
+| Phase | Tool | Status |
+|-------|------|--------|
+| Initial build | Claude.ai chat | ✅ Done — built the food planner |
+| Current onwards | **Claude Code** | ← We are here. Full filesystem, runs server, tests locally. |
+| Later (multi-contributor) | Claude Code + pull requests | When volunteer devs join. |
+
+### Setting Up Claude Code
+```bash
+# One-time setup (~30 minutes)
+1. Install Node.js from https://nodejs.org
+2. Install git from https://git-scm.com
+3. npm install -g @anthropic-ai/claude-code
+4. git clone https://github.com/baasvis/Sering-food-planner
+5. cd Sering-food-planner && npm install
+6. claude    # start working
+```
+
+**Daily workflow:**
+```
+> claude "read DESIGN.md then let's work on the catering module"
+> "add a toppings section to the dish planner"
+> "there's a bug on the orders page, the stock input doesn't save"
+> "push to github"
+```
+
+Same natural language as Claude.ai chat, but with full project access.
 
 ### Tech Stack
 All chosen for: (1) Claude compatibility, (2) stability, (3) readability by non-experts.
