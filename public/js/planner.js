@@ -486,7 +486,7 @@ function getInventoryState(loc) {
   // Determine current window
   if (!lunchDone && mins < lunchDeadline) {
     // Before lunch deadline, lunch not done
-    return { window: 'lunch', label: '13:45', done: false, urgent: mins >= lunchDeadline - 60 };
+    return { window: 'lunch', label: 'Do inventory — 13:45', done: false, urgent: mins >= lunchDeadline - 60 };
   }
   if (!lunchDone && mins >= lunchDeadline && mins < dinnerDeadline) {
     // Past lunch deadline, lunch not done
@@ -495,7 +495,7 @@ function getInventoryState(loc) {
   if (lunchDone && mins < dinnerDeadline) {
     // Lunch done, before dinner deadline
     const urgent = mins >= dinnerDeadline - 60;
-    return { window: 'dinner', label: dinnerDone ? 'Inventory done' : '20:15', done: dinnerDone, urgent: !dinnerDone && urgent };
+    return { window: 'dinner', label: dinnerDone ? 'Inventory done' : 'Do inventory — 20:15', done: dinnerDone, urgent: !dinnerDone && urgent };
   }
   if (!dinnerDone && mins >= dinnerDeadline) {
     // Past dinner deadline, dinner not done
@@ -517,13 +517,14 @@ function getInventoryButton(loc) {
 function openInventory(loc) {
   const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
   const dishes = S.dishes.filter(d => {
+    if (!d.cookConfirmed) return false; // Only cooked dishes need inventory
     const atLoc = (d.services || []).some(s => s.loc === loc);
     const logMatch = d.logistics === locLabel || d.logistics === 'Transport to ' + (loc === 'west' ? 'Sering Centraal' : 'Sering West');
     return atLoc || logMatch;
   });
 
   if (dishes.length === 0) {
-    toast('No dishes at ' + locLabel);
+    toast('No cooked dishes at ' + locLabel);
     return;
   }
 
@@ -550,9 +551,10 @@ function openInventory(loc) {
         <span class="${cls}" style="font-size:11px;">${str}</span>
       </div>
       <div class="inv-controls">
-        <label style="font-size:11px;color:var(--text2);">Stock (L)</label>
+        <label style="font-size:11px;color:var(--text2);">Current stock</label>
         <input type="number" class="inv-stock-input" id="inv-stock-${d.id}" value="${d.stock || 0}" step="0.5" min="0" onchange="updateInventoryStock('${d.id}',this.value)" />
-        <button class="btn btn-sm inv-served-btn" onclick="openServedFromInventory('${d.id}','${loc}')">Served</button>
+        <span style="display:inline-block;width:1px;height:24px;background:var(--border);margin:0 6px;vertical-align:middle;"></span>
+        <button class="btn btn-sm inv-served-btn" style="background:#d32f2f;color:#fff;border-color:#d32f2f;" onclick="openServedFromInventory('${d.id}','${loc}')">Served</button>
       </div>
     </div>`;
   });
