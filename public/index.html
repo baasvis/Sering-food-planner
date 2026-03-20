@@ -221,6 +221,24 @@
   .slot-header.today{background:var(--blue-bg);}
   .copy-slot-btn{font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--text3);cursor:pointer;white-space:nowrap;transition:all .1s;}
   .copy-slot-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg);}
+  .copy-day-btn{display:block;font-size:8px;font-weight:600;padding:1px 4px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--text3);cursor:pointer;white-space:nowrap;transition:all .1s;margin:2px auto 0;}
+  .copy-day-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg);}
+  .collapse-arrow{font-size:11px;color:var(--text3);margin-left:4px;}
+  /* INVENTORY */
+  .inv-btn{font-weight:700;font-size:13px;padding:8px 16px;border-radius:var(--radius);border:2px solid var(--border2);background:var(--bg);color:var(--text);cursor:pointer;transition:all .15s;}
+  .inv-btn:hover{border-color:var(--text2);background:var(--bg2);}
+  .inv-urgent{border-color:var(--red) !important;background:var(--red-bg) !important;color:var(--red) !important;animation:inv-pulse 1.5s ease-in-out infinite;}
+  .inv-done{border-color:var(--green) !important;color:var(--green) !important;opacity:.6;cursor:default !important;}
+  @keyframes inv-pulse{0%,100%{opacity:1;}50%{opacity:.7;}}
+  .inv-list{max-height:400px;overflow-y:auto;margin-bottom:12px;}
+  .inv-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+  .inv-row:last-child{border-bottom:none;}
+  .inv-name{flex:1;display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:150px;}
+  .inv-controls{display:flex;align-items:center;gap:6px;flex-shrink:0;}
+  .inv-stock-input{width:70px;font-size:13px;height:32px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 8px;background:var(--bg);color:var(--text);text-align:right;}
+  .inv-stock-input:focus{border-color:var(--blue);outline:none;}
+  .inv-served-btn{font-size:11px;color:var(--text2);border-color:var(--border2);}
+  .inv-served-btn:hover{color:var(--red);border-color:var(--red);}
   .type-lbl{display:flex;align-items:center;gap:4px;font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.03em;padding:2px 4px;}
   .type-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
   .type-dot.chip-soup{background:var(--green);}
@@ -243,11 +261,11 @@
   .add-slot-btn:hover{color:var(--text2);border-color:var(--border2);}
 
   /* DISH LIST */
-  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:6px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+  .dish-list-hdr{display:grid;grid-template-columns:20px 1fr 140px 62px 50px 110px 52px 52px;gap:6px;padding:5px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
   .dish-list-hdr .sortable{cursor:pointer;user-select:none;border-radius:4px;padding:2px 4px;transition:background .1s;}
   .dish-list-hdr .sortable:hover{background:var(--bg2);color:var(--text);}
   .dish-list-hdr .sortable.active{color:var(--blue);}
-  .dish-row{display:grid;grid-template-columns:20px 1fr 140px 62px 62px 50px 110px 52px 52px;gap:6px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;min-width:750px;}
+  .dish-row{display:grid;grid-template-columns:20px 1fr 140px 62px 50px 110px 52px 52px;gap:6px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;min-width:700px;}
   .dish-row:hover{border-color:var(--border2);}
   .dish-row.selected{border-color:var(--blue);background:var(--blue-bg);}
   .dish-row.split-child{padding-left:10px;}
@@ -475,7 +493,7 @@
     .dish-row{display:block;padding:10px 12px;}
     .dish-row .sel-box{display:none;}
     .dish-row .col-cook{border-left:none;padding-left:0;margin-top:6px;}
-    .dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-logistics{display:none;}
+    .dish-row .col-stock,.dish-row .col-diff,.dish-row .col-logistics{display:none;}
     .m-stock-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
     .m-stock-row > *{flex-shrink:0;}
 

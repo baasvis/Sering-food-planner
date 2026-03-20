@@ -90,19 +90,21 @@ function updateSiSearch(val) {
   const query = val.toLowerCase().trim();
   const addedNames = new Set(standardInventory.map(i => i.name.toLowerCase().trim()));
   const suggestions = query.length >= 2
-    ? S.ingredientDb.filter(i => i.name.toLowerCase().includes(query)).slice(0, 8)
+    ? S.ingredientDb.filter(i => i.name.toLowerCase().includes(query) || (i.orderCode && i.orderCode.toLowerCase().includes(query))).slice(0, 8)
     : [];
-  sugContainer.innerHTML = suggestions.length ? suggestions.map(ing => {
+  let html = suggestions.map(ing => {
     const isAdded = addedNames.has(ing.name.toLowerCase().trim());
     const nameAttr = esc(ing.name);
     const unitAttr = esc(ing.unit || 'g');
     return `<div class="si-suggestion${isAdded ? ' si-suggestion-added' : ''}" ${!isAdded ? `onclick="addToStandardInventory('${nameAttr}', '${unitAttr}')"` : ''}>
       <span class="si-sug-name">${esc(ing.name)}</span>
-      <span class="si-sug-meta">${ing.source ? esc(ing.source) + ' · ' : ''}${ing.unit || 'g'}</span>
+      <span class="si-sug-meta">${ing.source ? esc(ing.source) + ' · ' : ''}${ing.orderCode ? esc(ing.orderCode) + ' · ' : ''}${ing.unit || 'g'}</span>
       ${isAdded ? '<span style="color:var(--green);font-size:11px;font-weight:600;">✓ added</span>' : ''}
     </div>`;
-  }).join('') : '';
-  sugContainer.style.display = suggestions.length ? 'block' : 'none';
+  }).join('');
+
+  sugContainer.innerHTML = html;
+  sugContainer.style.display = html ? 'block' : 'none';
 }
 
 function hideSiSuggestions() {

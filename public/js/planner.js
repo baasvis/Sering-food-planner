@@ -58,28 +58,37 @@ function renderLocationPlan(loc) {
   const mondayOff = todayDow === 0 ? -6 : 1 - todayDow;
   const monday = new Date(today); monday.setDate(today.getDate() + mondayOff);
 
-  let html = `<div class="btn-row" style="margin-bottom:12px;">
+  const invBtn = getInventoryButton(loc);
+  let html = `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
     <button class="btn btn-primary" onclick="openNewDish()">+ New dish</button>
+    ${invBtn}
   </div>
   <div id="split-bar-area"></div>`;
 
+  const otherLoc = loc === 'west' ? 'centraal' : 'west';
+  const otherLabel = loc === 'west' ? 'Centraal' : 'West';
+
   typeGroups.forEach(tg => {
-    // Type section header
+    const collapseKey = `${loc}-${tg.key}`;
+    if (S.collapsedTypes[collapseKey] === undefined) S.collapsedTypes[collapseKey] = true;
+    const isCollapsed = !!S.collapsedTypes[collapseKey];
+
+    // Type section header — clickable to toggle dish list
     html += `<div class="type-section">`;
-    html += `<div class="type-section-hdr"><span class="type-dot ${tg.cls}"></span>${tg.label}</div>`;
+    html += `<div class="type-section-hdr" style="cursor:pointer;" onclick="toggleTypeCollapse('${collapseKey}')"><span class="type-dot ${tg.cls}"></span>${tg.label}<span class="collapse-arrow">${isCollapsed ? '&#9654;' : '&#9660;'}</span></div>`;
 
     // Calendar grid for this type
     html += `<div class="week-scroll"><div class="week-grid"><div></div>`;
 
-    // Day headers
+    // Day headers with copy button
     DAYS.forEach((d, i) => {
       const isToday = i === (new Date().getDay() + 6) % 7;
       const dt = new Date(monday); dt.setDate(monday.getDate() + i);
       const dateStr = `${dt.getDate()}/${dt.getMonth()+1}`;
-      html += `<div class="day-hdr${isToday ? ' today-hdr' : ''}">${d}<span class="gt-date">${dateStr}</span></div>`;
+      html += `<div class="day-hdr${isToday ? ' today-hdr' : ''}">${d}<span class="gt-date">${dateStr}</span><button class="copy-day-btn" onclick="event.stopPropagation();copyDayToOther('${loc}',${i})" title="Copy all ${d} dishes to ${otherLabel}">&rarr; ${otherLabel}</button></div>`;
     });
 
-    // Lunch row
+    // Meal rows
     MEALS.forEach(meal => {
       const mealLabel = meal.charAt(0).toUpperCase() + meal.slice(1);
       html += `<div class="meal-lbl">${mealLabel}</div>`;
@@ -90,7 +99,6 @@ function renderLocationPlan(loc) {
         const isToday = d === (new Date().getDay() + 6) % 7;
         html += `<div class="slot${isToday ? ' today' : ''}" onclick="openAddDishTyped('${loc}',${d},'${meal}','${tg.key}')">`;
         slotDishes.forEach(dish => {
-          const req = calcRequired(dish);
           const trClass = (dish.logistics || '').startsWith('Transport') ? ' chip-tr-border' : '';
           html += `<div class="dish-chip ${tg.cls}${trClass}"><span class="chip-nm">${esc(dish.name)}</span><span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}',${d},'${meal}')">&#10005;</span></div>`;
         });
@@ -100,17 +108,15 @@ function renderLocationPlan(loc) {
 
     html += '</div></div>'; // close week-grid and week-scroll
 
-    // Dish list below the grid — all dishes of this type with services at this location
+    // Collapsible dish list below the grid
     const typeDishes = S.dishes.filter(d => d.type === tg.key && (d.services || []).some(s => s.loc === loc));
-    if (typeDishes.length > 0) {
+    if (typeDishes.length > 0 && !isCollapsed) {
       html += `<div class="type-dish-list">`;
-      // Dish list header (desktop only)
       html += `<div class="dish-list-hdr">
         <span></span>
         <span>Dish</span>
         <span>Cook date</span>
         <span>Stock</span>
-        <span>Need</span>
         <span>+/&minus;</span>
         <span>Location</span>
         <span>Order</span>
@@ -118,6 +124,8 @@ function renderLocationPlan(loc) {
       </div>`;
       html += renderDishListSplit(typeDishes);
       html += `</div>`;
+    } else if (typeDishes.length > 0 && isCollapsed) {
+      html += `<div style="font-size:11px;color:var(--text3);padding:4px 0;cursor:pointer;" onclick="toggleTypeCollapse('${collapseKey}')">${typeDishes.length} dish${typeDishes.length !== 1 ? 'es' : ''} — click to expand</div>`;
     }
 
     html += `</div>`; // close type-section
@@ -130,7 +138,7 @@ function renderLocationPlan(loc) {
     html += `<div class="type-section">`;
     html += `<div class="type-section-hdr" style="color:var(--text3);">Unassigned dishes at ${locLabel}</div>`;
     html += `<div class="dish-list-hdr">
-      <span></span><span>Dish</span><span>Cook date</span><span>Stock</span><span>Need</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
+      <span></span><span>Dish</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
     </div>`;
     html += renderDishListSplit(unassigned);
     html += `</div>`;
@@ -201,7 +209,7 @@ function renderTransportView() {
       html += `<div class="type-section">`;
       html += `<div class="type-section-hdr"${isToday ? ' style="color:var(--blue);"' : ''}>${dayName} ${dateStr}</div>`;
       html += `<div class="dish-list-hdr">
-        <span></span><span>Dish</span><span>Cook date</span><span>Stock</span><span>Need</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
+        <span></span><span>Dish</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
       </div>`;
       html += renderDishListSplit(dishes);
       html += `</div>`;
@@ -212,7 +220,7 @@ function renderTransportView() {
       html += `<div class="type-section">`;
       html += `<div class="type-section-hdr" style="color:var(--text3);">No day assigned</div>`;
       html += `<div class="dish-list-hdr">
-        <span></span><span>Dish</span><span>Cook date</span><span>Stock</span><span>Need</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
+        <span></span><span>Dish</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
       </div>`;
       html += renderDishListSplit(noDayDishes);
       html += `</div>`;
@@ -273,6 +281,35 @@ function removeDishFromSlot(dishId, loc, day, meal) {
   rebuildPlanner(); rerenderCurrentView(); scheduleSave();
 }
 
+function toggleTypeCollapse(key) {
+  S.collapsedTypes[key] = !S.collapsedTypes[key];
+  rerenderCurrentView();
+}
+
+function copyDayToOther(fromLoc, day) {
+  const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
+  const toLabel = toLoc === 'west' ? 'Sering West' : 'Sering Centraal';
+  let added = 0;
+  MEALS.forEach(meal => {
+    const k = `${fromLoc}-${day}-${meal}`;
+    const dishes = S.planner[k] || [];
+    dishes.forEach(dish => {
+      const already = (dish.services || []).some(s => s.loc === toLoc && s.day === day && s.meal === meal);
+      if (!already) {
+        if (!dish.services) dish.services = [];
+        dish.services.push({ loc: toLoc, day, meal });
+        added++;
+      }
+    });
+  });
+  if (added > 0) {
+    rebuildPlanner(); rerenderCurrentView(); scheduleSave();
+    toast(`${added} dish${added > 1 ? 'es' : ''} copied to ${toLabel} ${DAYS[day]}`);
+  } else {
+    toast('All dishes already assigned there');
+  }
+}
+
 function copySlotToOther(fromLoc, day, meal) {
   const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
   const toLabel = toLoc === 'west' ? 'Sering West' : 'Sering Centraal';
@@ -318,8 +355,10 @@ function renderAddModal(loc, day, meal, existing, filterOn, searchQuery, typeFil
     avail = avail.filter(d => d.name.toLowerCase().includes(q));
   }
   const typeLabel = typeFilter ? ` (${typeFilter === 'Main course' ? 'Mains' : typeFilter + 's'})` : '';
+
+  // Existing dishes section
   const opts = avail.length === 0
-    ? `<div class="empty">No dishes available${typeLabel}${filterOn ? ' at this location' : ''}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`
+    ? ''
     : avail.map(d => {
       const { diff, str, cls } = diffStr(d);
       const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
@@ -338,19 +377,54 @@ function renderAddModal(loc, day, meal, existing, filterOn, searchQuery, typeFil
         </div>
       </div>`;
     }).join('');
+
+  // Recipes from index section — exclude recipes already on the menu
+  const activeDishRecipeIds = new Set(S.dishes.map(d => d.recipeSheetId).filter(Boolean));
+  let recipes = S.recipeIndex.filter(r => !activeDishRecipeIds.has(r.recipeSheetId));
+  if (typeFilter) recipes = recipes.filter(r => r.type === typeFilter);
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    recipes = recipes.filter(r => r.name.toLowerCase().includes(q));
+  }
+  const recipeOpts = recipes.slice(0, 15).map(r => {
+    const ags = (r.allergens || []).slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
+    return `<div class="dish-opt" onclick="addRecipeToSlot('${r.id}','${loc}',${day},'${meal}')">
+      <div style="flex:1;">
+        <div><span style="font-weight:500;">${esc(r.name)}</span> ${typeBadge(r.type || 'Soup')}</div>
+        <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
+          ${ags}
+          ${r.costPerServing ? `<span style="color:var(--text3);">${esc(r.costPerServing)}</span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
   const existingJson = JSON.stringify(existing).replace(/'/g, "\\'");
   const tfEsc = typeFilter ? typeFilter.replace(/'/g, "\\'") : '';
   const tf = `,'${tfEsc}'`;
+
+  let listHtml = '';
+  if (opts) {
+    listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;padding:6px 10px;">On the menu</div>`;
+    listHtml += opts;
+  }
+  if (recipeOpts) {
+    listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;padding:6px 10px;${opts ? 'border-top:2px solid var(--border);margin-top:2px;' : ''}">From recipes</div>`;
+    listHtml += recipeOpts;
+  }
+  if (!listHtml) {
+    listHtml = `<div class="empty">No dishes or recipes available${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
+  }
+
   showModal(`<h3>Add${typeLabel} to ${DAYS[day]} ${meal} &middot; ${locLabel}</h3>
-    <input type="text" class="dish-search" id="planner-search" placeholder="Search dishes..." value="${esc(searchQuery)}"
+    <input type="text" class="dish-search" id="planner-search" placeholder="Search dishes & recipes..." value="${esc(searchQuery)}"
       oninput="renderAddModal('${loc}',${day},'${meal}',${existingJson},${filterOn},this.value${tf})" />
-    <div class="filter-toggle-row" onclick="renderAddModal('${loc}',${day},'${meal}',${existingJson},${!filterOn},''${tf})">
+    ${opts ? `<div class="filter-toggle-row" onclick="renderAddModal('${loc}',${day},'${meal}',${existingJson},${!filterOn},''${tf})">
       <div class="tbox${filterOn ? ' on' : ''}"><div class="tknob"></div></div>
       <span>Only show dishes at ${locLabel}</span>
-    </div>
-    <div class="dish-opts-list">${opts || '<div class="empty">No dishes yet. Add some in Menu planner.</div>'}</div>
+    </div>` : ''}
+    <div class="dish-opts-list" style="max-height:340px;">${listHtml}</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
-  // Restore focus and cursor position to search input
   const si = document.getElementById('planner-search');
   if (si) { si.focus(); si.setSelectionRange(si.value.length, si.value.length); }
 }
@@ -361,3 +435,166 @@ function confirmAddDish(dishId, loc, day, meal) {
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`${dish.name} added to ${DAYS[day]} ${meal}`);
 }
+
+function addRecipeToSlot(recipeId, loc, day, meal) {
+  const r = S.recipeIndex.find(x => x.id === recipeId);
+  if (!r) return;
+  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const newDish = {
+    id: newId(),
+    name: r.name,
+    type: r.type || 'Soup',
+    stock: 0,
+    serving: r.servingSize || 280,
+    storage: 'Gastro',
+    logistics: locLabel,
+    recipeSheetId: r.recipeSheetId || null,
+    recipeVolume: r.recipeVolume || null,
+    recipeIngredients: r.recipeIngredients ? [...r.recipeIngredients] : null,
+    allergens: [...(r.allergens || [])],
+    extraAllergens: [],
+    orderFor: false,
+    parentId: null,
+    cookMode: 'day',
+    cookDay: null,
+    cookDate: null,
+    cookConfirmed: false,
+    services: [{ loc, day: parseInt(day), meal }],
+    createdAt: new Date().toISOString(),
+  };
+  S.dishes.push(newDish);
+  closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
+  toast(`${r.name} added to ${DAYS[day]} ${meal}`);
+}
+
+// ── INVENTORY ────────────────────────────────────────────
+function getAmsterdamNow() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+}
+
+function getInventoryState(loc) {
+  const now = getAmsterdamNow();
+  const h = now.getHours(), m = now.getMinutes();
+  const mins = h * 60 + m;
+  const lunchDeadline = 13 * 60 + 45; // 13:45
+  const dinnerDeadline = 20 * 60 + 15; // 20:15
+  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const inv = S.inventoryDone[loc] || {};
+  const lunchDone = inv.lunch === todayStr;
+  const dinnerDone = inv.dinner === todayStr;
+
+  // Determine current window
+  if (!lunchDone && mins < lunchDeadline) {
+    // Before lunch deadline, lunch not done
+    return { window: 'lunch', label: 'Do inventory — 13:45', done: false, urgent: mins >= lunchDeadline - 60 };
+  }
+  if (!lunchDone && mins >= lunchDeadline && mins < dinnerDeadline) {
+    // Past lunch deadline, lunch not done
+    return { window: 'lunch', label: 'DO INVENTORY', done: false, urgent: true };
+  }
+  if (lunchDone && mins < dinnerDeadline) {
+    // Lunch done, before dinner deadline
+    const urgent = mins >= dinnerDeadline - 60;
+    return { window: 'dinner', label: dinnerDone ? 'Inventory done' : 'Do inventory — 20:15', done: dinnerDone, urgent: !dinnerDone && urgent };
+  }
+  if (!dinnerDone && mins >= dinnerDeadline) {
+    // Past dinner deadline, dinner not done
+    return { window: 'dinner', label: 'DO INVENTORY', done: false, urgent: true };
+  }
+  // Both done
+  return { window: 'done', label: 'Inventory done', done: true, urgent: false };
+}
+
+function getInventoryButton(loc) {
+  const st = getInventoryState(loc);
+  if (st.done && st.window === 'done') {
+    return `<button class="btn inv-btn inv-done" disabled>&#10003; Inventory done</button>`;
+  }
+  const cls = st.urgent ? 'inv-btn inv-urgent' : 'inv-btn';
+  return `<button class="btn ${cls}" onclick="openInventory('${loc}')">${st.label}</button>`;
+}
+
+function openInventory(loc) {
+  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const dishes = S.dishes.filter(d => {
+    if (!d.cookConfirmed) return false; // Only cooked dishes need inventory
+    const atLoc = (d.services || []).some(s => s.loc === loc);
+    const logMatch = d.logistics === locLabel || d.logistics === 'Transport to ' + (loc === 'west' ? 'Sering Centraal' : 'Sering West');
+    return atLoc || logMatch;
+  });
+
+  if (dishes.length === 0) {
+    toast('No cooked dishes at ' + locLabel);
+    return;
+  }
+
+  let html = `<h3>Inventory — ${locLabel}</h3>`;
+  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Update stock for each dish, or mark as served.</div>`;
+  html += `<div class="inv-list">`;
+
+  const sorted = [...dishes].sort((a, b) => {
+    const typeOrder = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+    return (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0);
+  });
+
+  let lastType = '';
+  sorted.forEach(d => {
+    if (d.type !== lastType) {
+      lastType = d.type;
+      html += `<div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text2);padding:8px 0 4px;border-bottom:1px solid var(--border);">${d.type}</div>`;
+    }
+    const { str, cls } = diffStr(d);
+    html += `<div class="inv-row" id="inv-row-${d.id}">
+      <div class="inv-name">
+        <span style="font-weight:500;">${esc(d.name)}</span>
+        ${storageBadge(d.storage || 'Gastro')}
+        <span class="${cls}" style="font-size:11px;">${str}</span>
+      </div>
+      <div class="inv-controls">
+        <label style="font-size:11px;color:var(--text2);">Current stock</label>
+        <input type="number" class="inv-stock-input" id="inv-stock-${d.id}" value="${d.stock || 0}" step="0.5" min="0" onchange="updateInventoryStock('${d.id}',this.value)" />
+        <span style="display:inline-block;width:1px;height:24px;background:var(--border);margin:0 6px;vertical-align:middle;"></span>
+        <button class="btn btn-sm inv-served-btn" style="background:#d32f2f;color:#fff;border-color:#d32f2f;" onclick="openServedFromInventory('${d.id}','${loc}')">Served</button>
+      </div>
+    </div>`;
+  });
+
+  html += `</div>`;
+  html += `<div class="modal-actions">
+    <button class="btn" onclick="S._inventoryLoc=null;closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="finishInventory('${loc}')">Finish inventory</button>
+  </div>`;
+
+  showModal(html);
+  // Widen the modal for inventory
+  const modal = document.querySelector('.modal');
+  if (modal) modal.style.width = '560px';
+}
+
+function updateInventoryStock(id, value) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  d.stock = parseFloat(value) || 0;
+  scheduleSave();
+}
+
+function openServedFromInventory(id, loc) {
+  // Store that we came from inventory so we can reopen it
+  S._inventoryLoc = loc;
+  openServedDialog(id);
+}
+
+function finishInventory(loc) {
+  const now = getAmsterdamNow();
+  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const st = getInventoryState(loc);
+  if (!S.inventoryDone[loc]) S.inventoryDone[loc] = {};
+  S.inventoryDone[loc][st.window] = todayStr;
+  S._inventoryLoc = null;
+  closeModal();
+  rebuildPlanner();
+  rerenderCurrentView();
+  scheduleSave();
+  toast('Inventory complete!');
+}
+

@@ -21,6 +21,12 @@ const { OAuth2Client } = require('google-auth-library');
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const STD_INV_FILE = path.join(DATA_DIR, 'standard-inventory.json');
+const STD_INV_SEED = path.join(__dirname, 'seeds', 'standard-inventory.json');
+// Seed from default inventory on first deploy if no data file exists yet
+if (!fs.existsSync(STD_INV_FILE) && fs.existsSync(STD_INV_SEED)) {
+  fs.copyFileSync(STD_INV_SEED, STD_INV_FILE);
+  console.log('Standard inventory seeded from seeds/standard-inventory.json');
+}
 
 const app = express();
 app.set('trust proxy', 1); // Trust Railway's proxy so secure cookies work
@@ -52,6 +58,7 @@ function cleanSheetId(val) {
 const CONFIG = {
   DB_SHEET_ID: cleanSheetId(process.env.DB_SHEET_ID || ''),
   INGREDIENT_DB_SHEET_ID: cleanSheetId(process.env.INGREDIENT_DB_SHEET_ID || '1yrYRECESZf6kP5GHwDDR9CmxBtm5G9-gRCPUJqgkzQc'),
+  INGREDIENT_DB_GID: process.env.INGREDIENT_DB_GID || '1737213788',
   GOOGLE_CREDENTIALS: process.env.GOOGLE_CREDENTIALS || '{}',
 
   // Google Sign-In: your Google Cloud OAuth client ID
@@ -613,14 +620,18 @@ app.get('/api/ingredients', async (req, res) => {
   try {
     // First get the sheet metadata to find the correct tab name
     const meta = await sheets.spreadsheets.get({
-      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, fields: 'sheets.properties.title',
+      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, fields: 'sheets.properties(title,sheetId)',
     });
-    const tabs = meta.data.sheets.map(s => s.properties.title);
-    console.log('Ingredient DB tabs:', tabs);
-    // Use first tab
-    const tabName = tabs[0] || 'Sheet1';
+    const sheets_meta = meta.data.sheets;
+    console.log('Ingredient DB tabs:', sheets_meta.map(s => `${s.properties.title} (gid=${s.properties.sheetId})`));
+    // Use the tab matching INGREDIENT_DB_GID if set, otherwise first tab
+    const targetGid = CONFIG.INGREDIENT_DB_GID ? parseInt(CONFIG.INGREDIENT_DB_GID) : null;
+    const matchedTab = targetGid != null
+      ? sheets_meta.find(s => s.properties.sheetId === targetGid)
+      : null;
+    const tabName = (matchedTab || sheets_meta[0])?.properties?.title || 'Sheet1';
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, range: `'${tabName}'!B3:R300`,
+      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, range: `'${tabName}'!B3:R2000`,
     });
     const allRows = response.data.values || [];
     console.log('Ingredient DB raw rows:', allRows.length);
@@ -702,6 +713,9 @@ app.get('/api/health', (req, res) => {
 app.post('/api/feedback', requireAuth, async (req, res) => {
   const { type, text, screen, user, timestamp, userAgent } = req.body;
   if (!text) return res.status(400).json({ error: 'Feedback text required' });
+
+  const sheets = getSheetsClient();
+  if (!sheets || !CONFIG.DB_SHEET_ID) return res.status(503).json({ error: 'Google Sheets not configured' });
 
   try {
     // Ensure 'feedback' tab exists
