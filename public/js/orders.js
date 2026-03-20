@@ -41,8 +41,6 @@ function renderOrders() {
   }
 
   const orderedDishes = S.dishes.filter(d => d.orderFor);
-  const shortfall = S.dishes.filter(d => d.stock < calcRequired(d) && calcRequired(d) > 0);
-
   // Combine ingredients across all ordered dishes
   const combined = {};
   orderedDishes.forEach(dish => {
@@ -97,19 +95,6 @@ function renderOrders() {
   });
 
   let html = '';
-
-  // Shortfall section
-  html += `<div style="margin-bottom:20px;"><div class="section-title">Stock shortfall &mdash; needs cooking or restock</div>`;
-  if (!shortfall.length) html += `<div class="empty" style="color:var(--green);">All dishes have sufficient stock</div>`;
-  else html += shortfall.map(d => {
-    const req = calcRequired(d); const { str } = diffStr(d);
-    return `<div class="order-shortfall-row">
-      <div style="font-weight:600;">${esc(d.name)} <span style="font-weight:400;color:var(--text2);font-size:12px;">&middot; ${d.logistics}</span></div>
-      <div style="color:var(--red);font-weight:600;">${str}</div>
-      <div style="font-size:12px;color:var(--text2);">need ${req}L</div>
-    </div>`;
-  }).join('');
-  html += '</div>';
 
   // Ingredient order section
   const dishesWithSheets = orderedDishes.filter(d => d.recipeSheetId);
