@@ -9,7 +9,7 @@
 //   - Sheet ID sanitization on recipe endpoint
 // ─────────────────────────────────────────────────────────────────────────────
 
-require('dotenv').config();
+try { require('dotenv').config(); } catch (e) { /* dotenv optional in production */ }
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
