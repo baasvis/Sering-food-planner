@@ -74,7 +74,6 @@ function renderDishesOverview() {
     <span class="${sCls('name')}" onclick="dishSortBy('name')">Dish${arrow('name')}</span>
     <span class="${sCls('date')}" onclick="dishSortBy('date')">Cook date${arrow('date')}</span>
     <span class="${sCls('stock')}" onclick="dishSortBy('stock')">Stock${arrow('stock')}</span>
-    <span>Need</span>
     <span class="${sCls('diff')}" onclick="dishSortBy('diff')">+/&minus;${arrow('diff')}</span>
     <span>Location</span>
     <span>Order</span>
@@ -169,7 +168,6 @@ function renderDishRow(d) {
     </div>
     <div class="col-cook">${cookHtml}</div>
     <div class="col-stock"><input class="inline-edit inline-edit-stock${d.cookConfirmed ? '' : ' stock-locked'}" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" ${d.cookConfirmed ? '' : 'disabled title="Cook this dish first to set stock"'} /></div>
-    <div class="col-req" style="font-size:13px;">${req}L</div>
     <div class="col-diff ${cls}" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</div>
     <div class="col-logistics">
       <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLogistics('${d.id}')" title="Click to change">${logisticsShort(d.logistics || 'Sering West')}</span>
@@ -178,7 +176,6 @@ function renderDishRow(d) {
     <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
     <div class="m-stock-row">
       <span style="font-size:12px;">Stock: <strong>${d.stock || 0}L</strong></span>
-      <span style="font-size:12px;">Need: <strong>${req}L</strong></span>
       <span class="${cls}" style="font-size:12px;" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</span>
       <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;font-size:10px;" onclick="event.stopPropagation();cycleLogistics('${d.id}')">${logisticsShort(d.logistics || 'Sering West')}</span>
     </div>
@@ -197,11 +194,8 @@ function inlineEdit(id, field, value) {
   const row = document.querySelector(`.dish-row input[onchange*="'${id}','stock'"]`);
   if (row) {
     const rowEl = row.closest('.dish-row');
-    const req = calcRequired(d);
     const { str, cls } = diffStr(d);
-    const reqEl = rowEl.querySelector('.col-req');
     const diffEl = rowEl.querySelector('.col-diff');
-    if (reqEl) reqEl.textContent = req + 'L';
     if (diffEl) { diffEl.textContent = str; diffEl.className = 'col-diff ' + cls; }
   }
 }

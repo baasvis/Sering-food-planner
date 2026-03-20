@@ -703,6 +703,9 @@ app.post('/api/feedback', requireAuth, async (req, res) => {
   const { type, text, screen, user, timestamp, userAgent } = req.body;
   if (!text) return res.status(400).json({ error: 'Feedback text required' });
 
+  const sheets = getSheetsClient();
+  if (!sheets || !CONFIG.DB_SHEET_ID) return res.status(503).json({ error: 'Google Sheets not configured' });
+
   try {
     // Ensure 'feedback' tab exists
     const meta = await sheets.spreadsheets.get({
