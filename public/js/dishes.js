@@ -176,6 +176,12 @@ function renderDishRow(d) {
     </div>
     <div><button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button></div>
     <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
+    <div class="m-stock-row">
+      <span style="font-size:12px;">Stock: <strong>${d.stock || 0}L</strong></span>
+      <span style="font-size:12px;">Need: <strong>${req}L</strong></span>
+      <span class="${cls}" style="font-size:12px;">${str}</span>
+      <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;font-size:10px;" onclick="event.stopPropagation();cycleLogistics('${d.id}')">${logisticsShort(d.logistics || 'Sering West')}</span>
+    </div>
   </div>`;
 }
 

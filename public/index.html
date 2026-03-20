@@ -228,11 +228,6 @@
   /* Stock columns emphasis */
   .col-stock-wrap{font-weight:600;}
   .col-diff{font-weight:600;font-size:12px;border-radius:4px;padding:2px 4px;text-align:center;}
-  @media(max-width:700px){
-    .dish-list-hdr{display:none;}
-    .dish-row{grid-template-columns:20px 1fr auto;gap:6px;}
-    .dish-row .col-cook,.dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-logistics{display:none;}
-  }
   .cook-select{font-size:11px;height:26px;border:1px solid transparent;border-radius:4px;padding:0 4px;background:transparent;color:var(--text2);cursor:pointer;transition:border-color .15s;width:100%;}
   .cook-select:hover{border-color:var(--border);background:var(--bg2);}
   .cook-select:focus{outline:none;border-color:var(--blue);}
@@ -346,6 +341,81 @@
   .ri-empty p{margin-bottom:12px;}
   .ri-add-url{width:100%;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);}
   .ri-table-wrap{overflow-x:auto;}
+
+  .m-stock-row{display:none;}
+
+  /* ═══════════ MOBILE ═══════════ */
+  @media(max-width:600px){
+    /* Tighter padding */
+    .content{padding:10px 8px;}
+    .card{padding:12px 10px;}
+
+    /* Nav: compact on mobile */
+    .top-bar{flex-wrap:wrap;padding:0 8px;gap:0;}
+    .top-bar h1{width:100%;padding:10px 0 4px;margin-right:0;font-size:14px;text-align:center;}
+    .nav-btn{padding:8px 8px;font-size:11px;flex:1;text-align:center;min-width:0;}
+    .save-indicator{order:10;width:100%;justify-content:center;padding:4px 0;border-top:1px solid var(--border);font-size:11px;}
+    .user-menu{order:11;width:100%;justify-content:center;border-left:none;padding:4px 0 6px;margin-left:0;}
+
+    /* Dashboard */
+    .dash-greeting{font-size:17px;}
+    .dash-grid{grid-template-columns:1fr;gap:10px;}
+    .dash-action-btn{flex:1;min-width:0;padding:8px 10px;font-size:12px;justify-content:center;}
+
+    /* Guest counts: scroll wrapper */
+    .guest-table th,.guest-table td{padding:3px 2px;font-size:11px;}
+    .guest-table .gt-input{width:44px;height:26px;font-size:12px;}
+    .gt-date{font-size:9px;}
+
+    /* Weekly planner: allow scroll but hint at it */
+    .week-scroll{position:relative;}
+    .week-scroll::after{content:'';position:absolute;right:0;top:0;bottom:0;width:20px;background:linear-gradient(to right,transparent,var(--bg3));pointer-events:none;}
+    .week-grid{gap:2px;}
+    .day-hdr{font-size:10px;padding:3px 1px;}
+    .meal-lbl{font-size:9px;padding:3px 1px;}
+    .type-lbl{font-size:8px;padding:1px 2px;}
+    .slot{min-height:36px;padding:3px;}
+    .dish-chip{font-size:10px;padding:2px 4px;}
+    .chip-sub{font-size:9px;}
+    .add-slot-btn{font-size:9px;padding:1px 3px;}
+    .copy-slot-btn{font-size:8px;padding:1px 3px;}
+
+    /* Dish list: card layout instead of grid */
+    .dish-list-hdr{display:none;}
+    .dish-row{display:block;padding:10px 12px;}
+    .dish-row .sel-box{display:none;}
+    .dish-row .col-cook{border-left:none;padding-left:0;margin-top:6px;}
+    .dish-row .col-stock,.dish-row .col-req,.dish-row .col-diff,.dish-row .col-logistics{display:none;}
+    .m-stock-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .m-stock-row > *{flex-shrink:0;}
+
+    /* Filter bars */
+    .filter-bar{gap:3px;margin-bottom:8px;}
+    .fc{font-size:11px;padding:4px 8px;}
+    .filter-sep{display:none;}
+
+    /* Recipe index */
+    .ri-table{font-size:11px;}
+    .ri-table th,.ri-table td{padding:4px 3px;}
+    .ri-search{max-width:100%;}
+
+    /* Order tables */
+    .ing-table{font-size:11px;}
+    .ing-table th,.ing-table td{padding:4px 4px;}
+    .order-stock-input{width:55px;font-size:11px;}
+
+    /* Modals: slide up from bottom */
+    .modal{width:100%;border-radius:var(--radius-lg) var(--radius-lg) 0 0;margin:auto 0 0 0;max-height:85vh;overflow-y:auto;}
+    .modal-bg{align-items:flex-end;padding:0;}
+
+    /* Buttons bigger for touch */
+    .btn{padding:8px 14px;font-size:13px;}
+    .btn-sm{padding:5px 10px;font-size:12px;}
+    .served-btn,.order-toggle-btn{padding:5px 10px;font-size:11px;}
+
+    /* Section titles */
+    .section-title{font-size:10px;}
+  }
 </style>
 </head>
 <body>
