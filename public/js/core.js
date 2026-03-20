@@ -12,6 +12,33 @@ function rebuildPlanner() {
   });
 }
 
+function renderDishListSplit(dishes) {
+  const cooked = sortByCookDate(dishes.filter(d => d.cookConfirmed));
+  const uncooked = sortByCookDate(dishes.filter(d => !d.cookConfirmed));
+  let html = '';
+  if (uncooked.length > 0) {
+    html += `<div class="cook-group-hdr uncooked-hdr">To cook (${uncooked.length})</div>`;
+    uncooked.forEach(d => { html += renderDishRow(d); });
+  }
+  if (cooked.length > 0) {
+    html += `<div class="cook-group-hdr cooked-hdr">Cooked (${cooked.length})</div>`;
+    cooked.forEach(d => { html += renderDishRow(d); });
+  }
+  return html;
+}
+
+function sortByCookDate(dishes) {
+  return [...dishes].sort((a, b) => {
+    const da = a.cookDate ? strToDate(a.cookDate) : null;
+    const db = b.cookDate ? strToDate(b.cookDate) : null;
+    // No date goes to bottom
+    if (!da && !db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    return da - db;
+  });
+}
+
 function getGuests(loc, dayIdx, meal) {
   const lk = loc === 'west' ? 'west' : 'centraal';
   const dn = DAYS[dayIdx];
@@ -27,7 +54,40 @@ function calcRequired(dish) {
     const count = Math.max(peers.length, 1);
     total += (g / count) * ((dish.serving || 280) / 1000);
   });
+  // Add catering requirements (split by same-type peers)
+  (S.caterings || []).forEach(c => {
+    const cd = (c.dishes || []).find(cd => cd.dishId === dish.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter(d => d.type === dish.type).length;
+      total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000);
+    }
+  });
   return Math.round(total * 10) / 10;
+}
+
+function calcRequiredBreakdown(dish) {
+  const lines = [];
+  (dish.services || []).forEach(svc => {
+    const g = getGuests(svc.loc, svc.day, svc.meal);
+    const k = `${svc.loc}-${svc.day}-${svc.meal}`;
+    const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
+    const count = Math.max(peers.length, 1);
+    const liters = Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
+    if (liters > 0) {
+      const loc = svc.loc === 'west' ? 'Sering West' : 'Sering Centraal';
+      const meal = svc.meal.charAt(0).toUpperCase() + svc.meal.slice(1);
+      lines.push(`${liters}L — ${DAYS[svc.day]} ${meal} ${loc}`);
+    }
+  });
+  (S.caterings || []).forEach(c => {
+    const cd = (c.dishes || []).find(cd => cd.dishId === dish.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter(d => d.type === dish.type).length;
+      const liters = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000) * 10) / 10;
+      if (liters > 0) lines.push(`${liters}L — ${c.name} (${c.guestCount} guests${peers > 1 ? ', 1/' + peers + ' split' : ''})`);
+    }
+  });
+  return lines;
 }
 
 function calcTotalGuests(dish) {
@@ -37,6 +97,14 @@ function calcTotalGuests(dish) {
     const k = `${svc.loc}-${svc.day}-${svc.meal}`;
     const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
     g += total / Math.max(peers.length, 1);
+  });
+  // Add catering guests (split by same-type peers)
+  (S.caterings || []).forEach(c => {
+    const cd = (c.dishes || []).find(cd => cd.dishId === dish.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter(d => d.type === dish.type).length;
+      g += (c.guestCount || 0) / Math.max(peers, 1);
+    }
   });
   return Math.round(g);
 }
@@ -78,7 +146,7 @@ function cycleStorage(id) {
   const idx = STORAGE.indexOf(d.storage || 'Gastro');
   d.storage = STORAGE[(idx + 1) % STORAGE.length];
   scheduleSave();
-  renderDishes();
+  rerenderCurrentView();
 }
 function logisticsBadge(l) {
   if (l === 'Sering Centraal') return `<span class="badge b-centraal">Sering Centraal</span>`;
@@ -105,7 +173,7 @@ function cycleLogistics(id) {
   d.logistics = LOGISTICS[(idx + 1) % LOGISTICS.length];
   rebuildPlanner();
   scheduleSave();
-  renderDishes();
+  rerenderCurrentView();
 }
 
 // ── SERVED / ARCHIVE ─────────────────────────────────────
@@ -178,7 +246,7 @@ function archiveDish(id, withRating) {
   pendingRatings = { skill:0, speed:0, banger:0 };
   closeModal();
   rebuildPlanner();
-  renderDishes();
+  rerenderCurrentView();
   scheduleSave();
   toast(esc(d.name) + ' archived');
 }
@@ -197,14 +265,14 @@ function cycleType(id) {
   const idx = TYPES.indexOf(d.type || 'Soup');
   d.type = TYPES[(idx + 1) % TYPES.length];
   scheduleSave();
-  renderDishes();
+  rerenderCurrentView();
 }
 function toggleOrder(id) {
   const d = S.dishes.find(x => x.id === id);
   if (!d) return;
   d.orderFor = !d.orderFor;
   scheduleSave();
-  renderDishes();
+  rerenderCurrentView();
 }
 function chipClass(d) {
   if ((d.logistics || '').startsWith('Transport')) return 'chip-tr';

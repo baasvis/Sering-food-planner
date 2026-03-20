@@ -11,9 +11,12 @@ const ALLERGENS=['Gluten','Soy','Nuts','Peanuts','Sesame','Celery','Mustard','Su
 // ═══════════════════════════════════════════════════════════════════
 let S = {
   currentLoc:'west',
+  plannerSubTab:'west',
   filters:{loc:'all',storage:'all',logistics:'all'},
   selected:new Set(),
   orderToggles:{dishes:true,standard:false},
+  caterings:[],
+  transportItems:[],
   guests:{
     west:{Mon:{lunch:100,dinner:110},Tue:{lunch:100,dinner:110},Wed:{lunch:100,dinner:110},Thu:{lunch:100,dinner:110},Fri:{lunch:80,dinner:90},Sat:{lunch:0,dinner:0},Sun:{lunch:0,dinner:0}},
     centraal:{Mon:{lunch:80,dinner:85},Tue:{lunch:80,dinner:85},Wed:{lunch:80,dinner:85},Thu:{lunch:80,dinner:85},Fri:{lunch:60,dinner:70},Sat:{lunch:0,dinner:0},Sun:{lunch:0,dinner:0}}

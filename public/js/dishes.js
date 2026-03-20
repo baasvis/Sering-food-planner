@@ -1,7 +1,7 @@
 // ── DISH LIST ─────────────────────────────────────────────
 let dishSort = { col: 'default', dir: 'asc' };
 
-function renderDishes() {
+function renderDishesOverview() {
   const f = S.filters;
   const filtered = S.dishes.filter(d => {
     if (f.loc !== 'all') {
@@ -83,7 +83,7 @@ function renderDishes() {
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${sorted.length} dish${sorted.length !== 1 ? 'es' : ''}${dishSort.col !== 'default' ? ` · sorted by ${dishSort.col}` : ''}</div>
   ${sorted.length === 0 ? '<div class="empty">No dishes match these filters</div>' : (dishSort.col !== 'default' ? sorted.map(d => renderDishRow(d)).join('') : renderDishGroups(sorted))}`;
 
-  document.getElementById('screen-dishes').innerHTML = html;
+  document.getElementById('planner-content').innerHTML = html;
   renderSplitBar();
 }
 
@@ -95,7 +95,7 @@ function dishSortBy(col) {
     dishSort.col = col;
     dishSort.dir = col === 'stock' || col === 'diff' ? 'desc' : 'asc';
   }
-  renderDishes();
+  rerenderCurrentView();
 }
 
 function cookDateSortVal(ddmmyyyy) {
@@ -145,7 +145,7 @@ function renderDishRow(d) {
   const svcLbls = (d.services || []).map(s => {
     const ml = s.meal === 'lunch' ? 'L' : 'D';
     const lc = s.loc === 'west' ? 'SW' : 'SC';
-    return `${DAYS[s.day]} ${ml} ${lc}`;
+    return `<strong>${DAYS[s.day]}</strong> ${ml} ${lc}`;
   }).join(' · ');
   const isSel = S.selected.has(d.id);
   const isFrozen = d.storage === 'Frozen';
@@ -164,13 +164,13 @@ function renderDishRow(d) {
           ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
           <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}')" title="Add allergen">+</button>
         </div>
-        ${svcLbls ? `<span style="font-size:10px;color:var(--text2);">${svcLbls}</span>` : '<span style="font-size:10px;color:var(--text3);">no service</span>'}
+        ${svcLbls ? `<span style="font-size:12px;color:var(--text);">${svcLbls}</span>` : '<span style="font-size:12px;font-weight:600;color:var(--red);">no day assigned</span>'}
       </div>
     </div>
     <div class="col-cook">${cookHtml}</div>
-    <div class="col-stock"><input class="inline-edit inline-edit-stock" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" /></div>
+    <div class="col-stock"><input class="inline-edit inline-edit-stock${d.cookConfirmed ? '' : ' stock-locked'}" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" ${d.cookConfirmed ? '' : 'disabled title="Cook this dish first to set stock"'} /></div>
     <div class="col-req" style="font-size:13px;">${req}L</div>
-    <div class="col-diff ${cls}">${str}</div>
+    <div class="col-diff ${cls}" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</div>
     <div class="col-logistics">
       <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLogistics('${d.id}')" title="Click to change">${logisticsShort(d.logistics || 'Sering West')}</span>
     </div>
@@ -179,7 +179,7 @@ function renderDishRow(d) {
     <div class="m-stock-row">
       <span style="font-size:12px;">Stock: <strong>${d.stock || 0}L</strong></span>
       <span style="font-size:12px;">Need: <strong>${req}L</strong></span>
-      <span class="${cls}" style="font-size:12px;">${str}</span>
+      <span class="${cls}" style="font-size:12px;" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</span>
       <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;font-size:10px;" onclick="event.stopPropagation();cycleLogistics('${d.id}')">${logisticsShort(d.logistics || 'Sering West')}</span>
     </div>
   </div>`;
@@ -212,7 +212,7 @@ function inlineRemoveAllergen(id, allergen) {
   d.allergens = (d.allergens || []).filter(a => a !== allergen);
   d.extraAllergens = (d.extraAllergens || []).filter(a => a !== allergen);
   scheduleSave();
-  renderDishes();
+  rerenderCurrentView();
 }
 
 function inlineAddAllergenStart(id) {
@@ -237,11 +237,11 @@ function inlineAddAllergenStart(id) {
       input.placeholder = 'type...';
       input.onkeydown = function(e) {
         if (e.key === 'Enter') { inlineAddAllergenConfirm(id, this.value); }
-        if (e.key === 'Escape') { renderDishes(); }
+        if (e.key === 'Escape') { rerenderCurrentView(); }
       };
       input.onblur = function() {
         if (this.value.trim()) inlineAddAllergenConfirm(id, this.value);
-        else renderDishes();
+        else rerenderCurrentView();
       };
       container.insertBefore(input, btn);
       input.focus();
@@ -250,7 +250,7 @@ function inlineAddAllergenStart(id) {
     }
   };
   select.onblur = function() {
-    if (!this.value) renderDishes();
+    if (!this.value) rerenderCurrentView();
   };
   container.insertBefore(select, btn);
   btn.style.display = 'none';
@@ -259,14 +259,14 @@ function inlineAddAllergenStart(id) {
 
 function inlineAddAllergenConfirm(id, value) {
   const val = value.trim();
-  if (!val) { renderDishes(); return; }
+  if (!val) { rerenderCurrentView(); return; }
   const d = S.dishes.find(x => x.id === id);
   if (!d) return;
   if (!d.extraAllergens) d.extraAllergens = [];
   const allExisting = [...(d.allergens || []), ...d.extraAllergens];
   if (!allExisting.includes(val)) d.extraAllergens.push(val);
   scheduleSave();
-  renderDishes();
+  rerenderCurrentView();
 }
 
 // ── COOK DATE/DAY LOGIC ──────────────────────────────────
@@ -363,14 +363,14 @@ function getCookCellHtml(d) {
   }
   // Has a planned future day — show dropdown (with option to switch to date)
   if (d.cookDate && !d.cookConfirmed) {
-    return `<select class="cook-select" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
+    return `<select class="cook-select has-date" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
       <option value="">Select day/date</option>
       ${opts.map(o => `<option value="${o.value}"${d.cookDate === o.value ? ' selected' : ''}>${o.label}</option>`).join('')}
       <option value="__date">Pick a date...</option>
     </select>`;
   }
-  // No plan yet — show dropdown
-  return `<select class="cook-select" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
+  // No plan yet — show dropdown with red warning style
+  return `<select class="cook-select no-date" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
     <option value="">Select day/date</option>
     ${opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
     <option value="__date">Pick a date...</option>
@@ -416,7 +416,7 @@ function setCookDay(id, value) {
   d.cookConfirmed = false;
   d.cookMode = 'day';
   scheduleSave();
-  renderDishes();
+  rerenderCurrentView();
 }
 
 function setCookDateDirect(id, isoDate) {
@@ -428,9 +428,13 @@ function setCookDateDirect(id, isoDate) {
   const today = getToday();
   d.cookConfirmed = picked <= today;
   d.cookMode = 'date';
+  // Auto-fill stock to required amount if just confirmed and stock was 0
+  if (d.cookConfirmed && (!d.stock || d.stock === 0)) {
+    d.stock = calcRequired(d);
+  }
   scheduleSave();
-  renderDishes();
-  if (d.cookConfirmed) toast(esc(d.name) + ' marked as cooked');
+  rerenderCurrentView();
+  if (d.cookConfirmed) toast(esc(d.name) + ' marked as cooked — stock set to ' + d.stock + 'L');
 }
 
 function confirmCooked(id) {
@@ -438,13 +442,17 @@ function confirmCooked(id) {
   if (!d) return;
   d.cookDate = dateToStr(getToday());
   d.cookConfirmed = true;
+  // Auto-fill stock to required amount if stock was 0
+  if (!d.stock || d.stock === 0) {
+    d.stock = calcRequired(d);
+  }
   scheduleSave();
-  renderDishes();
-  toast(esc(d.name) + ' marked as cooked');
+  rerenderCurrentView();
+  toast(esc(d.name) + ' marked as cooked — stock set to ' + d.stock + 'L');
 }
 
-function setFilter(group, val) { S.filters[group] = val; S.selected.clear(); renderDishes(); }
-function toggleSelect(id) { if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id); renderDishes(); }
+function setFilter(group, val) { S.filters[group] = val; S.selected.clear(); rerenderCurrentView(); }
+function toggleSelect(id) { if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id); rerenderCurrentView(); }
 
 function calcRequiredForLoc(dish, loc) {
   let total = 0;
@@ -496,7 +504,7 @@ function renderSplitBar() {
     <button class="btn btn-primary" onclick="doSplit(false)">Split off</button>
     ${hasWest ? `<button class="btn btn-purple" onclick="doTransportSplit('centraal',${smartCentraalAmt})">Split ${smartCentraalAmt}L &rarr; Centraal</button>` : ''}
     ${hasCentraal ? `<button class="btn btn-purple" onclick="doTransportSplit('west',${smartWestAmt})">Split ${smartWestAmt}L &rarr; West</button>` : ''}
-    <button class="btn" onclick="S.selected.clear();renderDishes()">Cancel</button>
+    <button class="btn" onclick="S.selected.clear();rerenderCurrentView()">Cancel</button>
   </div>`;
 }
 
@@ -546,7 +554,7 @@ function doSplit(isTransport, targetLoc, smartAmounts) {
     S.dishes.push(newDish);
   });
   if (errors.length) { alert('Cannot split: ' + errors.join(', ')); return; }
-  S.selected.clear(); rebuildPlanner(); renderDishes(); scheduleSave();
+  S.selected.clear(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast('Stock split created');
 }
 function doTransportSplit(tl, smartAmt) { doSplit(true, tl, true); }
@@ -630,7 +638,7 @@ async function saveNewDish() {
     } catch (e) { toastError('Could not fetch recipe: ' + e.message); }
   }
   S.dishes.push(newDish);
-  closeModal(); rebuildPlanner(); renderDishes(); scheduleSave();
+  closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`"${name}" added`);
 }
 
@@ -745,13 +753,13 @@ function saveEditDish(id) {
   d.orderFor = document.getElementById('ed-order').value === 'true';
   if (d.cookMode === 'day') { const el = document.getElementById('ed-cookday'); if (el) d.cookDay = el.value || null; }
   else { const el = document.getElementById('ed-cookdate'); if (el) d.cookDate = el.value || null; }
-  closeModal(); rebuildPlanner(); renderDishes(); scheduleSave();
+  closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast('Dish saved');
 }
 
 function deleteDish(id) {
   if (!confirm('Delete this dish? This cannot be undone.')) return;
   S.dishes = S.dishes.filter(d => d.id !== id);
-  closeModal(); rebuildPlanner(); renderDishes(); scheduleSave();
+  closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast('Dish deleted');
 }
