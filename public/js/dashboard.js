@@ -9,8 +9,7 @@ function showScreen(name, btn) {
   rebuildPlanner();
   if (name === 'dashboard') renderDashboard();
   if (name === 'guests') renderGuests();
-  if (name === 'planner') renderPlanner();
-  if (name === 'dishes') renderDishes();
+  if (name === 'planner') renderWeekPlan();
   if (name === 'recipe-index') renderRecipeIndex();
   if (name === 'orders') renderOrders();
 }
@@ -53,7 +52,7 @@ function renderDashboard() {
       } else {
         slotDishes.forEach(d => {
           const { cls } = diffStr(d);
-          servingHtml += `<div class="dish-chip ${chipClass(d)}" style="cursor:pointer;" onclick="navTo('dishes')">
+          servingHtml += `<div class="dish-chip ${chipClass(d)}" style="cursor:pointer;" onclick="navTo('planner','overview')">
             <span class="chip-nm">${esc(d.name)}</span>
           </div>`;
         });
@@ -90,7 +89,7 @@ function renderDashboard() {
       </div>`;
     });
     if (shortfalls.length > 5) {
-      alertHtml += `<div style="font-size:12px;color:var(--text2);padding:6px 0;">+ ${shortfalls.length - 5} more &mdash; <a href="#" onclick="event.preventDefault();navTo('dishes')" style="color:var(--blue);">view all</a></div>`;
+      alertHtml += `<div style="font-size:12px;color:var(--text2);padding:6px 0;">+ ${shortfalls.length - 5} more &mdash; <a href="#" onclick="event.preventDefault();navTo('planner','overview')" style="color:var(--blue);">view all</a></div>`;
     }
   }
 
@@ -170,15 +169,16 @@ function renderDashboard() {
 
     <div class="dash-actions">
       <div class="dash-action-btn" onclick="navTo('planner')">&#8594; Week plan</div>
-      <div class="dash-action-btn" onclick="navTo('dishes')">&#43; Dishes</div>
+      <div class="dash-action-btn" onclick="navTo('planner','overview')">&#43; Dishes</div>
       <div class="dash-action-btn" onclick="navTo('orders')">&#128203; Orders${orderDishes.length ? ' (' + orderDishes.length + ')' : ''}</div>
       <div class="dash-action-btn" onclick="navTo('guests')">&#9998; Guests</div>
     </div>
   `;
 }
 
-function navTo(screen) {
+function navTo(screen, subTab) {
   const btns = document.querySelectorAll('.nav-btn');
-  const labels = { dashboard:'Dashboard', guests:'Guests', planner:'Week plan', dishes:'Dishes', 'recipe-index':'Recipes', orders:'Orders' };
+  const labels = { dashboard:'Dashboard', guests:'Guests', planner:'Week plan', 'recipe-index':'Recipes', orders:'Orders' };
+  if (subTab) S.plannerSubTab = subTab;
   btns.forEach(b => { if (b.textContent === labels[screen]) showScreen(screen, b); });
 }

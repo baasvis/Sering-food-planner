@@ -223,6 +223,30 @@ const RECIPE_INDEX_HEADERS = [
   'recipe_ingredients','created_at','avg_skill','avg_speed','avg_banger','times_served'
 ];
 
+const CATERING_HEADERS = ['id','name','date','guest_count','delivery_mode','dishes','logistics_notes','created_at'];
+
+function rowToCatering(row) {
+  let dishes = [];
+  try { if (row.dishes) dishes = JSON.parse(row.dishes); } catch (e) {}
+  return {
+    id: row.id,
+    name: row.name || '',
+    date: row.date || null,
+    guestCount: parseInt(row.guest_count) || 0,
+    deliveryMode: row.delivery_mode || 'pickup',
+    dishes,
+    logisticsNotes: row.logistics_notes || '',
+  };
+}
+
+function cateringToRow(c) {
+  return [
+    c.id, c.name || '', c.date || '', c.guestCount || 0,
+    c.deliveryMode || 'pickup', JSON.stringify(c.dishes || []),
+    c.logisticsNotes || '', c.createdAt || new Date().toISOString()
+  ];
+}
+
 function rowToRecipeIndex(row) {
   return {
     id: row.id,
@@ -307,15 +331,17 @@ function getDefaultGuests() {
 async function dbReadAll() {
   const sheets = getSheetsClient();
   if (!sheets || !CONFIG.DB_SHEET_ID) {
-    return { dishes: [], guests: getDefaultGuests(), recipeIndex: [] };
+    return { dishes: [], guests: getDefaultGuests(), recipeIndex: [], caterings: [], transportItems: [] };
   }
   try {
-    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log','recipe_index']);
-    const [dishRows, serviceRows, guestRows, recipeRows] = await Promise.all([
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log','recipe_index','caterings','transport_items']);
+    const [dishRows, serviceRows, guestRows, recipeRows, cateringRows, transportItemRows] = await Promise.all([
       readTab(sheets, CONFIG.DB_SHEET_ID, 'dishes'),
       readTab(sheets, CONFIG.DB_SHEET_ID, 'services'),
       readTab(sheets, CONFIG.DB_SHEET_ID, 'guests'),
       readTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index'),
+      readTab(sheets, CONFIG.DB_SHEET_ID, 'caterings'),
+      readTab(sheets, CONFIG.DB_SHEET_ID, 'transport_items'),
     ]);
     const dishes = dishRows.map(rowToDish);
     serviceRows.forEach(svcRow => {
@@ -330,18 +356,20 @@ async function dbReadAll() {
       }
     });
     const recipeIndex = recipeRows.map(rowToRecipeIndex);
-    return { dishes, guests, recipeIndex };
+    const caterings = cateringRows.map(rowToCatering);
+    const transportItems = transportItemRows.map(r => ({ id: r.id, text: r.text }));
+    return { dishes, guests, recipeIndex, caterings, transportItems };
   } catch (e) {
     console.error('dbReadAll error:', e.message);
-    return { dishes: [], guests: getDefaultGuests(), recipeIndex: [] };
+    return { dishes: [], guests: getDefaultGuests(), recipeIndex: [], caterings: [], transportItems: [] };
   }
 }
 
-async function dbWriteAll(dishes, guests) {
+async function dbWriteAll(dishes, guests, caterings, transportItems) {
   const sheets = getSheetsClient();
   if (!sheets || !CONFIG.DB_SHEET_ID) return;
   try {
-    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log']);
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log','caterings','transport_items']);
     await writeTab(sheets, CONFIG.DB_SHEET_ID, 'dishes', DISH_HEADERS, dishes.map(dishToRow));
 
     const serviceRows = [];
@@ -360,6 +388,14 @@ async function dbWriteAll(dishes, guests) {
       });
     });
     await writeTab(sheets, CONFIG.DB_SHEET_ID, 'guests', GUEST_HEADERS, guestRows);
+
+    if (caterings && caterings.length > 0) {
+      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'caterings', CATERING_HEADERS, caterings.map(cateringToRow));
+    }
+    const TRANSPORT_ITEM_HEADERS = ['id', 'text'];
+    if (transportItems && transportItems.length > 0) {
+      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'transport_items', TRANSPORT_ITEM_HEADERS, transportItems.map(i => [i.id, i.text]));
+    }
   } catch (e) {
     console.error('dbWriteAll error:', e.message);
     throw e;
@@ -454,13 +490,15 @@ app.post('/api/data', async (req, res) => {
   try {
     const dishes = req.body.dishes || [];
     const guests = req.body.guests || getDefaultGuests();
+    const caterings = req.body.caterings || [];
+    const transportItems = req.body.transportItems || [];
 
     const dishErr = validateDishes(dishes);
     if (dishErr) return res.status(400).json({ error: dishErr });
     const guestErr = validateGuests(guests);
     if (guestErr) return res.status(400).json({ error: guestErr });
 
-    await withWriteLock(() => dbWriteAll(dishes, guests));
+    await withWriteLock(() => dbWriteAll(dishes, guests, caterings, transportItems));
 
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'save', `${dishes.length} dishes`);

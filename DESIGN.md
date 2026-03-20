@@ -78,7 +78,13 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 **Completed features:**
 - Dashboard with today's menu, guests, stock alerts, week overview
 - Guest count tables per location (West + Centraal) with live totals and dates
-- Weekly planner grid (days × meals × dish types: Soups/Mains/Desserts) with copy-to-other-location
+- Unified Week Plan tab with sub-tabs: Sering West, Sering Centraal, To Transport, Caterings, Overview
+- Location sub-tabs: calendar grid organised by dish type (Soups/Mains/Desserts), each with day×meal slots + dish list below with inline editing
+- Dish lists split into "To cook" / "Cooked" sections, sorted by cook date
+- Cook date column: red highlight when unset, bold when planned. Stock locked until marked as cooked, auto-fills to required amount on cook.
+- Requirement breakdown tooltip on +/- column (hover to see per-service and per-catering demand)
+- Caterings module: name, date, guest count, delivery mode, auto-calculated dish requirements (guest count × serving size ÷ same-type peers), logistics notes
+- Transport view: "Mark selected as arrived" (changes logistics to destination), custom transport items list (free-text, disappear on delivery)
 - Dish management with inline editing, cook date tracking, stock levels, +/- status pills, sortable columns
 - Recipe index (library) with single + bulk import from Google Sheets, ratings, conditional cost colouring
 - Order overview with ingredient aggregation, supplier grouping (Hanos first), order codes, in-stock input, to-order calculation
@@ -98,8 +104,9 @@ public/
     core.js            — Planner rebuild, calculations, badges, served/archive
     dashboard.js       — Dashboard screen
     guests.js          — Guest counts screen
-    planner.js         — Weekly planner screen
-    dishes.js          — Dishes screen (~750 lines, largest module)
+    planner.js         — Week plan: sub-tabs, location grids, transport view, add-dish modal
+    dishes.js          — Dish rows, overview, cook workflow, inline editing (~750 lines, largest module)
+    caterings.js       — Caterings CRUD, dish picker, auto-calculated requirements
     recipes.js         — Recipe index screen
     orders.js          — Order overview screen
     feedback.js        — Feedback button and form
@@ -117,6 +124,8 @@ SETUP_GUIDE.md         — Installation instructions
 | Service | id, dish_id, location, day (0-6), meal (lunch/dinner) | services |
 | Guests | location, day, lunch count, dinner count | guests |
 | Recipe Index | id, name, type, recipeSheetId, allergens, costPerServing, structure, seasonality, ratings, timesServed | recipe_index |
+| Catering | id, name, date, guestCount, deliveryMode, dishes (JSON), logisticsNotes | caterings |
+| Transport Item | id, text | transport_items |
 | Feedback | timestamp, user, type, screen, text, userAgent | feedback |
 | Ingredient DB | name, unit, source, costPer100, orderType, orderCode, orderAmount, allergens, storageLocation | separate sheet |
 
@@ -128,7 +137,7 @@ SETUP_GUIDE.md         — Installation instructions
 - X6:X40: supplier/source per ingredient
 
 **Key formulas:**
-- Required stock (L) = Σ services: (guests ÷ peer_dishes_same_type) × (serving_ml ÷ 1000)
+- Required stock (L) = Σ services: (guests ÷ peer_dishes_same_type) × (serving_ml ÷ 1000) + Σ caterings: (catering_guests ÷ same_type_peers_in_catering) × (serving_ml ÷ 1000)
 - Ingredients per guest = ingredient_amount ÷ (recipeVolume_L × 1000 ÷ serving_ml)
 - Amounts stay in recipe's original units; conversion to grams only for order-unit calculations
 
@@ -142,7 +151,7 @@ Rather than building each module to completion before starting the next, we buil
 ### Now: Deepen the Food Planner
 The food planner is live and working. Current priorities to expand it:
 
-- [ ] **Caterings module**: name, date, guest count, pickup/delivery/on-location, dish list from recipe index, logistics notes. Separate from the weekly meal planner.
+- [x] **Caterings module**: name, date, guest count, pickup/delivery/on-location, auto-calculated dish requirements, logistics notes. Integrated as sub-tab in Week Plan.
 - [ ] **Toppings/sides/bread**: currently only soups, mains, desserts. Need to handle the standard accompaniments (bread, aioli, toppings, dips) that go with every service.
 - [ ] **Basic budgeting per service**: simple cost indicator per meal service — how much are we spending on ingredients for this lunch vs how many guests are paying.
 - [ ] Import all existing recipes from old spreadsheet

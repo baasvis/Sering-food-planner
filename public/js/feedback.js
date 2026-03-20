@@ -11,7 +11,7 @@ let feedbackSelectedType = '';
 
 function openFeedback() {
   const currentScreen = document.querySelector('.screen.active')?.id?.replace('screen-', '') || 'unknown';
-  const screenLabels = { dashboard:'Dashboard', guests:'Guests', planner:'Week plan', dishes:'Dishes', 'recipe-index':'Recipes', orders:'Orders' };
+  const screenLabels = { dashboard:'Dashboard', guests:'Guests', planner:'Week plan', 'recipe-index':'Recipes', orders:'Orders' };
   const screenLabel = screenLabels[currentScreen] || currentScreen;
 
   feedbackSelectedType = '';

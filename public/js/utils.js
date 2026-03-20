@@ -48,7 +48,7 @@ async function doSave() {
   if (saveState === 'saving') return;
   setSaveState('saving');
   try {
-    const result = await apiPost('/api/data', { guests: S.guests, dishes: S.dishes });
+    const result = await apiPost('/api/data', { guests: S.guests, dishes: S.dishes, caterings: S.caterings, transportItems: S.transportItems });
     setSaveState('saved', 'Saved');
     retryCount = 0;
   } catch (e) {
@@ -76,6 +76,8 @@ async function loadData() {
     if (data.guests) S.guests = data.guests;
     if (data.recipeIndex) S.recipeIndex = data.recipeIndex;
     if (data.dishes) S.dishes = data.dishes;
+    if (data.caterings) S.caterings = data.caterings;
+    if (data.transportItems) S.transportItems = data.transportItems;
     rebuildPlanner();
     // Load ingredient DB in background (for order overview)
     loadIngredientDb();
