@@ -287,6 +287,7 @@ From Phase 3 onward, locations are database-driven (not hardcoded):
 - **Small, tested increments**: Build one feature, test it live, push, move on
 - **Git is the safety net**: Every change committed with clear messages. Easy to revert.
 - **Feedback-driven**: Real users give feedback via the in-app button → prioritise based on that
+- **Keep DESIGN.md current**: After every major push, update this document with new features, file changes, data model additions, and any architectural decisions made. This is how context transfers between sessions.
 
 ### Recommended Workflow Evolution
 
