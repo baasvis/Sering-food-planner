@@ -44,6 +44,13 @@ function rerenderCurrentView() {
   else if (screen.id === 'screen-dashboard') renderDashboard();
 }
 
+let _plannerDayOffset = 0;
+
+function changePlannerDay(delta) {
+  _plannerDayOffset = Math.max(-14, Math.min(14, _plannerDayOffset + delta));
+  renderPlannerSubTab();
+}
+
 // ── LOCATION PLAN (West / Centraal) ─────────────────────
 function renderLocationPlan(loc) {
   const typeGroups = [
@@ -52,14 +59,11 @@ function renderLocationPlan(loc) {
     { key: 'Dessert', label: 'Desserts', cls: 'chip-dessert' },
   ];
 
-  // Calculate week dates
-  const today = getToday();
-  const todayDow = today.getDay();
-  const mondayOff = todayDow === 0 ? -6 : 1 - todayDow;
-  const monday = new Date(today); monday.setDate(today.getDate() + mondayOff);
+  const days = getVisibleDays(_plannerDayOffset);
 
   const invBtn = getInventoryButton(loc);
-  let html = `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
+  let html = renderDayNav(_plannerDayOffset, -14, 14, 'changePlannerDay', '');
+  html += `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
     <button class="btn btn-primary" onclick="openNewDish()">+ New dish</button>
     ${invBtn}
   </div>
@@ -81,29 +85,26 @@ function renderLocationPlan(loc) {
     html += `<div class="week-scroll"><div class="week-grid"><div></div>`;
 
     // Day headers with copy button
-    DAYS.forEach((d, i) => {
-      const isToday = i === (new Date().getDay() + 6) % 7;
-      const dt = new Date(monday); dt.setDate(monday.getDate() + i);
-      const dateStr = `${dt.getDate()}/${dt.getMonth()+1}`;
-      html += `<div class="day-hdr${isToday ? ' today-hdr' : ''}">${d}<span class="gt-date">${dateStr}</span><button class="copy-day-btn" onclick="event.stopPropagation();copyDayToOther('${loc}',${i})" title="Copy all ${d} dishes to ${otherLabel}">&rarr; ${otherLabel}</button></div>`;
+    days.forEach(d => {
+      const dateStr = `${d.date.getDate()}/${d.date.getMonth()+1}`;
+      html += `<div class="day-hdr${d.isToday ? ' today-hdr' : ''}${d.isPast ? ' past-hdr' : ''}">${d.dayName}<span class="gt-date">${dateStr}</span><button class="copy-day-btn" onclick="event.stopPropagation();copyDayToOther('${loc}',${d.dayIdx})" title="Copy all ${d.dayName} dishes to ${otherLabel}">&rarr; ${otherLabel}</button></div>`;
     });
 
     // Meal rows
     MEALS.forEach(meal => {
       const mealLabel = meal.charAt(0).toUpperCase() + meal.slice(1);
       html += `<div class="meal-lbl">${mealLabel}</div>`;
-      for (let d = 0; d < 7; d++) {
-        const gc = getGuests(loc, d, meal);
-        const k = `${loc}-${d}-${meal}`;
+      days.forEach(d => {
+        const gc = getGuests(loc, d.dayIdx, meal);
+        const k = `${loc}-${d.dayIdx}-${meal}`;
         const slotDishes = (S.planner[k] || []).filter(dish => dish.type === tg.key);
-        const isToday = d === (new Date().getDay() + 6) % 7;
-        html += `<div class="slot${isToday ? ' today' : ''}" onclick="openAddDishTyped('${loc}',${d},'${meal}','${tg.key}')">`;
+        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}" onclick="openAddDishTyped('${loc}',${d.dayIdx},'${meal}','${tg.key}')">`;
         slotDishes.forEach(dish => {
           const trClass = (dish.logistics || '').startsWith('Transport') ? ' chip-tr-border' : '';
-          html += `<div class="dish-chip ${tg.cls}${trClass}"><span class="chip-nm">${esc(dish.name)}</span><span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}',${d},'${meal}')">&#10005;</span></div>`;
+          html += `<div class="dish-chip ${tg.cls}${trClass}"><span class="chip-nm">${esc(dish.name)}</span><span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}',${d.dayIdx},'${meal}')">&#10005;</span></div>`;
         });
-        html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}',${d},'${meal}','${tg.key}')">+</div></div>`;
-      }
+        html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}',${d.dayIdx},'${meal}','${tg.key}')">+</div></div>`;
+      });
     });
 
     html += '</div></div>'; // close week-grid and week-scroll

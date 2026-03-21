@@ -40,15 +40,219 @@ function parseCSV(text) {
   return rows;
 }
 
-// ── Tebi Categorizer ────────────────────────────────────────────────────────
-// Takes parsed CSV rows and figures out:
-//   1. Which register (device) belongs to which location
-//   2. How many meals were served per day per location per meal type
-//
-// The key insight: each sale has an Invoice ID like "723192|2026-03-16T09:13:39Z|INVOICE|3053680566|81"
-// where the 4th part (3053680566) is the device/register ID. Devices that have
-// sold "Dinner donation" are West registers; devices that sold "DSC Dinner" are Centraal.
-// This lets us correctly assign ambiguous products like "Lunch" and "Staff & volunteer meals".
+// ── Multi-Format File Processor ──────────────────────────────────────────────
+// Auto-detects and processes three CSV formats:
+//   1. Tebi ProductOrdersReport (comma-sep, has "Invoice ID" + "Business day")
+//   2. Tebi ProductReportByProfitCenter (comma-sep, has "Profit Center" + "Items sold")
+//   3. Lightspeed receipt-items (semicolon-sep, has "Company Name" + "Creation Date")
+
+function categorizeUploadedFiles(fileContents, existingDeviceMap) {
+  const aggregated = {
+    west: { lunch: {}, dinner: {}, staff: {} },
+    centraal: { lunch: {}, dinner: {}, staff: {} }
+  };
+  const deviceMap = { ...(existingDeviceMap || {}) };
+  let totalMealRows = 0;
+  let unmappedRows = 0;
+  let totalRows = 0;
+  const formats = [];
+
+  for (const { text, filename } of fileContents) {
+    const format = detectFormat(text);
+    formats.push(format);
+
+    if (format === 'tebi-orders') {
+      const rows = parseCSV(text);
+      totalRows += rows.length;
+      const result = categorizeTebiData(rows, deviceMap);
+      mergeAggregated(aggregated, result.aggregated);
+      Object.assign(deviceMap, result.deviceMap);
+      totalMealRows += result.stats.totalMealRows;
+      unmappedRows += result.stats.unmappedRows;
+
+    } else if (format === 'tebi-profitcenter') {
+      const rows = parseCSV(text);
+      totalRows += rows.length;
+      // Extract date from filename: ProductReportByProfitCenter_YYYY-MM-DD_YYYY-MM-DD__...
+      const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
+      const date = dateMatch ? dateMatch[1] : null;
+      if (!date) { unmappedRows += rows.length; continue; }
+      const result = categorizeProfitCenterData(rows, date);
+      mergeAggregated(aggregated, result.aggregated);
+      totalMealRows += result.totalMealRows;
+
+    } else if (format === 'lightspeed') {
+      const rows = parseSemicolonCSV(text);
+      totalRows += rows.length;
+      const result = categorizeLightspeedData(rows);
+      mergeAggregated(aggregated, result.aggregated);
+      totalMealRows += result.totalMealRows;
+
+    } else {
+      unmappedRows += text.split('\n').length;
+    }
+  }
+
+  const allDates = new Set();
+  for (const loc of ['west', 'centraal']) {
+    for (const meal of ['lunch', 'dinner', 'staff']) {
+      Object.keys(aggregated[loc][meal]).forEach(d => allDates.add(d));
+    }
+  }
+  const sortedDates = [...allDates].sort();
+
+  return {
+    aggregated,
+    deviceMap,
+    stats: {
+      totalRows,
+      totalMealRows,
+      unmappedRows,
+      formats: [...new Set(formats)],
+      dateRange: sortedDates.length
+        ? { from: sortedDates[0], to: sortedDates[sortedDates.length - 1] }
+        : null,
+      daysCount: sortedDates.length,
+      perCategory: {
+        westLunch: Object.keys(aggregated.west.lunch).length,
+        westDinner: Object.keys(aggregated.west.dinner).length,
+        westStaff: Object.keys(aggregated.west.staff).length,
+        centraalLunch: Object.keys(aggregated.centraal.lunch).length,
+        centraalDinner: Object.keys(aggregated.centraal.dinner).length,
+        centraalStaff: Object.keys(aggregated.centraal.staff).length,
+      }
+    }
+  };
+}
+
+// Detect file format from header line
+function detectFormat(text) {
+  const firstLine = text.split('\n')[0];
+  if (firstLine.includes(';') && firstLine.includes('Company Name')) return 'lightspeed';
+  if (firstLine.includes('Profit Center') && firstLine.includes('Items sold')) return 'tebi-profitcenter';
+  if (firstLine.includes('Invoice ID') && firstLine.includes('Business day')) return 'tebi-orders';
+  return 'unknown';
+}
+
+// Parse semicolon-separated CSV (Lightspeed format)
+function parseSemicolonCSV(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(';').map(h => h.trim());
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const vals = lines[i].split(';');
+    const row = {};
+    headers.forEach((h, j) => { row[h] = (vals[j] || '').trim(); });
+    rows.push(row);
+  }
+  return rows;
+}
+
+// Merge source aggregated data into target (additive)
+function mergeAggregated(target, source) {
+  for (const loc of ['west', 'centraal']) {
+    if (!source[loc]) continue;
+    for (const meal of ['lunch', 'dinner', 'staff']) {
+      if (!source[loc][meal]) continue;
+      for (const [date, count] of Object.entries(source[loc][meal])) {
+        target[loc][meal][date] = (target[loc][meal][date] || 0) + count;
+      }
+    }
+  }
+}
+
+// ── Tebi ProfitCenter Categorizer ───────────────────────────────────────────
+// Much cleaner than ProductOrders: "Profit Center" column says "Sering West"
+// or "Sering Centraal" directly. "Items sold" is already summed per product.
+// Date must be provided from the filename since it's not in the CSV.
+
+function categorizeProfitCenterData(rows, date) {
+  const aggregated = {
+    west: { lunch: {}, dinner: {}, staff: {} },
+    centraal: { lunch: {}, dinner: {}, staff: {} }
+  };
+  const MEAL_PRODUCTS = {
+    'Lunch': 'lunch', 'Lunch card guest': 'lunch',
+    'Dinner donation': 'dinner', 'Stadspas Dinner': 'dinner', 'DSC Dinner': 'dinner',
+    'Staff & volunteer meals': 'staff'
+  };
+  let totalMealRows = 0;
+
+  for (const row of rows) {
+    const name = row['Name'];
+    const mealType = MEAL_PRODUCTS[name];
+    if (!mealType) continue;
+
+    const qty = parseInt(row['Items sold']) || 0;
+    if (qty <= 0) continue;
+
+    const profitCenter = row['Profit Center'] || '';
+    let loc = null;
+    if (profitCenter.includes('West')) loc = 'west';
+    else if (profitCenter.includes('Centraal')) loc = 'centraal';
+    if (!loc) continue;
+
+    totalMealRows += qty;
+    aggregated[loc][mealType][date] = (aggregated[loc][mealType][date] || 0) + qty;
+  }
+
+  return { aggregated, totalMealRows };
+}
+
+// ── Lightspeed Categorizer ──────────────────────────────────────────────────
+// Sering Centraal lunches from the Lightspeed (TestTafel) system.
+// Products: "Lunch" + "lunch card guest" → centraal lunch
+//           "Donation Dinner Sering" → centraal dinner
+//           "Staff & volunteers meals" → centraal staff
+// Date format: "DD/MM/YY HH:MM" in "Creation Date" column.
+
+function categorizeLightspeedData(rows) {
+  const aggregated = {
+    west: { lunch: {}, dinner: {}, staff: {} },
+    centraal: { lunch: {}, dinner: {}, staff: {} }
+  };
+  const MEAL_MAP = {
+    'Lunch': 'lunch',
+    'lunch card guest': 'lunch',
+    'Donation Dinner Sering': 'dinner',
+    'Staff & volunteers meals': 'staff'
+  };
+  let totalMealRows = 0;
+
+  for (const row of rows) {
+    const name = row['Name'];
+    const mealType = MEAL_MAP[name];
+    if (!mealType) continue;
+
+    const qty = parseInt(row['Quantity']) || 0;
+    if (qty <= 0) continue;
+
+    // Parse date: "2/03/26 12:03" → "2026-03-02"
+    const dateStr = row['Creation Date'];
+    const date = parseLightspeedDate(dateStr);
+    if (!date) continue;
+
+    totalMealRows += qty;
+    aggregated.centraal[mealType][date] = (aggregated.centraal[mealType][date] || 0) + qty;
+  }
+
+  return { aggregated, totalMealRows };
+}
+
+// Parse "D/MM/YY HH:MM" or "DD/MM/YY HH:MM" → "YYYY-MM-DD"
+function parseLightspeedDate(dateStr) {
+  if (!dateStr) return null;
+  const parts = dateStr.split(' ')[0]; // strip time
+  const [day, month, year] = parts.split('/');
+  if (!day || !month || !year) return null;
+  const fullYear = parseInt(year) < 100 ? 2000 + parseInt(year) : parseInt(year);
+  return `${fullYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+// ── Tebi ProductOrders Categorizer (original format) ────────────────────────
+// Individual transactions with device-based location detection.
 
 function categorizeTebiData(allRows, existingDeviceMap) {
   const deviceMap = { ...(existingDeviceMap || {}) };
@@ -265,4 +469,74 @@ function getDayOfWeek(dateStr) {
   const jsDay = d.getDay(); // 0=Sun, 1=Mon, ...
   const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   return DAY_NAMES[jsDay];
+}
+
+// ── Day Navigation Helpers (shared by Guests + Planner tabs) ────────────────
+
+// Build an array of 7 visible days starting from today + offset.
+// Each entry has: date, dayName, dayIdx, isToday, isPast, mondayKey, isCurrentWeek.
+function getVisibleDays(offset) {
+  const today = getToday();
+  const todayStr = today.toDateString();
+
+  // Find the current week's Monday for comparison
+  const todayDow = today.getDay();
+  const curMondayOff = todayDow === 0 ? -6 : 1 - todayDow;
+  const curMonday = new Date(today);
+  curMonday.setDate(today.getDate() + curMondayOff);
+  const curMondayStr = localDateStr(curMonday);
+
+  return Array.from({length: 7}, (_, i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() + offset + i);
+    const dayIdx = (d.getDay() + 6) % 7; // 0=Mon, 6=Sun
+    const mk = getMondayKeyForDate(d);
+    return {
+      date: d,
+      dayName: DAYS[dayIdx],
+      dayIdx,
+      isToday: d.toDateString() === todayStr,
+      isPast: d < today && d.toDateString() !== todayStr,
+      mondayKey: mk,
+      isCurrentWeek: mk === curMondayStr
+    };
+  });
+}
+
+// Get the Monday date key (YYYY-MM-DD) for the week a date belongs to
+function getMondayKeyForDate(d) {
+  const dow = d.getDay(); // 0=Sun
+  const off = dow === 0 ? -6 : 1 - dow;
+  const mon = new Date(d);
+  mon.setDate(d.getDate() + off);
+  return localDateStr(mon);
+}
+
+// Format a Date as YYYY-MM-DD using local timezone (avoids UTC shift)
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+// Render the day-navigation header bar used by both Guests and Planner
+function renderDayNav(offset, minOffset, maxOffset, changeFn, extraHtml) {
+  const days = getVisibleDays(offset);
+  const first = days[0].date;
+  const last = days[6].date;
+  const shortDate = d => `${d.getDate()}/${d.getMonth()+1}`;
+  const monthYear = first.toLocaleDateString('en-GB', {month:'short', year:'numeric'});
+
+  let html = `<div class="gt-header">
+    <div class="gt-nav">
+      <button class="gt-nav-btn" onclick="${changeFn}(-1)" ${offset <= minOffset ? 'disabled' : ''} title="Previous day">&larr;</button>
+      <div class="gt-week-label">`;
+  if (offset !== 0) {
+    html += `<button class="gt-today-btn" onclick="${changeFn}(-${offset})" title="Back to today">Today</button>`;
+  }
+  html += `<span class="gt-week-dates">${shortDate(first)} — ${shortDate(last)} ${monthYear}</span>
+      </div>
+      <button class="gt-nav-btn" onclick="${changeFn}(1)" ${offset + 6 >= maxOffset ? 'disabled' : ''} title="Next day">&rarr;</button>
+    </div>
+    <div class="gt-header-actions">${extraHtml || ''}</div>
+  </div>`;
+  return html;
 }

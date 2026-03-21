@@ -2,47 +2,19 @@
 
 // Temporary state for CSV processing (only lives while page is open)
 let _pendingUpload = null; // { aggregated, deviceMap, stats } after CSV parse
-let _guestsWeekOffset = 0; // 0 = this week, 1 = next week, 2 = in two weeks
+let _guestsDayOffset = 0;  // 0 = starting from today, +1 = starting from tomorrow, etc.
+
+function changeGuestDay(delta) {
+  _guestsDayOffset = Math.max(-14, Math.min(14, _guestsDayOffset + delta));
+  renderGuests();
+}
 
 function renderGuests() {
   const locs = [{ key:'west', label:'Sering West' }, { key:'centraal', label:'Sering Centraal' }];
-  const isCurrentWeek = _guestsWeekOffset === 0;
+  const days = getVisibleDays(_guestsDayOffset);
 
-  // Calculate dates for the selected week
-  const today = getToday();
-  const todayDow = today.getDay(); // 0=Sun, 1=Mon...
-  const mondayOffset = todayDow === 0 ? -6 : 1 - todayDow;
-  const monday = new Date(today);
-  monday.setDate(today.getDate() + mondayOffset + _guestsWeekOffset * 7);
-  // Monday date key for storing future week data (e.g. "2026-03-23")
-  // Use local date parts to avoid timezone shift from toISOString()
-  const mondayKey = `${monday.getFullYear()}-${String(monday.getMonth()+1).padStart(2,'0')}-${String(monday.getDate()).padStart(2,'0')}`;
-  const weekDates = DAYS.map((_, i) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
-    return d;
-  });
-  const sunday = weekDates[6];
-  const shortDate = d => `${d.getDate()}/${d.getMonth()+1}`;
-  const weekLabel = _guestsWeekOffset === 0 ? 'This week'
-    : _guestsWeekOffset === 1 ? 'Next week'
-    : `In ${_guestsWeekOffset} weeks`;
-
-  let html = '';
-
-  // ── Week navigation header ─────────────────────────────
-  html += `<div class="gt-header">
-    <div class="gt-nav">
-      <button class="gt-nav-btn" onclick="changeGuestWeek(-1)" ${_guestsWeekOffset <= 0 ? 'disabled' : ''} title="Previous week">&larr;</button>
-      <div class="gt-week-label">
-        <span class="gt-week-title">${weekLabel}</span>
-        <span class="gt-week-dates">${shortDate(monday)} — ${shortDate(sunday)} ${monday.toLocaleDateString('en-GB', {month:'short', year:'numeric'})}</span>
-      </div>
-      <button class="gt-nav-btn" onclick="changeGuestWeek(1)" ${_guestsWeekOffset >= 2 ? 'disabled' : ''} title="Next week">&rarr;</button>
-    </div>
-    <div class="gt-header-actions">`;
-
-  // History info (compact, inline)
+  // Build header actions
+  let actions = '';
   if (S.guestHistory && (S.guestHistory.west || S.guestHistory.centraal)) {
     const allDates = new Set();
     for (const loc of ['west', 'centraal']) {
@@ -53,39 +25,38 @@ function renderGuests() {
     }
     const sorted = [...allDates].sort();
     if (sorted.length > 0) {
-      html += `<span class="gt-hist-badge" title="Historical data: ${formatDateShort(sorted[0])} — ${formatDateShort(sorted[sorted.length-1])}, ${sorted.length} days">${sorted.length}d history</span>`;
+      actions += `<span class="gt-hist-badge" title="Historical data: ${formatDateShort(sorted[0])} — ${formatDateShort(sorted[sorted.length-1])}, ${sorted.length} days">${sorted.length}d history</span>`;
     }
   }
-
   if (S.predictions) {
-    html += `<button class="btn btn-sm" onclick="applyPredictions()" style="font-size:12px;padding:5px 12px;">Apply predictions</button>`;
+    actions += `<button class="btn btn-sm" onclick="applyPredictions()" style="font-size:12px;padding:5px 12px;">Apply predictions</button>`;
   }
-  html += `</div></div>`;
+
+  let html = renderDayNav(_guestsDayOffset, -14, 14, 'changeGuestDay', actions);
 
   // ── Location tables ─────────────────────────────────────
   html += `<div class="guests-grid">`;
 
   locs.forEach(loc => {
     let weekTotal = 0;
-    DAYS.forEach(day => {
+    days.forEach(d => {
       MEALS.forEach(meal => {
-        weekTotal += getGuestValue(loc.key, day, isCurrentWeek, mondayKey)[meal] || 0;
+        weekTotal += getGuestForDay(loc.key, d)[meal] || 0;
       });
     });
 
     html += `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border);">
         <h3 style="font-size:14px;font-weight:600;margin:0;">${loc.label}</h3>
-        <span style="font-size:12px;color:var(--text2);">Week total: <strong>${weekTotal}</strong></span>
+        <span style="font-size:12px;color:var(--text2);">Total: <strong>${weekTotal}</strong></span>
       </div>
       <div style="overflow-x:auto;">
       <table class="guest-table">
         <thead><tr>
           <th></th>
-          ${DAYS.map((day, i) => {
-            const isToday = weekDates[i].toDateString() === today.toDateString();
-            const isPast = weekDates[i] < today && !isToday;
-            return `<th class="${isToday ? 'gt-today' : ''} ${isPast ? 'gt-past' : ''}">${day}<span class="gt-date">${shortDate(weekDates[i])}</span></th>`;
+          ${days.map(d => {
+            const shortDate = `${d.date.getDate()}/${d.date.getMonth()+1}`;
+            return `<th class="${d.isToday ? 'gt-today' : ''} ${d.isPast ? 'gt-past' : ''}">${d.dayName}<span class="gt-date">${shortDate}</span></th>`;
           }).join('')}
           <th class="gt-total">Total</th>
         </tr></thead>
@@ -94,19 +65,20 @@ function renderGuests() {
     MEALS.forEach(meal => {
       let mealTotal = 0;
       html += `<tr><td>${meal.charAt(0).toUpperCase() + meal.slice(1)}</td>`;
-      DAYS.forEach((day, i) => {
-        const vals = getGuestValue(loc.key, day, isCurrentWeek, mondayKey);
+      days.forEach(d => {
+        const vals = getGuestForDay(loc.key, d);
         const v = vals[meal] || 0;
         mealTotal += v;
-        const isToday = weekDates[i].toDateString() === today.toDateString();
-        const isPast = weekDates[i] < today && !isToday;
-        const pred = S.predictions && S.predictions[loc.key] && S.predictions[loc.key][day]
-          ? S.predictions[loc.key][day][meal] : null;
+        const pred = S.predictions && S.predictions[loc.key] && S.predictions[loc.key][d.dayName]
+          ? S.predictions[loc.key][d.dayName][meal] : null;
 
-        const cellClass = isToday ? 'gt-today-cell' : isPast ? 'gt-past-cell' : '';
-        const onchange = isCurrentWeek
-          ? `updateGuests('${loc.key}','${day}','${meal}',this.value)`
-          : `updateGuestsNextWeek('${mondayKey}','${loc.key}','${day}','${meal}',this.value)`;
+        const cellClass = d.isToday ? 'gt-today-cell' : d.isPast ? 'gt-past-cell' : '';
+
+        // Determine the right onchange handler based on which week this day belongs to
+        const dateKey = localDateStr(d.date);
+        const onchange = d.isCurrentWeek
+          ? `updateGuests('${loc.key}','${d.dayName}','${meal}',this.value)`
+          : `updateGuestsNextWeek('${d.mondayKey}','${loc.key}','${d.dayName}','${meal}',this.value)`;
 
         html += `<td class="${cellClass}">
           <input class="gt-input" type="number" min="0" value="${v}" onchange="${onchange}" />`;
@@ -121,32 +93,26 @@ function renderGuests() {
       });
       html += `<td class="gt-total-cell">${mealTotal}</td></tr>`;
 
-      // Dishes row (only for current week — future weeks don't have dishes planned)
-      if (isCurrentWeek) {
-        html += `<tr><td></td>`;
-        DAYS.forEach((day, i) => {
-          const k = `${loc.key}-${i}-${meal}`;
-          const dishes = S.planner[k] || [];
-          const isToday = weekDates[i].toDateString() === today.toDateString();
-          const isPast = weekDates[i] < today && !isToday;
-          const cellClass = isToday ? 'gt-today-cell' : isPast ? 'gt-past-cell' : '';
-          html += `<td class="${cellClass}" style="border-bottom:2px solid var(--border);padding-bottom:6px;">
-            <div class="gt-dishes">${dishes.length ? dishes.map(d => `<span title="${esc(d.name)}">${esc(d.name.length > 14 ? d.name.slice(0,12) + '…' : d.name)}</span>`).join('') : '<span style="opacity:.3;">—</span>'}</div>
-          </td>`;
-        });
-        html += `<td class="gt-total-cell" style="border-bottom:2px solid var(--border);"></td></tr>`;
-      }
+      // Dishes row for this meal (current week days only have planned dishes)
+      html += `<tr><td></td>`;
+      days.forEach(d => {
+        const k = `${loc.key}-${d.dayIdx}-${meal}`;
+        const dishes = (d.isCurrentWeek ? S.planner[k] : null) || [];
+        const cellClass = d.isToday ? 'gt-today-cell' : d.isPast ? 'gt-past-cell' : '';
+        html += `<td class="${cellClass}" style="border-bottom:2px solid var(--border);padding-bottom:6px;">
+          <div class="gt-dishes">${dishes.length ? dishes.map(di => `<span title="${esc(di.name)}">${esc(di.name.length > 14 ? di.name.slice(0,12) + '…' : di.name)}</span>`).join('') : '<span style="opacity:.3;">—</span>'}</div>
+        </td>`;
+      });
+      html += `<td class="gt-total-cell" style="border-bottom:2px solid var(--border);"></td></tr>`;
     });
 
     // Daily totals row
     html += `<tr><td style="font-weight:600;">Daily</td>`;
-    DAYS.forEach((day, i) => {
+    days.forEach(d => {
       let dayTotal = 0;
-      const vals = getGuestValue(loc.key, day, isCurrentWeek, mondayKey);
+      const vals = getGuestForDay(loc.key, d);
       MEALS.forEach(meal => { dayTotal += vals[meal] || 0; });
-      const isToday = weekDates[i].toDateString() === today.toDateString();
-      const isPast = weekDates[i] < today && !isToday;
-      const cellClass = isToday ? 'gt-today-cell' : isPast ? 'gt-past-cell' : '';
+      const cellClass = d.isToday ? 'gt-today-cell' : d.isPast ? 'gt-past-cell' : '';
       html += `<td class="gt-total-cell ${cellClass}">${dayTotal}</td>`;
     });
     html += `<td class="gt-total-cell" style="font-size:14px;">${weekTotal}</td></tr>`;
@@ -155,35 +121,26 @@ function renderGuests() {
   });
 
   html += '</div>';
-
-  // ── Upload section (below tables) ───────────────────────
   html += renderUploadSection();
 
   document.getElementById('screen-guests').innerHTML = html;
   setupUploadHandlers();
 }
 
-// Get guest values for a day — from S.guests for current week, from guestsNextWeeks for future
-function getGuestValue(loc, day, isCurrentWeek, mondayKey) {
-  if (isCurrentWeek) {
-    return ((S.guests[loc] || {})[day] || {});
+// Get guest values for a specific visible day
+function getGuestForDay(loc, dayInfo) {
+  if (dayInfo.isCurrentWeek) {
+    return ((S.guests[loc] || {})[dayInfo.dayName] || {});
   }
-  // Future weeks: check saved values first, then fall back to predictions
-  const weekData = S.guestsNextWeeks[mondayKey];
-  if (weekData && weekData[loc] && weekData[loc][day]) {
-    return weekData[loc][day];
+  // Future/past week: check saved next-weeks data, then fall back to predictions
+  const weekData = S.guestsNextWeeks[dayInfo.mondayKey];
+  if (weekData && weekData[loc] && weekData[loc][dayInfo.dayName]) {
+    return weekData[loc][dayInfo.dayName];
   }
-  // Fall back to predictions
-  if (S.predictions && S.predictions[loc] && S.predictions[loc][day]) {
-    return S.predictions[loc][day];
+  if (S.predictions && S.predictions[loc] && S.predictions[loc][dayInfo.dayName]) {
+    return S.predictions[loc][dayInfo.dayName];
   }
   return {};
-}
-
-// ── Week Navigation ───────────────────────────────────────
-function changeGuestWeek(delta) {
-  _guestsWeekOffset = Math.max(0, Math.min(2, _guestsWeekOffset + delta));
-  renderGuests();
 }
 
 // ── Upload Section HTML ───────────────────────────────────
@@ -252,144 +209,77 @@ function setupUploadHandlers() {
   });
 }
 
-// Read multiple CSV files, parse them all, then categorize
 async function handleFiles(fileList) {
   const files = Array.from(fileList).filter(f => f.name.endsWith('.csv'));
   if (files.length === 0) { toastError('No CSV files found'); return; }
 
   toast(`Processing ${files.length} file${files.length > 1 ? 's' : ''}...`);
 
-  const allRows = [];
+  // Read all files with their filenames (needed for date extraction from ProfitCenter reports)
+  const fileContents = [];
   const readPromises = files.map(file => new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => {
-      const rows = parseCSV(reader.result);
-      allRows.push(...rows);
-      resolve();
-    };
+    reader.onload = () => { fileContents.push({ text: reader.result, filename: file.name }); resolve(); };
     reader.onerror = reject;
     reader.readAsText(file);
   }));
 
-  try {
-    await Promise.all(readPromises);
-  } catch (e) {
-    toastError('Error reading files: ' + e.message);
-    return;
-  }
+  try { await Promise.all(readPromises); }
+  catch (e) { toastError('Error reading files: ' + e.message); return; }
 
   const existingDeviceMap = (S.guestHistory && S.guestHistory.deviceMap) || {};
-  const result = categorizeTebiData(allRows, existingDeviceMap);
+  const result = categorizeUploadedFiles(fileContents, existingDeviceMap);
   _pendingUpload = result;
-
-  toast(`Processed ${result.stats.totalMealRows} meals across ${result.stats.daysCount} days`);
+  const formatLabels = (result.stats.formats || []).map(f =>
+    f === 'tebi-orders' ? 'Tebi' : f === 'tebi-profitcenter' ? 'Tebi ProfitCenter' : f === 'lightspeed' ? 'Lightspeed' : f
+  ).join(' + ');
+  toast(`Processed ${result.stats.totalMealRows} meals across ${result.stats.daysCount} days (${formatLabels})`);
   renderGuests();
 }
 
-// Save processed upload to server
 async function saveUploadedHistory() {
   if (!_pendingUpload) return;
-
   try {
-    const payload = {
-      ..._pendingUpload.aggregated,
-      deviceMap: _pendingUpload.deviceMap
-    };
-    await apiPost('/api/guest-history', payload);
-
+    await apiPost('/api/guest-history', { ..._pendingUpload.aggregated, deviceMap: _pendingUpload.deviceMap });
     const data = await apiGet('/api/guest-history');
     S.guestHistory = data;
-    if (data && (data.west || data.centraal)) {
-      S.predictions = predictGuests(data);
-    }
-
+    if (data && (data.west || data.centraal)) S.predictions = predictGuests(data);
     _pendingUpload = null;
     toast('History saved — predictions updated');
     renderGuests();
-  } catch (e) {
-    toastError('Failed to save: ' + e.message);
-  }
-}
-
-// ── Update Guest Count (future weeks) ─────────────────────
-function updateGuestsNextWeek(mondayKey, loc, day, meal, val) {
-  if (!S.guestsNextWeeks[mondayKey]) S.guestsNextWeeks[mondayKey] = {};
-  if (!S.guestsNextWeeks[mondayKey][loc]) S.guestsNextWeeks[mondayKey][loc] = {};
-  if (!S.guestsNextWeeks[mondayKey][loc][day]) S.guestsNextWeeks[mondayKey][loc][day] = {};
-  S.guestsNextWeeks[mondayKey][loc][day][meal] = parseInt(val) || 0;
-  scheduleNextWeeksSave();
-  // Re-render with focus restore
-  const active = document.activeElement;
-  const wasInput = active && active.tagName === 'INPUT' && active.closest('.guest-table');
-  let cellIndex, rowIndex, tableIndex;
-  if (wasInput) {
-    const td = active.closest('td');
-    const tr = active.closest('tr');
-    const table = active.closest('.guest-table');
-    cellIndex = td ? td.cellIndex : -1;
-    rowIndex = tr ? tr.rowIndex : -1;
-    const tables = document.querySelectorAll('.guest-table');
-    tableIndex = Array.from(tables).indexOf(table);
-  }
-  renderGuests();
-  if (wasInput && tableIndex >= 0) {
-    const tables = document.querySelectorAll('.guest-table');
-    if (tables[tableIndex]) {
-      const row = tables[tableIndex].rows[rowIndex];
-      if (row && row.cells[cellIndex]) {
-        const inp = row.cells[cellIndex].querySelector('input');
-        if (inp) { inp.focus(); inp.select(); }
-      }
-    }
-  }
+  } catch (e) { toastError('Failed to save: ' + e.message); }
 }
 
 // ── Apply Predictions ─────────────────────────────────────
 function applyPredictions() {
   if (!S.predictions) return;
-  const isCurrentWeek = _guestsWeekOffset === 0;
+  const days = getVisibleDays(_guestsDayOffset);
 
-  if (isCurrentWeek) {
+  days.forEach(d => {
     for (const loc of ['west', 'centraal']) {
-      if (!S.predictions[loc]) continue;
-      if (!S.guests[loc]) S.guests[loc] = {};
-      for (const day of DAYS) {
-        if (!S.predictions[loc][day]) continue;
-        if (!S.guests[loc][day]) S.guests[loc][day] = {};
-        for (const meal of MEALS) {
-          if (S.predictions[loc][day][meal] !== undefined) {
-            S.guests[loc][day][meal] = S.predictions[loc][day][meal];
-          }
+      if (!S.predictions[loc] || !S.predictions[loc][d.dayName]) continue;
+      for (const meal of MEALS) {
+        const pred = S.predictions[loc][d.dayName][meal];
+        if (pred === undefined) continue;
+
+        if (d.isCurrentWeek) {
+          if (!S.guests[loc]) S.guests[loc] = {};
+          if (!S.guests[loc][d.dayName]) S.guests[loc][d.dayName] = {};
+          S.guests[loc][d.dayName][meal] = pred;
+        } else {
+          if (!S.guestsNextWeeks[d.mondayKey]) S.guestsNextWeeks[d.mondayKey] = {};
+          if (!S.guestsNextWeeks[d.mondayKey][loc]) S.guestsNextWeeks[d.mondayKey][loc] = {};
+          if (!S.guestsNextWeeks[d.mondayKey][loc][d.dayName]) S.guestsNextWeeks[d.mondayKey][loc][d.dayName] = {};
+          S.guestsNextWeeks[d.mondayKey][loc][d.dayName][meal] = pred;
         }
       }
     }
-    scheduleSave();
-  } else {
-    // Calculate monday key for this offset
-    const today = getToday();
-    const todayDow = today.getDay();
-    const mondayOff = todayDow === 0 ? -6 : 1 - todayDow;
-    const mon = new Date(today);
-    mon.setDate(today.getDate() + mondayOff + _guestsWeekOffset * 7);
-    const mondayKey = `${mon.getFullYear()}-${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')}`;
+  });
 
-    if (!S.guestsNextWeeks[mondayKey]) S.guestsNextWeeks[mondayKey] = {};
-    for (const loc of ['west', 'centraal']) {
-      if (!S.predictions[loc]) continue;
-      if (!S.guestsNextWeeks[mondayKey][loc]) S.guestsNextWeeks[mondayKey][loc] = {};
-      for (const day of DAYS) {
-        if (!S.predictions[loc][day]) continue;
-        if (!S.guestsNextWeeks[mondayKey][loc][day]) S.guestsNextWeeks[mondayKey][loc][day] = {};
-        for (const meal of MEALS) {
-          if (S.predictions[loc][day][meal] !== undefined) {
-            S.guestsNextWeeks[mondayKey][loc][day][meal] = S.predictions[loc][day][meal];
-          }
-        }
-      }
-    }
-    scheduleNextWeeksSave();
-  }
-
+  // Save whichever stores were touched
+  scheduleSave();
+  const hasNonCurrent = days.some(d => !d.isCurrentWeek);
+  if (hasNonCurrent) scheduleNextWeeksSave();
   toast('Predictions applied — adjust for known events');
   renderGuests();
 }
@@ -400,6 +290,20 @@ function updateGuests(loc, day, meal, val) {
   if (!S.guests[loc][day]) S.guests[loc][day] = {};
   S.guests[loc][day][meal] = parseInt(val) || 0;
   scheduleSave();
+  restoreFocusAfterRender(renderGuests);
+}
+
+function updateGuestsNextWeek(mondayKey, loc, day, meal, val) {
+  if (!S.guestsNextWeeks[mondayKey]) S.guestsNextWeeks[mondayKey] = {};
+  if (!S.guestsNextWeeks[mondayKey][loc]) S.guestsNextWeeks[mondayKey][loc] = {};
+  if (!S.guestsNextWeeks[mondayKey][loc][day]) S.guestsNextWeeks[mondayKey][loc][day] = {};
+  S.guestsNextWeeks[mondayKey][loc][day][meal] = parseInt(val) || 0;
+  scheduleNextWeeksSave();
+  restoreFocusAfterRender(renderGuests);
+}
+
+// Re-render while keeping focus on the same input cell
+function restoreFocusAfterRender(renderFn) {
   const active = document.activeElement;
   const wasInput = active && active.tagName === 'INPUT' && active.closest('.guest-table');
   let cellIndex, rowIndex, tableIndex;
@@ -412,7 +316,7 @@ function updateGuests(loc, day, meal, val) {
     const tables = document.querySelectorAll('.guest-table');
     tableIndex = Array.from(tables).indexOf(table);
   }
-  renderGuests();
+  renderFn();
   if (wasInput && tableIndex >= 0) {
     const tables = document.querySelectorAll('.guest-table');
     if (tables[tableIndex]) {
