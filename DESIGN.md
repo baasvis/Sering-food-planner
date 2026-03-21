@@ -124,8 +124,6 @@ public/
 server.js              — Express server
 data/
   standard-inventory.json  — Standard inventory (gitignored, persisted on server)
-  guest-history.json       — Aggregated historical guest counts from POS exports (gitignored)
-  guests-next-weeks.json   — Manually edited guest counts for future weeks (gitignored)
 .env                   — Local environment variables (gitignored)
 DESIGN.md              — This document
 SETUP_GUIDE.md         — Installation instructions
@@ -144,8 +142,8 @@ SETUP_GUIDE.md         — Installation instructions
 | Feedback | timestamp, user, type, screen, text, userAgent | feedback |
 | Ingredient DB | name, unit, source, costPer100, orderType, orderCode, orderAmount, allergens, storageLocation | separate sheet |
 | Standard Inventory | id, name, amount, unit | data/standard-inventory.json (server-side) |
-| Guest History | location, meal (lunch/dinner/staff_lunch/staff_dinner), date → count | data/guest-history.json (server-side, from POS uploads) |
-| Guests Next Weeks | mondayKey → location → day → meal → count | data/guests-next-weeks.json (server-side) |
+| Guest History | location, meal, date, count | guest_history (+ guest_history_meta for deviceMap) |
+| Guests Next Weeks | monday_key, location, day, meal, count | guests_next_weeks |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -234,8 +232,8 @@ The order of everything below is flexible. Build thin slices first, deepen based
 
 ### Current: Simple Monolith (good for many more modules)
 ```
-Browser ←→ Express Server ←→ Google Sheets (dishes, guests, recipes, ingredient DB)
-                            ←→ data/ JSON files (standard inventory, guest history, next-week guests)
+Browser ←→ Express Server ←→ Google Sheets (dishes, guests, recipes, ingredient DB, guest history, next-week guests)
+                            ←→ data/ JSON files (standard inventory)
 ```
 - Single Node.js app on Railway
 - Google Sheets as database

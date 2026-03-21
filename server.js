@@ -21,8 +21,6 @@ const { OAuth2Client } = require('google-auth-library');
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const STD_INV_FILE = path.join(DATA_DIR, 'standard-inventory.json');
-const GUEST_HIST_FILE = path.join(DATA_DIR, 'guest-history.json');
-const GUEST_NEXT_FILE = path.join(DATA_DIR, 'guests-next-weeks.json');
 const STD_INV_SEED = path.join(__dirname, 'seeds', 'standard-inventory.json');
 // Seed from default inventory on first deploy if no data file exists yet
 if (!fs.existsSync(STD_INV_FILE) && fs.existsSync(STD_INV_SEED)) {
@@ -240,6 +238,9 @@ const RECIPE_INDEX_HEADERS = [
 ];
 
 const CATERING_HEADERS = ['id','name','date','guest_count','delivery_mode','dishes','logistics_notes','created_at'];
+const GUEST_HISTORY_HEADERS = ['location','meal','date','count'];
+const GUEST_HISTORY_META_HEADERS = ['key','value'];
+const GUESTS_NEXT_WEEKS_HEADERS = ['monday_key','location','day','meal','count'];
 
 function rowToCatering(row) {
   let dishes = [];
@@ -350,7 +351,7 @@ async function dbReadAll() {
     return { dishes: [], guests: getDefaultGuests(), recipeIndex: [], caterings: [], transportItems: [] };
   }
   try {
-    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log','recipe_index','caterings','transport_items']);
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log','recipe_index','caterings','transport_items','guest_history','guest_history_meta','guests_next_weeks']);
     const [dishRows, serviceRows, guestRows, recipeRows, cateringRows, transportItemRows] = await Promise.all([
       readTab(sheets, CONFIG.DB_SHEET_ID, 'dishes'),
       readTab(sheets, CONFIG.DB_SHEET_ID, 'services'),
@@ -385,7 +386,7 @@ async function dbWriteAll(dishes, guests, caterings, transportItems) {
   const sheets = getSheetsClient();
   if (!sheets || !CONFIG.DB_SHEET_ID) return;
   try {
-    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log','caterings','transport_items']);
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['dishes','services','guests','log','caterings','transport_items','guest_history','guest_history_meta','guests_next_weeks']);
     await writeTab(sheets, CONFIG.DB_SHEET_ID, 'dishes', DISH_HEADERS, dishes.map(dishToRow));
 
     const serviceRows = [];
@@ -695,67 +696,168 @@ app.post('/api/standard-inventory', (req, res) => {
   }
 });
 
-// ── Guest history (aggregated Tebi data for predictions) ─────────────────────
+// ── Guest history (aggregated Tebi data for predictions) — stored in Google Sheets ──
 
-app.get('/api/guest-history', (req, res) => {
+// Reconstruct nested JSON from flat guest_history + guest_history_meta rows
+function guestHistoryRowsToJson(histRows, metaRows) {
+  const result = {};
+  for (const row of histRows) {
+    const loc = row.location;
+    const meal = row.meal;
+    if (!result[loc]) result[loc] = {};
+    if (!result[loc][meal]) result[loc][meal] = {};
+    result[loc][meal][row.date] = parseInt(row.count) || 0;
+  }
+  for (const row of metaRows) {
+    if (row.key === 'deviceMap') {
+      try { result.deviceMap = JSON.parse(row.value); } catch (e) { result.deviceMap = {}; }
+    } else if (row.key === 'lastUpdated') {
+      result.lastUpdated = row.value;
+    }
+  }
+  return result;
+}
+
+// Flatten nested guest history JSON to rows for Google Sheets
+function guestHistoryJsonToRows(data) {
+  const rows = [];
+  for (const loc of ['west', 'centraal']) {
+    if (!data[loc]) continue;
+    for (const meal of ['lunch', 'dinner', 'staff', 'staff_lunch', 'staff_dinner']) {
+      if (!data[loc][meal]) continue;
+      for (const [date, count] of Object.entries(data[loc][meal])) {
+        rows.push([loc, meal, date, count]);
+      }
+    }
+  }
+  return rows;
+}
+
+app.get('/api/guest-history', async (req, res) => {
+  const sheets = getSheetsClient();
+  if (!sheets || !CONFIG.DB_SHEET_ID) return res.json({});
   try {
-    const data = fs.existsSync(GUEST_HIST_FILE)
-      ? JSON.parse(fs.readFileSync(GUEST_HIST_FILE, 'utf8'))
-      : {};
-    res.json(data);
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['guest_history', 'guest_history_meta']);
+    const [histRows, metaRows] = await Promise.all([
+      readTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history'),
+      readTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history_meta'),
+    ]);
+    res.json(guestHistoryRowsToJson(histRows, metaRows));
   } catch (e) {
+    console.error('guest-history read error:', e.message);
     res.json({});
   }
 });
 
-app.post('/api/guest-history', (req, res) => {
+app.post('/api/guest-history', async (req, res) => {
   const incoming = req.body;
   if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'Expected object' });
   try {
-    const existing = fs.existsSync(GUEST_HIST_FILE)
-      ? JSON.parse(fs.readFileSync(GUEST_HIST_FILE, 'utf8'))
-      : {};
-    // Deep merge: for each location → each meal type → merge date keys
-    for (const loc of ['west', 'centraal']) {
-      if (!incoming[loc]) continue;
-      if (!existing[loc]) existing[loc] = {};
-      for (const meal of ['lunch', 'dinner', 'staff', 'staff_lunch', 'staff_dinner']) {
-        if (!incoming[loc][meal]) continue;
-        if (!existing[loc][meal]) existing[loc][meal] = {};
-        Object.assign(existing[loc][meal], incoming[loc][meal]);
+    await withWriteLock(async () => {
+      const sheets = getSheetsClient();
+      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
+      await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['guest_history', 'guest_history_meta']);
+
+      // Read existing data and merge
+      const [existingHistRows, existingMetaRows] = await Promise.all([
+        readTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history'),
+        readTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history_meta'),
+      ]);
+      const existing = guestHistoryRowsToJson(existingHistRows, existingMetaRows);
+
+      // Deep merge incoming data
+      for (const loc of ['west', 'centraal']) {
+        if (!incoming[loc]) continue;
+        if (!existing[loc]) existing[loc] = {};
+        for (const meal of ['lunch', 'dinner', 'staff', 'staff_lunch', 'staff_dinner']) {
+          if (!incoming[loc][meal]) continue;
+          if (!existing[loc][meal]) existing[loc][meal] = {};
+          Object.assign(existing[loc][meal], incoming[loc][meal]);
+        }
       }
-    }
-    if (incoming.deviceMap) {
-      existing.deviceMap = { ...(existing.deviceMap || {}), ...incoming.deviceMap };
-    }
-    existing.lastUpdated = new Date().toISOString();
-    fs.writeFileSync(GUEST_HIST_FILE, JSON.stringify(existing, null, 2));
-    res.json({ ok: true, dates: Object.keys(existing.west?.lunch || {}).length });
+      if (incoming.deviceMap) {
+        existing.deviceMap = { ...(existing.deviceMap || {}), ...incoming.deviceMap };
+      }
+      existing.lastUpdated = new Date().toISOString();
+
+      // Write back
+      const histDataRows = guestHistoryJsonToRows(existing);
+      const metaDataRows = [
+        ['deviceMap', JSON.stringify(existing.deviceMap || {})],
+        ['lastUpdated', existing.lastUpdated],
+      ];
+      await Promise.all([
+        writeTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history', GUEST_HISTORY_HEADERS, histDataRows),
+        writeTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history_meta', GUEST_HISTORY_META_HEADERS, metaDataRows),
+      ]);
+    });
+    res.json({ ok: true });
   } catch (e) {
+    console.error('guest-history write error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ── Guests next weeks (editable future week data) ────────────────────────────
+// ── Guests next weeks (editable future week data) — stored in Google Sheets ──
 
-app.get('/api/guests-next-weeks', (req, res) => {
+// Reconstruct nested JSON from flat guests_next_weeks rows
+function guestsNextWeeksRowsToJson(rows) {
+  const result = {};
+  for (const row of rows) {
+    const mk = row.monday_key;
+    if (!result[mk]) result[mk] = {};
+    if (!result[mk][row.location]) result[mk][row.location] = {};
+    if (!result[mk][row.location][row.day]) result[mk][row.location][row.day] = {};
+    result[mk][row.location][row.day][row.meal] = parseInt(row.count) || 0;
+  }
+  return result;
+}
+
+// Flatten nested next-weeks JSON to rows for Google Sheets
+function guestsNextWeeksJsonToRows(data) {
+  const rows = [];
+  for (const [mondayKey, locations] of Object.entries(data)) {
+    if (typeof locations !== 'object') continue;
+    for (const [loc, days] of Object.entries(locations)) {
+      if (typeof days !== 'object') continue;
+      for (const [day, meals] of Object.entries(days)) {
+        if (typeof meals !== 'object') continue;
+        for (const [meal, count] of Object.entries(meals)) {
+          rows.push([mondayKey, loc, day, meal, count]);
+        }
+      }
+    }
+  }
+  return rows;
+}
+
+app.get('/api/guests-next-weeks', async (req, res) => {
+  const sheets = getSheetsClient();
+  if (!sheets || !CONFIG.DB_SHEET_ID) return res.json({});
   try {
-    const data = fs.existsSync(GUEST_NEXT_FILE)
-      ? JSON.parse(fs.readFileSync(GUEST_NEXT_FILE, 'utf8'))
-      : {};
-    res.json(data);
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['guests_next_weeks']);
+    const rows = await readTab(sheets, CONFIG.DB_SHEET_ID, 'guests_next_weeks');
+    res.json(guestsNextWeeksRowsToJson(rows));
   } catch (e) {
+    console.error('guests-next-weeks read error:', e.message);
     res.json({});
   }
 });
 
-app.post('/api/guests-next-weeks', (req, res) => {
+app.post('/api/guests-next-weeks', async (req, res) => {
   const data = req.body;
   if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Expected object' });
   try {
-    fs.writeFileSync(GUEST_NEXT_FILE, JSON.stringify(data, null, 2));
+    await withWriteLock(async () => {
+      const sheets = getSheetsClient();
+      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
+      await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['guests_next_weeks']);
+      const rows = guestsNextWeeksJsonToRows(data);
+      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'guests_next_weeks', GUESTS_NEXT_WEEKS_HEADERS, rows);
+    });
     res.json({ ok: true });
   } catch (e) {
+    console.error('guests-next-weeks write error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
