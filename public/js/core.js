@@ -1,6 +1,39 @@
 // CORE LOGIC
 // ═══════════════════════════════════════════════════════════════════
 
+// Amsterdam time helper (shared — also used by planner.js inventory)
+function getAmsterdamNow() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+}
+
+// Check if a service (lunch/dinner on a specific day) is past / "served"
+// A service is served when:
+// - The day is before today, OR
+// - Today + clock past deadline (lunch 13:45 / dinner 20:15), OR
+// - Today + inventory was done after the button turned urgent (lunch urgent at 12:45, dinner at 19:15)
+function isServicePast(svc) {
+  const now = getAmsterdamNow();
+  const todayIdx = (now.getDay() + 6) % 7; // 0=Mon, 6=Sun
+  if (svc.day < todayIdx) return true;      // past day
+  if (svc.day > todayIdx) return false;     // future day
+  // Today — check time and inventory state
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const loc = svc.loc === 'west' ? 'west' : 'centraal';
+  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const inv = S.inventoryDone[loc] || {};
+  if (svc.meal === 'lunch') {
+    const deadline = 13 * 60 + 45;     // 13:45
+    const urgentFrom = deadline - 60;   // 12:45
+    return mins >= deadline || (inv.lunch === todayStr && mins >= urgentFrom);
+  }
+  if (svc.meal === 'dinner') {
+    const deadline = 20 * 60 + 15;     // 20:15
+    const urgentFrom = deadline - 60;   // 19:15
+    return mins >= deadline || (inv.dinner === todayStr && mins >= urgentFrom);
+  }
+  return false;
+}
+
 function rebuildPlanner() {
   S.planner = {};
   S.dishes.forEach(d => {
@@ -48,6 +81,7 @@ function getGuests(loc, dayIdx, meal) {
 function calcRequired(dish) {
   let total = 0;
   (dish.services || []).forEach(svc => {
+    if (isServicePast(svc)) return; // Skip served services — no longer pulling stock
     const g = getGuests(svc.loc, svc.day, svc.meal);
     const k = `${svc.loc}-${svc.day}-${svc.meal}`;
     const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
@@ -68,14 +102,19 @@ function calcRequired(dish) {
 function calcRequiredBreakdown(dish) {
   const lines = [];
   (dish.services || []).forEach(svc => {
+    const loc = svc.loc === 'west' ? 'Sering West' : 'Sering Centraal';
+    const meal = svc.meal.charAt(0).toUpperCase() + svc.meal.slice(1);
+    // Past services show as "served" instead of contributing liters
+    if (isServicePast(svc)) {
+      lines.push(`✓ ${DAYS[svc.day]} ${meal} ${loc} (served)`);
+      return;
+    }
     const g = getGuests(svc.loc, svc.day, svc.meal);
     const k = `${svc.loc}-${svc.day}-${svc.meal}`;
     const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
     const count = Math.max(peers.length, 1);
     const liters = Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
     if (liters > 0) {
-      const loc = svc.loc === 'west' ? 'Sering West' : 'Sering Centraal';
-      const meal = svc.meal.charAt(0).toUpperCase() + svc.meal.slice(1);
       lines.push(`${liters}L — ${DAYS[svc.day]} ${meal} ${loc}`);
     }
   });
@@ -93,6 +132,7 @@ function calcRequiredBreakdown(dish) {
 function calcTotalGuests(dish) {
   let g = 0;
   (dish.services || []).forEach(svc => {
+    if (isServicePast(svc)) return; // Skip served services
     const total = getGuests(svc.loc, svc.day, svc.meal);
     const k = `${svc.loc}-${svc.day}-${svc.meal}`;
     const peers = (S.planner[k] || []).filter(d => d.type === dish.type);

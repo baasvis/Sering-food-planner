@@ -26,6 +26,11 @@ async function initApp() {
   await loadData();
   rebuildPlanner();
   renderDashboard();
+  // Auto-refresh every 60s so the UI updates when a service deadline passes (13:45 / 20:15)
+  setInterval(() => {
+    rebuildPlanner();
+    rerenderCurrentView();
+  }, 60000);
 }
 
 // On page load: check for existing session, or show login

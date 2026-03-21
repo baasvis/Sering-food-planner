@@ -101,7 +101,8 @@ function renderLocationPlan(loc) {
         html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}" onclick="openAddDishTyped('${loc}',${d.dayIdx},'${meal}','${tg.key}')">`;
         slotDishes.forEach(dish => {
           const trClass = (dish.logistics || '').startsWith('Transport') ? ' chip-tr-border' : '';
-          html += `<div class="dish-chip ${tg.cls}${trClass}"><span class="chip-nm">${esc(dish.name)}</span><span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}',${d.dayIdx},'${meal}')">&#10005;</span></div>`;
+          const servedClass = isServicePast({loc, day: d.dayIdx, meal}) ? ' dish-chip-served' : '';
+          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}"><span class="chip-nm">${esc(dish.name)}</span>${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}',${d.dayIdx},'${meal}')">&#10005;</span>`}</div>`;
         });
         html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}',${d.dayIdx},'${meal}','${tg.key}')">+</div></div>`;
       });
@@ -469,9 +470,7 @@ function addRecipeToSlot(recipeId, loc, day, meal) {
 }
 
 // ── INVENTORY ────────────────────────────────────────────
-function getAmsterdamNow() {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
-}
+// getAmsterdamNow() is defined in core.js (shared with isServicePast)
 
 function getInventoryState(loc) {
   const now = getAmsterdamNow();
