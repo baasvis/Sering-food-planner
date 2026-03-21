@@ -86,8 +86,9 @@ function renderLocationPlan(loc) {
 
     // Day headers with copy button
     days.forEach(d => {
-      const dateStr = `${d.date.getDate()}/${d.date.getMonth()+1}`;
-      html += `<div class="day-hdr${d.isToday ? ' today-hdr' : ''}${d.isPast ? ' past-hdr' : ''}">${d.dayName}<span class="gt-date">${dateStr}</span><button class="copy-day-btn" onclick="event.stopPropagation();copyDayToOther('${loc}',${d.dayIdx})" title="Copy all ${d.dayName} dishes to ${otherLabel}">&rarr; ${otherLabel}</button></div>`;
+      const dispDate = `${d.date.getDate()}/${d.date.getMonth()+1}`;
+      const isoDate = dateToIso(d.date);
+      html += `<div class="day-hdr${d.isToday ? ' today-hdr' : ''}${d.isPast ? ' past-hdr' : ''}">${d.dayName}<span class="gt-date">${dispDate}</span><button class="copy-day-btn" onclick="event.stopPropagation();copyDayToOther('${loc}','${isoDate}')" title="Copy all ${d.dayName} dishes to ${otherLabel}">&rarr; ${otherLabel}</button></div>`;
     });
 
     // Meal rows
@@ -95,16 +96,18 @@ function renderLocationPlan(loc) {
       const mealLabel = meal.charAt(0).toUpperCase() + meal.slice(1);
       html += `<div class="meal-lbl">${mealLabel}</div>`;
       days.forEach(d => {
-        const gc = getGuests(loc, d.dayIdx, meal);
-        const k = `${loc}-${d.dayIdx}-${meal}`;
+        const isoDate = dateToIso(d.date);
+        const gc = getGuests(loc, isoDate, meal);
+        const k = `${loc}-${isoDate}-${meal}`;
         const slotDishes = (S.planner[k] || []).filter(dish => dish.type === tg.key);
-        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}" onclick="openAddDishTyped('${loc}',${d.dayIdx},'${meal}','${tg.key}')">`;
+        const slotServed = isServicePast({loc, date: isoDate, meal});
+        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}" onclick="openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">`;
         slotDishes.forEach(dish => {
           const trClass = (dish.logistics || '').startsWith('Transport') ? ' chip-tr-border' : '';
-          const servedClass = isSlotServed(d.date, meal, loc) ? ' dish-chip-served' : '';
-          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}"><span class="chip-nm">${esc(dish.name)}</span>${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}',${d.dayIdx},'${meal}')">&#10005;</span>`}</div>`;
+          const servedClass = slotServed ? ' dish-chip-served' : '';
+          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}"><span class="chip-nm">${esc(dish.name)}</span>${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
         });
-        html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}',${d.dayIdx},'${meal}','${tg.key}')">+</div></div>`;
+        html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div></div>`;
       });
     });
 
@@ -188,26 +191,29 @@ function renderTransportView() {
     const mondayOff = todayDow === 0 ? -6 : 1 - todayDow;
     const monday = new Date(today); monday.setDate(today.getDate() + mondayOff);
 
-    // Collect dishes per day
-    const byDay = {};
+    // Collect dishes per date
+    const byDate = {};
     const noDayDishes = [];
     transportDishes.forEach(d => {
-      const days = new Set();
-      (d.services || []).forEach(s => days.add(s.day));
-      if (days.size === 0) { noDayDishes.push(d); return; }
-      days.forEach(day => {
-        if (!byDay[day]) byDay[day] = [];
-        if (!byDay[day].find(x => x.id === d.id)) byDay[day].push(d);
+      const dates = new Set();
+      (d.services || []).forEach(s => { if (s.date) dates.add(s.date); });
+      if (dates.size === 0) { noDayDishes.push(d); return; }
+      dates.forEach(date => {
+        if (!byDate[date]) byDate[date] = [];
+        if (!byDate[date].find(x => x.id === d.id)) byDate[date].push(d);
       });
     });
 
-    // Render per day
-    DAYS.forEach((dayName, i) => {
-      const dishes = byDay[i];
+    // Render per day (show days that have dishes, sorted by date)
+    const sortedDates = Object.keys(byDate).sort();
+    const todayIso = dateToIso(today);
+    sortedDates.forEach(isoDate => {
+      const dishes = byDate[isoDate];
       if (!dishes || dishes.length === 0) return;
-      const dt = new Date(monday); dt.setDate(monday.getDate() + i);
+      const dayName = dateToDayName(isoDate);
+      const dt = new Date(isoDate + 'T12:00:00');
       const dateStr = `${dt.getDate()}/${dt.getMonth()+1}`;
-      const isToday = i === (new Date().getDay() + 6) % 7;
+      const isToday = isoDate === todayIso;
       html += `<div class="type-section">`;
       html += `<div class="type-section-hdr"${isToday ? ' style="color:var(--blue);"' : ''}>${dayName} ${dateStr}</div>`;
       html += `<div class="dish-list-hdr">
@@ -277,9 +283,9 @@ function markSelectedArrived() {
 }
 
 // ── ADD DISH MODAL ───────────────────────────────────────
-function removeDishFromSlot(dishId, loc, day, meal) {
+function removeDishFromSlot(dishId, loc, date, meal) {
   const dish = S.dishes.find(d => d.id === dishId);
-  if (dish) { dish.services = (dish.services || []).filter(s => !(s.loc === loc && s.day === day && s.meal === meal)); }
+  if (dish) { dish.services = (dish.services || []).filter(s => !(s.loc === loc && s.date === date && s.meal === meal)); }
   rebuildPlanner(); rerenderCurrentView(); scheduleSave();
 }
 
@@ -288,66 +294,67 @@ function toggleTypeCollapse(key) {
   rerenderCurrentView();
 }
 
-function copyDayToOther(fromLoc, day) {
+function copyDayToOther(fromLoc, date) {
   const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
   const toLabel = toLoc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const dayName = dateToDayName(date);
   let added = 0;
   MEALS.forEach(meal => {
-    const k = `${fromLoc}-${day}-${meal}`;
+    const k = `${fromLoc}-${date}-${meal}`;
     const dishes = S.planner[k] || [];
     dishes.forEach(dish => {
-      const already = (dish.services || []).some(s => s.loc === toLoc && s.day === day && s.meal === meal);
+      const already = (dish.services || []).some(s => s.loc === toLoc && s.date === date && s.meal === meal);
       if (!already) {
         if (!dish.services) dish.services = [];
-        dish.services.push({ loc: toLoc, day, meal });
+        dish.services.push({ loc: toLoc, date, meal });
         added++;
       }
     });
   });
   if (added > 0) {
     rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-    toast(`${added} dish${added > 1 ? 'es' : ''} copied to ${toLabel} ${DAYS[day]}`);
+    toast(`${added} dish${added > 1 ? 'es' : ''} copied to ${toLabel} ${dayName}`);
   } else {
     toast('All dishes already assigned there');
   }
 }
 
-function copySlotToOther(fromLoc, day, meal) {
+function copySlotToOther(fromLoc, date, meal) {
   const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
   const toLabel = toLoc === 'west' ? 'Sering West' : 'Sering Centraal';
-  const k = `${fromLoc}-${day}-${meal}`;
+  const k = `${fromLoc}-${date}-${meal}`;
   const dishes = S.planner[k] || [];
   if (!dishes.length) return;
 
   let added = 0;
   dishes.forEach(dish => {
-    const already = (dish.services || []).some(s => s.loc === toLoc && s.day === day && s.meal === meal);
+    const already = (dish.services || []).some(s => s.loc === toLoc && s.date === date && s.meal === meal);
     if (!already) {
       if (!dish.services) dish.services = [];
-      dish.services.push({ loc: toLoc, day, meal });
+      dish.services.push({ loc: toLoc, date, meal });
       added++;
     }
   });
 
   if (added > 0) {
     rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-    toast(`${added} dish${added > 1 ? 'es' : ''} copied to ${toLabel} ${DAYS[day]} ${meal}`);
+    toast(`${added} dish${added > 1 ? 'es' : ''} copied to ${toLabel} ${dateToDayName(date)} ${meal}`);
   } else {
     toast('All dishes already assigned there');
   }
 }
 
-function openAddDishTyped(loc, day, meal, type) {
-  const existing = (S.planner[`${loc}-${day}-${meal}`] || []).map(d => d.id);
-  renderAddModal(loc, day, meal, existing, false, '', type);
+function openAddDishTyped(loc, date, meal, type) {
+  const existing = (S.planner[`${loc}-${date}-${meal}`] || []).map(d => d.id);
+  renderAddModal(loc, date, meal, existing, false, '', type);
 }
 
-function openAddDish(loc, day, meal) {
-  const existing = (S.planner[`${loc}-${day}-${meal}`] || []).map(d => d.id);
-  renderAddModal(loc, day, meal, existing, false, '', '');
+function openAddDish(loc, date, meal) {
+  const existing = (S.planner[`${loc}-${date}-${meal}`] || []).map(d => d.id);
+  renderAddModal(loc, date, meal, existing, false, '', '');
 }
 
-function renderAddModal(loc, day, meal, existing, filterOn, searchQuery, typeFilter) {
+function renderAddModal(loc, date, meal, existing, filterOn, searchQuery, typeFilter) {
   const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
   let avail = S.dishes.filter(d => !existing.includes(d.id));
   if (typeFilter) avail = avail.filter(d => d.type === typeFilter);
@@ -367,7 +374,7 @@ function renderAddModal(loc, day, meal, existing, filterOn, searchQuery, typeFil
       const agHtml = allAg.slice(0, 4).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
       const cookInfo = d.cookConfirmed ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
       const stockLoc = logisticsShort(d.logistics || 'Sering West');
-      return `<div class="dish-opt" onclick="confirmAddDish('${d.id}','${loc}',${day},'${meal}')">
+      return `<div class="dish-opt" onclick="confirmAddDish('${d.id}','${loc}','${date}','${meal}')">
         <div style="flex:1;">
           <div><span style="font-weight:500;">${esc(d.name)}</span> ${typeBadge(d.type)} ${storageBadge(d.storage || 'Gastro')}</div>
           <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
@@ -390,7 +397,7 @@ function renderAddModal(loc, day, meal, existing, filterOn, searchQuery, typeFil
   }
   const recipeOpts = recipes.slice(0, 15).map(r => {
     const ags = (r.allergens || []).slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
-    return `<div class="dish-opt" onclick="addRecipeToSlot('${r.id}','${loc}',${day},'${meal}')">
+    return `<div class="dish-opt" onclick="addRecipeToSlot('${r.id}','${loc}','${date}','${meal}')">
       <div style="flex:1;">
         <div><span style="font-weight:500;">${esc(r.name)}</span> ${typeBadge(r.type || 'Soup')}</div>
         <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
@@ -418,10 +425,11 @@ function renderAddModal(loc, day, meal, existing, filterOn, searchQuery, typeFil
     listHtml = `<div class="empty">No dishes or recipes available${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
   }
 
-  showModal(`<h3>Add${typeLabel} to ${DAYS[day]} ${meal} &middot; ${locLabel}</h3>
+  const dayName = dateToDayName(date);
+  showModal(`<h3>Add${typeLabel} to ${dayName} ${meal} &middot; ${locLabel}</h3>
     <input type="text" class="dish-search" id="planner-search" placeholder="Search dishes & recipes..." value="${esc(searchQuery)}"
-      oninput="renderAddModal('${loc}',${day},'${meal}',${existingJson},${filterOn},this.value${tf})" />
-    ${opts ? `<div class="filter-toggle-row" onclick="renderAddModal('${loc}',${day},'${meal}',${existingJson},${!filterOn},''${tf})">
+      oninput="renderAddModal('${loc}','${date}','${meal}',${existingJson},${filterOn},this.value${tf})" />
+    ${opts ? `<div class="filter-toggle-row" onclick="renderAddModal('${loc}','${date}','${meal}',${existingJson},${!filterOn},''${tf})">
       <div class="tbox${filterOn ? ' on' : ''}"><div class="tknob"></div></div>
       <span>Only show dishes at ${locLabel}</span>
     </div>` : ''}
@@ -431,14 +439,14 @@ function renderAddModal(loc, day, meal, existing, filterOn, searchQuery, typeFil
   if (si) { si.focus(); si.setSelectionRange(si.value.length, si.value.length); }
 }
 
-function confirmAddDish(dishId, loc, day, meal) {
+function confirmAddDish(dishId, loc, date, meal) {
   const dish = S.dishes.find(d => d.id === dishId);
-  if (dish) { if (!dish.services) dish.services = []; dish.services.push({ loc, day, meal }); }
+  if (dish) { if (!dish.services) dish.services = []; dish.services.push({ loc, date, meal }); }
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-  toast(`${dish.name} added to ${DAYS[day]} ${meal}`);
+  toast(`${dish.name} added to ${dateToDayName(date)} ${meal}`);
 }
 
-function addRecipeToSlot(recipeId, loc, day, meal) {
+function addRecipeToSlot(recipeId, loc, date, meal) {
   const r = S.recipeIndex.find(x => x.id === recipeId);
   if (!r) return;
   const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
@@ -461,7 +469,7 @@ function addRecipeToSlot(recipeId, loc, day, meal) {
     cookDay: null,
     cookDate: null,
     cookConfirmed: false,
-    services: [{ loc, day: parseInt(day), meal }],
+    services: [{ loc, date, meal }],
     createdAt: new Date().toISOString(),
   };
   S.dishes.push(newDish);

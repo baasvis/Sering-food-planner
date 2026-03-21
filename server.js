@@ -363,7 +363,22 @@ async function dbReadAll() {
     const dishes = dishRows.map(rowToDish);
     serviceRows.forEach(svcRow => {
       const dish = dishes.find(d => d.id === svcRow.dish_id);
-      if (dish) dish.services.push({ loc: svcRow.location, day: parseInt(svcRow.day), meal: svcRow.meal });
+      if (!dish) return;
+      // Migration: old format stored dayIdx (0-6), new format stores ISO date string
+      if (svcRow.day && svcRow.day.includes('-')) {
+        // New format: date string like "2026-03-23"
+        dish.services.push({ loc: svcRow.location, date: svcRow.day, meal: svcRow.meal });
+      } else {
+        // Old format: dayIdx (0=Mon..6=Sun) — convert to this week's date
+        const dayIdx = parseInt(svcRow.day);
+        const now = new Date();
+        const todayDow = now.getDay(); // 0=Sun
+        const mondayOff = todayDow === 0 ? -6 : 1 - todayDow;
+        const monday = new Date(now); monday.setDate(now.getDate() + mondayOff);
+        const target = new Date(monday); target.setDate(monday.getDate() + dayIdx);
+        const dateStr = target.getFullYear() + '-' + String(target.getMonth() + 1).padStart(2, '0') + '-' + String(target.getDate()).padStart(2, '0');
+        dish.services.push({ loc: svcRow.location, date: dateStr, meal: svcRow.meal });
+      }
     });
     const guests = getDefaultGuests();
     guestRows.forEach(row => {
@@ -392,8 +407,8 @@ async function dbWriteAll(dishes, guests, caterings, transportItems) {
     const serviceRows = [];
     dishes.forEach(dish => {
       (dish.services || []).forEach(svc => {
-        serviceRows.push([dish.id + '_' + svc.loc + '_' + svc.day + '_' + svc.meal,
-          dish.id, svc.loc, svc.day, svc.meal]);
+        serviceRows.push([dish.id + '_' + svc.loc + '_' + svc.date + '_' + svc.meal,
+          dish.id, svc.loc, svc.date, svc.meal]);
       });
     });
     await writeTab(sheets, CONFIG.DB_SHEET_ID, 'services', SERVICE_HEADERS, serviceRows);
@@ -460,7 +475,7 @@ function validateDishes(dishes) {
     if (!Array.isArray(d.services)) return `Dish ${i}: services must be an array`;
     for (const svc of d.services) {
       if (!VALID_LOCATIONS.includes(svc.loc)) return `Dish ${i}: invalid service location`;
-      if (typeof svc.day !== 'number' || svc.day < 0 || svc.day > 6) return `Dish ${i}: invalid service day`;
+      if (!svc.date || typeof svc.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(svc.date)) return `Dish ${i}: invalid service date (expected YYYY-MM-DD)`;
       if (!VALID_MEALS.includes(svc.meal)) return `Dish ${i}: invalid service meal`;
     }
   }

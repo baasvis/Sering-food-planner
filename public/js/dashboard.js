@@ -65,11 +65,11 @@ function getCookDateDishes(loc, date) {
   );
 }
 
-function calcLitersForService(dish, loc, dayIdx, meal) {
-  const k = `${loc}-${dayIdx}-${meal}`;
+function calcLitersForService(dish, loc, dateStr, meal) {
+  const k = `${loc}-${dateStr}-${meal}`;
   const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
   const count = Math.max(peers.length, 1);
-  const g = getGuests(loc, dayIdx, meal);
+  const g = getGuests(loc, dateStr, meal);
   return Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
 }
 
@@ -172,21 +172,22 @@ function renderDashboardContent() {
   if (!el) return;
 
   const loc = S.dashboardLoc;
-  const todayIdx = getTodayIndex();
   const today = getToday();
+  const todayIso = dateToIso(today);
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowIso = dateToIso(tomorrow);
 
   // ── Guests ──
-  const lunchGuests = getGuests(loc, todayIdx, 'lunch');
-  const dinnerGuests = getGuests(loc, todayIdx, 'dinner');
+  const lunchGuests = getGuests(loc, todayIso, 'lunch');
+  const dinnerGuests = getGuests(loc, todayIso, 'dinner');
 
   // ── Today's menu with liters + starch ──
   let menuHtml = '';
   MEALS.forEach(meal => {
-    const k = `${loc}-${todayIdx}-${meal}`;
+    const k = `${loc}-${todayIso}-${meal}`;
     const dishes = S.planner[k] || [];
-    const gc = getGuests(loc, todayIdx, meal);
+    const gc = getGuests(loc, todayIso, meal);
     menuHtml += `<div class="dash-section">
       <div class="dash-section-hdr">${meal} <span style="font-weight:400;color:var(--text3);">(${gc} guests)</span></div>`;
     if (dishes.length === 0) {
@@ -196,7 +197,7 @@ function renderDashboardContent() {
       const typeOrder = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
       const sorted = [...dishes].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
       sorted.forEach(d => {
-        const liters = calcLitersForService(d, loc, todayIdx, meal);
+        const liters = calcLitersForService(d, loc, todayIso, meal);
         const isMain = d.type === 'Main course';
         const starch = d.starch || null;
         const starchLabel = starch || 'Pasta or rice?';

@@ -144,7 +144,7 @@ function renderDishRow(d) {
   const svcLbls = (d.services || []).map(s => {
     const ml = s.meal === 'lunch' ? 'L' : 'D';
     const lc = s.loc === 'west' ? 'SW' : 'SC';
-    return `<strong>${DAYS[s.day]}</strong> ${ml} ${lc}`;
+    return `<strong>${dateToDayName(s.date)}</strong> ${ml} ${lc}`;
   }).join(' · ');
   const isSel = S.selected.has(d.id);
   const isFrozen = d.storage === 'Frozen';
@@ -452,8 +452,8 @@ function calcRequiredForLoc(dish, loc) {
   let total = 0;
   (dish.services || []).forEach(svc => {
     if (svc.loc !== loc) return;
-    const g = getGuests(svc.loc, svc.day, svc.meal);
-    const k = `${svc.loc}-${svc.day}-${svc.meal}`;
+    const g = getGuests(svc.loc, svc.date, svc.meal);
+    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
     const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
     const count = Math.max(peers.length, 1);
     total += (g / count) * ((dish.serving || 280) / 1000);
