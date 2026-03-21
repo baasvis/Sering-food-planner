@@ -80,6 +80,10 @@ function renderGuests() {
           ? `updateGuests('${loc.key}','${d.dayName}','${meal}',this.value)`
           : `updateGuestsNextWeek('${d.mondayKey}','${loc.key}','${d.dayName}','${meal}',this.value)`;
 
+        // Staff count for this meal (staff_lunch or staff_dinner)
+        const staffKey = meal === 'lunch' ? 'staff_lunch' : 'staff_dinner';
+        const staffVal = getGuestForDay(loc.key, d)[staffKey] || 0;
+
         html += `<td class="${cellClass}">
           <input class="gt-input" type="number" min="0" value="${v}" onchange="${onchange}" />`;
         if (pred !== null && pred !== undefined) {
@@ -88,6 +92,9 @@ function renderGuests() {
           if (delta > 0) deltaHtml = `<span class="gt-pred-delta gt-pred-up">+${delta}</span>`;
           else if (delta < 0) deltaHtml = `<span class="gt-pred-delta gt-pred-down">${delta}</span>`;
           html += `<div class="gt-pred" title="Predicted from historical data">~${pred} ${deltaHtml}</div>`;
+        }
+        if (staffVal > 0) {
+          html += `<div class="gt-staff" title="${staffVal} staff/volunteer meals included in total">${staffVal} staff</div>`;
         }
         html += `</td>`;
       });
@@ -127,20 +134,30 @@ function renderGuests() {
   setupUploadHandlers();
 }
 
-// Get guest values for a specific visible day
+// Get guest values for a specific visible day.
+// Returns { lunch, dinner, staff_lunch, staff_dinner }.
+// Staff counts come from predictions/history (not manually edited).
 function getGuestForDay(loc, dayInfo) {
+  let base;
   if (dayInfo.isCurrentWeek) {
-    return ((S.guests[loc] || {})[dayInfo.dayName] || {});
+    base = { ...((S.guests[loc] || {})[dayInfo.dayName] || {}) };
+  } else {
+    const weekData = S.guestsNextWeeks[dayInfo.mondayKey];
+    if (weekData && weekData[loc] && weekData[loc][dayInfo.dayName]) {
+      base = { ...weekData[loc][dayInfo.dayName] };
+    } else if (S.predictions && S.predictions[loc] && S.predictions[loc][dayInfo.dayName]) {
+      base = { ...S.predictions[loc][dayInfo.dayName] };
+    } else {
+      base = {};
+    }
   }
-  // Future/past week: check saved next-weeks data, then fall back to predictions
-  const weekData = S.guestsNextWeeks[dayInfo.mondayKey];
-  if (weekData && weekData[loc] && weekData[loc][dayInfo.dayName]) {
-    return weekData[loc][dayInfo.dayName];
-  }
+  // Overlay staff counts from predictions (they come from historical data, not manual input)
   if (S.predictions && S.predictions[loc] && S.predictions[loc][dayInfo.dayName]) {
-    return S.predictions[loc][dayInfo.dayName];
+    const pred = S.predictions[loc][dayInfo.dayName];
+    if (pred.staff_lunch !== undefined) base.staff_lunch = pred.staff_lunch;
+    if (pred.staff_dinner !== undefined) base.staff_dinner = pred.staff_dinner;
   }
-  return {};
+  return base;
 }
 
 // ── Upload Section HTML ───────────────────────────────────

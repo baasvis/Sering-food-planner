@@ -46,11 +46,21 @@ function parseCSV(text) {
 //   2. Tebi ProductReportByProfitCenter (comma-sep, has "Profit Center" + "Items sold")
 //   3. Lightspeed receipt-items (semicolon-sep, has "Company Name" + "Creation Date")
 
-function categorizeUploadedFiles(fileContents, existingDeviceMap) {
-  const aggregated = {
-    west: { lunch: {}, dinner: {}, staff: {} },
-    centraal: { lunch: {}, dinner: {}, staff: {} }
+// Data model: lunch/dinner include staff. staff_lunch/staff_dinner track how
+// many of those were staff (for display). When multiple sources have data for
+// the same day, we average them (prevents double-counting from overlapping POS systems).
+
+function emptyAggregated() {
+  return {
+    west: { lunch: {}, dinner: {}, staff_lunch: {}, staff_dinner: {} },
+    centraal: { lunch: {}, dinner: {}, staff_lunch: {}, staff_dinner: {} }
   };
+}
+const AGG_MEALS = ['lunch', 'dinner', 'staff_lunch', 'staff_dinner'];
+
+function categorizeUploadedFiles(fileContents, existingDeviceMap) {
+  // Each source file gets its own layer — we average overlapping days at the end
+  const layers = [];
   const deviceMap = { ...(existingDeviceMap || {}) };
   let totalMealRows = 0;
   let unmappedRows = 0;
@@ -65,7 +75,7 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
       const rows = parseCSV(text);
       totalRows += rows.length;
       const result = categorizeTebiData(rows, deviceMap);
-      mergeAggregated(aggregated, result.aggregated);
+      layers.push(result.aggregated);
       Object.assign(deviceMap, result.deviceMap);
       totalMealRows += result.stats.totalMealRows;
       unmappedRows += result.stats.unmappedRows;
@@ -73,19 +83,18 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
     } else if (format === 'tebi-profitcenter') {
       const rows = parseCSV(text);
       totalRows += rows.length;
-      // Extract date from filename: ProductReportByProfitCenter_YYYY-MM-DD_YYYY-MM-DD__...
       const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
       const date = dateMatch ? dateMatch[1] : null;
       if (!date) { unmappedRows += rows.length; continue; }
       const result = categorizeProfitCenterData(rows, date);
-      mergeAggregated(aggregated, result.aggregated);
+      layers.push(result.aggregated);
       totalMealRows += result.totalMealRows;
 
     } else if (format === 'lightspeed') {
       const rows = parseSemicolonCSV(text);
       totalRows += rows.length;
       const result = categorizeLightspeedData(rows);
-      mergeAggregated(aggregated, result.aggregated);
+      layers.push(result.aggregated);
       totalMealRows += result.totalMealRows;
 
     } else {
@@ -93,9 +102,12 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
     }
   }
 
+  // Merge layers: average when multiple sources have data for the same day/loc/meal
+  const aggregated = averageLayers(layers);
+
   const allDates = new Set();
   for (const loc of ['west', 'centraal']) {
-    for (const meal of ['lunch', 'dinner', 'staff']) {
+    for (const meal of AGG_MEALS) {
       Object.keys(aggregated[loc][meal]).forEach(d => allDates.add(d));
     }
   }
@@ -116,13 +128,37 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
       perCategory: {
         westLunch: Object.keys(aggregated.west.lunch).length,
         westDinner: Object.keys(aggregated.west.dinner).length,
-        westStaff: Object.keys(aggregated.west.staff).length,
+        westStaff: Object.keys(aggregated.west.staff_lunch).length + Object.keys(aggregated.west.staff_dinner).length,
         centraalLunch: Object.keys(aggregated.centraal.lunch).length,
         centraalDinner: Object.keys(aggregated.centraal.dinner).length,
-        centraalStaff: Object.keys(aggregated.centraal.staff).length,
+        centraalStaff: Object.keys(aggregated.centraal.staff_lunch).length + Object.keys(aggregated.centraal.staff_dinner).length,
       }
     }
   };
+}
+
+// Average overlapping data across layers. If two sources both have West lunch
+// on March 18, take the average. If only one has it, use that value.
+function averageLayers(layers) {
+  const result = emptyAggregated();
+  for (const loc of ['west', 'centraal']) {
+    for (const meal of AGG_MEALS) {
+      // Collect all dates and their values from each layer
+      const dateValues = {}; // date → [val1, val2, ...]
+      for (const layer of layers) {
+        if (!layer[loc] || !layer[loc][meal]) continue;
+        for (const [date, count] of Object.entries(layer[loc][meal])) {
+          if (!dateValues[date]) dateValues[date] = [];
+          dateValues[date].push(count);
+        }
+      }
+      // Average
+      for (const [date, values] of Object.entries(dateValues)) {
+        result[loc][meal][date] = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+      }
+    }
+  }
+  return result;
 }
 
 // Detect file format from header line
@@ -150,12 +186,13 @@ function parseSemicolonCSV(text) {
   return rows;
 }
 
-// Merge source aggregated data into target (additive)
+// Merge source aggregated data into target (additive) — used for server-side history merging
 function mergeAggregated(target, source) {
   for (const loc of ['west', 'centraal']) {
     if (!source[loc]) continue;
-    for (const meal of ['lunch', 'dinner', 'staff']) {
+    for (const meal of AGG_MEALS) {
       if (!source[loc][meal]) continue;
+      if (!target[loc][meal]) target[loc][meal] = {};
       for (const [date, count] of Object.entries(source[loc][meal])) {
         target[loc][meal][date] = (target[loc][meal][date] || 0) + count;
       }
@@ -169,22 +206,13 @@ function mergeAggregated(target, source) {
 // Date must be provided from the filename since it's not in the CSV.
 
 function categorizeProfitCenterData(rows, date) {
-  const aggregated = {
-    west: { lunch: {}, dinner: {}, staff: {} },
-    centraal: { lunch: {}, dinner: {}, staff: {} }
-  };
-  const MEAL_PRODUCTS = {
-    'Lunch': 'lunch', 'Lunch card guest': 'lunch',
-    'Dinner donation': 'dinner', 'Stadspas Dinner': 'dinner', 'DSC Dinner': 'dinner',
-    'Staff & volunteer meals': 'staff'
-  };
+  const aggregated = emptyAggregated();
+  // Staff meals are split by Time Dimension: Morning/Lunch/Afternoon = lunch staff, Dinner/Party = dinner staff
+  const LUNCH_TIMES = ['Morning', 'Lunch', 'Afternoon'];
   let totalMealRows = 0;
 
   for (const row of rows) {
     const name = row['Name'];
-    const mealType = MEAL_PRODUCTS[name];
-    if (!mealType) continue;
-
     const qty = parseInt(row['Items sold']) || 0;
     if (qty <= 0) continue;
 
@@ -194,8 +222,24 @@ function categorizeProfitCenterData(rows, date) {
     else if (profitCenter.includes('Centraal')) loc = 'centraal';
     if (!loc) continue;
 
-    totalMealRows += qty;
-    aggregated[loc][mealType][date] = (aggregated[loc][mealType][date] || 0) + qty;
+    const timeDim = row['Time Dimension'] || '';
+
+    if (name === 'Lunch' || name === 'Lunch card guest') {
+      totalMealRows += qty;
+      aggregated[loc].lunch[date] = (aggregated[loc].lunch[date] || 0) + qty;
+    } else if (name === 'Dinner donation' || name === 'Stadspas Dinner' || name === 'DSC Dinner') {
+      totalMealRows += qty;
+      aggregated[loc].dinner[date] = (aggregated[loc].dinner[date] || 0) + qty;
+    } else if (name === 'Staff & volunteer meals') {
+      totalMealRows += qty;
+      if (LUNCH_TIMES.includes(timeDim)) {
+        aggregated[loc].lunch[date] = (aggregated[loc].lunch[date] || 0) + qty;
+        aggregated[loc].staff_lunch[date] = (aggregated[loc].staff_lunch[date] || 0) + qty;
+      } else {
+        aggregated[loc].dinner[date] = (aggregated[loc].dinner[date] || 0) + qty;
+        aggregated[loc].staff_dinner[date] = (aggregated[loc].staff_dinner[date] || 0) + qty;
+      }
+    }
   }
 
   return { aggregated, totalMealRows };
@@ -209,36 +253,46 @@ function categorizeProfitCenterData(rows, date) {
 // Date format: "DD/MM/YY HH:MM" in "Creation Date" column.
 
 function categorizeLightspeedData(rows) {
-  const aggregated = {
-    west: { lunch: {}, dinner: {}, staff: {} },
-    centraal: { lunch: {}, dinner: {}, staff: {} }
-  };
-  const MEAL_MAP = {
-    'Lunch': 'lunch',
-    'lunch card guest': 'lunch',
-    'Donation Dinner Sering': 'dinner',
-    'Staff & volunteers meals': 'staff'
-  };
+  const aggregated = emptyAggregated();
   let totalMealRows = 0;
 
   for (const row of rows) {
     const name = row['Name'];
-    const mealType = MEAL_MAP[name];
-    if (!mealType) continue;
-
     const qty = parseInt(row['Quantity']) || 0;
     if (qty <= 0) continue;
 
-    // Parse date: "2/03/26 12:03" → "2026-03-02"
     const dateStr = row['Creation Date'];
     const date = parseLightspeedDate(dateStr);
     if (!date) continue;
+    const hour = parseLightspeedHour(dateStr);
 
-    totalMealRows += qty;
-    aggregated.centraal[mealType][date] = (aggregated.centraal[mealType][date] || 0) + qty;
+    if (name === 'Lunch' || name === 'lunch card guest') {
+      totalMealRows += qty;
+      aggregated.centraal.lunch[date] = (aggregated.centraal.lunch[date] || 0) + qty;
+    } else if (name === 'Donation Dinner Sering') {
+      totalMealRows += qty;
+      aggregated.centraal.dinner[date] = (aggregated.centraal.dinner[date] || 0) + qty;
+    } else if (name === 'Staff & volunteers meals') {
+      totalMealRows += qty;
+      if (hour < 17) {
+        aggregated.centraal.lunch[date] = (aggregated.centraal.lunch[date] || 0) + qty;
+        aggregated.centraal.staff_lunch[date] = (aggregated.centraal.staff_lunch[date] || 0) + qty;
+      } else {
+        aggregated.centraal.dinner[date] = (aggregated.centraal.dinner[date] || 0) + qty;
+        aggregated.centraal.staff_dinner[date] = (aggregated.centraal.staff_dinner[date] || 0) + qty;
+      }
+    }
   }
 
   return { aggregated, totalMealRows };
+}
+
+// Extract hour from Lightspeed date "D/MM/YY HH:MM" → integer hour
+function parseLightspeedHour(dateStr) {
+  if (!dateStr) return 12;
+  const timePart = dateStr.split(' ')[1];
+  if (!timePart) return 12;
+  return parseInt(timePart.split(':')[0]) || 12;
 }
 
 // Parse "D/MM/YY HH:MM" or "DD/MM/YY HH:MM" → "YYYY-MM-DD"
@@ -261,16 +315,6 @@ function categorizeTebiData(allRows, existingDeviceMap) {
   const WEST_MARKERS = ['Dinner donation', 'Stadspas Dinner'];
   const CENTRAAL_MARKERS = ['DSC Dinner'];
 
-  // Products we count as meals, and what type they are
-  const MEAL_PRODUCTS = {
-    'Lunch':                     'lunch',
-    'Lunch card guest':          'lunch',
-    'Dinner donation':           'dinner',
-    'Stadspas Dinner':           'dinner',
-    'DSC Dinner':                'dinner',
-    'Staff & volunteer meals':   'staff'
-  };
-
   // Products where the location is always known from the name itself
   const FIXED_LOCATION = {
     'Dinner donation':  'west',
@@ -288,25 +332,21 @@ function categorizeTebiData(allRows, existingDeviceMap) {
   }
 
   // Step 2: count meals per day per location per type
-  const aggregated = {
-    west: { lunch: {}, dinner: {}, staff: {} },
-    centraal: { lunch: {}, dinner: {}, staff: {} }
-  };
+  const aggregated = emptyAggregated();
   let totalMealRows = 0;
   let unmappedRows = 0;
+  const MEAL_NAMES = ['Lunch', 'Lunch card guest', 'Dinner donation', 'Stadspas Dinner', 'DSC Dinner', 'Staff & volunteer meals'];
 
   for (const row of allRows) {
     const name = row['Product name'];
-    const mealType = MEAL_PRODUCTS[name];
-    if (!mealType) continue; // not a meal product, skip (coffee, drinks, etc.)
-    if (name === 'Lunch card') continue; // buying a card, not eating a meal
+    if (!MEAL_NAMES.includes(name)) continue;
 
     const qty = parseInt(row['Quantity']) || 0;
-    if (qty <= 0) continue; // skip refunds/negatives
-    const date = row['Business day']; // format: "2026-03-16"
+    if (qty <= 0) continue;
+    const date = row['Business day'];
     if (!date) continue;
 
-    // Determine location: fixed from product name, or from device
+    // Determine location
     let loc = FIXED_LOCATION[name];
     if (!loc) {
       const deviceId = extractDeviceId(row['Invoice ID']);
@@ -315,13 +355,27 @@ function categorizeTebiData(allRows, existingDeviceMap) {
     if (!loc) { unmappedRows++; continue; }
 
     totalMealRows++;
-    aggregated[loc][mealType][date] = (aggregated[loc][mealType][date] || 0) + qty;
+
+    if (name === 'Lunch' || name === 'Lunch card guest') {
+      aggregated[loc].lunch[date] = (aggregated[loc].lunch[date] || 0) + qty;
+    } else if (name === 'Dinner donation' || name === 'Stadspas Dinner' || name === 'DSC Dinner') {
+      aggregated[loc].dinner[date] = (aggregated[loc].dinner[date] || 0) + qty;
+    } else if (name === 'Staff & volunteer meals') {
+      // Extract hour from Date closed: "3/16/26, 12:03 PM" or Invoice ID timestamp
+      const hour = extractHourFromTebiRow(row);
+      if (hour < 17) {
+        aggregated[loc].lunch[date] = (aggregated[loc].lunch[date] || 0) + qty;
+        aggregated[loc].staff_lunch[date] = (aggregated[loc].staff_lunch[date] || 0) + qty;
+      } else {
+        aggregated[loc].dinner[date] = (aggregated[loc].dinner[date] || 0) + qty;
+        aggregated[loc].staff_dinner[date] = (aggregated[loc].staff_dinner[date] || 0) + qty;
+      }
+    }
   }
 
-  // Compute stats for the UI summary
   const allDates = new Set();
   for (const loc of ['west', 'centraal']) {
-    for (const meal of ['lunch', 'dinner', 'staff']) {
+    for (const meal of AGG_MEALS) {
       Object.keys(aggregated[loc][meal]).forEach(d => allDates.add(d));
     }
   }
@@ -341,13 +395,26 @@ function categorizeTebiData(allRows, existingDeviceMap) {
       perCategory: {
         westLunch: Object.keys(aggregated.west.lunch).length,
         westDinner: Object.keys(aggregated.west.dinner).length,
-        westStaff: Object.keys(aggregated.west.staff).length,
+        westStaff: Object.keys(aggregated.west.staff_lunch).length + Object.keys(aggregated.west.staff_dinner).length,
         centraalLunch: Object.keys(aggregated.centraal.lunch).length,
         centraalDinner: Object.keys(aggregated.centraal.dinner).length,
-        centraalStaff: Object.keys(aggregated.centraal.staff).length,
+        centraalStaff: Object.keys(aggregated.centraal.staff_lunch).length + Object.keys(aggregated.centraal.staff_dinner).length,
       }
     }
   };
+}
+
+// Extract hour from a Tebi ProductOrders row.
+// Invoice ID has a timestamp: "723192|2026-03-16T16:30:00Z|INVOICE|..."
+function extractHourFromTebiRow(row) {
+  const invoiceId = row['Invoice ID'] || '';
+  const parts = invoiceId.split('|');
+  if (parts.length >= 2) {
+    const ts = parts[1]; // "2026-03-16T16:30:00Z"
+    const match = ts.match(/T(\d{2}):/);
+    if (match) return parseInt(match[1]);
+  }
+  return 12; // default to noon if can't parse
 }
 
 // Pull the device ID out of an Invoice ID string
@@ -380,7 +447,7 @@ function predictGuests(history) {
       predictions[loc][day] = {};
     }
 
-    for (const meal of ['lunch', 'dinner']) {
+    for (const meal of ['lunch', 'dinner', 'staff_lunch', 'staff_dinner']) {
       const dateMap = (history[loc] && history[loc][meal]) || {};
       const entries = Object.entries(dateMap)
         .map(([date, count]) => ({ date, count, dow: getDayOfWeek(date) }))

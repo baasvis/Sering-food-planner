@@ -719,7 +719,7 @@ app.post('/api/guest-history', (req, res) => {
     for (const loc of ['west', 'centraal']) {
       if (!incoming[loc]) continue;
       if (!existing[loc]) existing[loc] = {};
-      for (const meal of ['lunch', 'dinner', 'staff']) {
+      for (const meal of ['lunch', 'dinner', 'staff', 'staff_lunch', 'staff_dinner']) {
         if (!incoming[loc][meal]) continue;
         if (!existing[loc][meal]) existing[loc][meal] = {};
         Object.assign(existing[loc][meal], incoming[loc][meal]);
