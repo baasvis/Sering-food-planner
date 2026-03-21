@@ -101,7 +101,7 @@ function renderLocationPlan(loc) {
         html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}" onclick="openAddDishTyped('${loc}',${d.dayIdx},'${meal}','${tg.key}')">`;
         slotDishes.forEach(dish => {
           const trClass = (dish.logistics || '').startsWith('Transport') ? ' chip-tr-border' : '';
-          const servedClass = isServicePast({loc, day: d.dayIdx, meal}) ? ' dish-chip-served' : '';
+          const servedClass = isSlotServed(d.date, meal, loc) ? ' dish-chip-served' : '';
           html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}"><span class="chip-nm">${esc(dish.name)}</span>${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}',${d.dayIdx},'${meal}')">&#10005;</span>`}</div>`;
         });
         html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}',${d.dayIdx},'${meal}','${tg.key}')">+</div></div>`;
