@@ -554,7 +554,7 @@ function openInventory(loc) {
         <label style="font-size:11px;color:var(--text2);">Current stock</label>
         <input type="number" class="inv-stock-input" id="inv-stock-${d.id}" value="${d.stock || 0}" step="0.5" min="0" onchange="updateInventoryStock('${d.id}',this.value)" />
         <span style="display:inline-block;width:1px;height:24px;background:var(--border);margin:0 6px;vertical-align:middle;"></span>
-        <button class="btn btn-sm inv-served-btn" style="background:#d32f2f;color:#fff;border-color:#d32f2f;" onclick="openServedFromInventory('${d.id}','${loc}')">Served</button>
+        <button class="btn btn-sm inv-served-btn" style="background:var(--red);color:#fff;border-color:var(--red);" onclick="openServedFromInventory('${d.id}','${loc}')">Served</button>
       </div>
     </div>`;
   });

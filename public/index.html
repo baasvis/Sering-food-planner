@@ -30,6 +30,12 @@
       --bg:#1c1c1a; --bg2:#252523; --bg3:#2e2e2b;
       --text:#f0efe9; --text2:#a0a09a; --text3:#6b6b66;
       --border:rgba(255,255,255,0.1); --border2:rgba(255,255,255,0.2);
+      --green:#4EC9A0; --green-bg:rgba(78,201,160,0.15);
+      --amber:#E4A84D; --amber-bg:rgba(228,168,77,0.15);
+      --red:#E86B5A;   --red-bg:rgba(232,107,90,0.12);
+      --blue:#5BA3D9;  --blue-bg:rgba(91,163,217,0.15);
+      --purple:#8B82E0; --purple-bg:rgba(139,130,224,0.15);
+      --gray-bg:#2e2e2b; --gray-text:#b0b0aa;
     }
   }
   *{box-sizing:border-box;margin:0;padding:0;}
@@ -154,12 +160,12 @@
   .b-main{background:var(--blue-bg);color:var(--blue);}
   .b-dessert{background:var(--purple-bg);color:var(--purple);}
   .b-gastro{background:var(--amber-bg);color:var(--amber);font-size:11px;font-weight:700;}
-  .b-frozen{background:#D0EAFC;color:#0C447C;font-size:11px;font-weight:700;}
+  .b-frozen{background:var(--blue-bg);color:var(--blue);font-size:11px;font-weight:700;}
   .b-vacpack{background:var(--purple-bg);color:var(--purple);font-size:11px;font-weight:700;}
-  .b-west{background:#FFF3E0;color:#BA7517;font-size:11px;font-weight:700;padding:3px 9px;}
-  .b-centraal{background:#E1F5EE;color:#0F6E56;font-size:11px;font-weight:700;padding:3px 9px;}
-  .b-twc{background:#EAF3DE;color:#639922;font-size:11px;font-weight:700;padding:3px 9px;}
-  .b-tww{background:#FAEEDA;color:#BA7517;font-size:11px;font-weight:700;padding:3px 9px;}
+  .b-west{background:var(--amber-bg);color:var(--amber);font-size:11px;font-weight:700;padding:3px 9px;}
+  .b-centraal{background:var(--green-bg);color:var(--green);font-size:11px;font-weight:700;padding:3px 9px;}
+  .b-twc{background:var(--green-bg);color:var(--green);font-size:11px;font-weight:700;padding:3px 9px;}
+  .b-tww{background:var(--amber-bg);color:var(--amber);font-size:11px;font-weight:700;padding:3px 9px;}
   .allergen-pill{font-size:10px;padding:2px 6px;border-radius:10px;background:var(--red-bg);color:var(--red);display:inline-block;margin:1px;}
 
   /* FROZEN ROW */
@@ -276,8 +282,8 @@
   .meal-spacer{height:8px;}
   .dish-chip{border-radius:5px;padding:3px 6px;font-size:11px;font-weight:500;display:flex;justify-content:space-between;align-items:flex-start;gap:3px;cursor:default;}
   .chip-tr-border{border-left:2px solid var(--purple);}
-  .chip-soup{background:var(--green-bg);color:#085041;}
-  .chip-main{background:var(--blue-bg);color:#0C447C;}
+  .chip-soup{background:var(--green-bg);color:var(--green);}
+  .chip-main{background:var(--blue-bg);color:var(--blue);}
   .chip-dessert{background:var(--purple-bg);color:var(--purple);}
   .chip-tr{background:var(--purple-bg);color:var(--purple);}
   .chip-nm{overflow:hidden;text-overflow:ellipsis;flex:1;word-break:break-word;}

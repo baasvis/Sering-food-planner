@@ -13,11 +13,15 @@ function costColor(cost, allCosts) {
   if (cost === null || allCosts.length < 2) return '';
   const min = Math.min(...allCosts);
   const max = Math.max(...allCosts);
-  if (max === min) return 'background:hsl(45,80%,85%);color:#333;';
+  const isDark = window.matchMedia('(prefers-color-scheme:dark)').matches;
+  const light = isDark ? 28 : 82;
+  const sat = isDark ? 40 : 70;
+  const txtCol = isDark ? '#f0efe9' : '#333';
+  if (max === min) return `background:hsl(45,${sat}%,${light}%);color:${txtCol};`;
   const t = (cost - min) / (max - min); // 0=cheapest, 1=most expensive
   // green(120) → orange(30) → red(0)
   const hue = 120 - t * 120;
-  return `background:hsl(${hue},70%,82%);color:#333;`;
+  return `background:hsl(${hue},${sat}%,${light}%);color:${txtCol};`;
 }
 
 function avgRating(r) {

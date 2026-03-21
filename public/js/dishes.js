@@ -130,7 +130,7 @@ function renderDishGroups(dishes) {
   }
 
   if (frozen.length) {
-    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:#378ADD;"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
+    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--blue);"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
     html += frozen.map(d => renderDishRow(d)).join('');
   }
 
