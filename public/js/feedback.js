@@ -88,4 +88,6 @@ async function submitFeedback(screen) {
 function showFeedbackFab() {
   const fab = document.getElementById('feedback-fab');
   if (fab) fab.style.display = 'flex';
+  const tut = document.getElementById('tutorial-fab');
+  if (tut) tut.style.display = 'flex';
 }

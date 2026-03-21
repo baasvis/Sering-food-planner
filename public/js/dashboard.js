@@ -375,7 +375,7 @@ function renderDashboardContent() {
     <!-- ══ SECTION 1: TODAY'S OVERVIEW ══ -->
     <h2 class="dash-section-heading">Today's Overview</h2>
 
-    <div class="dash-card">
+    <div class="dash-card" id="dash-guests-card">
       <div class="dash-card-title"><span class="dash-card-icon">👥</span> Guests today
         <span class="dash-card-subtitle">Expected headcount for today's service</span>
       </div>
@@ -385,7 +385,7 @@ function renderDashboardContent() {
       </div>
     </div>
 
-    <div class="dash-card">
+    <div class="dash-card" id="dash-menu-card">
       <div class="dash-card-title"><span class="dash-card-icon">🍲</span> Today's menu
         <span class="dash-card-subtitle">Pick Rice or Pasta for each main — totals appear below each meal</span>
       </div>
@@ -396,7 +396,7 @@ function renderDashboardContent() {
     <h2 class="dash-section-heading">Chef To-Dos</h2>
 
     <!-- 🔥 HEAT UP -->
-    <div class="dash-card">
+    <div class="dash-card" id="dash-heatup-card">
       <div class="dash-card-title"><span class="dash-card-icon">🔥</span> What to heat up
         <span class="dash-card-subtitle">Already cooked — just needs reheating for today's service</span>
       </div>
@@ -412,7 +412,7 @@ function renderDashboardContent() {
     </div>
 
     <!-- 👨‍🍳 WHAT TO COOK -->
-    <div class="dash-card">
+    <div class="dash-card" id="dash-cook-card">
       <div class="dash-card-title"><span class="dash-card-icon">👨‍🍳</span> What to cook
         <span class="dash-card-subtitle">Dishes that still need to be cooked — stay 1 day ahead!</span>
       </div>
