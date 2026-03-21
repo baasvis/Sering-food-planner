@@ -16,12 +16,19 @@ const fs = require('fs');
 const { google } = require('googleapis');
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
+const multer = require('multer');
+const XLSX = require('xlsx');
+
+// File upload config (memory storage for XLSX parsing)
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 // Persistent data directory (for server-side storage not in Google Sheets)
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const STD_INV_FILE = path.join(DATA_DIR, 'standard-inventory.json');
 const STD_INV_SEED = path.join(__dirname, 'seeds', 'standard-inventory.json');
+const INGREDIENTS_SEED = path.join(__dirname, 'seeds', 'ingredients.json');
+const INGREDIENTS_SEEDED_FLAG = path.join(DATA_DIR, '.ingredients-seeded');
 // Seed from default inventory on first deploy if no data file exists yet
 if (!fs.existsSync(STD_INV_FILE) && fs.existsSync(STD_INV_SEED)) {
   fs.copyFileSync(STD_INV_SEED, STD_INV_FILE);
@@ -241,6 +248,59 @@ const CATERING_HEADERS = ['id','name','date','guest_count','delivery_mode','dish
 const GUEST_HISTORY_HEADERS = ['location','meal','date','count'];
 const GUEST_HISTORY_META_HEADERS = ['key','value'];
 const GUESTS_NEXT_WEEKS_HEADERS = ['monday_key','location','day','meal','count'];
+
+const INGREDIENT_HEADERS = [
+  'id','name','supplier_name','category','unit','supplier',
+  'order_code','order_unit','order_unit_standard','order_price',
+  'order_amount_grams','allergens','notes','storage_location','active'
+];
+
+function rowToIngredient(row) {
+  return {
+    id: row.id,
+    name: row.name || '',
+    supplierName: row.supplier_name || '',
+    category: row.category || '',
+    unit: row.unit || 'Grams',
+    supplier: row.supplier || '',
+    orderCode: row.order_code || '',
+    orderUnit: row.order_unit || '',
+    orderUnitStandard: row.order_unit_standard || '',
+    orderPrice: row.order_price ? parseFloat(row.order_price) : null,
+    orderAmountGrams: parseFloat(row.order_amount_grams) || 0,
+    allergens: row.allergens || '',
+    notes: row.notes || '',
+    storageLocation: row.storage_location || '',
+    active: row.active !== 'false',
+  };
+}
+
+function ingredientToRow(ing) {
+  return [
+    ing.id, ing.name || '', ing.supplierName || '', ing.category || '',
+    ing.unit || 'Grams', ing.supplier || '', ing.orderCode || '',
+    ing.orderUnit || '', ing.orderUnitStandard || '',
+    ing.orderPrice != null ? ing.orderPrice : '',
+    ing.orderAmountGrams || 0, ing.allergens || '', ing.notes || '',
+    ing.storageLocation || '', ing.active !== false ? 'true' : 'false',
+  ];
+}
+
+// Parse Hanos "hoeveelheid" field into grams/ml, e.g. "Pak 1 liter" → 1000, "Zak 5 kilogram" → 5000
+function parseHanosQuantityGrams(hoeveelheid) {
+  if (!hoeveelheid) return 0;
+  const s = hoeveelheid.toLowerCase();
+  const numMatch = s.match(/([\d.,]+)\s*(kilo(?:gram)?|gram|liter|ml|stuk)/);
+  if (!numMatch) return 0;
+  const num = parseFloat(numMatch[1].replace(',', '.'));
+  const unit = numMatch[2];
+  if (unit.startsWith('kilo')) return num * 1000;
+  if (unit === 'liter') return num * 1000;
+  if (unit === 'gram') return num;
+  if (unit === 'ml') return num;
+  if (unit === 'stuk') return 0; // can't convert pieces to grams
+  return 0;
+}
 
 function rowToCatering(row) {
   let dishes = [];
@@ -631,51 +691,272 @@ app.get('/api/recipe', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/ingredients', async (req, res) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// INGREDIENT DATABASE (stored in 'ingredients' tab of main DB sheet)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Helper: load ingredients from Sheets or fall back to seed file
+async function loadIngredients() {
   const sheets = getSheetsClient();
-  if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
-  if (!CONFIG.INGREDIENT_DB_SHEET_ID) return res.json({ error: 'INGREDIENT_DB_SHEET_ID not set', items: [] });
+  if (sheets && CONFIG.DB_SHEET_ID) {
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['ingredients']);
+    const rows = await readTab(sheets, CONFIG.DB_SHEET_ID, 'ingredients');
+    if (rows.length > 0) return rows.map(rowToIngredient);
+  }
+  // Fallback: load from seed file (dev mode or before first Sheets write)
+  if (fs.existsSync(INGREDIENTS_SEED)) {
+    return JSON.parse(fs.readFileSync(INGREDIENTS_SEED, 'utf8'));
+  }
+  return [];
+}
+
+app.get('/api/ingredients', async (req, res) => {
   try {
-    // First get the sheet metadata to find the correct tab name
-    const meta = await sheets.spreadsheets.get({
-      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, fields: 'sheets.properties(title,sheetId)',
-    });
-    const sheets_meta = meta.data.sheets;
-    console.log('Ingredient DB tabs:', sheets_meta.map(s => `${s.properties.title} (gid=${s.properties.sheetId})`));
-    // Use the tab matching INGREDIENT_DB_GID if set, otherwise first tab
-    const targetGid = CONFIG.INGREDIENT_DB_GID ? parseInt(CONFIG.INGREDIENT_DB_GID) : null;
-    const matchedTab = targetGid != null
-      ? sheets_meta.find(s => s.properties.sheetId === targetGid)
-      : null;
-    const tabName = (matchedTab || sheets_meta[0])?.properties?.title || 'Sheet1';
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: CONFIG.INGREDIENT_DB_SHEET_ID, range: `'${tabName}'!B3:R2000`,
-    });
-    const allRows = response.data.values || [];
-    console.log('Ingredient DB raw rows:', allRows.length);
-    const rows = allRows.slice(1).filter(r => r[0]); // skip header row
-    console.log('Ingredient DB filtered rows:', rows.length);
-    if (rows.length > 0) console.log('First ingredient:', rows[0][0], '| orderCode:', rows[0][5]);
-    res.json(rows.map(r => ({
-      name: r[0] || '',
-      unit: r[1] || 'g',
-      source: r[2] || '',
-      costPer100: r[3] || '',
-      orderType: r[4] || '',
-      orderCode: r[5] || '',
-      actualUnit: r[6] || '',
-      orderAmount: parseFloat(r[7]) || 0,
-      notes: r[8] || '',
-      orderPrice: r[9] || '',
-      unitRecalc: parseFloat(r[10]) || 0,
-      allergens: r[13] || '',
-      storageLocation: r[16] || '',
+    const ingredients = await loadIngredients();
+    // Map to format expected by frontend (backward-compatible with old ingredient DB)
+    res.json(ingredients.map(ing => ({
+      id: ing.id,
+      name: ing.name,
+      supplierName: ing.supplierName,
+      category: ing.category,
+      unit: ing.unit,
+      source: ing.supplier,
+      orderCode: ing.orderCode,
+      orderUnit: ing.orderUnit,
+      orderUnitStandard: ing.orderUnitStandard,
+      orderPrice: ing.orderPrice || '',
+      orderAmount: ing.orderAmountGrams,
+      unitRecalc: ing.orderAmountGrams,
+      allergens: ing.allergens,
+      notes: ing.notes,
+      storageLocation: ing.storageLocation,
+      active: ing.active,
     })));
   } catch (e) {
     console.error('Ingredient DB error:', e.message);
-    // Return the error as data so frontend can display it
     res.json({ error: e.message, items: [] });
   }
+});
+
+// Full ingredient list (for the ingredient DB editor tab)
+app.get('/api/ingredients/full', async (req, res) => {
+  try {
+    const ingredients = await loadIngredients();
+    res.json(ingredients);
+  } catch (e) {
+    console.error('Ingredient DB error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Bulk save all ingredients
+app.post('/api/ingredients', async (req, res) => {
+  const ingredients = req.body;
+  if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'Expected array' });
+  try {
+    await withWriteLock(async () => {
+      const sheets = getSheetsClient();
+      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
+      await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['ingredients']);
+      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'ingredients', INGREDIENT_HEADERS, ingredients.map(ingredientToRow));
+    });
+    const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+    dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients`);
+    res.json({ ok: true, count: ingredients.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Upload and parse Hanos XLSX — returns parsed products for review
+// NOTE: specific routes like /upload-supplier and /migrate MUST come before /:id
+app.post('/api/ingredients/upload-supplier', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const ws = wb.Sheets['prices'] || wb.Sheets[wb.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+    if (data.length < 2) return res.json([]);
+    const headers = data[0];
+
+    // Find column indices
+    const col = (name) => headers.indexOf(name);
+    const titleIdx = col('title');
+    const codeIdx = col('artikelnummer');
+    const priceIdx = col('stukprijs');
+    const qtyIdx = col('hoeveelheid');
+    const stdQtyIdx = col('hoeveelheid_standaard');
+    const catIdx = col('categorie');
+    const subCatIdx = col('subcategorie');
+
+    // Find month columns for recent order detection
+    const monthCols = headers.map((h, i) => ({ name: h, idx: i }))
+      .filter(c => /^[A-Z][a-z]{2}-\d{2}$/.test(c.name));
+    const last6 = monthCols.slice(-6);
+
+    const products = data.slice(1).filter(r => r[titleIdx]).map(r => {
+      const recentOrders = last6.reduce((sum, mc) => sum + (parseFloat(r[mc.idx]) || 0), 0);
+      return {
+        title: r[titleIdx] || '',
+        orderCode: String(r[codeIdx] || ''),
+        price: r[priceIdx] != null ? parseFloat(r[priceIdx]) : null,
+        orderUnit: r[qtyIdx] || '',
+        orderUnitStandard: r[stdQtyIdx] || '',
+        category: r[catIdx] || '',
+        subcategory: r[subCatIdx] || '',
+        orderAmountGrams: parseHanosQuantityGrams(r[qtyIdx] || ''),
+        recentOrders: Math.round(recentOrders * 10) / 10,
+      };
+    });
+
+    res.json(products);
+  } catch (e) {
+    console.error('XLSX parse error:', e.message);
+    res.status(500).json({ error: 'Failed to parse file: ' + e.message });
+  }
+});
+
+// One-time migration: merge old CSV ingredient DB + Hanos XLSX
+app.post('/api/ingredients/migrate', upload.fields([
+  { name: 'oldCsv', maxCount: 1 },
+  { name: 'hanosXlsx', maxCount: 1 },
+]), async (req, res) => {
+  try {
+    const sheets = getSheetsClient();
+    if (!sheets || !CONFIG.DB_SHEET_ID) return res.status(503).json({ error: 'Sheets not configured' });
+
+    // Parse old CSV
+    const oldIngredients = [];
+    if (req.files.oldCsv && req.files.oldCsv[0]) {
+      const csvText = req.files.oldCsv[0].buffer.toString('utf8');
+      const lines = csvText.split('\n');
+      // Skip first 3 header lines (breda line, blank line, actual headers)
+      lines.slice(3).forEach(line => {
+        // Simple CSV parse (handles basic cases)
+        const cols = line.split(',');
+        const name = (cols[1] || '').trim();
+        if (!name || name === 'Name') return;
+        oldIngredients.push({
+          category: (cols[0] || '').trim(),
+          name,
+          unit: (cols[2] || 'Grams').trim(),
+          source: (cols[3] || '').trim(),
+          orderCode: (cols[6] || '').trim(),
+          notes: (cols[23] || '').trim(),
+          storageLocation: (cols[15] || '').trim(),
+          allergens: (cols[14] || '').trim(),
+        });
+      });
+    }
+
+    // Parse Hanos XLSX
+    const hanosByCode = {};
+    if (req.files.hanosXlsx && req.files.hanosXlsx[0]) {
+      const wb = XLSX.read(req.files.hanosXlsx[0].buffer, { type: 'buffer' });
+      const ws = wb.Sheets['prices'] || wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      data.slice(1).forEach(r => {
+        const code = String(r[1] || '');
+        if (code) {
+          hanosByCode[code] = {
+            title: r[0] || '',
+            price: r[3] != null ? parseFloat(r[3]) : null,
+            orderUnit: r[4] || '',
+            orderUnitStandard: r[5] || '',
+            category: r[18] || '',
+            orderAmountGrams: parseHanosQuantityGrams(r[4] || ''),
+          };
+        }
+      });
+    }
+
+    // Merge: old ingredients enriched with Hanos data
+    const merged = [];
+    const usedCodes = new Set();
+
+    oldIngredients.forEach(old => {
+      const id = crypto.randomUUID();
+      const code = old.orderCode.replace(/[^0-9]/g, '');
+      const hanos = code ? hanosByCode[code] : null;
+
+      merged.push({
+        id,
+        name: old.name,
+        supplierName: hanos ? hanos.title : '',
+        category: old.category || '',
+        unit: old.unit || 'Grams',
+        supplier: old.source || (hanos ? 'Hanos' : ''),
+        orderCode: code || '',
+        orderUnit: hanos ? hanos.orderUnit : '',
+        orderUnitStandard: hanos ? hanos.orderUnitStandard : '',
+        orderPrice: hanos ? hanos.price : null,
+        orderAmountGrams: hanos ? hanos.orderAmountGrams : 0,
+        allergens: old.allergens || '',
+        notes: old.notes || '',
+        storageLocation: old.storageLocation || '',
+        active: true,
+      });
+
+      if (code) usedCodes.add(code);
+    });
+
+    // Write to Google Sheets
+    await withWriteLock(async () => {
+      await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['ingredients']);
+      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'ingredients', INGREDIENT_HEADERS, merged.map(ingredientToRow));
+    });
+
+    const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+    dbAppendLog(user.email, user.name, 'ingredient-migration',
+      `Migrated ${merged.length} ingredients (${Object.keys(hanosByCode).length} Hanos products available, ${usedCodes.size} matched)`);
+
+    res.json({
+      ok: true,
+      total: merged.length,
+      hanosMatched: usedCodes.size,
+      hanosAvailable: Object.keys(hanosByCode).length,
+    });
+  } catch (e) {
+    console.error('Migration error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Save single ingredient (create or update) — must be after specific routes
+app.post('/api/ingredients/:id', async (req, res) => {
+  const ingredient = req.body;
+  if (!ingredient || !ingredient.name) return res.status(400).json({ error: 'name required' });
+  try {
+    await withWriteLock(async () => {
+      const sheets = getSheetsClient();
+      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
+      await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['ingredients']);
+      const existing = await readTab(sheets, CONFIG.DB_SHEET_ID, 'ingredients');
+      const all = existing.map(rowToIngredient);
+      const idx = all.findIndex(i => i.id === req.params.id);
+      if (idx >= 0) {
+        all[idx] = { ...all[idx], ...ingredient, id: req.params.id };
+      } else {
+        all.push({ ...ingredient, id: req.params.id });
+      }
+      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'ingredients', INGREDIENT_HEADERS, all.map(ingredientToRow));
+    });
+    const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+    dbAppendLog(user.email, user.name, 'ingredient', `saved "${ingredient.name}"`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete ingredient
+app.delete('/api/ingredients/:id', async (req, res) => {
+  try {
+    await withWriteLock(async () => {
+      const sheets = getSheetsClient();
+      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
+      const existing = await readTab(sheets, CONFIG.DB_SHEET_ID, 'ingredients');
+      const all = existing.map(rowToIngredient).filter(i => i.id !== req.params.id);
+      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'ingredients', INGREDIENT_HEADERS, all.map(ingredientToRow));
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/log', async (req, res) => {
@@ -938,6 +1219,32 @@ app.post('/api/feedback', requireAuth, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// INGREDIENT SEED — on first deploy, write seed data to Google Sheets
+// ─────────────────────────────────────────────────────────────────────────────
+async function seedIngredientsIfNeeded() {
+  if (fs.existsSync(INGREDIENTS_SEEDED_FLAG)) return;
+  if (!fs.existsSync(INGREDIENTS_SEED)) return;
+  const sheets = getSheetsClient();
+  if (!sheets || !CONFIG.DB_SHEET_ID) return;
+  try {
+    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['ingredients']);
+    const existing = await readTab(sheets, CONFIG.DB_SHEET_ID, 'ingredients');
+    if (existing.length > 0) {
+      console.log('Ingredients tab already has', existing.length, 'rows — skipping seed');
+      fs.writeFileSync(INGREDIENTS_SEEDED_FLAG, new Date().toISOString());
+      return;
+    }
+    const seed = JSON.parse(fs.readFileSync(INGREDIENTS_SEED, 'utf8'));
+    console.log('Seeding', seed.length, 'ingredients to Google Sheets...');
+    await writeTab(sheets, CONFIG.DB_SHEET_ID, 'ingredients', INGREDIENT_HEADERS, seed.map(ingredientToRow));
+    fs.writeFileSync(INGREDIENTS_SEEDED_FLAG, new Date().toISOString());
+    console.log('Ingredient seed complete:', seed.length, 'ingredients written');
+  } catch (e) {
+    console.error('Ingredient seed failed:', e.message);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('De Sering app v4 running on port ' + PORT);
@@ -946,4 +1253,6 @@ app.listen(PORT, () => {
   console.log('  DB_SHEET_ID:', CONFIG.DB_SHEET_ID ? 'set' : 'NOT SET');
   console.log('  GOOGLE_CREDENTIALS:', CONFIG.GOOGLE_CREDENTIALS !== '{}' ? 'set' : 'NOT SET');
   console.log('  ALLOWED_EMAILS:', CONFIG.ALLOWED_EMAILS.length ? CONFIG.ALLOWED_EMAILS.join(', ') : 'NOT SET (anyone can log in)');
+  // Seed ingredients on first deploy
+  seedIngredientsIfNeeded();
 });
