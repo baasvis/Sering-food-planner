@@ -346,56 +346,64 @@ function copySlotToOther(fromLoc, date, meal) {
 
 function openAddDishTyped(loc, date, meal, type) {
   const existing = (S.planner[`${loc}-${date}-${meal}`] || []).map(d => d.id);
-  renderAddModal(loc, date, meal, existing, false, '', type);
+  renderAddModal(loc, date, meal, existing, '', type, 'cooked');
 }
 
 function openAddDish(loc, date, meal) {
   const existing = (S.planner[`${loc}-${date}-${meal}`] || []).map(d => d.id);
-  renderAddModal(loc, date, meal, existing, false, '', '');
+  renderAddModal(loc, date, meal, existing, '', '', 'cooked');
 }
 
-function renderAddModal(loc, date, meal, existing, filterOn, searchQuery, typeFilter) {
+function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab) {
   const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
-  let avail = S.dishes.filter(d => !existing.includes(d.id));
-  if (typeFilter) avail = avail.filter(d => d.type === typeFilter);
-  if (filterOn) avail = avail.filter(d => d.logistics === locLabel);
-  if (searchQuery) {
-    const q = searchQuery.toLowerCase();
-    avail = avail.filter(d => d.name.toLowerCase().includes(q));
-  }
   const typeLabel = typeFilter ? ` (${typeFilter === 'Main course' ? 'Mains' : typeFilter + 's'})` : '';
+  const existingJson = JSON.stringify(existing).replace(/'/g, "\\'");
+  const tfEsc = typeFilter ? typeFilter.replace(/'/g, "\\'") : '';
+  const tf = `,'${tfEsc}'`;
 
-  // Existing dishes section
-  const opts = avail.length === 0
-    ? ''
-    : avail.map(d => {
-      const { diff, str, cls } = diffStr(d);
-      const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
-      const agHtml = allAg.slice(0, 4).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
-      const cookInfo = d.cookConfirmed ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
-      const stockLoc = logisticsShort(d.logistics || 'Sering West');
-      return `<div class="dish-opt" onclick="confirmAddDish('${d.id}','${loc}','${date}','${meal}')">
-        <div style="flex:1;">
-          <div><span style="font-weight:500;">${esc(d.name)}</span> ${typeBadge(d.type)} ${storageBadge(d.storage || 'Gastro')}</div>
-          <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
-            <span class="${cls}">${d.stock}L stock &middot; ${str}</span>
-            <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="font-size:10px;">${stockLoc}</span>
-            ${agHtml ? `<span>${agHtml}</span>` : ''}
-            ${cookInfo ? `<span style="color:var(--text3);">${cookInfo}</span>` : ''}
-          </div>
-        </div>
-      </div>`;
-    }).join('');
+  // Build filtered lists for counts and display
+  let allAvail = S.dishes.filter(d => !existing.includes(d.id));
+  if (typeFilter) allAvail = allAvail.filter(d => d.type === typeFilter);
 
-  // Recipes from index section — exclude recipes already on the menu
+  const cookedDishes = allAvail.filter(d => d.cookConfirmed && d.logistics === locLabel);
+  const plannedDishes = sortByCookDate(allAvail.filter(d => !d.cookConfirmed && (d.services || []).length > 0));
   const activeDishRecipeIds = new Set(S.dishes.map(d => d.recipeSheetId).filter(Boolean));
-  let recipes = S.recipeIndex.filter(r => !activeDishRecipeIds.has(r.recipeSheetId));
-  if (typeFilter) recipes = recipes.filter(r => r.type === typeFilter);
+  let allRecipes = S.recipeIndex.filter(r => !activeDishRecipeIds.has(r.recipeSheetId));
+  if (typeFilter) allRecipes = allRecipes.filter(r => r.type === typeFilter);
+
+  // Apply search filter
+  let filteredCooked = cookedDishes;
+  let filteredPlanned = plannedDishes;
+  let filteredRecipes = allRecipes;
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
-    recipes = recipes.filter(r => r.name.toLowerCase().includes(q));
+    filteredCooked = cookedDishes.filter(d => d.name.toLowerCase().includes(q));
+    filteredPlanned = plannedDishes.filter(d => d.name.toLowerCase().includes(q));
+    filteredRecipes = allRecipes.filter(r => r.name.toLowerCase().includes(q));
   }
-  const recipeOpts = recipes.slice(0, 15).map(r => {
+
+  // Render dish options helper
+  const renderDishOpts = (dishes) => dishes.map(d => {
+    const { diff, str, cls } = diffStr(d);
+    const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
+    const agHtml = allAg.slice(0, 4).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
+    const cookInfo = d.cookConfirmed ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
+    const stockLoc = logisticsShort(d.logistics || 'Sering West');
+    return `<div class="dish-opt" onclick="confirmAddDish('${d.id}','${loc}','${date}','${meal}')">
+      <div style="flex:1;">
+        <div><span style="font-weight:500;">${esc(d.name)}</span> ${typeBadge(d.type)} ${storageBadge(d.storage || 'Gastro')}</div>
+        <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
+          <span class="${cls}">${d.stock}L stock &middot; ${str}</span>
+          <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="font-size:10px;">${stockLoc}</span>
+          ${agHtml ? `<span>${agHtml}</span>` : ''}
+          ${cookInfo ? `<span style="color:var(--text3);">${cookInfo}</span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Render recipe options helper
+  const renderRecipeOpts = (recipes) => recipes.slice(0, 20).map(r => {
     const ags = (r.allergens || []).slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
     return `<div class="dish-opt" onclick="addRecipeToSlot('${r.id}','${loc}','${date}','${meal}')">
       <div style="flex:1;">
@@ -408,31 +416,34 @@ function renderAddModal(loc, date, meal, existing, filterOn, searchQuery, typeFi
     </div>`;
   }).join('');
 
-  const existingJson = JSON.stringify(existing).replace(/'/g, "\\'");
-  const tfEsc = typeFilter ? typeFilter.replace(/'/g, "\\'") : '';
-  const tf = `,'${tfEsc}'`;
-
+  // Build list content based on active tab
   let listHtml = '';
-  if (opts) {
-    listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;padding:6px 10px;">On the menu</div>`;
-    listHtml += opts;
+  if (tab === 'cooked') {
+    listHtml = filteredCooked.length > 0 ? renderDishOpts(filteredCooked)
+      : `<div class="empty">No cooked dishes at ${locLabel}${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
+  } else if (tab === 'planned') {
+    listHtml = filteredPlanned.length > 0 ? renderDishOpts(filteredPlanned)
+      : `<div class="empty">No planned dishes${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
+  } else {
+    listHtml = filteredRecipes.length > 0 ? renderRecipeOpts(filteredRecipes)
+      : `<div class="empty">No recipes available${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
   }
-  if (recipeOpts) {
-    listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;padding:6px 10px;${opts ? 'border-top:2px solid var(--border);margin-top:2px;' : ''}">From recipes</div>`;
-    listHtml += recipeOpts;
-  }
-  if (!listHtml) {
-    listHtml = `<div class="empty">No dishes or recipes available${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
-  }
+
+  // Tab bar
+  const tabs = [
+    { id: 'cooked', label: 'Cooked', count: filteredCooked.length },
+    { id: 'planned', label: 'Planned', count: filteredPlanned.length },
+    { id: 'recipes', label: 'Recipes', count: filteredRecipes.length },
+  ];
+  const tabBar = `<div class="sub-tab-bar" style="margin-bottom:10px;">${tabs.map(t =>
+    `<button class="sub-tab ${tab === t.id ? 'active' : ''}" onclick="renderAddModal('${loc}','${date}','${meal}',${existingJson},document.getElementById('planner-search').value${tf},'${t.id}')">${t.label} <span style="opacity:.6;font-size:11px;">${t.count}</span></button>`
+  ).join('')}</div>`;
 
   const dayName = dateToDayName(date);
   showModal(`<h3>Add${typeLabel} to ${dayName} ${meal} &middot; ${locLabel}</h3>
-    <input type="text" class="dish-search" id="planner-search" placeholder="Search dishes & recipes..." value="${esc(searchQuery)}"
-      oninput="renderAddModal('${loc}','${date}','${meal}',${existingJson},${filterOn},this.value${tf})" />
-    ${opts ? `<div class="filter-toggle-row" onclick="renderAddModal('${loc}','${date}','${meal}',${existingJson},${!filterOn},''${tf})">
-      <div class="tbox${filterOn ? ' on' : ''}"><div class="tknob"></div></div>
-      <span>Only show dishes at ${locLabel}</span>
-    </div>` : ''}
+    <input type="text" class="dish-search" id="planner-search" placeholder="Search..." value="${esc(searchQuery)}"
+      oninput="renderAddModal('${loc}','${date}','${meal}',${existingJson},this.value${tf},'${tab}')" />
+    ${tabBar}
     <div class="dish-opts-list" style="max-height:340px;">${listHtml}</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
   const si = document.getElementById('planner-search');
@@ -474,7 +485,7 @@ function addRecipeToSlot(recipeId, loc, date, meal) {
   };
   S.dishes.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-  toast(`${r.name} added to ${DAYS[day]} ${meal}`);
+  toast(`${r.name} added to ${dateToDayName(date)} ${meal}`);
 }
 
 // ── INVENTORY ────────────────────────────────────────────
