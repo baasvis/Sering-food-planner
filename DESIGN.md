@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-03-20*
+*Last updated: 2026-03-21*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -77,9 +77,15 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 
 **Completed features:**
 - Dashboard with today's menu, guests, stock alerts, week overview
-- Guest count tables per location (West + Centraal) with live totals and dates
+- Guest count tables per location (West + Centraal) with live totals, day-by-day navigation (today ±14 days), editable for current and future weeks
+- Guest prediction from historical POS data: upload Tebi or Lightspeed CSV exports, auto-detect format, predict guest counts using winsorized weighted averages with trend detection
+  - Supports 3 CSV formats: Tebi ProductOrdersReport, Tebi ProductReportByProfitCenter, Lightspeed receipt-items
+  - Location detection: Tebi uses device ID mapping or Profit Center column; Lightspeed = always Centraal
+  - Staff meals split by time (before 17:00 = lunch, after = dinner), included in totals with separate "X staff" indicator
+  - Multiple sources for same day are averaged (not summed) to prevent double-counting during POS transition
+  - "Apply predictions" button fills guest inputs; staff can manually adjust for events/reservations
 - Unified Week Plan tab with sub-tabs: Sering West, Sering Centraal, To Transport, Caterings, Overview
-- Location sub-tabs: calendar grid organised by dish type (Soups/Mains/Desserts), each with day×meal slots + dish list below with inline editing
+- Location sub-tabs: calendar grid organised by dish type (Soups/Mains/Desserts), each with day×meal slots + dish list below with inline editing. Day-by-day navigation (today ±14 days), same as Guests tab
 - Dish lists split into "To cook" / "Cooked" sections, sorted by cook date
 - Cook date column: red highlight when unset, bold when planned. Stock locked until marked as cooked, auto-fills to required amount on cook.
 - Requirement breakdown tooltip on +/- column (hover to see per-service and per-catering demand)
@@ -106,7 +112,8 @@ public/
     utils.js           — API, save system, toast, ingredient DB loading
     core.js            — Planner rebuild, calculations, badges, served/archive
     dashboard.js       — Dashboard screen
-    guests.js          — Guest counts screen
+    predictions.js     — CSV parsing (Tebi + Lightspeed), categorization, prediction engine, shared day-navigation helpers
+    guests.js          — Guest counts screen, upload UI, predictions display
     planner.js         — Week plan: sub-tabs, location grids, transport view, add-dish modal
     dishes.js          — Dish rows, overview, cook workflow, inline editing (~750 lines, largest module)
     caterings.js       — Caterings CRUD, dish picker, auto-calculated requirements
@@ -117,6 +124,8 @@ public/
 server.js              — Express server
 data/
   standard-inventory.json  — Standard inventory (gitignored, persisted on server)
+  guest-history.json       — Aggregated historical guest counts from POS exports (gitignored)
+  guests-next-weeks.json   — Manually edited guest counts for future weeks (gitignored)
 .env                   — Local environment variables (gitignored)
 DESIGN.md              — This document
 SETUP_GUIDE.md         — Installation instructions
@@ -135,6 +144,8 @@ SETUP_GUIDE.md         — Installation instructions
 | Feedback | timestamp, user, type, screen, text, userAgent | feedback |
 | Ingredient DB | name, unit, source, costPer100, orderType, orderCode, orderAmount, allergens, storageLocation | separate sheet |
 | Standard Inventory | id, name, amount, unit | data/standard-inventory.json (server-side) |
+| Guest History | location, meal (lunch/dinner/staff_lunch/staff_dinner), date → count | data/guest-history.json (server-side, from POS uploads) |
+| Guests Next Weeks | mondayKey → location → day → meal → count | data/guests-next-weeks.json (server-side) |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -224,7 +235,7 @@ The order of everything below is flexible. Build thin slices first, deepen based
 ### Current: Simple Monolith (good for many more modules)
 ```
 Browser ←→ Express Server ←→ Google Sheets (dishes, guests, recipes, ingredient DB)
-                            ←→ data/ JSON files (standard inventory)
+                            ←→ data/ JSON files (standard inventory, guest history, next-week guests)
 ```
 - Single Node.js app on Railway
 - Google Sheets as database
