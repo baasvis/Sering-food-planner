@@ -339,6 +339,11 @@ All chosen for: (1) Claude compatibility, (2) stability, (3) readability by non-
 - Commit messages explain what AND why
 - Lots of inline comments explaining business logic
 
+### Tutorial Maintenance Rule
+**Every time a new feature is added or an existing feature is modified, the in-app tutorial steps for that page must be updated to match.**
+
+The tutorials live in `public/js/tutorial.js`, organised by screen name (`dashboard`, `guests`, `planner`, `recipes`, `orders`). Each step is a plain object with a `selector`, `title`, and `body`. When you add a new section to a page, add a corresponding step. When you rename or restructure something, update the step that references it. The tutorials are the first thing a new cook reads — keeping them accurate is as important as keeping the code working.
+
 ---
 
 ## 7. Data Ownership & Security
