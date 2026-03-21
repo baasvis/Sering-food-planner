@@ -35,6 +35,9 @@ let S = {
   dashboardLoc:'west',
   dashVegMode:'combined',
   dashVegModeTomorrow:'combined',
+  guestHistory:null,
+  predictions:null,
+  guestsNextWeeks:{},
 };
 
 // ═══════════════════════════════════════════════════════════════════

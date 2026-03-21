@@ -81,6 +81,9 @@ async function loadData() {
     rebuildPlanner();
     // Load ingredient DB in background (for order overview)
     loadIngredientDb();
+    // Load guest history + next weeks in background (for Guests tab)
+    loadGuestHistory();
+    loadGuestsNextWeeks();
   } catch (e) {
     console.warn('Could not load from server, using defaults');
     toastError('Could not load data: ' + e.message);
@@ -114,6 +117,42 @@ async function loadIngredientDb() {
     ingredientDbLoaded = true;
     ingredientDbError = e.message || 'Unknown error';
   }
+}
+
+async function loadGuestHistory() {
+  try {
+    const data = await apiGet('/api/guest-history');
+    S.guestHistory = data;
+    if (data && (data.west || data.centraal)) {
+      S.predictions = predictGuests(data);
+    }
+  } catch (e) {
+    console.warn('Could not load guest history:', e.message);
+  }
+}
+
+async function loadGuestsNextWeeks() {
+  try {
+    const data = await apiGet('/api/guests-next-weeks');
+    if (data && typeof data === 'object') S.guestsNextWeeks = data;
+  } catch (e) {
+    console.warn('Could not load next weeks data:', e.message);
+  }
+}
+
+let _nextWeeksSaveTimer = null;
+function scheduleNextWeeksSave() {
+  if (_nextWeeksSaveTimer) clearTimeout(_nextWeeksSaveTimer);
+  setSaveState('unsaved');
+  _nextWeeksSaveTimer = setTimeout(async () => {
+    setSaveState('saving');
+    try {
+      await apiPost('/api/guests-next-weeks', S.guestsNextWeeks);
+      setSaveState('saved', 'Saved');
+    } catch (e) {
+      setSaveState('error', 'Save failed');
+    }
+  }, 1500);
 }
 
 function toast(msg) {

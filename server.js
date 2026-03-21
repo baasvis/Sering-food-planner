@@ -21,6 +21,8 @@ const { OAuth2Client } = require('google-auth-library');
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const STD_INV_FILE = path.join(DATA_DIR, 'standard-inventory.json');
+const GUEST_HIST_FILE = path.join(DATA_DIR, 'guest-history.json');
+const GUEST_NEXT_FILE = path.join(DATA_DIR, 'guests-next-weeks.json');
 const STD_INV_SEED = path.join(__dirname, 'seeds', 'standard-inventory.json');
 // Seed from default inventory on first deploy if no data file exists yet
 if (!fs.existsSync(STD_INV_FILE) && fs.existsSync(STD_INV_SEED)) {
@@ -687,6 +689,71 @@ app.post('/api/standard-inventory', (req, res) => {
   if (!Array.isArray(items)) return res.status(400).json({ error: 'Expected array' });
   try {
     fs.writeFileSync(STD_INV_FILE, JSON.stringify(items, null, 2));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Guest history (aggregated Tebi data for predictions) ─────────────────────
+
+app.get('/api/guest-history', (req, res) => {
+  try {
+    const data = fs.existsSync(GUEST_HIST_FILE)
+      ? JSON.parse(fs.readFileSync(GUEST_HIST_FILE, 'utf8'))
+      : {};
+    res.json(data);
+  } catch (e) {
+    res.json({});
+  }
+});
+
+app.post('/api/guest-history', (req, res) => {
+  const incoming = req.body;
+  if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'Expected object' });
+  try {
+    const existing = fs.existsSync(GUEST_HIST_FILE)
+      ? JSON.parse(fs.readFileSync(GUEST_HIST_FILE, 'utf8'))
+      : {};
+    // Deep merge: for each location → each meal type → merge date keys
+    for (const loc of ['west', 'centraal']) {
+      if (!incoming[loc]) continue;
+      if (!existing[loc]) existing[loc] = {};
+      for (const meal of ['lunch', 'dinner', 'staff']) {
+        if (!incoming[loc][meal]) continue;
+        if (!existing[loc][meal]) existing[loc][meal] = {};
+        Object.assign(existing[loc][meal], incoming[loc][meal]);
+      }
+    }
+    if (incoming.deviceMap) {
+      existing.deviceMap = { ...(existing.deviceMap || {}), ...incoming.deviceMap };
+    }
+    existing.lastUpdated = new Date().toISOString();
+    fs.writeFileSync(GUEST_HIST_FILE, JSON.stringify(existing, null, 2));
+    res.json({ ok: true, dates: Object.keys(existing.west?.lunch || {}).length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Guests next weeks (editable future week data) ────────────────────────────
+
+app.get('/api/guests-next-weeks', (req, res) => {
+  try {
+    const data = fs.existsSync(GUEST_NEXT_FILE)
+      ? JSON.parse(fs.readFileSync(GUEST_NEXT_FILE, 'utf8'))
+      : {};
+    res.json(data);
+  } catch (e) {
+    res.json({});
+  }
+});
+
+app.post('/api/guests-next-weeks', (req, res) => {
+  const data = req.body;
+  if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Expected object' });
+  try {
+    fs.writeFileSync(GUEST_NEXT_FILE, JSON.stringify(data, null, 2));
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
