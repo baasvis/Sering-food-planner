@@ -29,6 +29,7 @@ const STD_INV_FILE = path.join(DATA_DIR, 'standard-inventory.json');
 const STD_INV_SEED = path.join(__dirname, 'seeds', 'standard-inventory.json');
 const INGREDIENTS_SEED = path.join(__dirname, 'seeds', 'ingredients.json');
 const INGREDIENTS_SEEDED_FLAG = path.join(DATA_DIR, '.ingredients-seeded');
+const PREP_CHECKLIST_FILE = path.join(DATA_DIR, 'prep-checklist.json');
 // Seed from default inventory on first deploy if no data file exists yet
 if (!fs.existsSync(STD_INV_FILE) && fs.existsSync(STD_INV_SEED)) {
   fs.copyFileSync(STD_INV_SEED, STD_INV_FILE);
@@ -990,6 +991,46 @@ app.post('/api/standard-inventory', (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── Prep Checklist (server-side JSON, keyed by loc+date, auto-expires) ────────
+
+function loadPrepChecklistFile() {
+  try {
+    if (fs.existsSync(PREP_CHECKLIST_FILE))
+      return JSON.parse(fs.readFileSync(PREP_CHECKLIST_FILE, 'utf8'));
+  } catch (e) {}
+  return {};
+}
+
+function savePrepChecklistFile(data) {
+  // Auto-expire entries older than 3 days
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 3);
+  const cutoffStr = cutoff.toISOString().slice(0, 10); // YYYY-MM-DD
+  for (const key of Object.keys(data)) {
+    // key format: "west-YYYY-MM-DD"
+    const dash = key.indexOf('-');
+    const isoDate = key.slice(dash + 1);
+    if (isoDate < cutoffStr) delete data[key];
+  }
+  fs.writeFileSync(PREP_CHECKLIST_FILE, JSON.stringify(data, null, 2));
+}
+
+app.get('/api/prep-checklist', (req, res) => {
+  const { loc, date } = req.query;
+  if (!loc || !date) return res.status(400).json({ error: 'loc and date required' });
+  const data = loadPrepChecklistFile();
+  res.json(data[`${loc}-${date}`] || []);
+});
+
+app.post('/api/prep-checklist', (req, res) => {
+  const { loc, date, checked } = req.body;
+  if (!loc || !date) return res.status(400).json({ error: 'loc and date required' });
+  const data = loadPrepChecklistFile();
+  data[`${loc}-${date}`] = Array.isArray(checked) ? checked : [];
+  savePrepChecklistFile(data);
+  res.json({ ok: true });
 });
 
 // ── Guest history (aggregated Tebi data for predictions) — stored in Google Sheets ──

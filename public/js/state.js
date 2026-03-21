@@ -35,6 +35,11 @@ let S = {
   dashboardLoc:'west',
   dashVegMode:'combined',
   dashVegModeTomorrow:'combined',
+  prepChecklist: {}, // keyed by loc, value is Set of checked ingredient keys
+  heatChecked: new Set(),   // dish IDs ticked off in Heat Up
+  cookChecked: new Set(),   // dish IDs ticked off in Cook
+  customTodos: [],          // [{id, text, done}] freeform team todos
+  teamTodosOpen: false,     // floating panel expanded state
   guestHistory:null,
   predictions:null,
   guestsNextWeeks:{},

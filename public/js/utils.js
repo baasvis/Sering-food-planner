@@ -170,3 +170,36 @@ function toastError(msg) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// PREP CHECKLIST API
+// ═══════════════════════════════════════════════════════════════════
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+async function loadPrepChecklist(loc) {
+  try {
+    const data = await apiGet(`/api/prep-checklist?loc=${loc}&date=${todayIso()}`);
+    S.prepChecklist[loc] = new Set(Array.isArray(data) ? data : []);
+  } catch (e) {
+    S.prepChecklist[loc] = new Set();
+  }
+}
+
+let _prepSaveTimer = null;
+function schedulePrepSave(loc) {
+  if (_prepSaveTimer) clearTimeout(_prepSaveTimer);
+  _prepSaveTimer = setTimeout(async () => {
+    try {
+      await apiPost('/api/prep-checklist', {
+        loc,
+        date: todayIso(),
+        checked: [...(S.prepChecklist[loc] || new Set())],
+      });
+    } catch (e) {
+      console.warn('Could not save prep checklist:', e.message);
+    }
+  }, 600);
+}
+
+// ═══════════════════════════════════════════════════════════════════
