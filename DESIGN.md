@@ -104,8 +104,22 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 
 **File structure:**
 ```
+server.js              — Express app entry point, mounts routers (~65 lines)
+lib/
+  config.js            — Configuration, env vars, file paths
+  sheets.js            — Google Sheets client, row converters, validation, write lock
+routes/
+  auth.js              — Login, logout, session, requireAuth middleware
+  data.js              — GET/POST /api/data (main planner state)
+  recipes.js           — Recipe index CRUD + single recipe fetch
+  ingredients.js       — Ingredient CRUD + Hanos XLSX parser + upload
+  guests.js            — Guest history + next-weeks predictions
+  inventory.js         — Standard inventory + prep checklist + activity log
+  feedback.js          — User feedback
+  health.js            — Health check endpoint
 public/
-  index.html           (~500 lines — HTML + CSS skeleton)
+  index.html           — HTML shell + login screen (~75 lines)
+  style.css            — All CSS styles (~620 lines)
   js/
     state.js           — Constants, app state
     auth.js            — Google Sign-In, sessions
@@ -115,16 +129,24 @@ public/
     predictions.js     — CSV parsing (Tebi + Lightspeed), categorization, prediction engine, shared day-navigation helpers
     guests.js          — Guest counts screen, upload UI, predictions display
     planner.js         — Week plan: sub-tabs, location grids, transport view, add-dish modal
-    dishes.js          — Dish rows, overview, cook workflow, inline editing (~750 lines, largest module)
+    dishes.js          — Dish rows, overview, cook workflow, inline editing
     caterings.js       — Caterings CRUD, dish picker, auto-calculated requirements
     recipes.js         — Recipe index screen
     orders.js          — Order overview (3-tab: Combined Order / Standard Inventory / Dish Ingredients)
+    ingredient-db.js   — Ingredient database editor + supplier import
     feedback.js        — Feedback button and form
+    tutorial.js        — Interactive guided tutorial system
     init.js            — Modal, HTML escape, app init
-server.js              — Express server
 data/
   standard-inventory.json  — Standard inventory (gitignored, persisted on server)
+seeds/
+  ingredients.json     — Master ingredient database (~2,100 items, seed for first deploy)
+  standard-inventory.json  — Default weekly base order (~140 items)
+scripts/
+  migrate-ingredients.js   — One-time ingredient migration utility
+  import-standard-inventory.js — One-time standard inventory import
 .env                   — Local environment variables (gitignored)
+CLAUDE.md              — Claude Code project instructions
 DESIGN.md              — This document
 SETUP_GUIDE.md         — Installation instructions
 ```
