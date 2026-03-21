@@ -435,19 +435,33 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab)
     { id: 'planned', label: 'Planned', count: filteredPlanned.length },
     { id: 'recipes', label: 'Recipes', count: filteredRecipes.length },
   ];
-  const tabBar = `<div class="sub-tab-bar" style="margin-bottom:10px;">${tabs.map(t =>
-    `<button class="sub-tab ${tab === t.id ? 'active' : ''}" onclick="renderAddModal('${loc}','${date}','${meal}',${existingJson},document.getElementById('planner-search').value${tf},'${t.id}')">${t.label} <span style="opacity:.6;font-size:11px;">${t.count}</span></button>`
-  ).join('')}</div>`;
+  const tabBarHtml = tabs.map(t =>
+    `<button class="sub-tab ${tab === t.id ? 'active' : ''}" onclick="event.stopPropagation();updateAddModal('${loc}','${date}','${meal}',${existingJson}${tf},'${t.id}')">${t.label} <span style="opacity:.6;font-size:11px;">${t.count}</span></button>`
+  ).join('');
 
+  // If the modal is already open, only update the dynamic parts (tabs + list)
+  const existingModal = document.getElementById('add-modal-tabs');
+  if (existingModal) {
+    existingModal.innerHTML = tabBarHtml;
+    document.getElementById('add-modal-list').innerHTML = listHtml;
+    return;
+  }
+
+  // First open — render the full modal
   const dayName = dateToDayName(date);
   showModal(`<h3>Add${typeLabel} to ${dayName} ${meal} &middot; ${locLabel}</h3>
     <input type="text" class="dish-search" id="planner-search" placeholder="Search..." value="${esc(searchQuery)}"
-      oninput="renderAddModal('${loc}','${date}','${meal}',${existingJson},this.value${tf},'${tab}')" />
-    ${tabBar}
-    <div class="dish-opts-list" style="max-height:340px;">${listHtml}</div>
+      oninput="updateAddModal('${loc}','${date}','${meal}',${existingJson}${tf},'${tab}')" />
+    <div class="sub-tab-bar" style="margin-bottom:10px;" id="add-modal-tabs">${tabBarHtml}</div>
+    <div class="dish-opts-list" style="max-height:340px;" id="add-modal-list">${listHtml}</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
   const si = document.getElementById('planner-search');
   if (si) { si.focus(); si.setSelectionRange(si.value.length, si.value.length); }
+}
+
+function updateAddModal(loc, date, meal, existing, typeFilter, tab) {
+  const searchQuery = (document.getElementById('planner-search') || {}).value || '';
+  renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab);
 }
 
 function confirmAddDish(dishId, loc, date, meal) {
