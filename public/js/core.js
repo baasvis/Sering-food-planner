@@ -6,32 +6,48 @@ function getAmsterdamNow() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
 }
 
-// Check if a service (lunch/dinner on a specific day) is past / "served"
-// A service is served when:
-// - The day is before today, OR
-// - Today + clock past deadline (lunch 13:45 / dinner 20:15), OR
-// - Today + inventory was done after the button turned urgent (lunch urgent at 12:45, dinner at 19:15)
-function isServicePast(svc) {
-  const now = getAmsterdamNow();
-  const todayIdx = (now.getDay() + 6) % 7; // 0=Mon, 6=Sun
-  if (svc.day < todayIdx) return true;      // past day
-  if (svc.day > todayIdx) return false;     // future day
-  // Today — check time and inventory state
-  const mins = now.getHours() * 60 + now.getMinutes();
-  const loc = svc.loc === 'west' ? 'west' : 'centraal';
+// Shared helper: check if a meal on a given date is served (past).
+// Used by both isServicePast (dayIdx-based, for current-week stock calc)
+// and isSlotServed (date-based, for grid rendering across weeks).
+function _isMealServed(now, mins, meal, loc) {
+  const lk = loc === 'west' ? 'west' : 'centraal';
   const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
-  const inv = S.inventoryDone[loc] || {};
-  if (svc.meal === 'lunch') {
+  const inv = S.inventoryDone[lk] || {};
+  if (meal === 'lunch') {
     const deadline = 13 * 60 + 45;     // 13:45
     const urgentFrom = deadline - 60;   // 12:45
     return mins >= deadline || (inv.lunch === todayStr && mins >= urgentFrom);
   }
-  if (svc.meal === 'dinner') {
+  if (meal === 'dinner') {
     const deadline = 20 * 60 + 15;     // 20:15
     const urgentFrom = deadline - 60;   // 19:15
     return mins >= deadline || (inv.dinner === todayStr && mins >= urgentFrom);
   }
   return false;
+}
+
+// Check if a service (lunch/dinner on a specific dayIdx) is past / "served".
+// dayIdx is 0=Mon..6=Sun, always relative to the CURRENT week.
+// Used by calcRequired / calcRequiredBreakdown / calcTotalGuests.
+function isServicePast(svc) {
+  const now = getAmsterdamNow();
+  const todayIdx = (now.getDay() + 6) % 7; // 0=Mon, 6=Sun
+  if (svc.day < todayIdx) return true;      // past day this week
+  if (svc.day > todayIdx) return false;     // future day this week
+  // Today — check time and inventory state
+  return _isMealServed(now, now.getHours() * 60 + now.getMinutes(), svc.meal, svc.loc);
+}
+
+// Check if a calendar slot (with actual Date) is served.
+// Used by planner grid rendering — works correctly across week boundaries.
+function isSlotServed(date, meal, loc) {
+  const now = getAmsterdamNow();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const slotDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  if (slotDay < today) return true;       // past date
+  if (slotDay > today) return false;      // future date
+  // Today — check time and inventory state
+  return _isMealServed(now, now.getHours() * 60 + now.getMinutes(), meal, loc);
 }
 
 function rebuildPlanner() {
