@@ -89,6 +89,19 @@ function sortByCookDate(dishes) {
 function getGuests(loc, dateStr, meal) {
   const lk = loc === 'west' ? 'west' : 'centraal';
   const dn = dateToDayName(dateStr);
+
+  // Check S.guestsNextWeeks for this date's week
+  const d = new Date(dateStr + 'T12:00:00');
+  const dow = d.getDay();
+  const mon = new Date(d);
+  mon.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
+  const mk = dateToIso(mon);
+  const weekData = S.guestsNextWeeks[mk];
+  if (weekData && weekData[lk] && weekData[lk][dn] && weekData[lk][dn][meal] !== undefined) {
+    return weekData[lk][dn][meal];
+  }
+
+  // Fall back to current week's base guest counts
   return ((S.guests[lk] || {})[dn] || {})[meal] || 0;
 }
 
