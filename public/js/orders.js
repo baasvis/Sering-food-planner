@@ -79,7 +79,7 @@ function renderStorageBadge(db, loc) {
   const building = loc || currentOrdersLoc || 'west';
   const s = db.storageLocations[building];
   const label = formatStorageLoc(s);
-  if (!label) return '';
+  if (!label) return `<span class="stock-badge" style="cursor:pointer;font-size:10px;color:var(--text2);border:1px dashed var(--border2);" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to set">No location set</span>`;
   const cat = getStorageCategory(db, building);
   const color = cat ? getStorageColor(cat, building) : '#999';
   return `<span class="stock-badge" style="cursor:pointer;font-size:10px;background:${color}22;color:${color};border:1px solid ${color}44;" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to edit">${esc(label)}</span>`;
