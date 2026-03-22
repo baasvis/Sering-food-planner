@@ -6,12 +6,23 @@ let ingredientDbFullLoaded = false;
 let ingredientDbSearch = '';
 let ingredientDbTypeFilter = 'all'; // 'all' | 'Food' | 'Drinks' | 'Non-food'
 let ingredientDbCatFilter = 'all';  // 'all' | category name
-let ingredientDbStatusFilter = 'all'; // 'all' | 'active' | 'inactive'
+let ingredientDbStatusFilter = 'active'; // 'all' | 'active' | 'inactive'
 let ingredientDbSort = 'name';   // 'name' | 'supplier' | 'category' | 'type'
 let ingredientDbEditId = null;   // id of ingredient being edited inline
 let supplierUploadData = null;   // parsed Hanos XLSX data for import
 let ingredientDbPage = 0;        // current page for pagination
 const INGREDIENTS_PER_PAGE = 50;
+
+function updateIngredientSearch(el) {
+  const pos = el.selectionStart;
+  ingredientDbSearch = el.value;
+  ingredientDbPage = 0;
+  renderOrders();
+  requestAnimationFrame(() => {
+    const input = document.getElementById('ing-db-search');
+    if (input) { input.focus(); input.setSelectionRange(pos, pos); }
+  });
+}
 
 async function loadIngredientDbFull() {
   try {
@@ -123,7 +134,7 @@ function renderIngredientDbTab() {
       <span>Ingredient Database (${ingredientDbFull.length} total, ${filtered.length} shown)</span>
       <div style="display:flex;gap:8px;align-items:center;">
         <button class="btn btn-sm" onclick="openAddIngredientModal()">+ Add ingredient</button>
-        <button class="btn btn-sm" onclick="openStorageLocationsModal()">Manage locations</button>
+        <button class="btn btn-sm" onclick="openStorageLocationsModal()">Storage locations</button>
         <button class="btn btn-sm" onclick="openMigrationModal()">Migrate DB</button>
         <label class="btn btn-sm" style="cursor:pointer;">
           Upload Hanos XLSX
@@ -140,7 +151,7 @@ function renderIngredientDbTab() {
         <button class="ing-type-pill${ingredientDbTypeFilter==='Non-food'?' active':''}" onclick="ingredientDbTypeFilter='Non-food';ingredientDbCatFilter='all';ingredientDbPage=0;renderOrders()">Non-food</button>
       </div>
       <input type="text" class="dish-search" style="flex:1;min-width:180px;margin:0;" placeholder="Search name, supplier, code..."
-        value="${esc(ingredientDbSearch)}" oninput="ingredientDbSearch=this.value;ingredientDbPage=0;renderOrders()" />
+        id="ing-db-search" value="${esc(ingredientDbSearch)}" oninput="updateIngredientSearch(this)" />
       <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbCatFilter=this.value;ingredientDbPage=0;renderOrders()">
         ${catOptions}
       </select>
@@ -200,7 +211,7 @@ function renderIngredientDbTab() {
             <div style="font-size:11px;color:var(--text3);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(ing.supplierName||'')}">${esc(ing.supplierName || '')}</div>
           </td>
           <td>${renderTypePills(ing.types)}</td>
-          <td style="font-size:12px;">${esc(ing.category || '—')}</td>
+          <td style="font-size:12px;cursor:pointer;color:var(--blue);" onclick="showInlineCategoryEdit('${esc(ing.id)}',this)" title="Click to change">${esc(ing.category || '—')}</td>
           <td style="font-size:12px;">${esc(ing.supplier || '—')}</td>
           <td>${ing.orderCode ? '<span class="order-code">' + esc(ing.orderCode) + '</span>' : '<span style="color:var(--text3);">—</span>'}</td>
           <td style="font-size:12px;">${ing.orderUnit ? esc(ing.orderUnit) : esc(ing.unit || '—')}${ing.orderPrice ? ' · \u20AC' + Number(ing.orderPrice).toFixed(2) : ''}</td>
@@ -252,13 +263,16 @@ function renderIngredientEditRow(ing) {
     `<option value="${esc(c)}"${ing.category===c?' selected':''}>${esc(c)}</option>`
   ).join('');
 
-  // Storage location dropdowns
-  const westOpts = '<option value="">—</option>' + STORAGE_LOCATIONS.west.map(l =>
-    `<option value="${esc(l)}"${storLocs.west===l?' selected':''}>${esc(l)}</option>`
-  ).join('');
-  const centraalOpts = '<option value="">—</option>' + STORAGE_LOCATIONS.centraal.map(l =>
-    `<option value="${esc(l)}"${storLocs.centraal===l?' selected':''}>${esc(l)}</option>`
-  ).join('');
+  // Storage location dropdowns (category + location per building)
+  const storageCatNames = Object.keys(STORAGE_CATEGORIES);
+  const westCat = (storLocs.west && storLocs.west.category) || '';
+  const westLoc = (storLocs.west && storLocs.west.location) || '';
+  const centraalCat = (storLocs.centraal && storLocs.centraal.category) || '';
+  const centraalLoc = (storLocs.centraal && storLocs.centraal.location) || '';
+  const westCatOpts = '<option value="">—</option>' + storageCatNames.map(c => `<option value="${esc(c)}"${westCat===c?' selected':''}>${esc(c)}</option>`).join('');
+  const westLocOpts = '<option value="">—</option>' + (westCat && STORAGE_CATEGORIES[westCat] ? STORAGE_CATEGORIES[westCat] : []).map(l => `<option value="${esc(l)}"${westLoc===l?' selected':''}>${esc(l)}</option>`).join('');
+  const centraalCatOpts = '<option value="">—</option>' + storageCatNames.map(c => `<option value="${esc(c)}"${centraalCat===c?' selected':''}>${esc(c)}</option>`).join('');
+  const centraalLocOpts = '<option value="">—</option>' + (centraalCat && STORAGE_CATEGORIES[centraalCat] ? STORAGE_CATEGORIES[centraalCat] : []).map(l => `<option value="${esc(l)}"${centraalLoc===l?' selected':''}>${esc(l)}</option>`).join('');
 
   return `<tr style="background:var(--bg2);">
     <td colspan="10" style="padding:12px;">
@@ -335,12 +349,20 @@ function renderIngredientEditRow(ing) {
 
           <div class="ing-edit-row">
             <div style="flex:1;">
-              <label class="ing-edit-label">Storage West</label>
-              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageWest">${westOpts}</select>
+              <label class="ing-edit-label">West: Area</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageWestCat" onchange="updateStorageLocOpts('west')">${westCatOpts}</select>
             </div>
             <div style="flex:1;">
-              <label class="ing-edit-label">Storage Centraal</label>
-              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageCentraal">${centraalOpts}</select>
+              <label class="ing-edit-label">West: Spot</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageWestLoc">${westLocOpts}</select>
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Centraal: Area</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageCentraalCat" onchange="updateStorageLocOpts('centraal')">${centraalCatOpts}</select>
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Centraal: Spot</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageCentraalLoc">${centraalLocOpts}</select>
             </div>
             <div style="flex:2;">
               <label class="ing-edit-label">Notes</label>
@@ -358,8 +380,12 @@ function renderIngredientEditRow(ing) {
               <span style="font-size:12px;color:var(--text2);">${ing.pricePer100g ? '\u20AC' + ing.pricePer100g.toFixed(2) : '—'}</span>
             </div>
             <div style="flex:1;">
-              <label class="ing-edit-label">Stock</label>
-              <span style="font-size:12px;color:var(--text2);">${renderStockBadges(ing.stock)} <span style="font-size:10px;">(update via stocktake)</span></span>
+              <label class="ing-edit-label">Stock West</label>
+              <input class="order-stock-input" style="width:80px;" type="number" min="0" step="1" value="${(ing.stock&&ing.stock.west)?ing.stock.west.amount:''}" placeholder="0" id="ing-edit-stockWest" />
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Stock Centraal</label>
+              <input class="order-stock-input" style="width:80px;" type="number" min="0" step="1" value="${(ing.stock&&ing.stock.centraal)?ing.stock.centraal.amount:''}" placeholder="0" id="ing-edit-stockCentraal" />
             </div>
           </div>
 
@@ -385,6 +411,39 @@ function renderIngredientEditRow(ing) {
       </div>
     </td>
   </tr>`;
+}
+
+function showInlineCategoryEdit(ingId, td) {
+  const ing = ingredientDbFull.find(i => i.id === ingId);
+  if (!ing) return;
+  const opts = '<option value="">—</option>' + ALL_CATEGORIES.map(c =>
+    `<option value="${esc(c)}"${ing.category===c?' selected':''}>${esc(c)}</option>`
+  ).join('');
+  td.innerHTML = `<select class="order-stock-input" style="width:100%;text-align:left;font-size:12px;" onchange="saveInlineCategory('${esc(ingId)}',this.value)" onblur="renderOrders()">${opts}</select>`;
+  td.querySelector('select').focus();
+}
+
+async function saveInlineCategory(ingId, value) {
+  const ing = ingredientDbFull.find(i => i.id === ingId);
+  if (!ing) return;
+  ing.category = value;
+  try {
+    await apiPost('/api/ingredients/' + ingId, ing);
+    loadIngredientDb();
+    renderOrders();
+    toast('Category updated');
+  } catch (e) {
+    toastError('Save failed');
+  }
+}
+
+function updateStorageLocOpts(building) {
+  const catSel = document.getElementById('ing-edit-storage' + (building === 'west' ? 'West' : 'Centraal') + 'Cat');
+  const locSel = document.getElementById('ing-edit-storage' + (building === 'west' ? 'West' : 'Centraal') + 'Loc');
+  if (!catSel || !locSel) return;
+  const cat = catSel.value;
+  const locs = cat && STORAGE_CATEGORIES[cat] ? STORAGE_CATEGORIES[cat] : [];
+  locSel.innerHTML = '<option value="">—</option>' + locs.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
 }
 
 function updateEditCategoryOptions() {
@@ -436,8 +495,12 @@ async function saveIngredientEdit(id) {
     priceLevel: document.getElementById('ing-edit-priceLevel').value,
     pricePer100g: (orderPrice && orderAmountGrams > 0) ? Math.round((orderPrice / orderAmountGrams) * 10000) / 100 : 0,
     storageLocations: {
-      west: document.getElementById('ing-edit-storageWest').value,
-      centraal: document.getElementById('ing-edit-storageCentraal').value,
+      west: { category: document.getElementById('ing-edit-storageWestCat').value, location: document.getElementById('ing-edit-storageWestLoc').value },
+      centraal: { category: document.getElementById('ing-edit-storageCentraalCat').value, location: document.getElementById('ing-edit-storageCentraalLoc').value },
+    },
+    stock: {
+      west: { amount: parseFloat(document.getElementById('ing-edit-stockWest').value) || 0, date: new Date().toISOString().slice(0, 10) },
+      centraal: { amount: parseFloat(document.getElementById('ing-edit-stockCentraal').value) || 0, date: new Date().toISOString().slice(0, 10) },
     },
     nutrition: Object.keys(nutrition).length ? nutrition : {},
     active: document.getElementById('ing-edit-active').checked,
@@ -616,13 +679,18 @@ function openStoragePopover(ingredientId, anchorEl) {
 
   const storLocs = ing.storageLocations || {};
   const rect = anchorEl.getBoundingClientRect();
+  const catNames = Object.keys(STORAGE_CATEGORIES);
 
-  const westOpts = '<option value="">—</option>' + STORAGE_LOCATIONS.west.map(l =>
-    `<option value="${esc(l)}"${storLocs.west===l?' selected':''}>${esc(l)}</option>`
-  ).join('');
-  const centraalOpts = '<option value="">—</option>' + STORAGE_LOCATIONS.centraal.map(l =>
-    `<option value="${esc(l)}"${storLocs.centraal===l?' selected':''}>${esc(l)}</option>`
-  ).join('');
+  function buildOpts(building) {
+    const s = storLocs[building] || {};
+    const cat = s.category || '';
+    const loc = s.location || '';
+    const catOpts = '<option value="">—</option>' + catNames.map(c => `<option value="${esc(c)}"${cat===c?' selected':''}>${esc(c)}</option>`).join('');
+    const locOpts = '<option value="">—</option>' + (cat && STORAGE_CATEGORIES[cat] ? STORAGE_CATEGORIES[cat] : []).map(l => `<option value="${esc(l)}"${loc===l?' selected':''}>${esc(l)}</option>`).join('');
+    return { catOpts, locOpts };
+  }
+  const w = buildOpts('west');
+  const c = buildOpts('centraal');
 
   const pop = document.createElement('div');
   pop.id = 'storage-popover';
@@ -631,14 +699,22 @@ function openStoragePopover(ingredientId, anchorEl) {
   pop.style.left = Math.max(8, rect.left) + 'px';
   pop.innerHTML = `
     <div style="font-weight:600;font-size:12px;margin-bottom:8px;">Storage locations</div>
-    <div style="display:flex;gap:8px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
       <div>
-        <label class="ing-edit-label">West</label>
-        <select class="order-stock-input" id="pop-storage-west">${westOpts}</select>
+        <label class="ing-edit-label">West: Area</label>
+        <select class="order-stock-input" id="pop-storage-west-cat" onchange="updatePopStorageLoc('west')">${w.catOpts}</select>
       </div>
       <div>
-        <label class="ing-edit-label">Centraal</label>
-        <select class="order-stock-input" id="pop-storage-centraal">${centraalOpts}</select>
+        <label class="ing-edit-label">West: Spot</label>
+        <select class="order-stock-input" id="pop-storage-west-loc">${w.locOpts}</select>
+      </div>
+      <div>
+        <label class="ing-edit-label">Centraal: Area</label>
+        <select class="order-stock-input" id="pop-storage-centraal-cat" onchange="updatePopStorageLoc('centraal')">${c.catOpts}</select>
+      </div>
+      <div>
+        <label class="ing-edit-label">Centraal: Spot</label>
+        <select class="order-stock-input" id="pop-storage-centraal-loc">${c.locOpts}</select>
       </div>
     </div>
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px;">
@@ -659,14 +735,25 @@ function openStoragePopover(ingredientId, anchorEl) {
   }, 50);
 }
 
+function updatePopStorageLoc(building) {
+  const catSel = document.getElementById('pop-storage-' + building + '-cat');
+  const locSel = document.getElementById('pop-storage-' + building + '-loc');
+  if (!catSel || !locSel) return;
+  const cat = catSel.value;
+  const locs = cat && STORAGE_CATEGORIES[cat] ? STORAGE_CATEGORIES[cat] : [];
+  locSel.innerHTML = '<option value="">—</option>' + locs.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+}
+
 async function saveStorageFromPopover(ingredientId) {
-  const west = document.getElementById('pop-storage-west').value;
-  const centraal = document.getElementById('pop-storage-centraal').value;
+  const newLocs = {
+    west: { category: document.getElementById('pop-storage-west-cat').value, location: document.getElementById('pop-storage-west-loc').value },
+    centraal: { category: document.getElementById('pop-storage-centraal-cat').value, location: document.getElementById('pop-storage-centraal-loc').value },
+  };
 
   // Update in full DB
   const ingFull = ingredientDbFull.find(i => i.id === ingredientId);
   if (ingFull) {
-    ingFull.storageLocations = { west, centraal };
+    ingFull.storageLocations = newLocs;
     try {
       await apiPost('/api/ingredients/' + ingredientId, ingFull);
       toast('Storage location saved');
@@ -677,7 +764,7 @@ async function saveStorageFromPopover(ingredientId) {
 
   // Update in S.ingredientDb too
   const ingLight = S.ingredientDb.find(i => i.id === ingredientId);
-  if (ingLight) ingLight.storageLocations = { west, centraal };
+  if (ingLight) ingLight.storageLocations = newLocs;
 
   const pop = document.getElementById('storage-popover');
   if (pop) pop.remove();
@@ -786,35 +873,34 @@ async function applySupplierUpdate() {
 // ── Storage Location Management Modal ─────────────────────────
 
 function openStorageLocationsModal() {
-  const renderLocationList = (building) => {
-    const locs = STORAGE_LOCATIONS[building] || [];
-    return locs.map((loc, i) =>
-      `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;">
-        <span style="flex:1;font-size:13px;">${esc(loc)}</span>
-        <button class="btn btn-sm btn-danger" onclick="removeStorageLocation('${building}',${i})">Remove</button>
-      </div>`
-    ).join('') + `
-      <div style="display:flex;gap:6px;margin-top:6px;">
-        <input class="order-stock-input" style="flex:1;text-align:left;" id="new-loc-${building}" placeholder="New location..." />
-        <button class="btn btn-sm" onclick="addStorageLocation('${building}')">Add</button>
-      </div>`;
-  };
+  const cats = Object.keys(STORAGE_CATEGORIES);
+  let html = cats.map(cat => {
+    const locs = STORAGE_CATEGORIES[cat];
+    return `<div style="margin-bottom:12px;padding:8px;background:var(--bg2);border-radius:var(--radius);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-weight:600;font-size:13px;">${esc(cat)}</span>
+        <button class="btn btn-sm btn-danger" onclick="removeStorageCategory('${esc(cat)}')">Remove area</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">
+        ${locs.map((l, i) => `<span style="font-size:12px;padding:2px 8px;background:var(--bg);border:1px solid var(--border);border-radius:12px;display:inline-flex;align-items:center;gap:4px;">${esc(l)} <span style="cursor:pointer;opacity:.5;font-size:14px;" onclick="removeStorageSpot('${esc(cat)}',${i})">&times;</span></span>`).join('')}
+      </div>
+      <div style="display:flex;gap:6px;">
+        <input class="order-stock-input" style="flex:1;text-align:left;" id="new-spot-${esc(cat)}" placeholder="New spot..." />
+        <button class="btn btn-sm" onclick="addStorageSpot('${esc(cat)}')">Add spot</button>
+      </div>
+    </div>`;
+  }).join('');
 
   const modalHtml = `
     <div style="padding:20px;max-width:500px;">
-      <h3 style="margin:0 0 16px;">Manage Storage Locations</h3>
+      <h3 style="margin:0 0 16px;">Storage Locations</h3>
       <p style="font-size:12px;color:var(--text2);margin:0 0 12px;">
-        Define available storage locations per building. These appear as dropdown options when setting ingredient storage.
+        Define storage areas (Walk-in, Dry storage...) and spots within each (Shelf 1, The cart...).
       </p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-        <div>
-          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text);">Sering West</div>
-          <div id="loc-list-west">${renderLocationList('west')}</div>
-        </div>
-        <div>
-          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text);">Sering Centraal</div>
-          <div id="loc-list-centraal">${renderLocationList('centraal')}</div>
-        </div>
+      ${html}
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        <input class="order-stock-input" style="flex:1;text-align:left;" id="new-storage-cat" placeholder="New area name..." />
+        <button class="btn btn-sm" onclick="addStorageCategory()">Add area</button>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
         <button class="btn btn-sm" onclick="closeModal()">Close</button>
@@ -823,22 +909,39 @@ function openStorageLocationsModal() {
   showModal(modalHtml);
 }
 
-function addStorageLocation(building) {
-  const input = document.getElementById('new-loc-' + building);
+function addStorageCategory() {
+  const input = document.getElementById('new-storage-cat');
   if (!input) return;
   const name = input.value.trim();
   if (!name) return;
-  if (STORAGE_LOCATIONS[building].includes(name)) { toastError('Location already exists'); return; }
-  STORAGE_LOCATIONS[building].push(name);
-  input.value = '';
-  openStorageLocationsModal(); // Re-render
-  toast('Location added');
+  if (STORAGE_CATEGORIES[name]) { toastError('Area already exists'); return; }
+  STORAGE_CATEGORIES[name] = [];
+  openStorageLocationsModal();
+  toast('Area added');
 }
 
-function removeStorageLocation(building, idx) {
-  STORAGE_LOCATIONS[building].splice(idx, 1);
-  openStorageLocationsModal(); // Re-render
-  toast('Location removed');
+function removeStorageCategory(cat) {
+  if (!confirm('Remove "' + cat + '" and all its spots?')) return;
+  delete STORAGE_CATEGORIES[cat];
+  openStorageLocationsModal();
+  toast('Area removed');
+}
+
+function addStorageSpot(cat) {
+  const input = document.getElementById('new-spot-' + cat);
+  if (!input) return;
+  const name = input.value.trim();
+  if (!name) return;
+  if (STORAGE_CATEGORIES[cat].includes(name)) { toastError('Spot already exists'); return; }
+  STORAGE_CATEGORIES[cat].push(name);
+  openStorageLocationsModal();
+  toast('Spot added');
+}
+
+function removeStorageSpot(cat, idx) {
+  STORAGE_CATEGORIES[cat].splice(idx, 1);
+  openStorageLocationsModal();
+  toast('Spot removed');
 }
 
 // ── Migration Modal ───────────────────────────────────────────

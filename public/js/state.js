@@ -16,9 +16,12 @@ const INGREDIENT_CATEGORIES={
 const INGREDIENT_TYPE_TO_GROUP={'Food':'Food','Drinks':'Drinks','Kitchen Equipment':'Non-food','Cleaning':'Non-food','FOH Supplies':'Non-food','FOH Equipment':'Non-food','Office':'Non-food'};
 const ALL_CATEGORIES=[...INGREDIENT_CATEGORIES['Food'],...INGREDIENT_CATEGORIES['Drinks'],...INGREDIENT_CATEGORIES['Non-food']];
 const PRICE_LEVELS=['cheap','medium','expensive'];
-const STORAGE_LOCATIONS={
-  west:['Walk-in','Dry storage','Freezer','Bar','FOH'],
-  centraal:['Walk-in','Dry storage','Freezer','Bar','FOH'],
+const STORAGE_CATEGORIES={
+  'Walk-in':['Shelf 1','Shelf 2','Shelf 3'],
+  'Dry storage':['Shelf 1','Shelf 2','The cart'],
+  'Freezer':['Shelf 1','Shelf 2','Drawer 1'],
+  'Bar':['Counter','Under bar'],
+  'FOH':['Station 1'],
 };
 
 const ACCOMPANIMENTS=[
