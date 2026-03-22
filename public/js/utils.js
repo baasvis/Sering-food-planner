@@ -37,6 +37,66 @@ function setSaveState(state, msg) {
   text.textContent = msg || {saved:'Saved',unsaved:'Unsaved',saving:'Saving...',error:'Save failed'}[state];
 }
 
+// ── Snapshot diffing for patch saves ──
+let _lastSaved = { dishes: new Map(), guests: '', caterings: new Map(), transportItems: new Map() };
+
+function takeSnapshot() {
+  _lastSaved = {
+    dishes: new Map(S.dishes.map(d => [d.id, JSON.stringify(d)])),
+    guests: JSON.stringify(S.guests),
+    caterings: new Map(S.caterings.map(c => [c.id, JSON.stringify(c)])),
+    transportItems: new Map(S.transportItems.map(t => [t.id, JSON.stringify(t)])),
+  };
+}
+
+function computePatch() {
+  const patch = { dishes: [], deletedDishes: [], guests: null,
+                  caterings: [], deletedCaterings: [],
+                  transportItems: [], deletedTransportItems: [] };
+
+  // Dishes
+  const curDishIds = new Set(S.dishes.map(d => d.id));
+  for (const d of S.dishes) {
+    const prev = _lastSaved.dishes.get(d.id);
+    if (!prev || prev !== JSON.stringify(d)) patch.dishes.push(d);
+  }
+  for (const [id] of _lastSaved.dishes) {
+    if (!curDishIds.has(id)) patch.deletedDishes.push(id);
+  }
+
+  // Guests (small fixed structure — send full if changed)
+  if (JSON.stringify(S.guests) !== _lastSaved.guests) patch.guests = S.guests;
+
+  // Caterings
+  const curCatIds = new Set(S.caterings.map(c => c.id));
+  for (const c of S.caterings) {
+    const prev = _lastSaved.caterings.get(c.id);
+    if (!prev || prev !== JSON.stringify(c)) patch.caterings.push(c);
+  }
+  for (const [id] of _lastSaved.caterings) {
+    if (!curCatIds.has(id)) patch.deletedCaterings.push(id);
+  }
+
+  // Transport items
+  const curTrIds = new Set(S.transportItems.map(t => t.id));
+  for (const t of S.transportItems) {
+    const prev = _lastSaved.transportItems.get(t.id);
+    if (!prev || prev !== JSON.stringify(t)) patch.transportItems.push(t);
+  }
+  for (const [id] of _lastSaved.transportItems) {
+    if (!curTrIds.has(id)) patch.deletedTransportItems.push(id);
+  }
+
+  return patch;
+}
+
+function patchIsEmpty(p) {
+  return p.dishes.length === 0 && p.deletedDishes.length === 0 &&
+         p.guests === null &&
+         p.caterings.length === 0 && p.deletedCaterings.length === 0 &&
+         p.transportItems.length === 0 && p.deletedTransportItems.length === 0;
+}
+
 function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   setSaveState('unsaved');
@@ -46,16 +106,23 @@ function scheduleSave() {
 
 async function doSave() {
   if (saveState === 'saving') return;
+  const patch = computePatch();
+  if (patchIsEmpty(patch)) { setSaveState('saved'); return; }
   setSaveState('saving');
   try {
-    const result = await apiPost('/api/data', { guests: S.guests, dishes: S.dishes, caterings: S.caterings, transportItems: S.transportItems });
+    const result = await apiPost('/api/data/patch', patch);
+    takeSnapshot();
     setSaveState('saved', 'Saved');
     retryCount = 0;
+    if (result && result.concurrent) {
+      const c = result.concurrent;
+      toast(`${c.recentUser} saved ${c.agoSeconds < 60 ? c.agoSeconds + 's' : Math.round(c.agoSeconds/60) + 'min'} ago — consider reloading`);
+    }
   } catch (e) {
     retryCount++;
     if (retryCount <= MAX_RETRIES) {
       setSaveState('error', `Retry ${retryCount}/${MAX_RETRIES}...`);
-      setTimeout(doSave, 2000 * retryCount); // exponential-ish backoff
+      setTimeout(doSave, 2000 * retryCount);
     } else {
       setSaveState('error', 'Save failed — check connection');
       toastError('Could not save changes. Check your internet connection and try again.');
@@ -78,6 +145,7 @@ async function loadData() {
     if (data.dishes) S.dishes = data.dishes;
     if (data.caterings) S.caterings = data.caterings;
     if (data.transportItems) S.transportItems = data.transportItems;
+    takeSnapshot();
     rebuildPlanner();
     // Load ingredient DB in background (for order overview)
     loadIngredientDb();
