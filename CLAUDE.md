@@ -22,14 +22,23 @@ routes/
   feedback.js          — User feedback
   health.js            — Health check endpoint
 public/
-  index.html           — Shell HTML + login screen + bottom nav (~96 lines)
-  style.css            — All CSS styles
+  index.html           — Shell HTML + login screen (nav generated from NAV_SCREENS)
+  css/
+    base.css           — Variables, resets, layout, shared components, modals
+    dashboard.css      — Dashboard cards, prep checklist, team todos
+    guests.css         — Guest count tables, predictions, upload zone
+    planner.css        — Week grid, dish list, slots, inventory, cook workflow
+    orders.css         — Order tabs, ingredient tables, ingredient DB styles
+    recipes.css        — Recipe index table
+    feedback.css       — Feedback FAB and form
+    tutorial.css       — Tutorial overlay and tooltips
+    mobile.css         — All mobile/responsive overrides, bottom nav
   js/
-    state.js           — Constants (DAYS, MEALS, STORAGE, etc.) + global state object S
+    state.js           — Constants (DAYS, MEALS, STORAGE, etc.) + NAV_SCREENS + global state object S
     auth.js            — Google Sign-In, sessions
     utils.js           — API helpers (apiGet/apiPost), save system, toast, prep checklist
     core.js            — rebuildPlanner, calcRequired, diffStr, badges, isServicePast
-    dashboard.js       — showScreen() (syncs top + bottom nav), Dashboard screen
+    dashboard.js       — showScreen(), Dashboard screen
     predictions.js     — Guest prediction from POS CSV data
     guests.js          — Guest count tables
     planner.js         — Week plan grid + transport + inventory modal
@@ -40,7 +49,7 @@ public/
     ingredient-db.js   — Ingredient database editor + supplier import
     feedback.js        — Feedback form
     tutorial.js        — Guided tutorial system
-    init.js            — Modal system (showModal/closeModal), esc helper, initApp (MUST load last)
+    init.js            — Modal system, esc helper, buildNav(), beforeunload guard, initApp (MUST load last)
 ```
 
 ## Script Load Order
@@ -57,6 +66,8 @@ Key chain: `state.js` -> `auth.js` -> `utils.js` -> `core.js` -> [feature files]
 - Location keys: "west", "centraal" (in data), "Sering West"/"Sering Centraal" (display)
 - Server writes use `withWriteLock()` to serialize concurrent Sheets writes
 - Row converters: `rowToX()` / `xToRow()` convert between Sheets rows and JS objects
+- Navigation screens defined in `NAV_SCREENS` array (state.js) — add new screens there, not in HTML
+- CSS split into per-screen files in `public/css/` — add new screen styles to the matching file
 
 ## Key Data Flow
 - `GET /api/data` returns `{dishes, guests, recipeIndex, caterings, transportItems}`

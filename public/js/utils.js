@@ -152,10 +152,38 @@ async function loadData() {
     // Load guest history + next weeks in background (for Guests tab)
     loadGuestHistory();
     loadGuestsNextWeeks();
+    hideDataError();
   } catch (e) {
     console.warn('Could not load from server, using defaults');
-    toastError('Could not load data: ' + e.message);
+    showDataError('Could not load data: ' + e.message);
   }
+}
+
+// ── Persistent error banner (stays visible until data loads) ──
+function showDataError(msg) {
+  let banner = document.getElementById('data-error-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'data-error-banner';
+    banner.className = 'data-error-banner';
+    const content = document.querySelector('.content');
+    if (content) content.prepend(banner);
+  }
+  banner.innerHTML = `<span>${esc ? esc(msg) : msg}</span><button onclick="retryLoad()">Retry</button>`;
+  banner.style.display = '';
+}
+
+function hideDataError() {
+  const banner = document.getElementById('data-error-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+async function retryLoad() {
+  const banner = document.getElementById('data-error-banner');
+  if (banner) banner.querySelector('span').textContent = 'Retrying...';
+  await loadData();
+  rebuildPlanner();
+  rerenderCurrentView();
 }
 
 let ingredientDbLoaded = false;

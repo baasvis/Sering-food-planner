@@ -1,20 +1,16 @@
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
 
-function showScreen(name, btn) {
+function showScreen(name) {
+  // Switch active screen
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
-  if (btn) btn.classList.add('active');
-  // Sync top nav
-  document.querySelectorAll('.top-bar .nav-btn').forEach(b => {
-    if (b.textContent.trim() === (btn && btn.textContent.trim())) b.classList.add('active');
-  });
-  // Sync bottom nav
-  document.querySelectorAll('.bnav-btn').forEach(b => {
+  // Sync both navs using data-screen attribute
+  document.querySelectorAll('.nav-btn, .bnav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.screen === name);
   });
-  rebuildPlanner();
+  // Only rebuild planner data when actually viewing planner or dashboard
+  if (name === 'planner' || name === 'dashboard') rebuildPlanner();
   if (name === 'dashboard') renderDashboard();
   if (name === 'guests') renderGuests();
   if (name === 'planner') renderWeekPlan();
@@ -517,8 +513,6 @@ function renderPrepChecklist() {
 }
 
 function navTo(screen, subTab) {
-  const btns = document.querySelectorAll('.nav-btn');
-  const labels = { dashboard:'Dashboard', guests:'Guests', planner:'Week plan', 'recipe-index':'Recipes', orders:'Orders' };
   if (subTab) S.plannerSubTab = subTab;
-  btns.forEach(b => { if (b.textContent === labels[screen]) showScreen(screen, b); });
+  showScreen(screen);
 }

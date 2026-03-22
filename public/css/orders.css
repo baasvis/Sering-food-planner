@@ -1,0 +1,67 @@
+/* ═══════════ ORDERS ═══════════ */
+
+  /* ORDER TABS */
+  .order-tab-bar{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:20px;}
+  .order-tab-btn{padding:10px 16px;font-size:13px;font-weight:500;border:none;background:none;cursor:pointer;color:var(--text2);border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:all .15s;}
+  .order-tab-btn.active{color:var(--text);border-bottom-color:var(--text);}
+  .order-tab-btn:hover:not(.active){color:var(--text);}
+
+  /* STANDARD INVENTORY SEARCH */
+  .si-suggestions{position:absolute;top:100%;left:0;right:0;background:var(--bg);border:1px solid var(--border2);border-radius:var(--radius);z-index:100;max-height:260px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.12);}
+  .si-suggestion{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);}
+  .si-suggestion:last-child{border-bottom:none;}
+  .si-suggestion:hover:not(.si-suggestion-added){background:var(--bg2);}
+  .si-suggestion-added{opacity:.55;cursor:default;}
+  .si-sug-name{flex:1;font-weight:500;}
+  .si-sug-meta{font-size:11px;color:var(--text2);}
+
+  /* COMBINED ORDER BREAKDOWN */
+  .combined-part{font-size:11px;font-weight:500;padding:2px 6px;border-radius:3px;white-space:nowrap;}
+  .combined-standard{background:var(--green-bg);color:var(--green);}
+  .combined-dishes{background:var(--blue-bg);color:var(--blue);}
+
+  /* ORDER */
+  .order-toggle-bar{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
+  .order-toggle{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px 14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);}
+  .order-toggle.on{border-color:var(--blue);background:var(--blue-bg);}
+  .tbox{width:30px;height:18px;border-radius:9px;background:var(--border2);position:relative;transition:background .15s;flex-shrink:0;}
+  .tbox.on{background:var(--blue);}
+  .tknob{width:14px;height:14px;border-radius:50%;background:#fff;position:absolute;top:2px;left:2px;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.2);}
+  .tbox.on .tknob{left:14px;}
+  .ing-table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;}
+  .ing-table th{text-align:left;padding:6px 8px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--border);background:var(--bg2);position:sticky;top:0;}
+  .ing-table td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  .ing-table tr:hover td{background:var(--bg2);}
+  .ing-supplier-hdr td{background:var(--bg2);font-weight:600;font-size:13px;border-bottom:2px solid var(--border);padding:10px 8px;}
+  .order-code{font-family:monospace;font-size:12px;background:var(--bg2);padding:2px 6px;border-radius:3px;cursor:pointer;display:inline-block;border:1px solid var(--border);transition:all .1s;user-select:all;}
+  .order-code:hover{border-color:var(--blue);background:var(--blue-bg);}
+  .order-amt{font-weight:600;white-space:nowrap;}
+  .order-units{font-size:11px;color:var(--text2);white-space:nowrap;}
+  .copy-all-btn{font-size:12px;padding:6px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin-left:8px;}
+  .copy-all-btn:hover{border-color:var(--blue);color:var(--blue);}
+  .order-stock-input{width:70px;font-size:12px;height:28px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 6px;background:var(--bg);color:var(--text);text-align:right;}
+  .order-stock-input:focus{border-color:var(--blue);outline:none;}
+  select.order-stock-input{text-align:left;}
+  .to-order-positive{color:var(--red);font-weight:600;}
+  .to-order-zero{color:var(--green);font-weight:500;}
+
+  /* Ingredient DB redesign */
+  .ing-filter-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;}
+  .ing-type-pills{display:flex;gap:4px;}
+  .ing-type-pill{font-size:12px;padding:5px 12px;border:1px solid var(--border2);border-radius:16px;cursor:pointer;background:transparent;color:var(--text2);transition:all .15s;}
+  .ing-type-pill:hover{border-color:var(--blue);color:var(--blue);}
+  .ing-type-pill.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+  .type-pill{font-size:10px;padding:1px 6px;border:1px solid;border-radius:8px;display:inline-block;line-height:1.4;white-space:nowrap;}
+  .stock-badge{font-size:10px;padding:1px 5px;border-radius:4px;background:var(--bg2);border:1px solid var(--border);display:inline-block;white-space:nowrap;}
+  .ing-edit-grid{display:flex;flex-direction:column;gap:12px;}
+  .ing-edit-section{display:flex;flex-direction:column;gap:8px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+  .ing-edit-section:last-of-type{border-bottom:none;}
+  .ing-edit-row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;}
+  .ing-edit-label{display:block;font-size:11px;font-weight:600;color:var(--text2);margin-bottom:2px;}
+  .ing-edit-types{display:flex;flex-wrap:wrap;gap:4px 10px;}
+  .ing-edit-type-label{font-size:12px;display:flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap;}
+  .ing-edit-nutrition{margin-top:4px;}
+  .storage-popover{position:absolute;z-index:200;background:var(--bg);border:1px solid var(--border2);border-radius:var(--radius);padding:12px;box-shadow:0 4px 12px rgba(0,0,0,.15);min-width:240px;}
+  .price-alert-banner{background:var(--red-bg);border:1px solid var(--red);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;}
+  .price-alert-banner strong{color:var(--red);}
+  .order-shortfall-row{display:grid;grid-template-columns:1fr 100px 80px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:var(--radius);margin-bottom:3px;padding-left:10px;}
