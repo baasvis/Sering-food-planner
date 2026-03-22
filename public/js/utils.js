@@ -147,8 +147,9 @@ async function loadData() {
     if (data.transportItems) S.transportItems = data.transportItems;
     takeSnapshot();
     rebuildPlanner();
-    // Load ingredient DB in background (for order overview)
+    // Load ingredient DB + storage config in background (for order overview)
     loadIngredientDb();
+    loadStorageConfig();
     // Load guest history + next weeks in background (for Guests tab)
     loadGuestHistory();
     loadGuestsNextWeeks();
@@ -213,6 +214,29 @@ async function loadIngredientDb() {
     S.ingredientDb = [];
     ingredientDbLoaded = true;
     ingredientDbError = e.message || 'Unknown error';
+  }
+}
+
+async function loadStorageConfig() {
+  try {
+    const cfg = await apiGet('/api/storage-config');
+    if (cfg && typeof cfg === 'object' && (cfg.west || cfg.centraal)) {
+      S.storageConfig = cfg;
+    } else {
+      // Initialize with defaults for both locations
+      S.storageConfig = { west: DEFAULT_STORAGE_CONFIG, centraal: DEFAULT_STORAGE_CONFIG.map(a => ({...a})) };
+    }
+  } catch (e) {
+    S.storageConfig = { west: DEFAULT_STORAGE_CONFIG, centraal: DEFAULT_STORAGE_CONFIG.map(a => ({...a})) };
+  }
+  rebuildStorageCategories(S.currentLoc || 'west');
+}
+
+async function saveStorageConfig() {
+  try {
+    await apiPost('/api/storage-config', S.storageConfig);
+  } catch (e) {
+    toastError('Failed to save storage config');
   }
 }
 

@@ -16,13 +16,33 @@ const INGREDIENT_CATEGORIES={
 const INGREDIENT_TYPE_TO_GROUP={'Food':'Food','Drinks':'Drinks','Kitchen Equipment':'Non-food','Cleaning':'Non-food','FOH Supplies':'Non-food','FOH Equipment':'Non-food','Office':'Non-food'};
 const ALL_CATEGORIES=[...INGREDIENT_CATEGORIES['Food'],...INGREDIENT_CATEGORIES['Drinks'],...INGREDIENT_CATEGORIES['Non-food']];
 const PRICE_LEVELS=['cheap','medium','expensive'];
-const STORAGE_CATEGORIES={
-  'Walk-in':['Shelf 1','Shelf 2','Shelf 3'],
-  'Dry storage':['Shelf 1','Shelf 2','The cart'],
-  'Freezer':['Shelf 1','Shelf 2','Drawer 1'],
-  'Bar':['Counter','Under bar'],
-  'FOH':['Station 1'],
-};
+// Default storage config — will be replaced by backend config when loaded
+const DEFAULT_STORAGE_CONFIG = [
+  { name: 'Walk-in', color: '#4CAF50', spots: ['Shelf 1', 'Shelf 2', 'Shelf 3'] },
+  { name: 'Dry storage', color: '#FF9800', spots: ['Shelf 1', 'Shelf 2', 'The cart'] },
+  { name: 'Freezer', color: '#2196F3', spots: ['Shelf 1', 'Shelf 2', 'Drawer 1'] },
+  { name: 'Bar', color: '#9C27B0', spots: ['Counter', 'Under bar'] },
+  { name: 'FOH', color: '#F44336', spots: ['Station 1'] },
+];
+
+// Mutable — rebuilt from storageConfig when loaded
+let STORAGE_CATEGORIES = {};
+function rebuildStorageCategories(loc) {
+  const arr = getStorageConfigForLoc(loc);
+  const obj = {};
+  arr.forEach(a => { obj[a.name] = a.spots || []; });
+  STORAGE_CATEGORIES = obj;
+}
+function getStorageConfigForLoc(loc) {
+  loc = loc || 'west';
+  const cfg = S.storageConfig || {};
+  return cfg[loc] || cfg.west || DEFAULT_STORAGE_CONFIG;
+}
+function getStorageColor(categoryName, loc) {
+  const arr = getStorageConfigForLoc(loc);
+  const entry = arr.find(a => a.name === categoryName);
+  return entry ? entry.color : '#999';
+}
 
 const ACCOMPANIMENTS=[
   { name:'Rice', gramsPerGuest:80 },
@@ -76,6 +96,7 @@ let S = {
   guestHistory:null,
   predictions:null,
   guestsNextWeeks:{},
+  storageConfig: null, // loaded from /api/storage-config
 };
 
 // ═══════════════════════════════════════════════════════════════════

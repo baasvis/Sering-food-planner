@@ -3,11 +3,12 @@
 // State
 let orderInventory = {};        // in-stock amounts for dish ingredients (keyed by name lowercase)
 let combinedOrderStock = {};   // in-stock amounts for combined order tab (grams, keyed by name lowercase)
-let standardInventory = [];     // [{id, name, amount, unit}] — the weekly base order
+let standardInventory = { west: [], centraal: [] };  // per-location weekly base order
 let siLoaded = false;
 let siLoadCalled = false;
 let siSaveTimeout = null;
 let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'dishes' | 'ingredientDb'
+let currentOrdersLoc = '';  // set on first render from S.currentLoc
 let siSearchQuery = '';
 
 // ── Shared helpers ────────────────────────────────────────
@@ -96,17 +97,22 @@ function calcOrderUnits(amountGrams, dbEntry) {
 
 async function loadStandardInventory() {
   try {
-    const data = await apiGet('/api/standard-inventory');
-    standardInventory = Array.isArray(data) ? data : [];
+    const [west, centraal] = await Promise.all([
+      apiGet('/api/standard-inventory?location=west'),
+      apiGet('/api/standard-inventory?location=centraal'),
+    ]);
+    standardInventory.west = Array.isArray(west) ? west : [];
+    standardInventory.centraal = Array.isArray(centraal) ? centraal : [];
   } catch (e) {
-    standardInventory = [];
+    standardInventory = { west: [], centraal: [] };
   }
   siLoaded = true;
 }
 
-async function saveStandardInventory() {
+async function saveStandardInventory(loc) {
+  loc = loc || currentOrdersLoc || 'west';
   try {
-    await apiPost('/api/standard-inventory', standardInventory);
+    await apiPost('/api/standard-inventory', { location: loc, items: standardInventory[loc] || [] });
   } catch (e) {
     toastError('Failed to save standard inventory');
   }
@@ -114,7 +120,8 @@ async function saveStandardInventory() {
 
 function debouncedSaveSI() {
   clearTimeout(siSaveTimeout);
-  siSaveTimeout = setTimeout(saveStandardInventory, 800);
+  const loc = currentOrdersLoc || 'west';
+  siSaveTimeout = setTimeout(() => saveStandardInventory(loc), 800);
 }
 
 // ── Standard Inventory actions ────────────────────────────
@@ -125,7 +132,8 @@ function updateSiSearch(val) {
   const sugContainer = document.getElementById('si-suggestions');
   if (!sugContainer) return;
   const query = val.toLowerCase().trim();
-  const addedNames = new Set(standardInventory.map(i => i.name.toLowerCase().trim()));
+  const loc = currentOrdersLoc || 'west';
+  const addedNames = new Set((standardInventory[loc] || []).map(i => i.name.toLowerCase().trim()));
   const suggestions = query.length >= 2
     ? S.ingredientDb.filter(i => i.name.toLowerCase().includes(query) || (i.orderCode && i.orderCode.toLowerCase().includes(query))).slice(0, 8)
     : [];
@@ -155,30 +163,40 @@ function hideSiSuggestions() {
 }
 
 function addToStandardInventory(name, unit) {
-  const exists = standardInventory.find(i => i.name.toLowerCase().trim() === name.toLowerCase().trim());
+  const loc = currentOrdersLoc || 'west';
+  const list = standardInventory[loc] || [];
+  const exists = list.find(i => i.name.toLowerCase().trim() === name.toLowerCase().trim());
   if (exists) return;
-  standardInventory.push({ id: newId(), name, amount: 0, unit: unit || 'g' });
+  list.push({ id: newId(), name, amount: 0, unit: unit || 'g' });
+  standardInventory[loc] = list;
   siSearchQuery = '';
-  saveStandardInventory();
+  saveStandardInventory(loc);
   renderOrders();
 }
 
 function removeSiItem(idx) {
-  standardInventory.splice(idx, 1);
-  saveStandardInventory();
+  const loc = currentOrdersLoc || 'west';
+  const list = standardInventory[loc] || [];
+  list.splice(idx, 1);
+  standardInventory[loc] = list;
+  saveStandardInventory(loc);
   renderOrders();
 }
 
 function updateSiAmount(idx, val) {
-  if (standardInventory[idx]) {
-    standardInventory[idx].amount = parseFloat(val) || 0;
+  const loc = currentOrdersLoc || 'west';
+  const list = standardInventory[loc] || [];
+  if (list[idx]) {
+    list[idx].amount = parseFloat(val) || 0;
     debouncedSaveSI();
   }
 }
 
 function updateSiUnit(idx, val) {
-  if (standardInventory[idx]) {
-    standardInventory[idx].unit = val;
+  const loc = currentOrdersLoc || 'west';
+  const list = standardInventory[loc] || [];
+  if (list[idx]) {
+    list[idx].unit = val;
     debouncedSaveSI();
   }
 }
@@ -187,6 +205,11 @@ function updateSiUnit(idx, val) {
 
 function switchOrdersTab(tab) {
   currentOrdersTab = tab;
+  renderOrders();
+}
+
+function switchOrdersLoc(loc) {
+  currentOrdersLoc = loc;
   renderOrders();
 }
 
@@ -207,6 +230,14 @@ function renderOrders() {
     return;
   }
 
+  if (!currentOrdersLoc) currentOrdersLoc = S.currentLoc || 'west';
+  rebuildStorageCategories(currentOrdersLoc);
+
+  const locBar = `<div class="order-loc-bar">
+    <button class="order-loc-btn${currentOrdersLoc === 'west' ? ' active' : ''}" onclick="switchOrdersLoc('west')">Sering West</button>
+    <button class="order-loc-btn${currentOrdersLoc === 'centraal' ? ' active' : ''}" onclick="switchOrdersLoc('centraal')">Sering Centraal</button>
+  </div>`;
+
   const tabBar = `<div class="order-tab-bar">
     <button class="order-tab-btn${currentOrdersTab === 'combined' ? ' active' : ''}" onclick="switchOrdersTab('combined')">🛒 Combined Order</button>
     <button class="order-tab-btn${currentOrdersTab === 'standard' ? ' active' : ''}" onclick="switchOrdersTab('standard')">📦 Standard Inventory</button>
@@ -220,26 +251,65 @@ function renderOrders() {
   else if (currentOrdersTab === 'ingredientDb') content = renderIngredientDbTab();
   else content = renderCombinedOrderTab();
 
-  document.getElementById('screen-orders').innerHTML = tabBar + content;
+  document.getElementById('screen-orders').innerHTML = locBar + tabBar + content;
 }
 
 // ── Standard Inventory tab ────────────────────────────────
 
 function renderStandardInventoryTab() {
-  // Calculate total value
-  let totalValue = 0;
-  standardInventory.forEach(item => {
+  const curLoc = currentOrdersLoc || 'west';
+  const siItems = standardInventory[curLoc] || [];
+
+  // Build enriched list (same approach as combined/dishes tabs)
+  const ingList = siItems.map((item, idx) => {
     const db = lookupIngredient(item.name);
-    if (db && db.orderPrice && db.orderAmount && db.orderAmount > 0 && item.amount > 0) {
-      const amtGrams = toGrams(item.amount, item.unit || 'g');
-      const units = Math.ceil(amtGrams / db.orderAmount);
-      totalValue += units * db.orderPrice;
+    const amtGrams = toGrams(item.amount, item.unit || 'g');
+    return {
+      ...item,
+      idx,
+      db,
+      amountInGrams: amtGrams,
+      supplier: normalizeSupplier((db && db.source) || ''),
+      orderCode: db ? db.orderCode : '',
+      orderCalc: db ? calcOrderUnits(amtGrams, db) : null,
+    };
+  });
+
+  // Calculate total value using calcOrderUnits (consistent with combined tab)
+  let totalValue = 0;
+  ingList.forEach(ing => {
+    if (ing.db && ing.db.orderPrice && ing.orderCalc && ing.orderCalc.units > 0) {
+      totalValue += ing.orderCalc.units * ing.db.orderPrice;
     }
   });
 
-  const itemsHtml = standardInventory.length === 0
-    ? '<div class="empty">No items yet. Search above to add ingredients from the database.</div>'
-    : `<div style="overflow-x:auto;"><table class="ing-table">
+  // Group by storage category (same as combined tab)
+  const byStorage = {};
+  ingList.forEach(ing => {
+    const cat = getStorageCategory(ing.db, curLoc) || 'Unsorted';
+    if (!byStorage[cat]) byStorage[cat] = [];
+    byStorage[cat].push(ing);
+  });
+  const storageCatOrder = Object.keys(STORAGE_CATEGORIES);
+  const storageOrder = [...storageCatOrder.filter(c => byStorage[c]), ...Object.keys(byStorage).filter(c => !storageCatOrder.includes(c))];
+
+  let itemsHtml = '';
+  if (siItems.length === 0) {
+    itemsHtml = '<div class="empty">No items yet. Search above to add ingredients from the database.</div>';
+  } else {
+    storageOrder.forEach(storageCat => {
+      const items = byStorage[storageCat];
+      const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
+
+      const catColor = getStorageColor(storageCat, curLoc);
+      itemsHtml += `<div class="storage-group" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span class="storage-group-dot" style="background:${catColor};"></span>
+          <span style="font-weight:600;font-size:14px;">${esc(storageCat)}</span>
+          <span style="font-size:12px;color:var(--text2);">(${items.length} item${items.length !== 1 ? 's' : ''})</span>
+          ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copySiOrderCodes('${esc(storageCat)}')">Copy all codes</button>` : ''}
+        </div>
+        <div style="overflow-x:auto;"><table class="ing-table">
         <thead><tr>
           <th>Ingredient</th>
           <th>Category</th>
@@ -247,36 +317,45 @@ function renderStandardInventoryTab() {
           <th>Order code</th>
           <th>Unit / Price</th>
           <th>Amount / week</th>
+          <th>Order units</th>
           <th></th>
-        </tr></thead>
-        <tbody>
-          ${standardInventory.map((item, idx) => {
-            const db = lookupIngredient(item.name);
-            const dbUnit = db && db.unit ? esc(db.unit) : (item.unit ? esc(item.unit) : 'g');
-            const isUrl = db && db.orderCode && (db.orderCode.startsWith('http') || db.orderCode.startsWith('www'));
-            let codeDisplay;
-            if (!db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
-            else if (!db.orderCode) codeDisplay = '<span style="color:var(--text3);font-size:11px;">\u2014</span>';
-            else if (isUrl) codeDisplay = `<a href="${esc(db.orderCode.startsWith('http') ? db.orderCode : 'https://'+db.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
-            else codeDisplay = `<span class="order-code">${esc(db.orderCode)}</span>`;
-            const unitPrice = db ? (db.orderUnit ? esc(db.orderUnit) : dbUnit) + (db.orderPrice ? ' \u00B7 \u20AC' + Number(db.orderPrice).toFixed(2) : '') : dbUnit;
-            return `<tr>
-              <td style="font-weight:500;">${esc(item.name)}</td>
-              <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
-              <td>${renderStorageBadge(db)}</td>
-              <td>${codeDisplay}</td>
-              <td style="font-size:12px;">${unitPrice}</td>
-              <td><input class="order-stock-input" type="number" min="0" step="any" value="${item.amount > 0 ? item.amount : ''}" placeholder="0" oninput="updateSiAmount(${idx}, this.value)" /></td>
-              <td><button class="btn btn-danger btn-sm" onclick="removeSiItem(${idx})">Remove</button></td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table></div>`;
+        </tr></thead><tbody>`;
+
+      items.forEach(ing => {
+        const db = ing.db;
+        const dbUnit = db && db.unit ? esc(db.unit) : (ing.unit ? esc(ing.unit) : 'g');
+        const isUrl = ing.orderCode && (ing.orderCode.startsWith('http') || ing.orderCode.startsWith('www'));
+        let codeDisplay;
+        if (!db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
+        else if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">\u2014</span>';
+        else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
+        else codeDisplay = `<span class="order-code">${esc(ing.orderCode)}</span>`;
+        const unitPrice = db ? (db.orderUnit ? esc(db.orderUnit) : dbUnit) + (db.orderPrice ? ' \u00B7 \u20AC' + Number(db.orderPrice).toFixed(2) : '') : dbUnit;
+
+        const orderUnits = ing.orderCalc && ing.orderCalc.units > 0
+          ? `<span class="order-amt">${ing.orderCalc.units}x</span> <span class="order-units">(${ing.orderCalc.perUnit} ${esc(ing.orderCalc.unitType)})</span>`
+          : (ing.amount > 0 ? '<span style="color:var(--text2);font-size:11px;">\u2014</span>' : '');
+
+        itemsHtml += `<tr>
+          <td style="font-weight:500;">${esc(ing.name)}</td>
+          <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
+          <td>${renderStorageBadge(db)}</td>
+          <td>${codeDisplay}</td>
+          <td style="font-size:12px;">${unitPrice}</td>
+          <td><input class="order-stock-input" type="number" min="0" step="any" value="${ing.amount > 0 ? ing.amount : ''}" placeholder="0" oninput="updateSiAmount(${ing.idx}, this.value)" /></td>
+          <td>${orderUnits}</td>
+          <td><button class="btn btn-danger btn-sm" onclick="removeSiItem(${ing.idx})">Remove</button></td>
+        </tr>`;
+      });
+
+      itemsHtml += `</tbody></table></div></div>`;
+    });
+  }
 
   return `
     <div>
       <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
-        <span>Standard Inventory &mdash; Weekly Base Order</span>
+        <span>Standard Inventory &mdash; ${esc(curLoc === 'west' ? 'Sering West' : 'Sering Centraal')}</span>
         ${totalValue > 0 ? `<span style="font-size:13px;font-weight:600;">Estimated: \u20AC${totalValue.toFixed(2)}</span>` : ''}
       </div>
       <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">These items are ordered every week. Adjust amounts as needed before generating the combined order.</p>
@@ -328,17 +407,15 @@ function renderDishesTab() {
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
 
-  const bySupplier = {};
+  const curLoc = currentOrdersLoc || 'west';
+  const byStorage = {};
   ingList.forEach(ing => {
-    const s = ing.supplier;
-    if (!bySupplier[s]) bySupplier[s] = [];
-    bySupplier[s].push(ing);
+    const cat = getStorageCategory(ing.db, curLoc) || 'Unsorted';
+    if (!byStorage[cat]) byStorage[cat] = [];
+    byStorage[cat].push(ing);
   });
-  const supplierOrder = Object.keys(bySupplier).sort((a, b) => {
-    if (a.toLowerCase().includes('hanos')) return -1;
-    if (b.toLowerCase().includes('hanos')) return 1;
-    return a.localeCompare(b);
-  });
+  const storageCatOrder = Object.keys(STORAGE_CATEGORIES);
+  const storageOrder = [...storageCatOrder.filter(c => byStorage[c]), ...Object.keys(byStorage).filter(c => !storageCatOrder.includes(c))];
 
   const dishesWithSheets = orderedDishes.filter(d => d.recipeSheetId);
   let html = `<div style="margin-bottom:20px;">
@@ -357,14 +434,16 @@ function renderDishesTab() {
       html += `<div class="empty">Dishes are flagged but have no recipe data. Make sure they have a linked recipe sheet with ingredients.</div>`;
     }
   } else {
-    supplierOrder.forEach(supplier => {
-      const items = bySupplier[supplier];
+    storageOrder.forEach(storageCat => {
+      const items = byStorage[storageCat];
       const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
-      html += `<div style="margin-bottom:16px;">
+      const catColor = getStorageColor(storageCat, curLoc);
+      html += `<div class="storage-group" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          <span style="font-weight:600;font-size:14px;">${esc(supplier)}</span>
+          <span class="storage-group-dot" style="background:${catColor};"></span>
+          <span style="font-weight:600;font-size:14px;">${esc(storageCat)}</span>
           <span style="font-size:12px;color:var(--text2);">(${items.length} item${items.length !== 1 ? 's' : ''})</span>
-          ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyOrderCodes('${esc(supplier)}')">Copy all codes</button>` : ''}
+          ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyDishOrderCodes('${esc(storageCat)}')">Copy all codes</button>` : ''}
         </div>
         <div style="overflow-x:auto;"><table class="ing-table">
         <thead><tr>
@@ -459,8 +538,9 @@ function renderCombinedOrderTab() {
     });
   });
 
-  // Add standard inventory — try to merge with dish ingredient keys by fuzzy name
-  standardInventory.forEach(item => {
+  // Add standard inventory for current location — try to merge with dish ingredient keys by fuzzy name
+  const siItems = standardInventory[currentOrdersLoc || 'west'] || [];
+  siItems.forEach(item => {
     if (!item.amount || item.amount <= 0) return;
     const db = lookupIngredient(item.name);
     const canonicalName = db ? db.name : item.name;
@@ -488,7 +568,7 @@ function renderCombinedOrderTab() {
   });
 
   // Group by storage category (current building) instead of supplier
-  const curLoc = S.currentLoc || 'west';
+  const curLoc = currentOrdersLoc || 'west';
   const byStorage = {};
   ingList.forEach(ing => {
     const cat = getStorageCategory(ing.db, curLoc) || 'Unsorted';
@@ -531,8 +611,10 @@ function renderCombinedOrderTab() {
     const items = byStorage[storageCat];
     const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
 
-    html += `<div style="margin-bottom:16px;">
+    const catColor = getStorageColor(storageCat, curLoc);
+    html += `<div class="storage-group" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span class="storage-group-dot" style="background:${catColor};"></span>
         <span style="font-weight:600;font-size:14px;">${esc(storageCat)}</span>
         <span style="font-size:12px;color:var(--text2);">(${items.length} item${items.length !== 1 ? 's' : ''})</span>
         ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyCombinedOrderCodes('${esc(storageCat)}')">Copy all codes</button>` : ''}
@@ -637,6 +719,36 @@ function copyOrderCodes(supplier) {
   if (items.length) navigator.clipboard.writeText(items.join('\n')).then(() => toast(items.length + ' order codes copied'));
 }
 
+function copyDishOrderCodes(storageCat) {
+  const curLoc = currentOrdersLoc || 'west';
+  const items = new Set();
+  S.dishes.filter(d => d.orderFor).forEach(dish => {
+    calcIngredientsFromRecipe(dish).forEach(ing => {
+      const db = lookupIngredient(ing.name);
+      if (db && db.orderCode && !db.orderCode.startsWith('http')) {
+        const cat = getStorageCategory(db, curLoc) || 'Unsorted';
+        if (cat === storageCat) items.add(db.orderCode);
+      }
+    });
+  });
+  const arr = [...items];
+  if (arr.length) navigator.clipboard.writeText(arr.join('\n')).then(() => toast(arr.length + ' order codes copied'));
+}
+
+function copySiOrderCodes(storageCat) {
+  const curLoc = currentOrdersLoc || 'west';
+  const items = new Set();
+  (standardInventory[curLoc] || []).forEach(item => {
+    const db = lookupIngredient(item.name);
+    if (db && db.orderCode && !db.orderCode.startsWith('http')) {
+      const cat = getStorageCategory(db, curLoc) || 'Unsorted';
+      if (cat === storageCat) items.add(db.orderCode);
+    }
+  });
+  const arr = [...items];
+  if (arr.length) navigator.clipboard.writeText(arr.join('\n')).then(() => toast(arr.length + ' order codes copied'));
+}
+
 function copyCombinedOrderCodes(supplier) {
   const items = new Set();
   S.dishes.filter(d => d.orderFor).forEach(dish => {
@@ -647,7 +759,7 @@ function copyCombinedOrderCodes(supplier) {
       }
     });
   });
-  standardInventory.forEach(item => {
+  (standardInventory[currentOrdersLoc || 'west'] || []).forEach(item => {
     const db = lookupIngredient(item.name);
     if (db && db.orderCode && !db.orderCode.startsWith('http') && normalizeSupplier(db.source || '').toLowerCase().includes(supplier.toLowerCase())) {
       items.add(db.orderCode);

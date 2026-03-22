@@ -22,7 +22,7 @@ routes/
   ingredients.js       — Ingredient CRUD + stock management
   ingredients-import.js — Hanos XLSX upload + CSV migration
   guests.js            — Guest history + next-weeks predictions
-  inventory.js         — Standard inventory + prep checklist + activity log
+  inventory.js         — Standard inventory (per-location) + storage config + prep checklist + activity log
   feedback.js          — User feedback
   health.js            — Health check endpoint
 public/
@@ -38,7 +38,7 @@ public/
     tutorial.css       — Tutorial overlay and tooltips
     mobile.css         — All mobile/responsive overrides, bottom nav
   js/
-    state.js           — Constants (DAYS, MEALS, STORAGE, etc.) + NAV_SCREENS + global state object S
+    state.js           — Constants (DAYS, MEALS, etc.) + NAV_SCREENS + storage config helpers + global state object S
     auth.js            — Google Sign-In, sessions
     utils.js           — API helpers (apiGet/apiPost), save system, toast, prep checklist
     core.js            — rebuildPlanner, calcRequired, diffStr, badges, isServicePast
@@ -80,7 +80,10 @@ Key chain: `state.js` -> `auth.js` -> `utils.js` -> `core.js` -> [feature files]
 - Ingredient stock endpoints: `/api/ingredients/stock`, `/api/ingredients/stock/bulk`
 - Ingredient migration: `POST /api/ingredients/migrate` (accepts oldCsv + hanosCsv, supports `?dryRun=true`)
 - Ingredient DB stores JSON fields: `types`, `storageLocations`, `stock`, `nutrition`, `priceHistory` (Prisma Json type)
-- Ingredient constants in state.js: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `STORAGE_LOCATIONS`, `PRICE_LEVELS`
+- Ingredient constants in state.js: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `PRICE_LEVELS`
+- Storage config: `GET/POST /api/storage-config` — per-location areas with colors, order, and spots (persisted as JSON)
+- `STORAGE_CATEGORIES` is dynamically rebuilt from `S.storageConfig` via `rebuildStorageCategories(loc)`
+- Standard inventory: `GET/POST /api/standard-inventory?location=west|centraal` — per-location weekly base order
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
 
 ## Running

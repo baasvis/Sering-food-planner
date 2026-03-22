@@ -1,5 +1,16 @@
 /* ═══════════ ORDERS ═══════════ */
 
+  /* ORDER LOCATION SWITCHER */
+  .order-loc-bar{display:flex;gap:4px;margin-bottom:14px;}
+  .order-loc-btn{padding:8px 16px;font-size:12px;font-weight:500;border:1px solid var(--border2);border-radius:20px;background:transparent;cursor:pointer;color:var(--text2);white-space:nowrap;transition:all .15s;}
+  .order-loc-btn.active{background:var(--text);color:var(--bg);border-color:var(--text);}
+  .order-loc-btn:hover:not(.active){color:var(--text);border-color:var(--text3);}
+
+  /* STORAGE GROUP */
+  .storage-group-dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0;}
+  .sc-area-row{margin-bottom:12px;padding:8px;background:var(--bg2);border-radius:var(--radius);transition:box-shadow .15s;}
+  .sc-area-row.sc-drag-over{box-shadow:0 -3px 0 0 var(--blue);}
+
   /* ORDER TABS */
   .order-tab-bar{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:20px;}
   .order-tab-btn{padding:10px 16px;font-size:13px;font-weight:500;border:none;background:none;cursor:pointer;color:var(--text2);border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:all .15s;}

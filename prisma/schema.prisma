@@ -177,10 +177,11 @@ model Feedback {
 }
 
 model StandardInventory {
-  id     String @id
-  name   String
-  amount Float
-  unit   String
+  id       String @id
+  name     String
+  amount   Float
+  unit     String
+  location String @default("west")
 
   @@map("standard_inventory")
 }
@@ -194,4 +195,11 @@ model PrepChecklist {
 
   @@unique([loc, date])
   @@map("prep_checklist")
+}
+
+model StorageConfig {
+  id     String @id @default("default")
+  config Json   @default("{}")
+
+  @@map("storage_config")
 }

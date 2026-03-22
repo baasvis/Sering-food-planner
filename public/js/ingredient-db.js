@@ -909,21 +909,44 @@ async function applySupplierUpdate() {
 
 // ── Storage Location Management Modal ─────────────────────────
 
+let storageModalLoc = 'west';
+let storageModalDragIdx = null;
+
 function openStorageLocationsModal() {
-  const cats = Object.keys(STORAGE_CATEGORIES);
-  let html = cats.map(cat => {
-    const locs = STORAGE_CATEGORIES[cat];
-    return `<div style="margin-bottom:12px;padding:8px;background:var(--bg2);border-radius:var(--radius);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <span style="font-weight:600;font-size:13px;">${esc(cat)}</span>
-        <button class="btn btn-sm btn-danger" onclick="removeStorageCategory('${esc(cat)}')">Remove area</button>
+  storageModalLoc = currentOrdersLoc || S.currentLoc || 'west';
+  renderStorageModal();
+}
+
+function renderStorageModal() {
+  if (!S.storageConfig) S.storageConfig = { west: DEFAULT_STORAGE_CONFIG.map(a => ({...a, spots: [...a.spots]})), centraal: DEFAULT_STORAGE_CONFIG.map(a => ({...a, spots: [...a.spots]})) };
+  const loc = storageModalLoc;
+  const areas = S.storageConfig[loc] || [];
+
+  const locTabs = `<div style="display:flex;gap:4px;margin-bottom:14px;">
+    <button class="order-loc-btn${loc === 'west' ? ' active' : ''}" onclick="storageModalLoc='west';renderStorageModal()">Sering West</button>
+    <button class="order-loc-btn${loc === 'centraal' ? ' active' : ''}" onclick="storageModalLoc='centraal';renderStorageModal()">Sering Centraal</button>
+  </div>`;
+
+  let html = areas.map((area, idx) => {
+    return `<div class="sc-area-row" draggable="true" data-sc-idx="${idx}"
+        ondragstart="storageModalDragIdx=${idx};this.style.opacity='.5'"
+        ondragend="this.style.opacity='1'"
+        ondragover="event.preventDefault();this.classList.add('sc-drag-over')"
+        ondragleave="this.classList.remove('sc-drag-over')"
+        ondrop="event.preventDefault();this.classList.remove('sc-drag-over');dropStorageArea(${idx})"
+      >
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span style="cursor:grab;font-size:16px;opacity:.4;" title="Drag to reorder">&#8942;&#8942;</span>
+        <input type="color" value="${area.color || '#999'}" style="width:28px;height:28px;border:none;padding:0;cursor:pointer;border-radius:4px;" oninput="updateStorageColor(${idx},this.value)" />
+        <span style="font-weight:600;font-size:13px;flex:1;">${esc(area.name)}</span>
+        <button class="btn btn-sm btn-danger" onclick="removeStorageCategory(${idx})">Remove</button>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">
-        ${locs.map((l, i) => `<span style="font-size:12px;padding:2px 8px;background:var(--bg);border:1px solid var(--border);border-radius:12px;display:inline-flex;align-items:center;gap:4px;">${esc(l)} <span style="cursor:pointer;opacity:.5;font-size:14px;" onclick="removeStorageSpot('${esc(cat)}',${i})">&times;</span></span>`).join('')}
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;margin-left:52px;">
+        ${(area.spots || []).map((l, i) => `<span style="font-size:12px;padding:2px 8px;background:var(--bg);border:1px solid var(--border);border-radius:12px;display:inline-flex;align-items:center;gap:4px;">${esc(l)} <span style="cursor:pointer;opacity:.5;font-size:14px;" onclick="removeStorageSpot(${idx},${i})">&times;</span></span>`).join('')}
       </div>
-      <div style="display:flex;gap:6px;">
-        <input class="order-stock-input" style="flex:1;text-align:left;" id="new-spot-${esc(cat)}" placeholder="New spot..." />
-        <button class="btn btn-sm" onclick="addStorageSpot('${esc(cat)}')">Add spot</button>
+      <div style="display:flex;gap:6px;margin-left:52px;">
+        <input class="order-stock-input" style="flex:1;text-align:left;" id="new-spot-${idx}" placeholder="New spot..." onkeydown="if(event.key==='Enter')addStorageSpot(${idx})" />
+        <button class="btn btn-sm" onclick="addStorageSpot(${idx})">Add spot</button>
       </div>
     </div>`;
   }).join('');
@@ -932,11 +955,12 @@ function openStorageLocationsModal() {
     <div style="padding:20px;max-width:500px;">
       <h3 style="margin:0 0 16px;">Storage Locations</h3>
       <p style="font-size:12px;color:var(--text2);margin:0 0 12px;">
-        Define storage areas (Walk-in, Dry storage...) and spots within each (Shelf 1, The cart...).
+        Configure storage areas per location. Drag to reorder. Click the color swatch to change colors.
       </p>
-      ${html}
+      ${locTabs}
+      ${html || '<div class="empty" style="margin-bottom:12px;">No areas defined yet.</div>'}
       <div style="display:flex;gap:6px;margin-top:8px;">
-        <input class="order-stock-input" style="flex:1;text-align:left;" id="new-storage-cat" placeholder="New area name..." />
+        <input class="order-stock-input" style="flex:1;text-align:left;" id="new-storage-cat" placeholder="New area name..." onkeydown="if(event.key==='Enter')addStorageCategory()" />
         <button class="btn btn-sm" onclick="addStorageCategory()">Add area</button>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
@@ -946,38 +970,78 @@ function openStorageLocationsModal() {
   showModal(modalHtml);
 }
 
+function dropStorageArea(toIdx) {
+  const fromIdx = storageModalDragIdx;
+  if (fromIdx === null || fromIdx === toIdx) return;
+  const loc = storageModalLoc;
+  const areas = S.storageConfig[loc] || [];
+  const [moved] = areas.splice(fromIdx, 1);
+  areas.splice(toIdx, 0, moved);
+  S.storageConfig[loc] = areas;
+  saveStorageConfig();
+  rebuildStorageCategories(loc);
+  renderStorageModal();
+}
+
+function updateStorageColor(idx, color) {
+  const loc = storageModalLoc;
+  if (S.storageConfig[loc] && S.storageConfig[loc][idx]) {
+    S.storageConfig[loc][idx].color = color;
+    saveStorageConfig();
+  }
+}
+
 function addStorageCategory() {
   const input = document.getElementById('new-storage-cat');
   if (!input) return;
   const name = input.value.trim();
   if (!name) return;
-  if (STORAGE_CATEGORIES[name]) { toastError('Area already exists'); return; }
-  STORAGE_CATEGORIES[name] = [];
-  openStorageLocationsModal();
+  const loc = storageModalLoc;
+  if (!S.storageConfig[loc]) S.storageConfig[loc] = [];
+  if (S.storageConfig[loc].find(a => a.name === name)) { toastError('Area already exists'); return; }
+  S.storageConfig[loc].push({ name, color: '#999', spots: [] });
+  saveStorageConfig();
+  rebuildStorageCategories(loc);
+  renderStorageModal();
   toast('Area added');
 }
 
-function removeStorageCategory(cat) {
-  if (!confirm('Remove "' + cat + '" and all its spots?')) return;
-  delete STORAGE_CATEGORIES[cat];
-  openStorageLocationsModal();
+function removeStorageCategory(idx) {
+  const loc = storageModalLoc;
+  const area = S.storageConfig[loc] && S.storageConfig[loc][idx];
+  if (!area || !confirm('Remove "' + area.name + '" and all its spots?')) return;
+  S.storageConfig[loc].splice(idx, 1);
+  saveStorageConfig();
+  rebuildStorageCategories(loc);
+  renderStorageModal();
   toast('Area removed');
 }
 
-function addStorageSpot(cat) {
-  const input = document.getElementById('new-spot-' + cat);
+function addStorageSpot(idx) {
+  const input = document.getElementById('new-spot-' + idx);
   if (!input) return;
   const name = input.value.trim();
   if (!name) return;
-  if (STORAGE_CATEGORIES[cat].includes(name)) { toastError('Spot already exists'); return; }
-  STORAGE_CATEGORIES[cat].push(name);
-  openStorageLocationsModal();
+  const loc = storageModalLoc;
+  const area = S.storageConfig[loc] && S.storageConfig[loc][idx];
+  if (!area) return;
+  if (!area.spots) area.spots = [];
+  if (area.spots.includes(name)) { toastError('Spot already exists'); return; }
+  area.spots.push(name);
+  saveStorageConfig();
+  rebuildStorageCategories(loc);
+  renderStorageModal();
   toast('Spot added');
 }
 
-function removeStorageSpot(cat, idx) {
-  STORAGE_CATEGORIES[cat].splice(idx, 1);
-  openStorageLocationsModal();
+function removeStorageSpot(areaIdx, spotIdx) {
+  const loc = storageModalLoc;
+  const area = S.storageConfig[loc] && S.storageConfig[loc][areaIdx];
+  if (!area || !area.spots) return;
+  area.spots.splice(spotIdx, 1);
+  saveStorageConfig();
+  rebuildStorageCategories(loc);
+  renderStorageModal();
   toast('Spot removed');
 }
 
