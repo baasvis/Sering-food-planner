@@ -10,6 +10,8 @@ let ingredientDbStatusFilter = 'all'; // 'all' | 'active' | 'inactive'
 let ingredientDbSort = 'name';   // 'name' | 'supplier' | 'category' | 'type'
 let ingredientDbEditId = null;   // id of ingredient being edited inline
 let supplierUploadData = null;   // parsed Hanos XLSX data for import
+let ingredientDbPage = 0;        // current page for pagination
+const INGREDIENTS_PER_PAGE = 50;
 
 async function loadIngredientDbFull() {
   try {
@@ -132,22 +134,22 @@ function renderIngredientDbTab() {
 
     <div class="ing-filter-bar">
       <div class="ing-type-pills">
-        <button class="ing-type-pill${ingredientDbTypeFilter==='all'?' active':''}" onclick="ingredientDbTypeFilter='all';ingredientDbCatFilter='all';renderOrders()">All</button>
-        <button class="ing-type-pill${ingredientDbTypeFilter==='Food'?' active':''}" onclick="ingredientDbTypeFilter='Food';ingredientDbCatFilter='all';renderOrders()">Food</button>
-        <button class="ing-type-pill${ingredientDbTypeFilter==='Drinks'?' active':''}" onclick="ingredientDbTypeFilter='Drinks';ingredientDbCatFilter='all';renderOrders()">Drinks</button>
-        <button class="ing-type-pill${ingredientDbTypeFilter==='Non-food'?' active':''}" onclick="ingredientDbTypeFilter='Non-food';ingredientDbCatFilter='all';renderOrders()">Non-food</button>
+        <button class="ing-type-pill${ingredientDbTypeFilter==='all'?' active':''}" onclick="ingredientDbTypeFilter='all';ingredientDbCatFilter='all';ingredientDbPage=0;renderOrders()">All</button>
+        <button class="ing-type-pill${ingredientDbTypeFilter==='Food'?' active':''}" onclick="ingredientDbTypeFilter='Food';ingredientDbCatFilter='all';ingredientDbPage=0;renderOrders()">Food</button>
+        <button class="ing-type-pill${ingredientDbTypeFilter==='Drinks'?' active':''}" onclick="ingredientDbTypeFilter='Drinks';ingredientDbCatFilter='all';ingredientDbPage=0;renderOrders()">Drinks</button>
+        <button class="ing-type-pill${ingredientDbTypeFilter==='Non-food'?' active':''}" onclick="ingredientDbTypeFilter='Non-food';ingredientDbCatFilter='all';ingredientDbPage=0;renderOrders()">Non-food</button>
       </div>
       <input type="text" class="dish-search" style="flex:1;min-width:180px;margin:0;" placeholder="Search name, supplier, code..."
-        value="${esc(ingredientDbSearch)}" oninput="ingredientDbSearch=this.value;renderOrders()" />
-      <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbCatFilter=this.value;renderOrders()">
+        value="${esc(ingredientDbSearch)}" oninput="ingredientDbSearch=this.value;ingredientDbPage=0;renderOrders()" />
+      <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbCatFilter=this.value;ingredientDbPage=0;renderOrders()">
         ${catOptions}
       </select>
-      <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbStatusFilter=this.value;renderOrders()">
+      <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbStatusFilter=this.value;ingredientDbPage=0;renderOrders()">
         <option value="all"${ingredientDbStatusFilter==='all'?' selected':''}>All status</option>
         <option value="active"${ingredientDbStatusFilter==='active'?' selected':''}>Active only</option>
         <option value="inactive"${ingredientDbStatusFilter==='inactive'?' selected':''}>Inactive only</option>
       </select>
-      <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbSort=this.value;renderOrders()">
+      <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbSort=this.value;ingredientDbPage=0;renderOrders()">
         <option value="name"${ingredientDbSort === 'name' ? ' selected' : ''}>Sort: Name</option>
         <option value="type"${ingredientDbSort === 'type' ? ' selected' : ''}>Sort: Type</option>
         <option value="category"${ingredientDbSort === 'category' ? ' selected' : ''}>Sort: Category</option>
@@ -162,6 +164,16 @@ function renderIngredientDbTab() {
   if (!filtered.length) {
     html += '<div class="empty">No ingredients match your search.</div>';
   } else {
+    const totalPages = Math.ceil(filtered.length / INGREDIENTS_PER_PAGE);
+    if (ingredientDbPage >= totalPages) ingredientDbPage = Math.max(0, totalPages - 1);
+    const start = ingredientDbPage * INGREDIENTS_PER_PAGE;
+    const pageItems = filtered.slice(start, start + INGREDIENTS_PER_PAGE);
+    // If editing an item not on the current page, include it
+    const editItem = ingredientDbEditId ? filtered.find(i => i.id === ingredientDbEditId) : null;
+    const showItems = editItem && !pageItems.find(i => i.id === editItem.id)
+      ? [editItem, ...pageItems]
+      : pageItems;
+
     html += `<div style="overflow-x:auto;"><table class="ing-table">
       <thead><tr>
         <th>Name</th>
@@ -176,7 +188,7 @@ function renderIngredientDbTab() {
         <th></th>
       </tr></thead><tbody>`;
 
-    filtered.forEach(ing => {
+    showItems.forEach(ing => {
       if (ingredientDbEditId === ing.id) {
         html += renderIngredientEditRow(ing);
       } else {
@@ -203,6 +215,17 @@ function renderIngredientDbTab() {
     });
 
     html += '</tbody></table></div>';
+
+    // Pagination controls
+    if (totalPages > 1) {
+      html += `<div style="display:flex;justify-content:center;align-items:center;gap:8px;padding:12px 0;">
+        <button class="btn btn-sm" ${ingredientDbPage === 0 ? 'disabled' : ''} onclick="ingredientDbPage=0;renderOrders()">&laquo;</button>
+        <button class="btn btn-sm" ${ingredientDbPage === 0 ? 'disabled' : ''} onclick="ingredientDbPage--;renderOrders()">&lsaquo; Prev</button>
+        <span style="font-size:12px;color:var(--text2);">Page ${ingredientDbPage + 1} of ${totalPages} (${filtered.length} items)</span>
+        <button class="btn btn-sm" ${ingredientDbPage >= totalPages - 1 ? 'disabled' : ''} onclick="ingredientDbPage++;renderOrders()">Next &rsaquo;</button>
+        <button class="btn btn-sm" ${ingredientDbPage >= totalPages - 1 ? 'disabled' : ''} onclick="ingredientDbPage=${totalPages - 1};renderOrders()">&raquo;</button>
+      </div>`;
+    }
   }
 
   html += '</div>';
