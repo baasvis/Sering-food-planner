@@ -449,8 +449,29 @@
   .copy-all-btn:hover{border-color:var(--blue);color:var(--blue);}
   .order-stock-input{width:70px;font-size:12px;height:28px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 6px;background:var(--bg);color:var(--text);text-align:right;}
   .order-stock-input:focus{border-color:var(--blue);outline:none;}
+  select.order-stock-input{text-align:left;}
   .to-order-positive{color:var(--red);font-weight:600;}
   .to-order-zero{color:var(--green);font-weight:500;}
+
+  /* Ingredient DB redesign */
+  .ing-filter-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;}
+  .ing-type-pills{display:flex;gap:4px;}
+  .ing-type-pill{font-size:12px;padding:5px 12px;border:1px solid var(--border2);border-radius:16px;cursor:pointer;background:transparent;color:var(--text2);transition:all .15s;}
+  .ing-type-pill:hover{border-color:var(--blue);color:var(--blue);}
+  .ing-type-pill.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+  .type-pill{font-size:10px;padding:1px 6px;border:1px solid;border-radius:8px;display:inline-block;line-height:1.4;white-space:nowrap;}
+  .stock-badge{font-size:10px;padding:1px 5px;border-radius:4px;background:var(--bg2);border:1px solid var(--border);display:inline-block;white-space:nowrap;}
+  .ing-edit-grid{display:flex;flex-direction:column;gap:12px;}
+  .ing-edit-section{display:flex;flex-direction:column;gap:8px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+  .ing-edit-section:last-of-type{border-bottom:none;}
+  .ing-edit-row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;}
+  .ing-edit-label{display:block;font-size:11px;font-weight:600;color:var(--text2);margin-bottom:2px;}
+  .ing-edit-types{display:flex;flex-wrap:wrap;gap:4px 10px;}
+  .ing-edit-type-label{font-size:12px;display:flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap;}
+  .ing-edit-nutrition{margin-top:4px;}
+  .storage-popover{position:absolute;z-index:200;background:var(--bg);border:1px solid var(--border2);border-radius:var(--radius);padding:12px;box-shadow:0 4px 12px rgba(0,0,0,.15);min-width:240px;}
+  .price-alert-banner{background:var(--red-bg);border:1px solid var(--red);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;}
+  .price-alert-banner strong{color:var(--red);}
   .order-shortfall-row{display:grid;grid-template-columns:1fr 100px 80px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:var(--radius);margin-bottom:3px;padding-left:10px;}
 
   /* MODAL */

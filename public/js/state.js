@@ -5,6 +5,22 @@ const MEALS=['lunch','dinner'];
 const STORAGE=['Gastro','Frozen','Vac-packed'];
 const LOGISTICS=['Sering West','Transport to Sering Centraal','Transport to Sering West','Sering Centraal'];
 const ALLERGENS=['Gluten','Soy','Nuts','Peanuts','Sesame','Celery','Mustard','Sulphites','Lupin','Onion','Garlic','Paprika'];
+
+// Ingredient database constants
+const INGREDIENT_TYPES=['Food','Drinks','Kitchen Equipment','Cleaning','FOH Supplies','FOH Equipment','Office'];
+const INGREDIENT_CATEGORIES={
+  'Food':['Vegetables & Fruit','Grains & Starches','Legumes & Proteins','Dairy & Alternatives','Oils & Fats','Herbs & Spices','Sauces & Condiments','Canned & Preserved','Baking & Dessert','Snacks','Seaweed & Specialty'],
+  'Drinks':['Coffee & Tea','Juices & Soft Drinks','Beer','Wine','Spirits & Liqueurs','Drink Ingredients'],
+  'Non-food':['Cleaning & Hygiene','Disposables & Packaging','Tableware & FOH','Kitchen Equipment','Office & Admin','Clothing & Textiles'],
+};
+const INGREDIENT_TYPE_TO_GROUP={'Food':'Food','Drinks':'Drinks','Kitchen Equipment':'Non-food','Cleaning':'Non-food','FOH Supplies':'Non-food','FOH Equipment':'Non-food','Office':'Non-food'};
+const ALL_CATEGORIES=[...INGREDIENT_CATEGORIES['Food'],...INGREDIENT_CATEGORIES['Drinks'],...INGREDIENT_CATEGORIES['Non-food']];
+const PRICE_LEVELS=['cheap','medium','expensive'];
+const STORAGE_LOCATIONS={
+  west:['Walk-in','Dry storage','Freezer','Bar','FOH'],
+  centraal:['Walk-in','Dry storage','Freezer','Bar','FOH'],
+};
+
 const ACCOMPANIMENTS=[
   { name:'Rice', gramsPerGuest:80 },
   { name:'Pasta', gramsPerGuest:80 },

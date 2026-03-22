@@ -62,6 +62,10 @@ Key chain: `state.js` -> `auth.js` -> `utils.js` -> `core.js` -> [feature files]
 - `GET /api/data` returns `{dishes, guests, recipeIndex, caterings, transportItems}`
 - `POST /api/data` saves `{dishes, guests, caterings, transportItems}`
 - Ingredient DB has separate endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`
+- Ingredient stock endpoints: `/api/ingredients/stock`, `/api/ingredients/stock/bulk`
+- Ingredient migration: `POST /api/ingredients/migrate` (accepts oldCsv + hanosCsv, supports `?dryRun=true`)
+- Ingredient DB stores JSON fields in Sheets cells: `types`, `storageLocations`, `stock`, `nutrition`, `priceHistory` — parsed with `safeJsonParse()` in row converters
+- Ingredient constants in state.js: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `STORAGE_LOCATIONS`, `PRICE_LEVELS`
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
 
 ## Running
