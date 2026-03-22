@@ -355,11 +355,12 @@ function openAddDish(loc, date, meal) {
 }
 
 function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab) {
+  // Store modal state globally so onclick/oninput handlers can reference it
+  // without embedding JSON in HTML attributes (which breaks on double quotes)
+  S._addModalState = { loc, date, meal, existing, typeFilter, tab };
+
   const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
   const typeLabel = typeFilter ? ` (${typeFilter === 'Main course' ? 'Mains' : typeFilter + 's'})` : '';
-  const existingJson = JSON.stringify(existing).replace(/'/g, "\\'");
-  const tfEsc = typeFilter ? typeFilter.replace(/'/g, "\\'") : '';
-  const tf = `,'${tfEsc}'`;
 
   // Build filtered lists for counts and display
   let allAvail = S.dishes.filter(d => !existing.includes(d.id));
@@ -436,7 +437,7 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab)
     { id: 'recipes', label: 'Recipes', count: filteredRecipes.length },
   ];
   const tabBarHtml = tabs.map(t =>
-    `<button class="sub-tab ${tab === t.id ? 'active' : ''}" onclick="event.stopPropagation();updateAddModal('${loc}','${date}','${meal}',${existingJson}${tf},'${t.id}')">${t.label} <span style="opacity:.6;font-size:11px;">${t.count}</span></button>`
+    `<button class="sub-tab ${tab === t.id ? 'active' : ''}" onclick="event.stopPropagation();switchAddModalTab('${t.id}')">${t.label} <span style="opacity:.6;font-size:11px;">${t.count}</span></button>`
   ).join('');
 
   // If the modal is already open, only update the dynamic parts (tabs + list)
@@ -451,7 +452,7 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab)
   const dayName = dateToDayName(date);
   showModal(`<h3>Add${typeLabel} to ${dayName} ${meal} &middot; ${locLabel}</h3>
     <input type="text" class="dish-search" id="planner-search" placeholder="Search..." value="${esc(searchQuery)}"
-      oninput="updateAddModal('${loc}','${date}','${meal}',${existingJson}${tf},'${tab}')" />
+      oninput="searchAddModal()" />
     <div class="sub-tab-bar" style="margin-bottom:10px;" id="add-modal-tabs">${tabBarHtml}</div>
     <div class="dish-opts-list" style="max-height:340px;" id="add-modal-list">${listHtml}</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
@@ -462,6 +463,21 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab)
 function updateAddModal(loc, date, meal, existing, typeFilter, tab) {
   const searchQuery = (document.getElementById('planner-search') || {}).value || '';
   renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab);
+}
+
+function switchAddModalTab(tab) {
+  const s = S._addModalState;
+  if (!s) return;
+  s.tab = tab;
+  const searchQuery = (document.getElementById('planner-search') || {}).value || '';
+  renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, tab);
+}
+
+function searchAddModal() {
+  const s = S._addModalState;
+  if (!s) return;
+  const searchQuery = (document.getElementById('planner-search') || {}).value || '';
+  renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, s.tab);
 }
 
 function confirmAddDish(dishId, loc, date, meal) {
