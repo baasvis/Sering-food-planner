@@ -367,7 +367,7 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab)
   if (typeFilter) allAvail = allAvail.filter(d => d.type === typeFilter);
 
   const cookedDishes = allAvail.filter(d => d.cookConfirmed && d.logistics === locLabel);
-  const plannedDishes = sortByCookDate(allAvail.filter(d => !d.cookConfirmed && (d.services || []).length > 0));
+  const plannedDishes = sortByCookDate(allAvail.filter(d => !d.cookConfirmed));
   const activeDishRecipeIds = new Set(S.dishes.map(d => d.recipeSheetId).filter(Boolean));
   let allRecipes = S.recipeIndex.filter(r => !activeDishRecipeIds.has(r.recipeSheetId));
   if (typeFilter) allRecipes = allRecipes.filter(r => r.type === typeFilter);
