@@ -5,7 +5,15 @@ function showScreen(name, btn) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
-  btn.classList.add('active');
+  if (btn) btn.classList.add('active');
+  // Sync top nav
+  document.querySelectorAll('.top-bar .nav-btn').forEach(b => {
+    if (b.textContent.trim() === (btn && btn.textContent.trim())) b.classList.add('active');
+  });
+  // Sync bottom nav
+  document.querySelectorAll('.bnav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.screen === name);
+  });
   rebuildPlanner();
   if (name === 'dashboard') renderDashboard();
   if (name === 'guests') renderGuests();

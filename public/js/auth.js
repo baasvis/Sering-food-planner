@@ -66,6 +66,7 @@ async function checkSession() {
 function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app-shell').classList.add('active');
+  document.getElementById('bottom-nav').classList.add('active');
   // Update user menu
   document.getElementById('user-name').textContent = S.user?.name || '';
   if (S.user?.picture) {
