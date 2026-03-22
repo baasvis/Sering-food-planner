@@ -74,8 +74,11 @@ async function initApp() {
   renderDashboard();
   // Auto-refresh every 60s so the UI updates when a service deadline passes (13:45 / 20:15)
   setInterval(() => {
+    const scrollY = window.scrollY;
     rebuildPlanner();
     rerenderCurrentView();
+    // Restore scroll position after DOM rebuild
+    requestAnimationFrame(() => window.scrollTo(0, scrollY));
   }, 60000);
 }
 

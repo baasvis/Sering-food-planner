@@ -198,6 +198,7 @@ async function loadIngredientDb() {
       ingredientDbError = result.error;
     } else if (Array.isArray(result)) {
       S.ingredientDb = result;
+      _ingredientCategoryCache = null; // invalidate choppable lookup cache
       ingredientDbError = '';
       console.log('Ingredient DB loaded:', S.ingredientDb.length, 'items');
       if (S.ingredientDb.length > 0) console.log('Sample:', S.ingredientDb[0].name, '| code:', S.ingredientDb[0].orderCode);

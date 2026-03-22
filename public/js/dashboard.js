@@ -19,36 +19,35 @@ function showScreen(name) {
 }
 
 // ── DASHBOARD ────────────────────────────────────────────
-// Pantry/dry items to exclude from prep list
-const PANTRY_KEYWORDS = [
-  'oil','olie','salt','zout','sugar','suiker','pepper','peper',
-  'vinegar','azijn','soy sauce','sojasaus','ketjap','tamari',
-  'flour','meel','bloem','butter','boter','margarine',
-  'cream','room','slagroom','milk','melk',
-  'stock','bouillon','broth',
-  'powder','poeder','cumin','komijn','cinnamon','kaneel',
-  'turmeric','kurkuma','paprikapoeder','chili powder','chilipoeder',
-  'nutmeg','nootmuskaat','cloves','kruidnagel',
-  'bay leaf','laurier','thyme','tijm','oregano','rosemary','rozemarijn',
-  'basil','basilicum','parsley','peterselie','cilantro','koriander',
-  'coconut milk','kokosmelk','coconut cream','kokosroom',
-  'tomato paste','tomatenpuree','tomato puree',
-  'mustard','mosterd','honey','honing','maple','ahorn',
-  'rice','rijst','pasta','noodles','noedels','couscous',
-  'sambal','sriracha','hot sauce','tabasco',
-  'water','cornstarch','maizena','agar','tapioca',
-  'yeast','gist','baking powder','bakpoeder','baking soda',
-  'breadcrumbs','paneermeel','panko',
-  'vanilla','vanille','extract','essence',
-  'miso','nutritional yeast','gistgvlokken',
-  'seaweed','nori','wakame','kombu',
-  'tahini','peanut butter','pindakaas',
-  'lemon juice','citroensap','lime juice','limoensap',
-];
+// Categories from ingredient DB that need chopping/prep
+const CHOPPABLE_CATEGORIES = ['vegetables', 'fruits', 'mushrooms', 'herbs', 'beans and legumes'];
 
-function isVegetableIngredient(name) {
+// Build a lookup cache from ingredient DB (name → category)
+let _ingredientCategoryCache = null;
+function getIngredientCategoryCache() {
+  if (_ingredientCategoryCache && _ingredientCategoryCache.size > 0) return _ingredientCategoryCache;
+  _ingredientCategoryCache = new Map();
+  (S.ingredientDb || []).forEach(ing => {
+    if (ing.name && ing.category) {
+      _ingredientCategoryCache.set(ing.name.toLowerCase().trim(), ing.category.toLowerCase().trim());
+    }
+  });
+  return _ingredientCategoryCache;
+}
+
+function isChoppableIngredient(name) {
+  const cache = getIngredientCategoryCache();
   const lower = name.toLowerCase().trim();
-  return !PANTRY_KEYWORDS.some(kw => lower.includes(kw));
+  const category = cache.get(lower);
+  if (category) return CHOPPABLE_CATEGORIES.includes(category);
+  // Fuzzy match: try matching start of name (e.g. "Carrot (purple)" → "carrot")
+  for (const [dbName, cat] of cache) {
+    if (lower.startsWith(dbName) || dbName.startsWith(lower)) {
+      return CHOPPABLE_CATEGORIES.includes(cat);
+    }
+  }
+  // Not found in DB — exclude by default (only show known choppable items)
+  return false;
 }
 
 function isDishAtLocation(dish, loc) {
@@ -92,7 +91,7 @@ function getVegIngredients(dishes) {
   dishes.forEach(dish => {
     const ings = calcIngredientsFromRecipe(dish);
     if (!ings || ings.length === 0) return;
-    ings.filter(i => isVegetableIngredient(i.name)).forEach(ing => {
+    ings.filter(i => isChoppableIngredient(i.name)).forEach(ing => {
       const key = ing.name.toLowerCase().trim();
       if (!combined[key]) combined[key] = { name: ing.name, amount: 0, unit: ing.unit };
       combined[key].amount += ing.amount;
@@ -190,6 +189,17 @@ function toggleHeatItem(dishId) {
 }
 
 function toggleCookItem(dishId) {
+  const d = S.dishes.find(x => x.id === dishId);
+  if (d && !d.cookConfirmed) {
+    // Actually mark the dish as cooked (same as "click to mark as cooked" on the tile)
+    confirmCooked(dishId);
+    // Also tick off the local checkbox
+    S.cookChecked.add(dishId);
+    saveDayTodos();
+    renderDashboardContent();
+    return;
+  }
+  // Already cooked or not found — just toggle the local checkbox
   S.cookChecked.has(dishId) ? S.cookChecked.delete(dishId) : S.cookChecked.add(dishId);
   saveDayTodos();
   renderDashboardContent();
