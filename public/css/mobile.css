@@ -42,12 +42,15 @@
 
     /* Dish list: card layout instead of grid */
     .dish-list-hdr{display:none;}
-    .dish-row{display:block;padding:10px 12px;}
+    .dish-row{display:block;padding:10px 12px;min-width:auto;}
     .dish-row .sel-box{display:none;}
     .dish-row .col-cook{border-left:none;padding-left:0;margin-top:6px;}
     .dish-row .col-stock,.dish-row .col-diff,.dish-row .col-logistics{display:none;}
-    .m-stock-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .dish-row .served-btn,.dish-row .order-toggle-btn{display:none;}
+    .m-stock-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);}
     .m-stock-row > *{flex-shrink:0;}
+    .m-stock-input{width:56px;height:28px;font-size:13px;text-align:right;border:1px solid var(--border2);border-radius:var(--radius);padding:0 6px;background:var(--bg);color:var(--text);}
+    .m-stock-input:focus{border-color:var(--blue);outline:none;}
 
     /* Filter bars */
     .filter-bar{gap:3px;margin-bottom:8px;}
