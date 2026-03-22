@@ -354,12 +354,13 @@ function openAddDish(loc, date, meal) {
   renderAddModal(loc, date, meal, existing, '', '', 'cooked');
 }
 
-function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab) {
+function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab, locFilter) {
   // Store modal state globally so onclick/oninput handlers can reference it
   // without embedding JSON in HTML attributes (which breaks on double quotes)
-  S._addModalState = { loc, date, meal, existing, typeFilter, tab };
+  if (!locFilter) locFilter = loc;
+  S._addModalState = { loc, date, meal, existing, typeFilter, tab, locFilter };
 
-  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const locLabel = locFilter === 'west' ? 'Sering West' : 'Sering Centraal';
   const typeLabel = typeFilter ? ` (${typeFilter === 'Main course' ? 'Mains' : typeFilter + 's'})` : '';
 
   // Build filtered lists for counts and display
@@ -440,9 +441,17 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab)
     `<button class="sub-tab ${tab === t.id ? 'active' : ''}" onclick="event.stopPropagation();switchAddModalTab('${t.id}')">${t.label} <span style="opacity:.6;font-size:11px;">${t.count}</span></button>`
   ).join('');
 
-  // If the modal is already open, only update the dynamic parts (tabs + list)
+  // Location toggle
+  const slotLocLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const locToggleHtml = `<div class="order-loc-bar" style="margin-bottom:10px;" id="add-modal-loc-toggle">
+    <button class="order-loc-btn${locFilter === 'west' ? ' active' : ''}" onclick="switchAddModalLoc('west')">Sering West</button>
+    <button class="order-loc-btn${locFilter === 'centraal' ? ' active' : ''}" onclick="switchAddModalLoc('centraal')">Sering Centraal</button>
+  </div>`;
+
+  // If the modal is already open, only update the dynamic parts
   const existingModal = document.getElementById('add-modal-tabs');
   if (existingModal) {
+    document.getElementById('add-modal-loc-toggle').outerHTML = locToggleHtml;
     existingModal.innerHTML = tabBarHtml;
     document.getElementById('add-modal-list').innerHTML = listHtml;
     return;
@@ -450,9 +459,10 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab)
 
   // First open — render the full modal
   const dayName = dateToDayName(date);
-  showModal(`<h3>Add${typeLabel} to ${dayName} ${meal} &middot; ${locLabel}</h3>
+  showModal(`<h3>Add${typeLabel} to ${dayName} ${meal} &middot; ${slotLocLabel}</h3>
     <input type="text" class="dish-search" id="planner-search" placeholder="Search..." value="${esc(searchQuery)}"
       oninput="searchAddModal()" />
+    ${locToggleHtml}
     <div class="sub-tab-bar" style="margin-bottom:10px;" id="add-modal-tabs">${tabBarHtml}</div>
     <div class="dish-opts-list" style="max-height:340px;" id="add-modal-list">${listHtml}</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
@@ -462,7 +472,8 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab)
 
 function updateAddModal(loc, date, meal, existing, typeFilter, tab) {
   const searchQuery = (document.getElementById('planner-search') || {}).value || '';
-  renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab);
+  const locFilter = S._addModalState ? S._addModalState.locFilter : loc;
+  renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab, locFilter);
 }
 
 function switchAddModalTab(tab) {
@@ -470,14 +481,22 @@ function switchAddModalTab(tab) {
   if (!s) return;
   s.tab = tab;
   const searchQuery = (document.getElementById('planner-search') || {}).value || '';
-  renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, tab);
+  renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, tab, s.locFilter);
+}
+
+function switchAddModalLoc(newLoc) {
+  const s = S._addModalState;
+  if (!s) return;
+  s.locFilter = newLoc;
+  const searchQuery = (document.getElementById('planner-search') || {}).value || '';
+  renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, s.tab, newLoc);
 }
 
 function searchAddModal() {
   const s = S._addModalState;
   if (!s) return;
   const searchQuery = (document.getElementById('planner-search') || {}).value || '';
-  renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, s.tab);
+  renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, s.tab, s.locFilter);
 }
 
 function confirmAddDish(dishId, loc, date, meal) {
