@@ -1,0 +1,134 @@
+{
+  "dishes": [
+    {
+      "id": "dev-soup-1", "name": "Butternut Squash Soup", "type": "Soup",
+      "stock": 0, "serving": 280, "storage": "Gastro", "logistics": "Sering West",
+      "allergens": ["Celery"], "extraAllergens": [], "orderFor": true,
+      "cookMode": "day", "cookDay": null, "cookDate": "", "cookConfirmed": false,
+      "recipeSheetId": "", "recipeVolume": 12,
+      "recipeIngredients": [
+        {"name": "Butternut squash", "amount": 4000, "unit": "Grams", "source": "Eco-brand"},
+        {"name": "Onion", "amount": 500, "unit": "Grams", "source": "Hanos"},
+        {"name": "Coconut cream", "amount": 800, "unit": "ML", "source": "Hanos"}
+      ],
+      "createdAt": "2026-03-20T10:00:00Z",
+      "services": [
+        {"loc": "west", "date": "2026-03-23", "meal": "lunch"},
+        {"loc": "west", "date": "2026-03-24", "meal": "lunch"}
+      ]
+    },
+    {
+      "id": "dev-soup-2", "name": "Tomato Basil Soup", "type": "Soup",
+      "stock": 0, "serving": 280, "storage": "Gastro", "logistics": "Transport to Sering Centraal",
+      "allergens": [], "extraAllergens": [], "orderFor": true,
+      "cookMode": "day", "cookDay": null, "cookDate": "", "cookConfirmed": false,
+      "recipeSheetId": "", "recipeVolume": 10,
+      "recipeIngredients": [
+        {"name": "Canned tomatoes", "amount": 5000, "unit": "Grams", "source": "Hanos"},
+        {"name": "Fresh basil", "amount": 200, "unit": "Grams", "source": "Eco-brand"}
+      ],
+      "createdAt": "2026-03-20T10:05:00Z",
+      "services": [
+        {"loc": "centraal", "date": "2026-03-23", "meal": "lunch"},
+        {"loc": "centraal", "date": "2026-03-25", "meal": "dinner"}
+      ]
+    },
+    {
+      "id": "dev-main-1", "name": "Thai Green Curry", "type": "Main course",
+      "stock": 0, "serving": 350, "storage": "Gastro", "logistics": "Sering West",
+      "allergens": ["Soy", "Peanuts"], "extraAllergens": [], "orderFor": true,
+      "cookMode": "day", "cookDay": null, "cookDate": "", "cookConfirmed": false,
+      "recipeSheetId": "", "recipeVolume": 15,
+      "recipeIngredients": [
+        {"name": "Tofu", "amount": 3000, "unit": "Grams", "source": "Eco-brand"},
+        {"name": "Green curry paste", "amount": 400, "unit": "Grams", "source": "Hanos"},
+        {"name": "Coconut milk", "amount": 4000, "unit": "ML", "source": "Hanos"},
+        {"name": "Mixed vegetables", "amount": 5000, "unit": "Grams", "source": "Eco-brand"}
+      ],
+      "createdAt": "2026-03-20T10:10:00Z",
+      "services": [
+        {"loc": "west", "date": "2026-03-23", "meal": "dinner"},
+        {"loc": "west", "date": "2026-03-24", "meal": "dinner"}
+      ]
+    },
+    {
+      "id": "dev-main-2", "name": "Mushroom Stroganoff", "type": "Main course",
+      "stock": 0, "serving": 320, "storage": "Gastro", "logistics": "Transport to Sering Centraal",
+      "allergens": ["Gluten", "Mustard"], "extraAllergens": [], "orderFor": true,
+      "cookMode": "day", "cookDay": null, "cookDate": "", "cookConfirmed": false,
+      "recipeSheetId": "", "recipeVolume": 12,
+      "recipeIngredients": [
+        {"name": "Mixed mushrooms", "amount": 4000, "unit": "Grams", "source": "Eco-brand"},
+        {"name": "Oat cream", "amount": 2000, "unit": "ML", "source": "Hanos"},
+        {"name": "Pasta", "amount": 3000, "unit": "Grams", "source": "Hanos"}
+      ],
+      "createdAt": "2026-03-20T10:15:00Z",
+      "services": [
+        {"loc": "centraal", "date": "2026-03-23", "meal": "dinner"},
+        {"loc": "centraal", "date": "2026-03-24", "meal": "lunch"}
+      ]
+    },
+    {
+      "id": "dev-main-3", "name": "Lentil Bolognese", "type": "Main course",
+      "stock": 0, "serving": 340, "storage": "Frozen", "logistics": "Sering West",
+      "allergens": ["Celery"], "extraAllergens": [], "orderFor": true,
+      "cookMode": "day", "cookDay": null, "cookDate": "", "cookConfirmed": false,
+      "recipeSheetId": "", "recipeVolume": 14,
+      "recipeIngredients": [
+        {"name": "Red lentils", "amount": 3000, "unit": "Grams", "source": "Hanos"},
+        {"name": "Canned tomatoes", "amount": 4000, "unit": "Grams", "source": "Hanos"},
+        {"name": "Spaghetti", "amount": 3000, "unit": "Grams", "source": "Hanos"}
+      ],
+      "createdAt": "2026-03-20T10:20:00Z",
+      "services": [
+        {"loc": "west", "date": "2026-03-25", "meal": "lunch"},
+        {"loc": "west", "date": "2026-03-25", "meal": "dinner"}
+      ]
+    },
+    {
+      "id": "dev-dessert-1", "name": "Chocolate Mousse", "type": "Dessert",
+      "stock": 0, "serving": 150, "storage": "Gastro", "logistics": "Sering West",
+      "allergens": ["Soy"], "extraAllergens": [], "orderFor": true,
+      "cookMode": "day", "cookDay": null, "cookDate": "", "cookConfirmed": false,
+      "recipeSheetId": "", "recipeVolume": 8,
+      "recipeIngredients": [
+        {"name": "Dark chocolate", "amount": 2000, "unit": "Grams", "source": "Hanos"},
+        {"name": "Silken tofu", "amount": 1500, "unit": "Grams", "source": "Eco-brand"}
+      ],
+      "createdAt": "2026-03-20T10:25:00Z",
+      "services": [
+        {"loc": "west", "date": "2026-03-23", "meal": "lunch"},
+        {"loc": "centraal", "date": "2026-03-24", "meal": "dinner"}
+      ]
+    },
+    {
+      "id": "dev-dessert-2", "name": "Fruit Crumble", "type": "Dessert",
+      "stock": 5.2, "serving": 180, "storage": "Gastro", "logistics": "Sering Centraal",
+      "allergens": ["Gluten", "Nuts"], "extraAllergens": [], "orderFor": false,
+      "cookMode": "day", "cookDay": null, "cookDate": "", "cookConfirmed": true,
+      "recipeSheetId": "", "recipeVolume": 6,
+      "recipeIngredients": [
+        {"name": "Seasonal fruit", "amount": 3000, "unit": "Grams", "source": "Eco-brand"},
+        {"name": "Oats", "amount": 1000, "unit": "Grams", "source": "Hanos"}
+      ],
+      "createdAt": "2026-03-20T10:30:00Z",
+      "services": [{"loc": "centraal", "date": "2026-03-25", "meal": "lunch"}]
+    }
+  ],
+  "caterings": [
+    {
+      "id": "dev-cat-1", "name": "Art Exhibition Opening", "date": "2026-03-27",
+      "guestCount": 80, "deliveryMode": "delivery",
+      "dishes": [
+        {"dishId": "dev-soup-1", "dishName": "Butternut Squash Soup", "type": "Soup"},
+        {"dishId": "dev-main-1", "dishName": "Thai Green Curry", "type": "Main course"}
+      ],
+      "logisticsNotes": "Deliver by 17:00", "createdAt": "2026-03-20T11:00:00Z"
+    }
+  ],
+  "transportItems": [
+    {"id": "dev-ti-1", "text": "Extra serving trays for Centraal"},
+    {"id": "dev-ti-2", "text": "Insulated containers for soup transport"}
+  ],
+  "recipeIndex": []
+}

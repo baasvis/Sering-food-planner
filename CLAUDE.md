@@ -86,9 +86,63 @@ Key chain: `state.js` -> `auth.js` -> `utils.js` -> `core.js` -> [feature files]
 - Standard inventory: `GET/POST /api/standard-inventory?location=west|centraal` — per-location weekly base order
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
 
+## Business Logic
+
+### Dishes vs Services
+A **dish** is a food item (e.g. "Butternut Squash Soup"). A **service** is a scheduled slot where that dish is served. One dish can have multiple services across different days, meals, and locations. Services are stored as an array on each dish: `{loc, date, meal}`.
+
+### Peer Splitting
+When multiple dishes of the same type (e.g. 3 soups) are in the same slot, guest count is split equally. If 90 guests and 3 soups → each soup serves 30 guests. This happens in `calcRequired()` in core.js.
+
+### Stock Calculation
+`calcRequired(dish)` sums across all future (non-past) services:
+```
+per service: (guestCount / peerCount) * (serving_ml / 1000) = liters needed
+```
+Catering events add to this total with the same peer-split logic.
+
+### Cook Workflow
+1. Dish starts with `cookConfirmed: false` — stock field is locked
+2. Cook confirms → `cookConfirmed: true` → stock field unlocks
+3. Cook enters actual liters produced as `stock`
+4. `calcRequired()` shows how much is still needed vs stock on hand
+
+### Ingredient Scaling
+Recipe ingredients scale from recipe volume to actual need:
+```
+guestsPerRecipe = (recipeVolume_L * 1000) / serving_ml
+scaleFactor = totalGuests / guestsPerRecipe
+scaledAmount = recipeAmount * scaleFactor
+```
+
+### Logistics & Transport
+- "Sering West" / "Sering Centraal" = cooked and served at that location
+- "Transport to Sering X" = cooked elsewhere, needs transport
+- "Mark as arrived" changes logistics from transport → local
+
+### Service Deadlines (isServicePast)
+A service becomes "past" (stops pulling stock) when:
+- Date is before today, OR
+- Date is today AND past the meal deadline (lunch: 13:45, dinner: 20:15)
+
+### Ordering Pipeline
+Three sources merged into combined order:
+1. **Standard inventory** — weekly base items per location from DB
+2. **Dish ingredients** — scaled from recipes for dishes flagged `orderFor: true`
+3. **Combined** — merges both, grouped by supplier, calculates order units from ingredient DB
+
+### Guest Counts
+- Default counts in `S.guests[loc][day][meal]` (same every week)
+- `S.guestsNextWeeks["2026-03-23"]` overrides specific weeks (keyed by Monday date)
+- `getGuests(loc, dateStr, meal)` checks overrides first, falls back to defaults
+
+## Data Shapes
+See JSDoc typedefs in `public/js/state.js` for Dish, Service, Catering, RecipeIndex, and Ingredient.
+
 ## Running
 ```bash
 npm start          # port 3000 by default
+npm test           # API tests (node --test + supertest)
 ```
 Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).

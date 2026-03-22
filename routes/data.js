@@ -1,9 +1,22 @@
 const router = require('express').Router();
-const { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateDishes, validateGuests, withWriteLock, dbWriteDishes, dbWriteGuests, dbWriteCaterings, dbWriteTransportItems } = require('../lib/db');
+const fs = require('fs');
+const path = require('path');
+const { CONFIG } = require('../lib/config');
+const { logError } = require('../lib/logger');
+const { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateDishes, validateGuests, validateCaterings, withWriteLock, dbWriteDishes, dbWriteGuests, dbWriteCaterings, dbWriteTransportItems } = require('../lib/db');
+
+const DEV_SEED_PATH = path.join(__dirname, '..', 'seeds', 'dev-data.json');
 
 router.get('/', async (req, res) => {
-  try { res.json(await dbReadAll()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try {
+    const data = await dbReadAll();
+    if (!CONFIG.GOOGLE_CLIENT_ID && (!data.dishes || data.dishes.length === 0) && fs.existsSync(DEV_SEED_PATH)) {
+      const seed = JSON.parse(fs.readFileSync(DEV_SEED_PATH, 'utf8'));
+      return res.json({ ...data, ...seed });
+    }
+    res.json(data);
+  }
+  catch (e) { logError('data', e, req); res.status(500).json({ error: e.message }); }
 });
 
 router.post('/', async (req, res) => {
@@ -17,6 +30,10 @@ router.post('/', async (req, res) => {
     if (dishErr) return res.status(400).json({ error: dishErr });
     const guestErr = validateGuests(guests);
     if (guestErr) return res.status(400).json({ error: guestErr });
+    if (caterings.length > 0) {
+      const catErr = validateCaterings(caterings);
+      if (catErr) return res.status(400).json({ error: catErr });
+    }
 
     await dbWriteAll(dishes, guests, caterings, transportItems);
 
@@ -24,7 +41,7 @@ router.post('/', async (req, res) => {
     dbAppendLog(user.email, user.name, 'save', `${dishes.length} dishes`);
 
     res.json({ ok: true, savedAt: new Date().toISOString() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { logError('data', e, req); res.status(500).json({ error: e.message }); }
 });
 
 // ── Concurrent save detection ──
@@ -105,6 +122,7 @@ router.post('/patch', async (req, res) => {
     if (concurrent) result.concurrent = concurrent;
     res.json(result);
   } catch (e) {
+    logError('data/patch', e, req);
     res.status(500).json({ error: e.message });
   }
 });

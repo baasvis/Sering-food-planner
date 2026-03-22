@@ -1,3 +1,84 @@
+// DATA SHAPE REFERENCE (JSDoc)
+// ═══════════════════════════════════════════════════════════════════
+
+/** @typedef {{ loc: 'west'|'centraal', date: string, meal: 'lunch'|'dinner' }} Service */
+
+/**
+ * @typedef {Object} Dish
+ * @property {string} id - UUID
+ * @property {string} name - e.g. "Butternut Squash Soup"
+ * @property {'Soup'|'Main course'|'Dessert'} type
+ * @property {number} stock - Liters currently in storage (editable after cookConfirmed)
+ * @property {number} serving - ML per guest (default 280)
+ * @property {'Gastro'|'Frozen'|'Vac-packed'} storage
+ * @property {string} logistics - One of LOGISTICS constants
+ * @property {string[]} allergens - From recipe
+ * @property {string[]} extraAllergens - Hand-added
+ * @property {boolean} orderFor - Include in combined order?
+ * @property {string} cookMode - "day" or future
+ * @property {string|null} cookDay - "Monday" etc or null
+ * @property {string} cookDate - "DD/MM/YYYY" format
+ * @property {boolean} cookConfirmed - Unlocks stock field
+ * @property {string} recipeSheetId - Google Sheets ID
+ * @property {number} recipeVolume - Liters the recipe makes
+ * @property {{ name: string, amount: number, unit: string, source: string }[]} recipeIngredients
+ * @property {Service[]} services - Scheduled serving slots
+ * @property {string} createdAt - ISO timestamp
+ */
+
+/**
+ * @typedef {Object} Catering
+ * @property {string} id - UUID
+ * @property {string} name - Event name
+ * @property {string} date - ISO "YYYY-MM-DD"
+ * @property {number} guestCount
+ * @property {'pickup'|'delivery'|'on-location'} deliveryMode
+ * @property {{ dishId: string, dishName: string, type: string }[]} dishes
+ * @property {string} logisticsNotes
+ * @property {string} createdAt - ISO timestamp
+ */
+
+/**
+ * @typedef {Object} RecipeIndex
+ * @property {string} id - UUID
+ * @property {string} name
+ * @property {'Soup'|'Main course'|'Dessert'} type
+ * @property {string} recipeSheetId - Google Sheets ID
+ * @property {string[]} allergens
+ * @property {number} servingSize - ML (default 280)
+ * @property {number} recipeVolume - Liters
+ * @property {{ name: string, amount: number, unit: string, source: string }[]} recipeIngredients
+ * @property {string} costPerServing
+ * @property {string} structure - "main", "side", etc.
+ * @property {string} seasonality
+ * @property {string} servingTemp - "hot" or "cold"
+ * @property {number} avgSkill - 1-5 rating
+ * @property {number} avgSpeed - 1-5 rating
+ * @property {number} avgBanger - 1-5 rating
+ * @property {number} timesServed
+ */
+
+/**
+ * @typedef {Object} Ingredient
+ * @property {string} id
+ * @property {string} name
+ * @property {string[]} types - From INGREDIENT_TYPES
+ * @property {string} category - From INGREDIENT_CATEGORIES
+ * @property {string} unit - Default "Grams"
+ * @property {string} supplier - "Hanos", "Eco-brand", etc.
+ * @property {string} supplierName
+ * @property {string} orderCode
+ * @property {string} orderUnit - "kg", "L", "pieces"
+ * @property {number} orderPrice
+ * @property {number} orderAmountGrams - Grams per order unit
+ * @property {string} priceLevel - 'cheap'|'medium'|'expensive'
+ * @property {Object} storageLocations - Per-location storage spots
+ * @property {Object} stock - Per-location stock amounts
+ * @property {string} allergens - Pipe-separated
+ * @property {string} notes
+ * @property {boolean} active
+ */
+
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
 const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];

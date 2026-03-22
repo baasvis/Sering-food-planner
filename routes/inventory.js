@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { prisma } = require('../lib/db');
+const { logError } = require('../lib/logger');
 
 // ── Standard Inventory ──
 
@@ -9,7 +10,7 @@ router.get('/standard-inventory', async (req, res) => {
     const items = await prisma.standardInventory.findMany({ where: { location } });
     res.json(items);
   } catch (e) {
-    console.error('standard-inventory read error:', e.message);
+    logError('standard-inventory', e, req);
     res.status(500).json({ error: e.message });
   }
 });
@@ -17,6 +18,13 @@ router.get('/standard-inventory', async (req, res) => {
 router.post('/standard-inventory', async (req, res) => {
   const { location, items } = req.body;
   if (!location || !Array.isArray(items)) return res.status(400).json({ error: 'Expected { location, items }' });
+  if (!['west', 'centraal'].includes(location)) return res.status(400).json({ error: 'location must be west or centraal' });
+  if (items.length > 500) return res.status(400).json({ error: 'Too many items (max 500)' });
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item.id || typeof item.id !== 'string') return res.status(400).json({ error: `Item ${i}: missing or invalid id` });
+    if (!item.name || typeof item.name !== 'string') return res.status(400).json({ error: `Item ${i}: missing or invalid name` });
+  }
   try {
     await prisma.$transaction([
       prisma.standardInventory.deleteMany({ where: { location } }),
@@ -37,7 +45,7 @@ router.get('/storage-config', async (req, res) => {
     const row = await prisma.storageConfig.findUnique({ where: { id: 'default' } });
     res.json(row ? row.config : {});
   } catch (e) {
-    console.error('storage-config read error:', e.message);
+    logError('storage-config', e, req);
     res.json({});
   }
 });
@@ -68,7 +76,7 @@ router.get('/prep-checklist', async (req, res) => {
     });
     res.json(entry ? entry.checked : []);
   } catch (e) {
-    console.error('prep-checklist read error:', e.message);
+    logError('prep-checklist', e, req);
     res.status(500).json({ error: e.message });
   }
 });
@@ -76,6 +84,8 @@ router.get('/prep-checklist', async (req, res) => {
 router.post('/prep-checklist', async (req, res) => {
   const { loc, date, checked } = req.body;
   if (!loc || !date) return res.status(400).json({ error: 'loc and date required' });
+  if (!['west', 'centraal'].includes(loc)) return res.status(400).json({ error: 'loc must be west or centraal' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD format' });
   try {
     await prisma.prepChecklist.upsert({
       where: { loc_date: { loc, date } },
@@ -111,7 +121,7 @@ router.get('/log', async (req, res) => {
       details: r.details,
     })));
   } catch (e) {
-    console.error('log read error:', e.message);
+    logError('log', e, req);
     res.status(500).json({ error: e.message });
   }
 });

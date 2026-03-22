@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { prisma } = require('../lib/db');
+const { logError } = require('../lib/logger');
 
 // ── Guest history helpers ──
 
@@ -46,7 +47,7 @@ router.get('/guest-history', async (req, res) => {
     ]);
     res.json(guestHistoryToJson(histRows, metaRows));
   } catch (e) {
-    console.error('guest-history read error:', e.message);
+    logError('guest-history', e, req);
     res.status(500).json({ error: e.message });
   }
 });
@@ -54,6 +55,15 @@ router.get('/guest-history', async (req, res) => {
 router.post('/guest-history', async (req, res) => {
   const incoming = req.body;
   if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'Expected object' });
+  const validLocs = ['west', 'centraal'];
+  const validMeals = ['lunch', 'dinner', 'staff', 'staff_lunch', 'staff_dinner'];
+  for (const key of Object.keys(incoming)) {
+    if (key === 'deviceMap' || key === 'lastUpdated') continue;
+    if (!validLocs.includes(key)) return res.status(400).json({ error: `Invalid location: ${key}` });
+    for (const meal of Object.keys(incoming[key])) {
+      if (!validMeals.includes(meal)) return res.status(400).json({ error: `Invalid meal: ${meal}` });
+    }
+  }
   try {
     await prisma.$transaction(async (tx) => {
       const [existingHist, existingMeta] = await Promise.all([
@@ -108,7 +118,7 @@ router.post('/guest-history', async (req, res) => {
     });
     res.json({ ok: true });
   } catch (e) {
-    console.error('guest-history write error:', e.message);
+    logError('guest-history', e, req);
     res.status(500).json({ error: e.message });
   }
 });
@@ -118,7 +128,7 @@ router.get('/guests-next-weeks', async (req, res) => {
     const rows = await prisma.guestsNextWeeks.findMany();
     res.json(guestsNextWeeksToJson(rows));
   } catch (e) {
-    console.error('guests-next-weeks read error:', e.message);
+    logError('guests-next-weeks', e, req);
     res.status(500).json({ error: e.message });
   }
 });
@@ -126,6 +136,9 @@ router.get('/guests-next-weeks', async (req, res) => {
 router.post('/guests-next-weeks', async (req, res) => {
   const data = req.body;
   if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Expected object' });
+  for (const mondayKey of Object.keys(data)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(mondayKey)) return res.status(400).json({ error: `Invalid monday key: ${mondayKey}` });
+  }
   try {
     // Flatten nested JSON to rows
     const rows = [];
@@ -148,7 +161,7 @@ router.post('/guests-next-weeks', async (req, res) => {
     ]);
     res.json({ ok: true });
   } catch (e) {
-    console.error('guests-next-weeks write error:', e.message);
+    logError('guests-next-weeks', e, req);
     res.status(500).json({ error: e.message });
   }
 });

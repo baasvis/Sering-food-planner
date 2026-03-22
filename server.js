@@ -65,6 +65,7 @@ async function seedIfNeeded() {
 
 // ── Start ──
 
+if (require.main === module) {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('De Sering app v5 running on port ' + PORT);
@@ -75,6 +76,9 @@ app.listen(PORT, () => {
   console.log('  ALLOWED_EMAILS:', CONFIG.ALLOWED_EMAILS.length ? CONFIG.ALLOWED_EMAILS.join(', ') : 'NOT SET (anyone can log in)');
   seedIfNeeded();
 });
+}
+
+module.exports = app;
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {

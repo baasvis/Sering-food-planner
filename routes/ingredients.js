@@ -2,6 +2,7 @@ const router = require('express').Router();
 const fs = require('fs');
 const { INGREDIENTS_SEED } = require('../lib/config');
 const { prisma, dbAppendLog } = require('../lib/db');
+const { logError } = require('../lib/logger');
 
 // Mount import sub-router (upload-supplier, migrate)
 router.use('/', require('./ingredients-import'));
@@ -47,7 +48,7 @@ router.get('/', async (req, res) => {
       active: ing.active,
     })));
   } catch (e) {
-    console.error('Ingredient DB error:', e.message);
+    logError('ingredients', e, req);
     res.status(500).json({ error: e.message });
   }
 });
@@ -58,7 +59,7 @@ router.get('/full', async (req, res) => {
     const ingredients = await loadIngredients();
     res.json(ingredients);
   } catch (e) {
-    console.error('Ingredient DB error:', e.message);
+    logError('ingredients', e, req);
     res.status(500).json({ error: e.message });
   }
 });
@@ -67,6 +68,12 @@ router.get('/full', async (req, res) => {
 router.post('/', async (req, res) => {
   const ingredients = req.body;
   if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'Expected array' });
+  if (ingredients.length > 2000) return res.status(400).json({ error: 'Too many ingredients (max 2000)' });
+  for (let i = 0; i < ingredients.length; i++) {
+    const ing = ingredients[i];
+    if (!ing.id || typeof ing.id !== 'string') return res.status(400).json({ error: `Ingredient ${i}: missing or invalid id` });
+    if (!ing.name || typeof ing.name !== 'string') return res.status(400).json({ error: `Ingredient ${i}: missing or invalid name` });
+  }
   try {
     await prisma.$transaction([
       prisma.ingredient.deleteMany(),
