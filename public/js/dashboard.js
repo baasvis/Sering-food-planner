@@ -429,7 +429,7 @@ function renderDashboardContent() {
   // ── Cook dish row helper — tappable checkbox ──
   function cookDishRow(d, note, checkedSet, toggleFn) {
     const checked = checkedSet && checkedSet.has(d.id);
-    const req = calcRequired(d);
+    const req = calcRequiredForLoc(d, loc);
     const typeColors = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
     const col = typeColors[d.type] || 'gray';
     return `<div class="dash-cook-item${checked ? ' checked' : ''}" onclick="${toggleFn}('${esc(d.id)}')">
