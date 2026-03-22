@@ -74,16 +74,15 @@ function getStorageCategory(db, building) {
   return s.category || '';
 }
 
-function renderStorageBadge(db) {
+function renderStorageBadge(db, loc) {
   if (!db || !db.storageLocations) return '';
-  const locs = db.storageLocations;
-  const parts = [];
-  const w = formatStorageLoc(locs.west);
-  const c = formatStorageLoc(locs.centraal);
-  if (w) parts.push('W:' + w);
-  if (c) parts.push('C:' + c);
-  if (!parts.length) return '';
-  return `<span class="stock-badge" style="cursor:pointer;font-size:10px;" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to edit">${parts.join(' ')}</span>`;
+  const building = loc || currentOrdersLoc || 'west';
+  const s = db.storageLocations[building];
+  const label = formatStorageLoc(s);
+  if (!label) return '';
+  const cat = getStorageCategory(db, building);
+  const color = cat ? getStorageColor(cat, building) : '#999';
+  return `<span class="stock-badge" style="cursor:pointer;font-size:10px;background:${color}22;color:${color};border:1px solid ${color}44;" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to edit">${esc(label)}</span>`;
 }
 
 function calcOrderUnits(amountGrams, dbEntry) {
@@ -337,7 +336,7 @@ function renderStandardInventoryTab() {
           : (ing.amount > 0 ? '<span style="color:var(--text2);font-size:11px;">\u2014</span>' : '');
 
         itemsHtml += `<tr>
-          <td style="font-weight:500;">${esc(ing.name)}</td>
+          <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}</td>
           <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
           <td>${renderStorageBadge(db)}</td>
           <td>${codeDisplay}</td>
@@ -486,7 +485,7 @@ function renderDishesTab() {
           : (orderAmt === 0 ? '<span class="to-order-zero">\u2014</span>' : '<span style="color:var(--text2);font-size:11px;">\u2014</span>');
 
         html += `<tr data-stock-key="${esc(key)}" data-needed="${amtNeeded}" data-unit="${esc(dbUnit)}">
-          <td style="font-weight:500;">${esc(ing.name)}</td>
+          <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}</td>
           <td style="font-size:12px;">${ing.db && ing.db.category ? esc(ing.db.category) : '\u2014'}</td>
           <td>${renderStorageBadge(ing.db)}</td>
           <td>${codeDisplay}</td>
@@ -682,7 +681,7 @@ function renderCombinedOrderTab() {
       const priceAlertIcon = (ing.db && ing.db.priceAlert) ? ' <span style="color:var(--red);font-size:11px;" title="Price increased">\u25B2</span>' : '';
 
       html += `<tr data-combined-key="${esc(key)}" data-needed="${ing.totalGrams}" data-dbname="${esc(ing.name)}">
-        <td style="font-weight:500;">${esc(ing.name)}${priceAlertIcon}</td>
+        <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}${priceAlertIcon}</td>
         <td style="font-size:12px;">${ing.db && ing.db.category ? esc(ing.db.category) : '\u2014'}</td>
         <td>${renderStorageBadge(ing.db)}</td>
         <td>${codeDisplay}</td>

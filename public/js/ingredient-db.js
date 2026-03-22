@@ -551,6 +551,7 @@ async function saveIngredientEdit(id) {
     await apiPost('/api/ingredients/' + id, updated);
     Object.assign(ing, updated);
     ingredientDbEditId = null;
+    closeModal();
     loadIngredientDb();
     renderOrders();
     toast('Ingredient saved');
@@ -584,6 +585,54 @@ async function deleteIngredient(id, name) {
     toast('Ingredient deleted');
   } catch (e) {
     toastError('Delete failed: ' + e.message);
+  }
+}
+
+async function openIngredientModal(name) {
+  if (!ingredientDbFullLoaded) await loadIngredientDbFull();
+  const ing = ingredientDbFull.find(i => i.name.toLowerCase().trim() === name.toLowerCase().trim());
+  if (!ing) { toastError('Ingredient not found in database'); return; }
+
+  const catSelect = '<option value="">— Select —</option>' + ALL_CATEGORIES.map(c =>
+    `<option value="${esc(c)}"${ing.category===c?' selected':''}>${esc(c)}</option>`
+  ).join('');
+
+  const modalHtml = `
+    <div style="padding:20px;max-width:400px;">
+      <h3 style="margin:0 0 16px;">Edit Ingredient</h3>
+      <div style="display:grid;gap:12px;">
+        <div>
+          <label class="ing-edit-label">Name</label>
+          <input class="order-stock-input" style="width:100%;text-align:left;" value="${esc(ing.name)}" id="ing-quick-name" />
+        </div>
+        <div>
+          <label class="ing-edit-label">Category</label>
+          <select class="order-stock-input" style="width:100%;" id="ing-quick-category">${catSelect}</select>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+          <button class="btn btn-sm" onclick="closeModal()">Cancel</button>
+          <button class="btn btn-sm" style="background:var(--green);color:white;" onclick="saveIngredientQuick('${esc(ing.id)}')">Save</button>
+        </div>
+      </div>
+    </div>`;
+  showModal(modalHtml);
+}
+
+async function saveIngredientQuick(id) {
+  const ing = ingredientDbFull.find(i => i.id === id);
+  if (!ing) return;
+  const newName = document.getElementById('ing-quick-name').value.trim();
+  if (!newName) { toastError('Name is required'); return; }
+  ing.name = newName;
+  ing.category = document.getElementById('ing-quick-category').value;
+  try {
+    await apiPost('/api/ingredients/' + id, ing);
+    closeModal();
+    loadIngredientDb();
+    renderOrders();
+    toast('Ingredient updated');
+  } catch (e) {
+    toastError('Save failed: ' + e.message);
   }
 }
 
