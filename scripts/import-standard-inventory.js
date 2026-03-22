@@ -1,105 +1,73 @@
-// One-off script: import Standard Inventory from Google Sheet into data/standard-inventory.json
-// Source sheet: 1wyy7FIDWbVY9yu23RQvCg4LDdKfMfu1q9tEfOBAOi_g, gid=761928065
-// Column B = ingredient name, Column G = quantity
+// Import standard inventory from CSV into PostgreSQL
+// Usage: node scripts/import-standard-inventory.js <csv-path> [location]
+// CSV format: Ingredient,Supplier,Storage location,Unit,Units required,Amount per container,Amount required (in grams or ML),...
 
 try { require('dotenv').config(); } catch (e) {}
 const fs = require('fs');
-const path = require('path');
-const { google } = require('googleapis');
 const crypto = require('crypto');
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
 
-const SOURCE_SHEET_ID = '1wyy7FIDWbVY9yu23RQvCg4LDdKfMfu1q9tEfOBAOi_g';
-const SOURCE_GID = 761928065;
-
-const INGREDIENT_DB_SHEET_ID = '1yrYRECESZf6kP5GHwDDR9CmxBtm5G9-gRCPUJqgkzQc';
-const INGREDIENT_DB_GID = 1737213788;
-
-const STD_INV_FILE = path.join(__dirname, '..', 'data', 'standard-inventory.json');
-
-function newId() { return crypto.randomUUID(); }
-
-function getSheetsClient() {
-  const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || '{}');
-  if (!credentials.client_email) throw new Error('GOOGLE_CREDENTIALS not set or invalid');
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-  return google.sheets({ version: 'v4', auth });
-}
-
-async function getTabName(sheets, sheetId, targetGid) {
-  const meta = await sheets.spreadsheets.get({
-    spreadsheetId: sheetId,
-    fields: 'sheets.properties(title,sheetId)',
-  });
-  const tab = meta.data.sheets.find(s => s.properties.sheetId === targetGid);
-  if (!tab) throw new Error(`Tab with gid=${targetGid} not found in sheet ${sheetId}`);
-  return tab.properties.title;
+function parseCsvLine(line) {
+  const cols = [];
+  let cur = '';
+  let inQuotes = false;
+  for (const ch of line) {
+    if (ch === '"') { inQuotes = !inQuotes; continue; }
+    if (ch === ',' && !inQuotes) { cols.push(cur.trim()); cur = ''; continue; }
+    cur += ch;
+  }
+  cols.push(cur.trim());
+  return cols;
 }
 
 async function main() {
-  const sheets = getSheetsClient();
+  const csvPath = process.argv[2];
+  const location = process.argv[3] || 'west';
 
-  // 1. Find tab names
-  const [sourceTab, ingredientTab] = await Promise.all([
-    getTabName(sheets, SOURCE_SHEET_ID, SOURCE_GID),
-    getTabName(sheets, INGREDIENT_DB_SHEET_ID, INGREDIENT_DB_GID),
-  ]);
-  console.log(`Source tab: "${sourceTab}"`);
-  console.log(`Ingredient DB tab: "${ingredientTab}"`);
-
-  // 2. Read source sheet columns A:G (A=name, D=unit, G=quantity)
-  const sourceRes = await sheets.spreadsheets.values.get({
-    spreadsheetId: SOURCE_SHEET_ID,
-    range: `'${sourceTab}'!A:J`,
-  });
-  const sourceRows = sourceRes.data.values || [];
-  console.log(`Source rows fetched: ${sourceRows.length}`);
-
-  // 3. Read ingredient DB for unit lookup (B=name, F=unit roughly — will match by name)
-  const dbRes = await sheets.spreadsheets.values.get({
-    spreadsheetId: INGREDIENT_DB_SHEET_ID,
-    range: `'${ingredientTab}'!B3:R2000`,
-  });
-  const dbRows = dbRes.data.values || [];
-  console.log(`Ingredient DB rows fetched: ${dbRows.length}`);
-
-  // Build a name→unit map from the ingredient DB
-  // Based on server.js /api/ingredients: col0=name, col1=unit, col2=orderCode, col3=supplier
-  const unitMap = new Map();
-  for (const row of dbRows) {
-    const name = (row[0] || '').trim();
-    const unit = (row[1] || 'Grams').trim();
-    if (name) unitMap.set(name.toLowerCase(), unit);
+  if (!csvPath) {
+    console.error('Usage: node scripts/import-standard-inventory.js <csv-path> [location]');
+    process.exit(1);
   }
 
-  // 4. Parse source rows — skip header row, find ingredient entries
-  // A=index0(name), B=index1(supplier), C=index2(storage), D=index3(unit), G=index6(amount)
+  const raw = fs.readFileSync(csvPath, 'utf-8');
+  const lines = raw.split('\n').slice(1); // skip header
+
   const items = [];
-  for (let i = 1; i < sourceRows.length; i++) { // skip row 0 = header
-    const row = sourceRows[i];
-    const rawName = (row[0] || '').trim();   // Column A = ingredient name
-    const rawUnit = (row[3] || '').trim();   // Column D = unit
-    const rawQty  = (row[6] || '').trim();   // Column G = amount required
+  const seen = new Set();
 
-    if (!rawName || !rawQty) continue;
+  for (const line of lines) {
+    const cols = parseCsvLine(line);
+    const name = cols[0];
+    if (!name) continue;
 
-    const qty = parseFloat(rawQty.replace(',', '.'));
-    if (isNaN(qty) || qty <= 0) continue;
+    const unit = cols[3] || 'Grams';
+    const amountRaw = parseFloat((cols[6] || '0').replace(',', '.')) || 0;
+    if (amountRaw <= 0) continue;
 
-    // Use unit from sheet column D, fall back to ingredient DB lookup, then 'Grams'
-    const unit = rawUnit || unitMap.get(rawName.toLowerCase()) || 'Grams';
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
 
-    items.push({ id: newId(), name: rawName, amount: qty, unit });
-    console.log(`  ✓ ${rawName} — ${qty} ${unit}`);
+    items.push({
+      id: crypto.randomUUID(),
+      name,
+      amount: amountRaw,
+      unit,
+      location,
+    });
+    console.log(`  + ${name} — ${amountRaw} ${unit}`);
   }
 
-  console.log(`\nTotal items to import: ${items.length}`);
+  console.log(`\nImporting ${items.length} items for location "${location}"...`);
 
-  // 5. Write to standard-inventory.json
-  fs.writeFileSync(STD_INV_FILE, JSON.stringify(items, null, 2));
-  console.log(`\nWritten to ${STD_INV_FILE}`);
+  await prisma.$transaction([
+    prisma.standardInventory.deleteMany({ where: { location } }),
+    prisma.standardInventory.createMany({ data: items }),
+  ]);
+
+  console.log(`Done! ${items.length} items imported for ${location}.`);
+  await prisma.$disconnect();
 }
 
-main().catch(err => { console.error('Error:', err.message); process.exit(1); });
+main().catch(e => { console.error(e); process.exit(1); });
