@@ -523,8 +523,10 @@
 
   /* ═══════════ MOBILE ═══════════ */
   @media(max-width:600px){
-    /* Tighter padding */
-    .content{padding:10px 8px;}
+    /* Prevent wide grids from expanding the page */
+    .app-shell{max-width:100vw;overflow-x:hidden;}
+    .content{padding:10px 8px;max-width:100vw;overflow-x:hidden;}
+    .screen{overflow-x:hidden;}
     .card{padding:12px 10px;}
 
     /* Nav: compact on mobile */
@@ -581,6 +583,7 @@
     .ri-search{max-width:100%;}
 
     /* Order tables */
+    .order-tab-bar{overflow-x:auto;-webkit-overflow-scrolling:touch;}
     .ing-table{font-size:11px;}
     .ing-table th,.ing-table td{padding:4px 4px;}
     .order-stock-input{width:55px;font-size:11px;}

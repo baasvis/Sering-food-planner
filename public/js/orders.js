@@ -194,7 +194,7 @@ function renderStandardInventoryTab() {
 
   const itemsHtml = standardInventory.length === 0
     ? '<div class="empty">No items yet. Search above to add ingredients from the database.</div>'
-    : `<table class="ing-table">
+    : `<div style="overflow-x:auto;"><table class="ing-table">
         <thead><tr>
           <th>Ingredient</th>
           <th>Amount / week</th>
@@ -222,7 +222,7 @@ function renderStandardInventoryTab() {
             </tr>`;
           }).join('')}
         </tbody>
-      </table>`;
+      </table></div>`;
 
   return `
     <div>
