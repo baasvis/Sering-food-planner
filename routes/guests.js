@@ -47,7 +47,7 @@ router.get('/guest-history', async (req, res) => {
     res.json(guestHistoryToJson(histRows, metaRows));
   } catch (e) {
     console.error('guest-history read error:', e.message);
-    res.json({});
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -119,7 +119,7 @@ router.get('/guests-next-weeks', async (req, res) => {
     res.json(guestsNextWeeksToJson(rows));
   } catch (e) {
     console.error('guests-next-weeks read error:', e.message);
-    res.json({});
+    res.status(500).json({ error: e.message });
   }
 });
 

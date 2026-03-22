@@ -29,6 +29,13 @@ app.use('/api',                   require('./routes/inventory'));
 app.use('/api/feedback',          require('./routes/feedback'));
 app.use('/api/health',            require('./routes/health'));
 
+// ── Global error handler ──
+
+app.use((err, req, res, _next) => {
+  console.error('Unhandled error:', err.message);
+  res.status(err.status || 500).json({ error: err.message });
+});
+
 // ── Seed — on first deploy, write seed data to Postgres ──
 
 async function seedIfNeeded() {

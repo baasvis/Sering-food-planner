@@ -8,7 +8,8 @@ router.get('/standard-inventory', async (req, res) => {
     const items = await prisma.standardInventory.findMany();
     res.json(items);
   } catch (e) {
-    res.json([]);
+    console.error('standard-inventory read error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -39,7 +40,8 @@ router.get('/prep-checklist', async (req, res) => {
     });
     res.json(entry ? entry.checked : []);
   } catch (e) {
-    res.json([]);
+    console.error('prep-checklist read error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -80,7 +82,10 @@ router.get('/log', async (req, res) => {
       action: r.action,
       details: r.details,
     })));
-  } catch (e) { res.json([]); }
+  } catch (e) {
+    console.error('log read error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 module.exports = router;

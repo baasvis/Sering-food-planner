@@ -4,21 +4,23 @@
 - Node.js/Express server, vanilla JS frontend (no build step, no bundler)
 - All frontend JS files loaded as `<script>` tags — functions are global
 - PostgreSQL database via Prisma ORM, Google Sign-In for auth
-- Google Sheets still used for external recipe sheet reading only
+- Google Sheets API used for external recipe sheet reading only (lib/recipe-sheets.js)
 - Hosted on Railway (auto-deploy from main branch, Postgres plugin)
 
 ## Project Structure
 ```
-server.js              — Express app entry point, mounts routers
+server.js              — Express app entry point, mounts routers, global error handler
 lib/
   config.js            — Configuration, env vars
-  db.js                — Prisma client, dbReadAll/dbWriteAll, validators, per-tab writers
-  sheets.js            — Google Sheets client (external recipe reading only) + Hanos parser
+  db.js                — Prisma client, row transformers, dbReadAll/dbWriteAll, validators
+  recipe-sheets.js     — Google Sheets client (external recipe reading only)
+  hanos-parser.js      — Hanos quantity parser (hoeveelheid → grams)
 routes/
   auth.js              — Login, logout, session, requireAuth middleware
   data.js              — GET/POST /api/data + POST /api/data/patch (main planner state)
   recipes.js           — Recipe index CRUD + single recipe fetch
-  ingredients.js       — Ingredient CRUD + Hanos XLSX parser + upload
+  ingredients.js       — Ingredient CRUD + stock management
+  ingredients-import.js — Hanos XLSX upload + CSV migration
   guests.js            — Guest history + next-weeks predictions
   inventory.js         — Standard inventory + prep checklist + activity log
   feedback.js          — User feedback

@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { prisma, dbAppendLog } = require('../lib/db');
-const { getSheetsClient } = require('../lib/sheets');
+const { getSheetsClient } = require('../lib/recipe-sheets');
 
 router.get('/recipe-index', async (req, res) => {
   try {
