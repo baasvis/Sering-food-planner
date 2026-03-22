@@ -30,7 +30,7 @@
     }
   }
   *{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg3);color:var(--text);font-size:14px;line-height:1.5;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg3);color:var(--text);font-size:14px;line-height:1.5;overflow-x:hidden;}
 
   /* DASHBOARD */
   .dash-greeting{font-size:20px;font-weight:600;margin-bottom:4px;}
