@@ -20,7 +20,11 @@ function showScreen(name) {
 
 // ── DASHBOARD ────────────────────────────────────────────
 // Categories from ingredient DB that need chopping/prep
-const CHOPPABLE_CATEGORIES = ['vegetables', 'fruits', 'mushrooms', 'herbs', 'beans and legumes'];
+const CHOPPABLE_CATEGORIES = [
+  'vegetables & fruit',       // production DB
+  'herbs & spices',           // fresh herbs (dried spices caught by PANTRY_KEYWORDS)
+  'vegetables', 'fruits', 'mushrooms', 'herbs', 'beans and legumes',  // seed DB fallback
+];
 
 // Fallback keywords for ingredients not found in DB — these are NOT choppable
 // NOTE: fresh herbs removed (parsley, basil, cilantro, thyme, rosemary) — herbs ARE choppable
@@ -47,6 +51,14 @@ const PANTRY_KEYWORDS = [
   'seaweed','nori','wakame','kombu',
   'tahini','peanut butter','pindakaas',
   'lemon juice','citroensap','lime juice','limoensap',
+  'paste','puree','purée','mashed',
+  'dried','gedroogd','gerist','gemalen','gehakt',
+  'cashew','almond','amandel','walnut','walnoot','hazelno','pecannot','pistachio','pinda','macadamia',
+  'seed','zaad','zaden','pitten',
+  'rozijn','raisin','vijg','dadel','pruim','moerbeien',
+  'noten','nuts','nibs','flakes','vlokken',
+  'agar','xanthan','xanthana','lecithin','inulin','isomalt','pectin','gelespessa',
+  'msg','maggi','liquid smoke',
 ];
 
 // Build a lookup cache from ingredient DB (name/supplierName → category)
