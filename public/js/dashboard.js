@@ -427,9 +427,9 @@ function renderDashboardContent() {
   const doneCount  = allPrep.filter(i => checkedSet.has(i.key)).length;
 
   // ── Cook dish row helper — tappable checkbox ──
-  function cookDishRow(d, note, checkedSet, toggleFn) {
+  function cookDishRow(d, note, checkedSet, toggleFn, dateStr, meal) {
     const checked = checkedSet && checkedSet.has(d.id);
-    const req = calcRequiredForLoc(d, loc);
+    const req = (dateStr && meal) ? calcLitersForService(d, loc, dateStr, meal) : calcRequiredForLoc(d, loc);
     const typeColors = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
     const col = typeColors[d.type] || 'gray';
     return `<div class="dash-cook-item${checked ? ' checked' : ''}" onclick="${toggleFn}('${esc(d.id)}')">
@@ -474,10 +474,10 @@ function renderDashboardContent() {
         ? `<div class="dash-empty">Nothing marked as cooked yet — check the cook list below</div>`
         : `${heatUpLunch.length > 0 ? `
           <div class="dash-todo-group-hdr">🍴 Lunch service</div>
-          ${heatUpLunch.map(d => cookDishRow(d, 'reheat', S.heatChecked, 'toggleHeatItem')).join('')}` : ''}
+          ${heatUpLunch.map(d => cookDishRow(d, 'reheat', S.heatChecked, 'toggleHeatItem', todayIso, 'lunch')).join('')}` : ''}
         ${heatUpDinner.length > 0 ? `
           <div class="dash-todo-group-hdr"${heatUpLunch.length > 0 ? ' style="margin-top:10px;"' : ''}>🌙 Dinner service</div>
-          ${heatUpDinner.map(d => cookDishRow(d, 'reheat', S.heatChecked, 'toggleHeatItem')).join('')}` : ''}`
+          ${heatUpDinner.map(d => cookDishRow(d, 'reheat', S.heatChecked, 'toggleHeatItem', todayIso, 'dinner')).join('')}` : ''}`
       }
     </div>
 
@@ -490,10 +490,10 @@ function renderDashboardContent() {
         ? `<div class="dash-empty">All dishes are cooked — great job! 🎉</div>`
         : `${cookLunch.length > 0 ? `
           <div class="dash-todo-group-hdr">🍴 Today — Lunch service</div>
-          ${cookLunch.map(d => cookDishRow(d, 'cook today', S.cookChecked, 'toggleCookItem')).join('')}` : ''}
+          ${cookLunch.map(d => cookDishRow(d, 'cook today', S.cookChecked, 'toggleCookItem', todayIso, 'lunch')).join('')}` : ''}
         ${cookDinner.length > 0 ? `
           <div class="dash-todo-group-hdr"${cookLunch.length > 0 ? ' style="margin-top:10px;"' : ''}>🌙 Today — Dinner service</div>
-          ${cookDinner.map(d => cookDishRow(d, 'cook today', S.cookChecked, 'toggleCookItem')).join('')}` : ''}
+          ${cookDinner.map(d => cookDishRow(d, 'cook today', S.cookChecked, 'toggleCookItem', todayIso, 'dinner')).join('')}` : ''}
         ${cookTomorrow.length > 0 ? `
           <div class="dash-todo-group-hdr"${(cookLunch.length + cookDinner.length) > 0 ? ' style="margin-top:10px;"' : ''}>📅 Future service</div>
           <div class="dash-todo-group-sub">Cook the full batch now — these dishes are on the plan for upcoming slots</div>

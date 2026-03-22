@@ -73,12 +73,15 @@ async function initApp() {
   rebuildPlanner();
   renderDashboard();
   // Auto-refresh every 60s so the UI updates when a service deadline passes (13:45 / 20:15)
+  // Only rebuild planner data silently; re-render only non-dashboard views to avoid flash
   setInterval(() => {
-    const scrollY = window.scrollY;
     rebuildPlanner();
-    rerenderCurrentView();
-    // Restore scroll position after DOM rebuild
-    requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    const active = document.querySelector('.screen.active');
+    if (active && active.id !== 'screen-dashboard') {
+      const scrollY = window.scrollY;
+      rerenderCurrentView();
+      requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    }
   }, 60000);
 }
 
