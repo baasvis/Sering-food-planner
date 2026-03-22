@@ -99,7 +99,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
   - Combined Order: merges both lists, sums overlapping ingredients, grouped by supplier (Hanos first)
 - Ingredient database integration (separate Google Sheet with supplier codes, units, prices)
 - Feedback system (floating purple button, structured form with 4 types, stores to Google Sheets)
-- Mobile responsive layout (card-based dishes on phone, bottom-sheet modals, compact nav)
+- Mobile responsive layout (card-based dishes on phone, bottom-sheet modals, fixed bottom navigation bar with icons, compact sticky header)
 - Logistics colour coding with legend, filter bars, section grouping (To cook / Cooked / Frozen)
 
 **File structure:**

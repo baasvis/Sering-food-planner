@@ -22,14 +22,14 @@ routes/
   feedback.js          — User feedback
   health.js            — Health check endpoint
 public/
-  index.html           — Shell HTML + login screen (~74 lines)
+  index.html           — Shell HTML + login screen + bottom nav (~96 lines)
   style.css            — All CSS styles
   js/
     state.js           — Constants (DAYS, MEALS, STORAGE, etc.) + global state object S
     auth.js            — Google Sign-In, sessions
     utils.js           — API helpers (apiGet/apiPost), save system, toast, prep checklist
     core.js            — rebuildPlanner, calcRequired, diffStr, badges, isServicePast
-    dashboard.js       — Dashboard screen
+    dashboard.js       — showScreen() (syncs top + bottom nav), Dashboard screen
     predictions.js     — Guest prediction from POS CSV data
     guests.js          — Guest count tables
     planner.js         — Week plan grid + transport + inventory modal
