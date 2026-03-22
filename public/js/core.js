@@ -90,18 +90,31 @@ function getGuests(loc, dateStr, meal) {
   const lk = loc === 'west' ? 'west' : 'centraal';
   const dn = dateToDayName(dateStr);
 
-  // Check S.guestsNextWeeks for this date's week
+  // Determine if dateStr falls in the current week
   const d = new Date(dateStr + 'T12:00:00');
   const dow = d.getDay();
   const mon = new Date(d);
   mon.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
   const mk = dateToIso(mon);
+
+  const today = getToday();
+  const todayDow = today.getDay();
+  const curMon = new Date(today);
+  curMon.setDate(today.getDate() + (todayDow === 0 ? -6 : 1 - todayDow));
+  const curMk = dateToIso(curMon);
+
+  // Current week: use S.guests (user-edited base counts)
+  if (mk === curMk) {
+    return ((S.guests[lk] || {})[dn] || {})[meal] || 0;
+  }
+
+  // Future/past weeks: use guestsNextWeeks predictions
   const weekData = S.guestsNextWeeks[mk];
   if (weekData && weekData[lk] && weekData[lk][dn] && weekData[lk][dn][meal] !== undefined) {
     return weekData[lk][dn][meal];
   }
 
-  // Fall back to current week's base guest counts
+  // Final fallback to base counts
   return ((S.guests[lk] || {})[dn] || {})[meal] || 0;
 }
 
