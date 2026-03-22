@@ -384,18 +384,22 @@ function renderDishesTab() {
         else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
         else codeDisplay = `<span class="order-code" title="Click to select">${esc(ing.orderCode)}</span>`;
 
-        const stockVal = orderInventory[key] !== undefined ? orderInventory[key] : '';
-        const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" />`;
+        const dbStock = getDbStockTotal(ing.db);
+        const hasManualStock = orderInventory[key] !== undefined;
+        const stockVal = hasManualStock ? orderInventory[key] : (dbStock > 0 ? dbStock : '');
+        const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
+        const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" />${stockLabel}`;
 
-        const inStock = parseFloat(orderInventory[key]) || 0;
-        const toOrder = Math.max(0, amtNeeded - inStock);
-        const toOrderDisplay = orderInventory[key] !== undefined
+        const effectiveStock = hasManualStock ? (parseFloat(orderInventory[key]) || 0) : dbStock;
+        const hasStockValue = hasManualStock || dbStock > 0;
+        const toOrder = Math.max(0, amtNeeded - effectiveStock);
+        const toOrderDisplay = hasStockValue
           ? (toOrder > 0
             ? `<span class="to-order-positive">${toOrder.toLocaleString()} ${esc(dbUnit)}</span>`
             : `<span class="to-order-zero">\u2713 enough</span>`)
           : `<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>`;
 
-        const orderAmt = orderInventory[key] !== undefined ? toOrder : amtNeeded;
+        const orderAmt = hasStockValue ? toOrder : amtNeeded;
         const orderAmtGrams = toGrams(orderAmt, dbUnit);
         const orderCalc = ing.db ? calcOrderUnits(orderAmtGrams, ing.db) : null;
         const orderUnits = orderCalc && orderCalc.units > 0
@@ -657,44 +661,79 @@ function copyCombinedOrderCodes(supplier) {
 
 function toggleOrderSection(key) { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }
 
+// Persist stock to the ingredient DB so it survives reloads and syncs across tabs
+let _stockSaveTimeout = null;
+function persistIngredientStock(ingredientName, amount) {
+  const db = lookupIngredient(ingredientName);
+  if (!db || !db.id) return;
+  const loc = S.currentLoc || 'west';
+  const amountNum = parseFloat(amount) || 0;
+
+  // Update in S.ingredientDb immediately
+  if (!db.stock) db.stock = {};
+  db.stock[loc] = { amount: amountNum, date: new Date().toISOString().slice(0, 10) };
+
+  // Update in ingredientDbFull too (if loaded)
+  if (typeof ingredientDbFull !== 'undefined') {
+    const full = ingredientDbFull.find(i => i.id === db.id);
+    if (full) {
+      if (!full.stock) full.stock = {};
+      full.stock[loc] = { amount: amountNum, date: new Date().toISOString().slice(0, 10) };
+    }
+  }
+
+  // Debounced save to backend
+  clearTimeout(_stockSaveTimeout);
+  _stockSaveTimeout = setTimeout(() => {
+    fetch('/api/ingredients/stock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ingredientId: db.id, location: loc, amount: amountNum }),
+    }).catch(e => console.error('Stock save failed:', e));
+  }, 600);
+}
+
 function updateCombinedOrderStock(key, val) {
   if (val === '' || val === null) {
     delete combinedOrderStock[key];
   } else {
     combinedOrderStock[key] = parseFloat(val) || 0;
   }
+
+  // Persist to DB
+  const db = lookupIngredient(key);
+  if (db) persistIngredientStock(db.name, val);
+
   const row = document.querySelector(`[data-combined-key="${key}"]`);
   if (!row) return;
   const neededGrams = parseFloat(row.dataset.needed) || 0;
   const inStockGrams = parseFloat(val) || 0;
   const toOrderGrams = Math.max(0, neededGrams - inStockGrams);
 
-  // Update "To order" cell
   const toOrderEl = row.querySelector('.to-order-cell');
   if (toOrderEl) {
     if (val === '' || val === null || val === undefined) {
-      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock →</span>';
+      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>';
     } else if (toOrderGrams > 0) {
       const f = formatGrams(toOrderGrams);
       toOrderEl.innerHTML = `<span class="to-order-positive">${f.amount} ${esc(f.unit)}</span>`;
     } else {
-      toOrderEl.innerHTML = '<span class="to-order-zero">✓ enough</span>';
+      toOrderEl.innerHTML = '<span class="to-order-zero">\u2713 enough</span>';
     }
   }
 
-  // Update "Order units" cell
   const orderUnitsEl = row.querySelector('.order-units-cell');
   if (orderUnitsEl) {
     const dbName = row.dataset.dbname || '';
-    const db = dbName ? lookupIngredient(dbName) : null;
+    const dbLookup = dbName ? lookupIngredient(dbName) : null;
     const orderAmt = (val === '' || val === null || val === undefined) ? neededGrams : toOrderGrams;
-    const orderCalc = db ? calcOrderUnits(orderAmt, db) : null;
+    const orderCalc = dbLookup ? calcOrderUnits(orderAmt, dbLookup) : null;
     if (orderCalc && orderCalc.units > 0) {
       orderUnitsEl.innerHTML = `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`;
     } else if (orderAmt === 0) {
-      orderUnitsEl.innerHTML = '<span class="to-order-zero">—</span>';
+      orderUnitsEl.innerHTML = '<span class="to-order-zero">\u2014</span>';
     } else {
-      orderUnitsEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">—</span>';
+      orderUnitsEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">\u2014</span>';
     }
   }
 }
@@ -705,6 +744,11 @@ function updateOrderStock(key, val) {
   } else {
     orderInventory[key] = parseFloat(val) || 0;
   }
+
+  // Persist to DB
+  const db = lookupIngredient(key);
+  if (db) persistIngredientStock(db.name, val);
+
   const row = document.querySelector(`[data-stock-key="${key}"]`);
   if (!row) return;
   const needed = parseFloat(row.dataset.needed) || 0;
@@ -714,11 +758,11 @@ function updateOrderStock(key, val) {
   const dbUnit = row.dataset.unit || 'g';
   if (toOrderEl) {
     if (val === '' || val === null || val === undefined) {
-      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock →</span>';
+      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>';
     } else if (toOrder > 0) {
       toOrderEl.innerHTML = `<span class="to-order-positive">${toOrder.toLocaleString()} ${esc(dbUnit)}</span>`;
     } else {
-      toOrderEl.innerHTML = '<span class="to-order-zero">✓ enough</span>';
+      toOrderEl.innerHTML = '<span class="to-order-zero">\u2713 enough</span>';
     }
   }
 }

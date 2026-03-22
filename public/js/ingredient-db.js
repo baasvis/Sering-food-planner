@@ -106,6 +106,43 @@ function renderPriceLevel(level) {
   return `<span style="font-size:11px;font-weight:600;color:${colors[level]||'var(--text2)'};" title="${level}">${icons[level]||level}</span>`;
 }
 
+function renderInlineStock(ing) {
+  const stock = ing.stock || {};
+  const wAmt = (stock.west && stock.west.amount) || '';
+  const cAmt = (stock.centraal && stock.centraal.amount) || '';
+  return `<div style="display:flex;gap:2px;align-items:center;">
+    <span style="font-size:9px;color:var(--text3);">W:</span><input class="order-stock-input" style="width:45px;font-size:11px;height:22px;" type="number" min="0" step="1" value="${wAmt}" placeholder="0" oninput="saveInlineStock('${esc(ing.id)}','west',this.value)" />
+    <span style="font-size:9px;color:var(--text3);">C:</span><input class="order-stock-input" style="width:45px;font-size:11px;height:22px;" type="number" min="0" step="1" value="${cAmt}" placeholder="0" oninput="saveInlineStock('${esc(ing.id)}','centraal',this.value)" />
+  </div>`;
+}
+
+let _inlineStockTimeout = null;
+function saveInlineStock(ingId, location, val) {
+  const amount = parseFloat(val) || 0;
+
+  // Update local state
+  const ing = ingredientDbFull.find(i => i.id === ingId);
+  if (ing) {
+    if (!ing.stock) ing.stock = {};
+    ing.stock[location] = { amount, date: new Date().toISOString().slice(0, 10) };
+  }
+  const dbIng = S.ingredientDb.find(i => i.id === ingId);
+  if (dbIng) {
+    if (!dbIng.stock) dbIng.stock = {};
+    dbIng.stock[location] = { amount, date: new Date().toISOString().slice(0, 10) };
+  }
+
+  // Debounced save to backend
+  clearTimeout(_inlineStockTimeout);
+  _inlineStockTimeout = setTimeout(() => {
+    fetch('/api/ingredients/stock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ingredientId: ingId, location, amount }),
+    }).catch(e => console.error('Stock save failed:', e));
+  }, 600);
+}
+
 function renderStockBadges(stock) {
   if (!stock || (!stock.west && !stock.centraal)) return '<span style="color:var(--text3);font-size:11px;">—</span>';
   const parts = [];
@@ -216,7 +253,7 @@ function renderIngredientDbTab() {
           <td>${ing.orderCode ? '<span class="order-code">' + esc(ing.orderCode) + '</span>' : '<span style="color:var(--text3);">—</span>'}</td>
           <td style="font-size:12px;">${ing.orderUnit ? esc(ing.orderUnit) : esc(ing.unit || '—')}${ing.orderPrice ? ' · \u20AC' + Number(ing.orderPrice).toFixed(2) : ''}</td>
           <td style="font-size:11px;">${renderPriceLevel(ing.priceLevel)}${priceAlertIcon}${ing.pricePer100g ? '<div style="color:var(--text3);">\u20AC' + ing.pricePer100g.toFixed(2) + '/100g</div>' : ''}</td>
-          <td>${renderStockBadges(ing.stock)}</td>
+          <td>${renderInlineStock(ing)}</td>
           <td><span style="cursor:pointer;font-size:16px;" onclick="toggleIngredientActive('${esc(ing.id)}')">${ing.active !== false ? '\u2705' : '\u274C'}</span></td>
           <td>
             <button class="btn btn-sm" onclick="ingredientDbEditId='${esc(ing.id)}';renderOrders()">Edit</button>
