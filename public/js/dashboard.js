@@ -22,32 +22,76 @@ function showScreen(name) {
 // Categories from ingredient DB that need chopping/prep
 const CHOPPABLE_CATEGORIES = ['vegetables', 'fruits', 'mushrooms', 'herbs', 'beans and legumes'];
 
-// Build a lookup cache from ingredient DB (name → category)
+// Fallback keywords for ingredients not found in DB — these are NOT choppable
+// NOTE: fresh herbs removed (parsley, basil, cilantro, thyme, rosemary) — herbs ARE choppable
+const PANTRY_KEYWORDS = [
+  'oil','olie','salt','zout','sugar','suiker','pepper','peper',
+  'vinegar','azijn','soy sauce','sojasaus','ketjap','tamari',
+  'flour','meel','bloem','butter','boter','margarine',
+  'cream','room','slagroom','milk','melk',
+  'stock','bouillon','broth',
+  'powder','poeder','cumin','komijn','cinnamon','kaneel',
+  'turmeric','kurkuma','paprikapoeder','chili powder','chilipoeder',
+  'nutmeg','nootmuskaat','cloves','kruidnagel',
+  'bay leaf','laurier',
+  'coconut milk','kokosmelk','coconut cream','kokosroom',
+  'tomato paste','tomatenpuree','tomato puree',
+  'mustard','mosterd','honey','honing','maple','ahorn',
+  'rice','rijst','pasta','noodles','noedels','couscous',
+  'sambal','sriracha','hot sauce','tabasco',
+  'water','cornstarch','maizena','agar','tapioca',
+  'yeast','gist','baking powder','bakpoeder','baking soda',
+  'breadcrumbs','paneermeel','panko',
+  'vanilla','vanille','extract','essence',
+  'miso','nutritional yeast','gistgvlokken',
+  'seaweed','nori','wakame','kombu',
+  'tahini','peanut butter','pindakaas',
+  'lemon juice','citroensap','lime juice','limoensap',
+];
+
+// Build a lookup cache from ingredient DB (name/supplierName → category)
 let _ingredientCategoryCache = null;
 function getIngredientCategoryCache() {
   if (_ingredientCategoryCache && _ingredientCategoryCache.size > 0) return _ingredientCategoryCache;
   _ingredientCategoryCache = new Map();
   (S.ingredientDb || []).forEach(ing => {
-    if (ing.name && ing.category) {
-      _ingredientCategoryCache.set(ing.name.toLowerCase().trim(), ing.category.toLowerCase().trim());
-    }
+    const cat = (ing.category || '').toLowerCase().trim();
+    if (!cat) return;
+    if (ing.name) _ingredientCategoryCache.set(ing.name.toLowerCase().trim(), cat);
+    if (ing.supplierName) _ingredientCategoryCache.set(ing.supplierName.toLowerCase().trim(), cat);
   });
   return _ingredientCategoryCache;
 }
 
 function isChoppableIngredient(name) {
-  const cache = getIngredientCategoryCache();
   const lower = name.toLowerCase().trim();
-  const category = cache.get(lower);
-  if (category) return CHOPPABLE_CATEGORIES.includes(category);
-  // Fuzzy match: try matching start of name (e.g. "Carrot (purple)" → "carrot")
+  // Hard exclusion: pantry staples are never choppable regardless of DB category
+  if (PANTRY_KEYWORDS.some(kw => lower.includes(kw))) return false;
+  // Check ingredient DB categories
+  const cache = getIngredientCategoryCache();
+  // Exact match
+  const exact = cache.get(lower);
+  if (exact) return CHOPPABLE_CATEGORIES.includes(exact);
+  // Word-level fuzzy: "red onion" contains word "onion", "carrot (purple)" contains "carrot"
+  const wordBoundary = (haystack, needle) => {
+    const i = haystack.indexOf(needle);
+    if (i === -1) return false;
+    const before = i === 0 || /\W/.test(haystack[i - 1]);
+    const after = i + needle.length >= haystack.length || /\W/.test(haystack[i + needle.length]);
+    return before && after;
+  };
+  const matchedCats = [];
   for (const [dbName, cat] of cache) {
-    if (lower.startsWith(dbName) || dbName.startsWith(lower)) {
-      return CHOPPABLE_CATEGORIES.includes(cat);
+    if (dbName === lower) continue;
+    if (wordBoundary(dbName, lower) || wordBoundary(lower, dbName)) {
+      matchedCats.push(cat);
     }
   }
-  // Not found in DB — exclude by default (only show known choppable items)
-  return false;
+  if (matchedCats.length > 0) {
+    return matchedCats.some(cat => CHOPPABLE_CATEGORIES.includes(cat));
+  }
+  // Not found in DB and not a pantry keyword — include it
+  return true;
 }
 
 function isDishAtLocation(dish, loc) {
