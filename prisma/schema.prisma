@@ -1,0 +1,197 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Dish {
+  id                String    @id
+  name              String
+  type              String    // 'Soup', 'Main course', 'Dessert'
+  stock             Float     @default(0)
+  serving           Int       @default(280)
+  storage           String    @default("Gastro")
+  logistics         String    @default("Sering West")
+  allergens         String[]
+  extraAllergens    String[]  @map("extra_allergens")
+  orderFor          Boolean   @default(false) @map("order_for")
+  cookMode          String    @default("day") @map("cook_mode")
+  cookDay           String?   @map("cook_day")
+  cookDate          String?   @map("cook_date")
+  cookConfirmed     Boolean   @default(false) @map("cook_confirmed")
+  recipeSheetId     String?   @map("recipe_sheet_id")
+  recipeVolume      Float?    @map("recipe_volume")
+  recipeIngredients Json?     @map("recipe_ingredients")
+  parentId          String?   @map("parent_id")
+  createdAt         String    @map("created_at")
+  services          Service[]
+
+  @@map("dishes")
+}
+
+model Service {
+  id       String @id
+  dishId   String @map("dish_id")
+  location String
+  date     String
+  meal     String
+  dish     Dish   @relation(fields: [dishId], references: [id], onDelete: Cascade)
+
+  @@map("services")
+}
+
+model Guest {
+  id       Int    @id @default(autoincrement())
+  location String
+  day      String
+  lunch    Int    @default(0)
+  dinner   Int    @default(0)
+
+  @@unique([location, day])
+  @@map("guests")
+}
+
+model RecipeIndex {
+  id                String   @id
+  name              String
+  type              String   @default("Soup")
+  recipeSheetId     String?  @map("recipe_sheet_id")
+  allergens         String[]
+  costPerServing    String   @default("") @map("cost_per_serving")
+  structure         String   @default("")
+  seasonality       String   @default("")
+  servingTemp       String   @default("") @map("serving_temp")
+  servingSize       Int      @default(280) @map("serving_size")
+  recipeVolume      Float?   @map("recipe_volume")
+  recipeIngredients Json?    @map("recipe_ingredients")
+  createdAt         String   @map("created_at")
+  avgSkill          Float    @default(0) @map("avg_skill")
+  avgSpeed          Float    @default(0) @map("avg_speed")
+  avgBanger         Float    @default(0) @map("avg_banger")
+  timesServed       Int      @default(0) @map("times_served")
+
+  @@map("recipe_index")
+}
+
+model Catering {
+  id             String  @id
+  name           String  @default("")
+  date           String?
+  guestCount     Int     @default(0) @map("guest_count")
+  deliveryMode   String  @default("pickup") @map("delivery_mode")
+  dishes         Json    @default("[]")
+  logisticsNotes String  @default("") @map("logistics_notes")
+  createdAt      String  @map("created_at")
+
+  @@map("caterings")
+}
+
+model TransportItem {
+  id   String @id
+  text String
+
+  @@map("transport_items")
+}
+
+model Ingredient {
+  id                String   @id
+  name              String   @default("")
+  supplierName      String   @default("") @map("supplier_name")
+  types             Json     @default("[]")
+  category          String   @default("")
+  unit              String   @default("Grams")
+  supplier          String   @default("")
+  orderCode         String   @default("") @map("order_code")
+  orderUnit         String   @default("") @map("order_unit")
+  orderUnitStandard String   @default("") @map("order_unit_standard")
+  orderPrice        Float?   @map("order_price")
+  orderAmountGrams  Float    @default(0) @map("order_amount_grams")
+  priceLevel        String   @default("") @map("price_level")
+  pricePer100g      Float    @default(0) @map("price_per_100g")
+  priceHistory      Json     @default("[]") @map("price_history")
+  priceAlert        Boolean  @default(false) @map("price_alert")
+  storageLocations  Json     @default("{}") @map("storage_locations")
+  stock             Json     @default("{}")
+  nutrition         Json     @default("{}")
+  allergens         String   @default("")
+  notes             String   @default("")
+  active            Boolean  @default(true)
+
+  @@map("ingredients")
+}
+
+model GuestHistory {
+  id       Int    @id @default(autoincrement())
+  location String
+  meal     String
+  date     String
+  count    Int    @default(0)
+
+  @@unique([location, meal, date])
+  @@map("guest_history")
+}
+
+model GuestHistoryMeta {
+  key   String @id
+  value String
+
+  @@map("guest_history_meta")
+}
+
+model GuestsNextWeeks {
+  id        Int    @id @default(autoincrement())
+  mondayKey String @map("monday_key")
+  location  String
+  day       String
+  meal      String
+  count     Int    @default(0)
+
+  @@unique([mondayKey, location, day, meal])
+  @@map("guests_next_weeks")
+}
+
+model Log {
+  id        Int    @id @default(autoincrement())
+  timestamp String
+  email     String
+  name      String
+  action    String
+  details   String
+
+  @@map("log")
+}
+
+model Feedback {
+  id        Int    @id @default(autoincrement())
+  timestamp String
+  user      String  @default("anonymous")
+  type      String  @default("general")
+  screen    String  @default("")
+  text      String
+  userAgent String  @default("") @map("user_agent")
+
+  @@map("feedback")
+}
+
+model StandardInventory {
+  id     String @id
+  name   String
+  amount Float
+  unit   String
+
+  @@map("standard_inventory")
+}
+
+model PrepChecklist {
+  id        Int      @id @default(autoincrement())
+  loc       String
+  date      String
+  checked   Json     @default("[]")
+  updatedAt DateTime @default(now()) @map("updated_at")
+
+  @@unique([loc, date])
+  @@map("prep_checklist")
+}

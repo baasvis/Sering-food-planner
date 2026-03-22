@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateDishes, validateGuests, withWriteLock } = require('../lib/sheets');
+const { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateDishes, validateGuests } = require('../lib/db');
 
 router.get('/', async (req, res) => {
   try { res.json(await dbReadAll()); }
@@ -18,7 +18,7 @@ router.post('/', async (req, res) => {
     const guestErr = validateGuests(guests);
     if (guestErr) return res.status(400).json({ error: guestErr });
 
-    await withWriteLock(() => dbWriteAll(dishes, guests, caterings, transportItems));
+    await dbWriteAll(dishes, guests, caterings, transportItems);
 
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'save', `${dishes.length} dishes`);

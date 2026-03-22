@@ -1,14 +1,29 @@
 const router = require('express').Router();
-const { CONFIG } = require('../lib/config');
-const { getSheetsClient, readTab, writeTab, ensureTabsExist, withWriteLock, dbAppendLog, RECIPE_INDEX_HEADERS, rowToRecipeIndex, recipeIndexToRow } = require('../lib/sheets');
+const { prisma, dbAppendLog } = require('../lib/db');
+const { getSheetsClient } = require('../lib/sheets');
 
 router.get('/recipe-index', async (req, res) => {
-  const sheets = getSheetsClient();
-  if (!sheets || !CONFIG.DB_SHEET_ID) return res.json([]);
   try {
-    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['recipe_index']);
-    const rows = await readTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index');
-    res.json(rows.map(rowToRecipeIndex));
+    const rows = await prisma.recipeIndex.findMany();
+    res.json(rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      recipeSheetId: r.recipeSheetId,
+      allergens: r.allergens,
+      costPerServing: r.costPerServing,
+      structure: r.structure,
+      seasonality: r.seasonality,
+      servingTemp: r.servingTemp,
+      servingSize: r.servingSize,
+      recipeVolume: r.recipeVolume,
+      recipeIngredients: r.recipeIngredients,
+      createdAt: r.createdAt,
+      avgSkill: r.avgSkill,
+      avgSpeed: r.avgSpeed,
+      avgBanger: r.avgBanger,
+      timesServed: r.timesServed,
+    })));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -16,16 +31,44 @@ router.post('/recipe-index', async (req, res) => {
   const recipe = req.body;
   if (!recipe || !recipe.id || !recipe.name) return res.status(400).json({ error: 'id and name required' });
   try {
-    await withWriteLock(async () => {
-      const sheets = getSheetsClient();
-      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
-      await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['recipe_index']);
-      const existing = await readTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index');
-      const all = existing.map(rowToRecipeIndex);
-      const idx = all.findIndex(r => r.id === recipe.id);
-      if (idx >= 0) all[idx] = recipe;
-      else all.push(recipe);
-      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index', RECIPE_INDEX_HEADERS, all.map(recipeIndexToRow));
+    await prisma.recipeIndex.upsert({
+      where: { id: recipe.id },
+      create: {
+        id: recipe.id,
+        name: recipe.name,
+        type: recipe.type || 'Soup',
+        recipeSheetId: recipe.recipeSheetId || null,
+        allergens: recipe.allergens || [],
+        costPerServing: recipe.costPerServing || '',
+        structure: recipe.structure || '',
+        seasonality: recipe.seasonality || '',
+        servingTemp: recipe.servingTemp || '',
+        servingSize: recipe.servingSize || 280,
+        recipeVolume: recipe.recipeVolume || null,
+        recipeIngredients: recipe.recipeIngredients || undefined,
+        createdAt: recipe.createdAt || new Date().toISOString(),
+        avgSkill: recipe.avgSkill || 0,
+        avgSpeed: recipe.avgSpeed || 0,
+        avgBanger: recipe.avgBanger || 0,
+        timesServed: recipe.timesServed || 0,
+      },
+      update: {
+        name: recipe.name,
+        type: recipe.type || 'Soup',
+        recipeSheetId: recipe.recipeSheetId || null,
+        allergens: recipe.allergens || [],
+        costPerServing: recipe.costPerServing || '',
+        structure: recipe.structure || '',
+        seasonality: recipe.seasonality || '',
+        servingTemp: recipe.servingTemp || '',
+        servingSize: recipe.servingSize || 280,
+        recipeVolume: recipe.recipeVolume || null,
+        recipeIngredients: recipe.recipeIngredients || undefined,
+        avgSkill: recipe.avgSkill || 0,
+        avgSpeed: recipe.avgSpeed || 0,
+        avgBanger: recipe.avgBanger || 0,
+        timesServed: recipe.timesServed || 0,
+      },
     });
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'recipe-index', `saved "${recipe.name}"`);
@@ -36,17 +79,12 @@ router.post('/recipe-index', async (req, res) => {
 router.delete('/recipe-index/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    await withWriteLock(async () => {
-      const sheets = getSheetsClient();
-      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
-      const existing = await readTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index');
-      const all = existing.map(rowToRecipeIndex).filter(r => r.id !== id);
-      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'recipe_index', RECIPE_INDEX_HEADERS, all.map(recipeIndexToRow));
-    });
+    await prisma.recipeIndex.delete({ where: { id } });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// External recipe reading — still uses Google Sheets API
 router.get('/recipe', async (req, res) => {
   const { sheetId } = req.query;
   if (!sheetId) return res.status(400).json({ error: 'sheetId required' });

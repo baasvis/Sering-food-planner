@@ -1,17 +1,16 @@
 const router = require('express').Router();
-const { CONFIG } = require('../lib/config');
-const { getSheetsClient, readTab, writeTab, ensureTabsExist, withWriteLock, GUEST_HISTORY_HEADERS, GUEST_HISTORY_META_HEADERS, GUESTS_NEXT_WEEKS_HEADERS } = require('../lib/sheets');
+const { prisma } = require('../lib/db');
 
 // ── Guest history helpers ──
 
-function guestHistoryRowsToJson(histRows, metaRows) {
+function guestHistoryToJson(histRows, metaRows) {
   const result = {};
   for (const row of histRows) {
     const loc = row.location;
     const meal = row.meal;
     if (!result[loc]) result[loc] = {};
     if (!result[loc][meal]) result[loc][meal] = {};
-    result[loc][meal][row.date] = parseInt(row.count) || 0;
+    result[loc][meal][row.date] = row.count;
   }
   for (const row of metaRows) {
     if (row.key === 'deviceMap') {
@@ -23,63 +22,29 @@ function guestHistoryRowsToJson(histRows, metaRows) {
   return result;
 }
 
-function guestHistoryJsonToRows(data) {
-  const rows = [];
-  for (const loc of ['west', 'centraal']) {
-    if (!data[loc]) continue;
-    for (const meal of ['lunch', 'dinner', 'staff', 'staff_lunch', 'staff_dinner']) {
-      if (!data[loc][meal]) continue;
-      for (const [date, count] of Object.entries(data[loc][meal])) {
-        rows.push([loc, meal, date, count]);
-      }
-    }
-  }
-  return rows;
-}
-
 // ── Next weeks helpers ──
 
-function guestsNextWeeksRowsToJson(rows) {
+function guestsNextWeeksToJson(rows) {
   const result = {};
   for (const row of rows) {
-    const mk = row.monday_key;
+    const mk = row.mondayKey;
     if (!result[mk]) result[mk] = {};
     if (!result[mk][row.location]) result[mk][row.location] = {};
     if (!result[mk][row.location][row.day]) result[mk][row.location][row.day] = {};
-    result[mk][row.location][row.day][row.meal] = parseInt(row.count) || 0;
+    result[mk][row.location][row.day][row.meal] = row.count;
   }
   return result;
-}
-
-function guestsNextWeeksJsonToRows(data) {
-  const rows = [];
-  for (const [mondayKey, locations] of Object.entries(data)) {
-    if (typeof locations !== 'object') continue;
-    for (const [loc, days] of Object.entries(locations)) {
-      if (typeof days !== 'object') continue;
-      for (const [day, meals] of Object.entries(days)) {
-        if (typeof meals !== 'object') continue;
-        for (const [meal, count] of Object.entries(meals)) {
-          rows.push([mondayKey, loc, day, meal, count]);
-        }
-      }
-    }
-  }
-  return rows;
 }
 
 // ── Routes ──
 
 router.get('/guest-history', async (req, res) => {
-  const sheets = getSheetsClient();
-  if (!sheets || !CONFIG.DB_SHEET_ID) return res.json({});
   try {
-    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['guest_history', 'guest_history_meta']);
     const [histRows, metaRows] = await Promise.all([
-      readTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history'),
-      readTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history_meta'),
+      prisma.guestHistory.findMany(),
+      prisma.guestHistoryMeta.findMany(),
     ]);
-    res.json(guestHistoryRowsToJson(histRows, metaRows));
+    res.json(guestHistoryToJson(histRows, metaRows));
   } catch (e) {
     console.error('guest-history read error:', e.message);
     res.json({});
@@ -90,16 +55,12 @@ router.post('/guest-history', async (req, res) => {
   const incoming = req.body;
   if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'Expected object' });
   try {
-    await withWriteLock(async () => {
-      const sheets = getSheetsClient();
-      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
-      await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['guest_history', 'guest_history_meta']);
-
-      const [existingHistRows, existingMetaRows] = await Promise.all([
-        readTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history'),
-        readTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history_meta'),
+    await prisma.$transaction(async (tx) => {
+      const [existingHist, existingMeta] = await Promise.all([
+        tx.guestHistory.findMany(),
+        tx.guestHistoryMeta.findMany(),
       ]);
-      const existing = guestHistoryRowsToJson(existingHistRows, existingMetaRows);
+      const existing = guestHistoryToJson(existingHist, existingMeta);
 
       // Deep merge incoming data
       for (const loc of ['west', 'centraal']) {
@@ -116,15 +77,34 @@ router.post('/guest-history', async (req, res) => {
       }
       existing.lastUpdated = new Date().toISOString();
 
-      const histDataRows = guestHistoryJsonToRows(existing);
-      const metaDataRows = [
-        ['deviceMap', JSON.stringify(existing.deviceMap || {})],
-        ['lastUpdated', existing.lastUpdated],
-      ];
-      await Promise.all([
-        writeTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history', GUEST_HISTORY_HEADERS, histDataRows),
-        writeTab(sheets, CONFIG.DB_SHEET_ID, 'guest_history_meta', GUEST_HISTORY_META_HEADERS, metaDataRows),
-      ]);
+      // Rebuild flat rows and write
+      const histData = [];
+      for (const loc of ['west', 'centraal']) {
+        if (!existing[loc]) continue;
+        for (const meal of ['lunch', 'dinner', 'staff', 'staff_lunch', 'staff_dinner']) {
+          if (!existing[loc][meal]) continue;
+          for (const [date, count] of Object.entries(existing[loc][meal])) {
+            histData.push({ location: loc, meal, date, count: parseInt(count) || 0 });
+          }
+        }
+      }
+
+      await tx.guestHistory.deleteMany();
+      if (histData.length > 0) {
+        await tx.guestHistory.createMany({ data: histData });
+      }
+
+      // Upsert meta
+      await tx.guestHistoryMeta.upsert({
+        where: { key: 'deviceMap' },
+        create: { key: 'deviceMap', value: JSON.stringify(existing.deviceMap || {}) },
+        update: { value: JSON.stringify(existing.deviceMap || {}) },
+      });
+      await tx.guestHistoryMeta.upsert({
+        where: { key: 'lastUpdated' },
+        create: { key: 'lastUpdated', value: existing.lastUpdated },
+        update: { value: existing.lastUpdated },
+      });
     });
     res.json({ ok: true });
   } catch (e) {
@@ -134,12 +114,9 @@ router.post('/guest-history', async (req, res) => {
 });
 
 router.get('/guests-next-weeks', async (req, res) => {
-  const sheets = getSheetsClient();
-  if (!sheets || !CONFIG.DB_SHEET_ID) return res.json({});
   try {
-    await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['guests_next_weeks']);
-    const rows = await readTab(sheets, CONFIG.DB_SHEET_ID, 'guests_next_weeks');
-    res.json(guestsNextWeeksRowsToJson(rows));
+    const rows = await prisma.guestsNextWeeks.findMany();
+    res.json(guestsNextWeeksToJson(rows));
   } catch (e) {
     console.error('guests-next-weeks read error:', e.message);
     res.json({});
@@ -150,13 +127,25 @@ router.post('/guests-next-weeks', async (req, res) => {
   const data = req.body;
   if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Expected object' });
   try {
-    await withWriteLock(async () => {
-      const sheets = getSheetsClient();
-      if (!sheets || !CONFIG.DB_SHEET_ID) throw new Error('Sheets not configured');
-      await ensureTabsExist(sheets, CONFIG.DB_SHEET_ID, ['guests_next_weeks']);
-      const rows = guestsNextWeeksJsonToRows(data);
-      await writeTab(sheets, CONFIG.DB_SHEET_ID, 'guests_next_weeks', GUESTS_NEXT_WEEKS_HEADERS, rows);
-    });
+    // Flatten nested JSON to rows
+    const rows = [];
+    for (const [mondayKey, locations] of Object.entries(data)) {
+      if (typeof locations !== 'object') continue;
+      for (const [loc, days] of Object.entries(locations)) {
+        if (typeof days !== 'object') continue;
+        for (const [day, meals] of Object.entries(days)) {
+          if (typeof meals !== 'object') continue;
+          for (const [meal, count] of Object.entries(meals)) {
+            rows.push({ mondayKey, location: loc, day, meal, count: parseInt(count) || 0 });
+          }
+        }
+      }
+    }
+
+    await prisma.$transaction([
+      prisma.guestsNextWeeks.deleteMany(),
+      prisma.guestsNextWeeks.createMany({ data: rows }),
+    ]);
     res.json({ ok: true });
   } catch (e) {
     console.error('guests-next-weeks write error:', e.message);
