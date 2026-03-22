@@ -49,6 +49,42 @@ function lookupIngredient(name) {
   return match || null;
 }
 
+function getDbStockTotal(db) {
+  if (!db || !db.stock) return 0;
+  let total = 0;
+  if (db.stock.west) total += (db.stock.west.amount || 0);
+  if (db.stock.centraal) total += (db.stock.centraal.amount || 0);
+  return total;
+}
+
+function formatStorageLoc(s) {
+  if (!s) return '';
+  if (typeof s === 'string') return s; // backward compat
+  if (s.category && s.location) return s.category + ' / ' + s.location;
+  if (s.category) return s.category;
+  return '';
+}
+
+function getStorageCategory(db, building) {
+  if (!db || !db.storageLocations) return '';
+  const s = db.storageLocations[building];
+  if (!s) return '';
+  if (typeof s === 'string') return s;
+  return s.category || '';
+}
+
+function renderStorageBadge(db) {
+  if (!db || !db.storageLocations) return '';
+  const locs = db.storageLocations;
+  const parts = [];
+  const w = formatStorageLoc(locs.west);
+  const c = formatStorageLoc(locs.centraal);
+  if (w) parts.push('W:' + w);
+  if (c) parts.push('C:' + c);
+  if (!parts.length) return '';
+  return `<span class="stock-badge" style="cursor:pointer;font-size:10px;" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to edit">${parts.join(' ')}</span>`;
+}
+
 function calcOrderUnits(amountGrams, dbEntry) {
   if (!dbEntry || !dbEntry.orderAmount || dbEntry.orderAmount <= 0) return null;
   const unitGrams = dbEntry.unitRecalc || dbEntry.orderAmount;
@@ -190,34 +226,47 @@ function renderOrders() {
 // ── Standard Inventory tab ────────────────────────────────
 
 function renderStandardInventoryTab() {
-  const UNITS = ['g', 'kg', 'L', 'mL', 'pieces', 'tbsp', 'tsp'];
+  // Calculate total value
+  let totalValue = 0;
+  standardInventory.forEach(item => {
+    const db = lookupIngredient(item.name);
+    if (db && db.orderPrice && db.orderAmount && db.orderAmount > 0 && item.amount > 0) {
+      const amtGrams = toGrams(item.amount, item.unit || 'g');
+      const units = Math.ceil(amtGrams / db.orderAmount);
+      totalValue += units * db.orderPrice;
+    }
+  });
 
   const itemsHtml = standardInventory.length === 0
     ? '<div class="empty">No items yet. Search above to add ingredients from the database.</div>'
     : `<div style="overflow-x:auto;"><table class="ing-table">
         <thead><tr>
           <th>Ingredient</th>
-          <th>Amount / week</th>
+          <th>Category</th>
+          <th>Storage</th>
           <th>Order code</th>
-          <th>Supplier</th>
+          <th>Unit / Price</th>
+          <th>Amount / week</th>
           <th></th>
         </tr></thead>
         <tbody>
           ${standardInventory.map((item, idx) => {
             const db = lookupIngredient(item.name);
-            const supplier = db && db.source ? esc(db.source) : '<span style="color:var(--text3);">—</span>';
             const dbUnit = db && db.unit ? esc(db.unit) : (item.unit ? esc(item.unit) : 'g');
             const isUrl = db && db.orderCode && (db.orderCode.startsWith('http') || db.orderCode.startsWith('www'));
             let codeDisplay;
             if (!db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
-            else if (!db.orderCode) codeDisplay = '<span style="color:var(--text3);font-size:11px;">—</span>';
-            else if (isUrl) codeDisplay = `<a href="${esc(db.orderCode.startsWith('http') ? db.orderCode : 'https://'+db.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link ↗</a>`;
+            else if (!db.orderCode) codeDisplay = '<span style="color:var(--text3);font-size:11px;">\u2014</span>';
+            else if (isUrl) codeDisplay = `<a href="${esc(db.orderCode.startsWith('http') ? db.orderCode : 'https://'+db.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
             else codeDisplay = `<span class="order-code">${esc(db.orderCode)}</span>`;
+            const unitPrice = db ? (db.orderUnit ? esc(db.orderUnit) : dbUnit) + (db.orderPrice ? ' \u00B7 \u20AC' + Number(db.orderPrice).toFixed(2) : '') : dbUnit;
             return `<tr>
-              <td style="font-weight:500;">${esc(item.name)} <span style="font-size:11px;color:var(--text3);">${dbUnit}</span></td>
-              <td><input class="order-stock-input" type="number" min="0" step="any" value="${item.amount > 0 ? item.amount : ''}" placeholder="0" oninput="updateSiAmount(${idx}, this.value)" /></td>
+              <td style="font-weight:500;">${esc(item.name)}</td>
+              <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
+              <td>${renderStorageBadge(db)}</td>
               <td>${codeDisplay}</td>
-              <td style="font-size:12px;color:var(--text2);">${supplier}</td>
+              <td style="font-size:12px;">${unitPrice}</td>
+              <td><input class="order-stock-input" type="number" min="0" step="any" value="${item.amount > 0 ? item.amount : ''}" placeholder="0" oninput="updateSiAmount(${idx}, this.value)" /></td>
               <td><button class="btn btn-danger btn-sm" onclick="removeSiItem(${idx})">Remove</button></td>
             </tr>`;
           }).join('')}
@@ -226,7 +275,10 @@ function renderStandardInventoryTab() {
 
   return `
     <div>
-      <div class="section-title">Standard Inventory &mdash; Weekly Base Order</div>
+      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>Standard Inventory &mdash; Weekly Base Order</span>
+        ${totalValue > 0 ? `<span style="font-size:13px;font-weight:600;">Estimated: \u20AC${totalValue.toFixed(2)}</span>` : ''}
+      </div>
       <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">These items are ordered every week. Adjust amounts as needed before generating the combined order.</p>
       <div style="position:relative;margin-bottom:16px;">
         <input
@@ -316,8 +368,8 @@ function renderDishesTab() {
         </div>
         <div style="overflow-x:auto;"><table class="ing-table">
         <thead><tr>
-          <th>Ingredient</th><th>Amount needed</th><th>Order code / link</th>
-          <th>In stock</th><th>To order</th><th>Order units</th><th>For dishes</th>
+          <th>Ingredient</th><th>Category</th><th>Storage</th><th>Order code</th>
+          <th>Amount needed</th><th>In stock</th><th>To order</th><th>Order units</th><th>For dishes</th>
         </tr></thead><tbody>`;
 
       items.forEach(ing => {
@@ -329,35 +381,41 @@ function renderDishesTab() {
         let codeDisplay;
         if (!ing.db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
         else if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">no code</span>';
-        else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link ↗</a>`;
+        else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
         else codeDisplay = `<span class="order-code" title="Click to select">${esc(ing.orderCode)}</span>`;
 
-        const stockVal = orderInventory[key] !== undefined ? orderInventory[key] : '';
-        const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" />`;
+        const dbStock = getDbStockTotal(ing.db);
+        const hasManualStock = orderInventory[key] !== undefined;
+        const stockVal = hasManualStock ? orderInventory[key] : (dbStock > 0 ? dbStock : '');
+        const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
+        const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" />${stockLabel}`;
 
-        const inStock = parseFloat(orderInventory[key]) || 0;
-        const toOrder = Math.max(0, amtNeeded - inStock);
-        const toOrderDisplay = orderInventory[key] !== undefined
+        const effectiveStock = hasManualStock ? (parseFloat(orderInventory[key]) || 0) : dbStock;
+        const hasStockValue = hasManualStock || dbStock > 0;
+        const toOrder = Math.max(0, amtNeeded - effectiveStock);
+        const toOrderDisplay = hasStockValue
           ? (toOrder > 0
             ? `<span class="to-order-positive">${toOrder.toLocaleString()} ${esc(dbUnit)}</span>`
-            : `<span class="to-order-zero">✓ enough</span>`)
-          : `<span style="color:var(--text2);font-size:11px;">enter stock →</span>`;
+            : `<span class="to-order-zero">\u2713 enough</span>`)
+          : `<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>`;
 
-        const orderAmt = orderInventory[key] !== undefined ? toOrder : amtNeeded;
+        const orderAmt = hasStockValue ? toOrder : amtNeeded;
         const orderAmtGrams = toGrams(orderAmt, dbUnit);
         const orderCalc = ing.db ? calcOrderUnits(orderAmtGrams, ing.db) : null;
         const orderUnits = orderCalc && orderCalc.units > 0
           ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`
-          : (orderAmt === 0 ? '<span class="to-order-zero">—</span>' : '<span style="color:var(--text2);font-size:11px;">—</span>');
+          : (orderAmt === 0 ? '<span class="to-order-zero">\u2014</span>' : '<span style="color:var(--text2);font-size:11px;">\u2014</span>');
 
         html += `<tr data-stock-key="${esc(key)}" data-needed="${amtNeeded}" data-unit="${esc(dbUnit)}">
           <td style="font-weight:500;">${esc(ing.name)}</td>
-          <td><span class="order-amt">${amtNeeded.toLocaleString()}</span> <span class="order-units">${esc(dbUnit)}</span></td>
+          <td style="font-size:12px;">${ing.db && ing.db.category ? esc(ing.db.category) : '\u2014'}</td>
+          <td>${renderStorageBadge(ing.db)}</td>
           <td>${codeDisplay}</td>
+          <td><span class="order-amt">${amtNeeded.toLocaleString()}</span> <span class="order-units">${esc(dbUnit)}</span></td>
           <td>${stockInput}</td>
           <td class="to-order-cell">${toOrderDisplay}</td>
           <td>${orderUnits}</td>
-          <td style="font-size:11px;color:var(--text2);">${ing.dishes.map(n => esc(n.length > 20 ? n.slice(0,18)+'…' : n)).join(', ')}</td>
+          <td style="font-size:11px;color:var(--text2);">${ing.dishes.map(n => esc(n.length > 20 ? n.slice(0,18)+'\u2026' : n)).join(', ')}</td>
         </tr>`;
       });
 
@@ -429,43 +487,64 @@ function renderCombinedOrderTab() {
     };
   });
 
-  const bySupplier = {};
+  // Group by storage category (current building) instead of supplier
+  const curLoc = S.currentLoc || 'west';
+  const byStorage = {};
   ingList.forEach(ing => {
-    const s = ing.supplier;
-    if (!bySupplier[s]) bySupplier[s] = [];
-    bySupplier[s].push(ing);
+    const cat = getStorageCategory(ing.db, curLoc) || 'Unsorted';
+    if (!byStorage[cat]) byStorage[cat] = [];
+    byStorage[cat].push(ing);
   });
-  const supplierOrder = Object.keys(bySupplier).sort((a, b) => {
-    if (a.toLowerCase().includes('hanos')) return -1;
-    if (b.toLowerCase().includes('hanos')) return 1;
-    return a.localeCompare(b);
+  const storageCatOrder = Object.keys(STORAGE_CATEGORIES);
+  const storageOrder = [...storageCatOrder.filter(c => byStorage[c]), ...Object.keys(byStorage).filter(c => !storageCatOrder.includes(c))];
+
+  // Calculate total value
+  let totalValue = 0;
+  ingList.forEach(ing => {
+    if (!ing.db || !ing.db.orderPrice) return;
+    const dbStock = getDbStockTotal(ing.db);
+    const key = ing.name.toLowerCase().trim();
+    const hasManual = combinedOrderStock[key] !== undefined;
+    const effectiveStock = hasManual ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
+    const toOrderGrams = Math.max(0, ing.totalGrams - effectiveStock);
+    const orderAmtGrams = (hasManual || dbStock > 0) ? toOrderGrams : ing.totalGrams;
+    const calc = calcOrderUnits(orderAmtGrams, ing.db);
+    if (calc && calc.units > 0) totalValue += calc.units * ing.db.orderPrice;
   });
 
-  let html = `<div style="margin-bottom:20px;">
-    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <span>Combined Order &mdash; Standard Inventory + Dish Ingredients</span>
-      <span style="font-size:12px;color:var(--text2);font-weight:400;">
-        <span style="color:var(--green);">&#9632;</span> standard &nbsp;
-        <span style="color:var(--blue);">&#9632;</span> dishes
-      </span>
+  // Price alert banner
+  const alertItems = ingList.filter(i => i.db && i.db.priceAlert);
+  let html = `<div style="margin-bottom:20px;">`;
+
+  if (alertItems.length) {
+    html += `<div class="price-alert-banner">
+      <strong>Price alerts:</strong> ${alertItems.map(i => esc(i.name)).join(', ')} had significant price increases.
+    </div>`;
+  }
+
+  html += `<div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <span>Combined Order &mdash; ${esc(curLoc === 'west' ? 'Sering West' : 'Sering Centraal')}</span>
+      <span style="font-size:13px;font-weight:600;">${totalValue > 0 ? 'Estimated: \u20AC' + totalValue.toFixed(2) : ''}</span>
     </div>`;
 
-  supplierOrder.forEach(supplier => {
-    const items = bySupplier[supplier];
+  storageOrder.forEach(storageCat => {
+    const items = byStorage[storageCat];
     const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
 
     html += `<div style="margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <span style="font-weight:600;font-size:14px;">${esc(supplier)}</span>
+        <span style="font-weight:600;font-size:14px;">${esc(storageCat)}</span>
         <span style="font-size:12px;color:var(--text2);">(${items.length} item${items.length !== 1 ? 's' : ''})</span>
-        ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyCombinedOrderCodes('${esc(supplier)}')">Copy all codes</button>` : ''}
+        ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyCombinedOrderCodes('${esc(storageCat)}')">Copy all codes</button>` : ''}
       </div>
       <div style="overflow-x:auto;"><table class="ing-table">
       <thead><tr>
         <th>Ingredient</th>
-        <th>Total needed</th>
-        <th>Breakdown</th>
-        <th>Order code / link</th>
+        <th>Category</th>
+        <th>Storage</th>
+        <th>Order code</th>
+        <th>Unit / Price</th>
+        <th style="cursor:pointer;" title="Click a row to see breakdown">Total needed</th>
         <th>In stock</th>
         <th>To order</th>
         <th>Order units</th>
@@ -479,28 +558,34 @@ function renderCombinedOrderTab() {
       let codeDisplay;
       if (!ing.db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
       else if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">no code</span>';
-      else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link ↗</a>`;
+      else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
       else codeDisplay = `<span class="order-code">${esc(ing.orderCode)}</span>`;
 
-      // In stock + to order
-      const stockVal = combinedOrderStock[key] !== undefined ? combinedOrderStock[key] : '';
-      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateCombinedOrderStock('${esc(key)}',this.value)" />`;
+      const unitPrice = ing.db ? (ing.db.orderUnit ? esc(ing.db.orderUnit) : '') + (ing.db.orderPrice ? ' \u00B7 \u20AC' + Number(ing.db.orderPrice).toFixed(2) : '') : '';
 
-      const inStockGrams = parseFloat(combinedOrderStock[key]) || 0;
-      const toOrderGrams = Math.max(0, ing.totalGrams - inStockGrams);
-      const toOrderDisplay = combinedOrderStock[key] !== undefined
+      // Stock
+      const dbStock = getDbStockTotal(ing.db);
+      const hasManualStock = combinedOrderStock[key] !== undefined;
+      const stockVal = hasManualStock ? combinedOrderStock[key] : (dbStock > 0 ? dbStock : '');
+      const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
+      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateCombinedOrderStock('${esc(key)}',this.value)" />${stockLabel}`;
+
+      const effectiveStock = hasManualStock ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
+      const hasStockValue = hasManualStock || dbStock > 0;
+      const toOrderGrams = Math.max(0, ing.totalGrams - effectiveStock);
+      const toOrderDisplay = hasStockValue
         ? (toOrderGrams > 0
           ? `<span class="to-order-positive">${formatGrams(toOrderGrams).amount} ${formatGrams(toOrderGrams).unit}</span>`
-          : `<span class="to-order-zero">✓ enough</span>`)
-        : `<span style="color:var(--text2);font-size:11px;">enter stock →</span>`;
+          : `<span class="to-order-zero">\u2713 enough</span>`)
+        : `<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>`;
 
-      // Order units based on stock-adjusted amount
-      const orderAmtGrams = combinedOrderStock[key] !== undefined ? toOrderGrams : ing.totalGrams;
+      const orderAmtGrams = hasStockValue ? toOrderGrams : ing.totalGrams;
       const orderCalc = ing.db ? calcOrderUnits(orderAmtGrams, ing.db) : null;
       const orderUnitsDisplay = orderCalc && orderCalc.units > 0
         ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`
-        : (orderAmtGrams === 0 ? '<span class="to-order-zero">—</span>' : '<span style="color:var(--text2);font-size:11px;">—</span>');
+        : (orderAmtGrams === 0 ? '<span class="to-order-zero">\u2014</span>' : '<span style="color:var(--text2);font-size:11px;">\u2014</span>');
 
+      // Breakdown (shown on click)
       const parts = [];
       if (ing.standardGrams > 0) {
         const f = formatGrams(ing.standardGrams);
@@ -508,15 +593,22 @@ function renderCombinedOrderTab() {
       }
       if (ing.dishGrams > 0) {
         const f = formatGrams(ing.dishGrams);
-        const dishNames = ing.dishes.map(n => n.length > 18 ? n.slice(0,16)+'…' : n).join(', ');
-        parts.push(`<span class="combined-part combined-dishes" title="${esc(ing.dishes.join(', '))}">${f.amount}${f.unit} dishes</span>`);
+        parts.push(`<span class="combined-part combined-dishes">${f.amount}${f.unit} ${esc(ing.dishes.join(', '))}</span>`);
       }
+      const breakdownHtml = parts.length ? `<div class="breakdown-detail" style="display:none;font-size:11px;margin-top:2px;">${parts.join(' + ')}</div>` : '';
+
+      const priceAlertIcon = (ing.db && ing.db.priceAlert) ? ' <span style="color:var(--red);font-size:11px;" title="Price increased">\u25B2</span>' : '';
 
       html += `<tr data-combined-key="${esc(key)}" data-needed="${ing.totalGrams}" data-dbname="${esc(ing.name)}">
-        <td style="font-weight:500;">${esc(ing.name)}</td>
-        <td><span class="order-amt">${fmt.amount}</span> <span class="order-units">${fmt.unit}</span></td>
-        <td>${parts.join(' + ')}</td>
+        <td style="font-weight:500;">${esc(ing.name)}${priceAlertIcon}</td>
+        <td style="font-size:12px;">${ing.db && ing.db.category ? esc(ing.db.category) : '\u2014'}</td>
+        <td>${renderStorageBadge(ing.db)}</td>
         <td>${codeDisplay}</td>
+        <td style="font-size:12px;">${unitPrice}</td>
+        <td style="cursor:pointer;" onclick="this.querySelector('.breakdown-detail')&&(this.querySelector('.breakdown-detail').style.display=this.querySelector('.breakdown-detail').style.display==='none'?'block':'none')">
+          <span class="order-amt">${fmt.amount}</span> <span class="order-units">${fmt.unit}</span>
+          ${breakdownHtml}
+        </td>
         <td>${stockInput}</td>
         <td class="to-order-cell">${toOrderDisplay}</td>
         <td class="order-units-cell">${orderUnitsDisplay}</td>
@@ -569,44 +661,79 @@ function copyCombinedOrderCodes(supplier) {
 
 function toggleOrderSection(key) { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }
 
+// Persist stock to the ingredient DB so it survives reloads and syncs across tabs
+let _stockSaveTimeout = null;
+function persistIngredientStock(ingredientName, amount) {
+  const db = lookupIngredient(ingredientName);
+  if (!db || !db.id) return;
+  const loc = S.currentLoc || 'west';
+  const amountNum = parseFloat(amount) || 0;
+
+  // Update in S.ingredientDb immediately
+  if (!db.stock) db.stock = {};
+  db.stock[loc] = { amount: amountNum, date: new Date().toISOString().slice(0, 10) };
+
+  // Update in ingredientDbFull too (if loaded)
+  if (typeof ingredientDbFull !== 'undefined') {
+    const full = ingredientDbFull.find(i => i.id === db.id);
+    if (full) {
+      if (!full.stock) full.stock = {};
+      full.stock[loc] = { amount: amountNum, date: new Date().toISOString().slice(0, 10) };
+    }
+  }
+
+  // Debounced save to backend
+  clearTimeout(_stockSaveTimeout);
+  _stockSaveTimeout = setTimeout(() => {
+    fetch('/api/ingredients/stock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ingredientId: db.id, location: loc, amount: amountNum }),
+    }).catch(e => console.error('Stock save failed:', e));
+  }, 600);
+}
+
 function updateCombinedOrderStock(key, val) {
   if (val === '' || val === null) {
     delete combinedOrderStock[key];
   } else {
     combinedOrderStock[key] = parseFloat(val) || 0;
   }
+
+  // Persist to DB
+  const db = lookupIngredient(key);
+  if (db) persistIngredientStock(db.name, val);
+
   const row = document.querySelector(`[data-combined-key="${key}"]`);
   if (!row) return;
   const neededGrams = parseFloat(row.dataset.needed) || 0;
   const inStockGrams = parseFloat(val) || 0;
   const toOrderGrams = Math.max(0, neededGrams - inStockGrams);
 
-  // Update "To order" cell
   const toOrderEl = row.querySelector('.to-order-cell');
   if (toOrderEl) {
     if (val === '' || val === null || val === undefined) {
-      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock →</span>';
+      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>';
     } else if (toOrderGrams > 0) {
       const f = formatGrams(toOrderGrams);
       toOrderEl.innerHTML = `<span class="to-order-positive">${f.amount} ${esc(f.unit)}</span>`;
     } else {
-      toOrderEl.innerHTML = '<span class="to-order-zero">✓ enough</span>';
+      toOrderEl.innerHTML = '<span class="to-order-zero">\u2713 enough</span>';
     }
   }
 
-  // Update "Order units" cell
   const orderUnitsEl = row.querySelector('.order-units-cell');
   if (orderUnitsEl) {
     const dbName = row.dataset.dbname || '';
-    const db = dbName ? lookupIngredient(dbName) : null;
+    const dbLookup = dbName ? lookupIngredient(dbName) : null;
     const orderAmt = (val === '' || val === null || val === undefined) ? neededGrams : toOrderGrams;
-    const orderCalc = db ? calcOrderUnits(orderAmt, db) : null;
+    const orderCalc = dbLookup ? calcOrderUnits(orderAmt, dbLookup) : null;
     if (orderCalc && orderCalc.units > 0) {
       orderUnitsEl.innerHTML = `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`;
     } else if (orderAmt === 0) {
-      orderUnitsEl.innerHTML = '<span class="to-order-zero">—</span>';
+      orderUnitsEl.innerHTML = '<span class="to-order-zero">\u2014</span>';
     } else {
-      orderUnitsEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">—</span>';
+      orderUnitsEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">\u2014</span>';
     }
   }
 }
@@ -617,6 +744,11 @@ function updateOrderStock(key, val) {
   } else {
     orderInventory[key] = parseFloat(val) || 0;
   }
+
+  // Persist to DB
+  const db = lookupIngredient(key);
+  if (db) persistIngredientStock(db.name, val);
+
   const row = document.querySelector(`[data-stock-key="${key}"]`);
   if (!row) return;
   const needed = parseFloat(row.dataset.needed) || 0;
@@ -626,11 +758,11 @@ function updateOrderStock(key, val) {
   const dbUnit = row.dataset.unit || 'g';
   if (toOrderEl) {
     if (val === '' || val === null || val === undefined) {
-      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock →</span>';
+      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>';
     } else if (toOrder > 0) {
       toOrderEl.innerHTML = `<span class="to-order-positive">${toOrder.toLocaleString()} ${esc(dbUnit)}</span>`;
     } else {
-      toOrderEl.innerHTML = '<span class="to-order-zero">✓ enough</span>';
+      toOrderEl.innerHTML = '<span class="to-order-zero">\u2713 enough</span>';
     }
   }
 }

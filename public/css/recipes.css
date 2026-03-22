@@ -1,0 +1,19 @@
+/* ═══════════ RECIPES ═══════════ */
+
+  .ri-table{width:100%;border-collapse:collapse;font-size:13px;}
+  .ri-table th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:8px 6px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap;}
+  .ri-table th:hover{color:var(--text);}
+  .ri-table th .sort-arrow{font-size:10px;margin-left:2px;opacity:.4;}
+  .ri-table th.sorted .sort-arrow{opacity:1;color:var(--amber);}
+  .ri-table td{padding:6px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  .ri-table tr:hover td{background:var(--bg2);}
+  .ri-table .ri-name-cell{font-weight:500;}
+  .ri-cost-cell{font-weight:600;font-size:12px;padding:3px 8px;border-radius:4px;text-align:center;white-space:nowrap;}
+  .ri-rating{display:inline-flex;align-items:center;gap:1px;font-size:11px;font-weight:600;color:var(--text2);}
+  .ri-rating-val{background:var(--bg2);padding:1px 5px;border-radius:3px;min-width:22px;text-align:center;}
+  .ri-search{width:100%;max-width:400px;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);margin-bottom:12px;}
+  .ri-filter-bar{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;align-items:center;}
+  .ri-empty{text-align:center;padding:40px 20px;color:var(--text2);}
+  .ri-empty p{margin-bottom:12px;}
+  .ri-add-url{width:100%;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);}
+  .ri-table-wrap{overflow-x:auto;}

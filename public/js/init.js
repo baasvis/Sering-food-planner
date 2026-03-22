@@ -18,6 +18,52 @@ function esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// ── NAV GENERATION ────────────────────────────────────────
+// Builds top bar, bottom nav, and screen containers from NAV_SCREENS
+function buildNav() {
+  const topBar = document.getElementById('top-bar');
+  const content = document.getElementById('content');
+  const bottomNav = document.getElementById('bottom-nav');
+
+  // Top bar: title + nav buttons + save indicator + user menu
+  topBar.innerHTML = `
+    <h1>De Sering</h1>
+    ${NAV_SCREENS.map((s, i) =>
+      `<button class="nav-btn${i === 0 ? ' active' : ''}" data-screen="${s.id}" onclick="showScreen('${s.id}')">${s.topLabel}</button>`
+    ).join('')}
+    <div class="save-indicator" id="save-indicator">
+      <div class="save-dot saved" id="save-dot"></div>
+      <span id="save-text">Saved</span>
+    </div>
+    <div class="user-menu" id="user-menu">
+      <img id="user-avatar" src="" alt="" style="display:none;">
+      <span id="user-name"></span>
+      <button onclick="doLogout()">Logout</button>
+    </div>
+  `;
+
+  // Screen containers
+  content.innerHTML = NAV_SCREENS.map((s, i) =>
+    `<div id="screen-${s.id}" class="screen${i === 0 ? ' active' : ''}"></div>`
+  ).join('');
+
+  // Bottom nav
+  bottomNav.innerHTML = NAV_SCREENS.map((s, i) =>
+    `<button class="bnav-btn${i === 0 ? ' active' : ''}" data-screen="${s.id}" onclick="showScreen('${s.id}')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${s.icon}</svg>
+      <span>${s.bottomLabel}</span>
+    </button>`
+  ).join('');
+}
+
+// ── BEFOREUNLOAD GUARD ────────────────────────────────────
+window.addEventListener('beforeunload', function(e) {
+  if (saveState !== 'saved') {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════════
@@ -28,13 +74,18 @@ async function initApp() {
   renderDashboard();
   // Auto-refresh every 60s so the UI updates when a service deadline passes (13:45 / 20:15)
   setInterval(() => {
+    const scrollY = window.scrollY;
     rebuildPlanner();
     rerenderCurrentView();
+    // Restore scroll position after DOM rebuild
+    requestAnimationFrame(() => window.scrollTo(0, scrollY));
   }, 60000);
 }
 
-// On page load: check for existing session, or show login
+// On page load: build nav, then check for existing session or show login
 (async () => {
+  buildNav();
+
   const hasSession = await checkSession();
   if (!hasSession) {
     try {

@@ -175,9 +175,12 @@ function renderDishRow(d) {
     <div><button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button></div>
     <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
     <div class="m-stock-row">
-      <span style="font-size:12px;">Stock: <strong>${d.stock || 0}L</strong></span>
+      <label style="font-size:12px;color:var(--text2);">Stock</label>
+      <input class="m-stock-input${d.cookConfirmed ? '' : ' stock-locked'}" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" ${d.cookConfirmed ? '' : 'disabled'} />
+      <span style="font-size:12px;color:var(--text2);">L</span>
       <span class="${cls}" style="font-size:12px;" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</span>
       <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;font-size:10px;" onclick="event.stopPropagation();cycleLogistics('${d.id}')">${logisticsShort(d.logistics || 'Sering West')}</span>
+      <button class="btn btn-sm served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')" style="margin-left:auto;">Served</button>
     </div>
   </div>`;
 }

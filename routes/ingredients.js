@@ -212,11 +212,13 @@ const HANOS_TYPE_MAP = {
   'Zeewier en zeewierproducten': { types: ['Food'], category: 'Seaweed & Specialty' },
   'Zuivel': { types: ['Food'], category: 'Dairy & Alternatives' },
   'Zuren en azijn': { types: ['Food'], category: 'Sauces & Condiments' },
+  // Drinks
   'Bieren': { types: ['Drinks'], category: 'Beer' },
   'Gedistilleerd': { types: ['Drinks'], category: 'Spirits & Liqueurs' },
   'Koude dranken': { types: ['Drinks'], category: 'Juices & Soft Drinks' },
   'Warme dranken': { types: ['Drinks'], category: 'Coffee & Tea' },
   'Wijn': { types: ['Drinks'], category: 'Wine' },
+  // Non-food
   'Aan Tafel': { types: ['FOH Supplies'], category: 'Tableware & FOH' },
   'Bar en buffet': { types: ['FOH Equipment'], category: 'Tableware & FOH' },
   'Barbecues en benodigdheden': { types: ['Kitchen Equipment'], category: 'Kitchen Equipment' },
@@ -276,6 +278,7 @@ router.post('/migrate', upload.fields([
       const lines = csvText.split('\n');
       if (lines.length < 2) return res.json({ error: 'Empty Hanos file' });
 
+      // Parse header
       const headerLine = lines[0];
       const headers = [];
       let inQuote = false, field = '';
@@ -295,6 +298,7 @@ router.post('/migrate', upload.fields([
       const stdQtyIdx = col('hoeveelheid_standaard');
       const catIdx = col('categorie');
 
+      // Nutrition indices
       const nutCols = {
         energyKj: col('Energie (kJ)'), energyKcal: col('Energie (Kcal)'),
         protein: col('Eiwitten (gram)'), carbs: col('Koolhydraten (gram)'),
@@ -303,12 +307,15 @@ router.post('/migrate', upload.fields([
         fiber: col('Vezels (gram)'), salt: col('Zout (gram)'),
       };
 
+      // Find month columns
       const monthCols = headers.map((h, i) => ({ name: h.trim(), idx: i }))
         .filter(c => /^[A-Z][a-z]{2}-\d{2}$/.test(c.name));
       const last12 = monthCols.slice(-12);
 
+      // Parse each Hanos row
       for (let li = 1; li < lines.length; li++) {
         if (!lines[li].trim()) continue;
+        // Simple CSV parse (handles quoted fields)
         const r = [];
         let inQ = false, f = '';
         for (let i = 0; i < lines[li].length; i++) {
@@ -328,6 +335,7 @@ router.post('/migrate', upload.fields([
         const mapped = mapHanosCategory(hanosCat);
         const orderAmountGrams = parseHanosQuantityGrams(r[qtyIdx] || '');
 
+        // Price history from month columns
         const priceHistory = [];
         monthCols.forEach(mc => {
           const raw = r[mc.idx];
@@ -337,6 +345,7 @@ router.post('/migrate', upload.fields([
           if (!isNaN(val) && val > 0) priceHistory.push({ month: mc.name, price: Math.round(val * 100) / 100 });
         });
 
+        // Recent orders for active flag
         const recentOrders = last12.reduce((sum, mc) => {
           const raw = r[mc.idx];
           if (!raw) return sum;
@@ -344,6 +353,7 @@ router.post('/migrate', upload.fields([
           return sum + (isNaN(val) ? 0 : (val > 0 ? 1 : 0));
         }, 0);
 
+        // Nutrition
         const nutrition = {};
         Object.entries(nutCols).forEach(([key, idx]) => {
           if (idx >= 0 && r[idx] != null && r[idx] !== '') {
@@ -352,6 +362,7 @@ router.post('/migrate', upload.fields([
           }
         });
 
+        // Match with old DB
         const old = oldByCode[code];
         const name = old ? old.name : title;
         if (old) matchedCount++;

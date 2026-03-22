@@ -1,20 +1,16 @@
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
 
-function showScreen(name, btn) {
+function showScreen(name) {
+  // Switch active screen
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
-  if (btn) btn.classList.add('active');
-  // Sync top nav
-  document.querySelectorAll('.top-bar .nav-btn').forEach(b => {
-    if (b.textContent.trim() === (btn && btn.textContent.trim())) b.classList.add('active');
-  });
-  // Sync bottom nav
-  document.querySelectorAll('.bnav-btn').forEach(b => {
+  // Sync both navs using data-screen attribute
+  document.querySelectorAll('.nav-btn, .bnav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.screen === name);
   });
-  rebuildPlanner();
+  // Only rebuild planner data when actually viewing planner or dashboard
+  if (name === 'planner' || name === 'dashboard') rebuildPlanner();
   if (name === 'dashboard') renderDashboard();
   if (name === 'guests') renderGuests();
   if (name === 'planner') renderWeekPlan();
@@ -23,7 +19,15 @@ function showScreen(name, btn) {
 }
 
 // ── DASHBOARD ────────────────────────────────────────────
-// Pantry/dry items to exclude from prep list
+// Categories from ingredient DB that need chopping/prep
+const CHOPPABLE_CATEGORIES = [
+  'vegetables & fruit',       // production DB
+  'herbs & spices',           // fresh herbs (dried spices caught by PANTRY_KEYWORDS)
+  'vegetables', 'fruits', 'mushrooms', 'herbs', 'beans and legumes',  // seed DB fallback
+];
+
+// Fallback keywords for ingredients not found in DB — these are NOT choppable
+// NOTE: fresh herbs removed (parsley, basil, cilantro, thyme, rosemary) — herbs ARE choppable
 const PANTRY_KEYWORDS = [
   'oil','olie','salt','zout','sugar','suiker','pepper','peper',
   'vinegar','azijn','soy sauce','sojasaus','ketjap','tamari',
@@ -33,8 +37,7 @@ const PANTRY_KEYWORDS = [
   'powder','poeder','cumin','komijn','cinnamon','kaneel',
   'turmeric','kurkuma','paprikapoeder','chili powder','chilipoeder',
   'nutmeg','nootmuskaat','cloves','kruidnagel',
-  'bay leaf','laurier','thyme','tijm','oregano','rosemary','rozemarijn',
-  'basil','basilicum','parsley','peterselie','cilantro','koriander',
+  'bay leaf','laurier',
   'coconut milk','kokosmelk','coconut cream','kokosroom',
   'tomato paste','tomatenpuree','tomato puree',
   'mustard','mosterd','honey','honing','maple','ahorn',
@@ -48,11 +51,59 @@ const PANTRY_KEYWORDS = [
   'seaweed','nori','wakame','kombu',
   'tahini','peanut butter','pindakaas',
   'lemon juice','citroensap','lime juice','limoensap',
+  'paste','puree','purée','mashed',
+  'dried','gedroogd','gerist','gemalen','gehakt',
+  'cashew','almond','amandel','walnut','walnoot','hazelno','pecannot','pistachio','pinda','macadamia',
+  'seed','zaad','zaden','pitten',
+  'rozijn','raisin','vijg','dadel','pruim','moerbeien',
+  'noten','nuts','nibs','flakes','vlokken',
+  'agar','xanthan','xanthana','lecithin','inulin','isomalt','pectin','gelespessa',
+  'msg','maggi','liquid smoke',
 ];
 
-function isVegetableIngredient(name) {
+// Build a lookup cache from ingredient DB (name/supplierName → category)
+let _ingredientCategoryCache = null;
+function getIngredientCategoryCache() {
+  if (_ingredientCategoryCache && _ingredientCategoryCache.size > 0) return _ingredientCategoryCache;
+  _ingredientCategoryCache = new Map();
+  (S.ingredientDb || []).forEach(ing => {
+    const cat = (ing.category || '').toLowerCase().trim();
+    if (!cat) return;
+    if (ing.name) _ingredientCategoryCache.set(ing.name.toLowerCase().trim(), cat);
+    if (ing.supplierName) _ingredientCategoryCache.set(ing.supplierName.toLowerCase().trim(), cat);
+  });
+  return _ingredientCategoryCache;
+}
+
+function isChoppableIngredient(name) {
   const lower = name.toLowerCase().trim();
-  return !PANTRY_KEYWORDS.some(kw => lower.includes(kw));
+  // Hard exclusion: pantry staples are never choppable regardless of DB category
+  if (PANTRY_KEYWORDS.some(kw => lower.includes(kw))) return false;
+  // Check ingredient DB categories
+  const cache = getIngredientCategoryCache();
+  // Exact match
+  const exact = cache.get(lower);
+  if (exact) return CHOPPABLE_CATEGORIES.includes(exact);
+  // Word-level fuzzy: "red onion" contains word "onion", "carrot (purple)" contains "carrot"
+  const wordBoundary = (haystack, needle) => {
+    const i = haystack.indexOf(needle);
+    if (i === -1) return false;
+    const before = i === 0 || /\W/.test(haystack[i - 1]);
+    const after = i + needle.length >= haystack.length || /\W/.test(haystack[i + needle.length]);
+    return before && after;
+  };
+  const matchedCats = [];
+  for (const [dbName, cat] of cache) {
+    if (dbName === lower) continue;
+    if (wordBoundary(dbName, lower) || wordBoundary(lower, dbName)) {
+      matchedCats.push(cat);
+    }
+  }
+  if (matchedCats.length > 0) {
+    return matchedCats.some(cat => CHOPPABLE_CATEGORIES.includes(cat));
+  }
+  // Not found in DB and not a pantry keyword — include it
+  return true;
 }
 
 function isDishAtLocation(dish, loc) {
@@ -96,7 +147,7 @@ function getVegIngredients(dishes) {
   dishes.forEach(dish => {
     const ings = calcIngredientsFromRecipe(dish);
     if (!ings || ings.length === 0) return;
-    ings.filter(i => isVegetableIngredient(i.name)).forEach(ing => {
+    ings.filter(i => isChoppableIngredient(i.name)).forEach(ing => {
       const key = ing.name.toLowerCase().trim();
       if (!combined[key]) combined[key] = { name: ing.name, amount: 0, unit: ing.unit };
       combined[key].amount += ing.amount;
@@ -194,6 +245,17 @@ function toggleHeatItem(dishId) {
 }
 
 function toggleCookItem(dishId) {
+  const d = S.dishes.find(x => x.id === dishId);
+  if (d && !d.cookConfirmed) {
+    // Actually mark the dish as cooked (same as "click to mark as cooked" on the tile)
+    confirmCooked(dishId);
+    // Also tick off the local checkbox
+    S.cookChecked.add(dishId);
+    saveDayTodos();
+    renderDashboardContent();
+    return;
+  }
+  // Already cooked or not found — just toggle the local checkbox
   S.cookChecked.has(dishId) ? S.cookChecked.delete(dishId) : S.cookChecked.add(dishId);
   saveDayTodos();
   renderDashboardContent();
@@ -517,8 +579,6 @@ function renderPrepChecklist() {
 }
 
 function navTo(screen, subTab) {
-  const btns = document.querySelectorAll('.nav-btn');
-  const labels = { dashboard:'Dashboard', guests:'Guests', planner:'Week plan', 'recipe-index':'Recipes', orders:'Orders' };
   if (subTab) S.plannerSubTab = subTab;
-  btns.forEach(b => { if (b.textContent === labels[screen]) showScreen(screen, b); });
+  showScreen(screen);
 }
