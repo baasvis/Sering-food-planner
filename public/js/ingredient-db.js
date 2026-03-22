@@ -766,17 +766,14 @@ function openStoragePopover(ingredientId, anchorEl) {
   const storLocs = ing.storageLocations || {};
   const rect = anchorEl.getBoundingClientRect();
   const catNames = Object.keys(STORAGE_CATEGORIES);
+  const curLoc = currentOrdersLoc || S.currentLoc || 'west';
+  const locLabel = curLoc === 'west' ? 'Sering West' : 'Sering Centraal';
 
-  function buildOpts(building) {
-    const s = storLocs[building] || {};
-    const cat = s.category || '';
-    const loc = s.location || '';
-    const catOpts = '<option value="">—</option>' + catNames.map(c => `<option value="${esc(c)}"${cat===c?' selected':''}>${esc(c)}</option>`).join('');
-    const locOpts = '<option value="">—</option>' + (cat && STORAGE_CATEGORIES[cat] ? STORAGE_CATEGORIES[cat] : []).map(l => `<option value="${esc(l)}"${loc===l?' selected':''}>${esc(l)}</option>`).join('');
-    return { catOpts, locOpts };
-  }
-  const w = buildOpts('west');
-  const c = buildOpts('centraal');
+  const s = storLocs[curLoc] || {};
+  const cat = s.category || '';
+  const loc = s.location || '';
+  const catOpts = '<option value="">—</option>' + catNames.map(c => `<option value="${esc(c)}"${cat===c?' selected':''}>${esc(c)}</option>`).join('');
+  const locOpts = '<option value="">—</option>' + (cat && STORAGE_CATEGORIES[cat] ? STORAGE_CATEGORIES[cat] : []).map(l => `<option value="${esc(l)}"${loc===l?' selected':''}>${esc(l)}</option>`).join('');
 
   const pop = document.createElement('div');
   pop.id = 'storage-popover';
@@ -784,23 +781,15 @@ function openStoragePopover(ingredientId, anchorEl) {
   pop.style.top = (rect.bottom + window.scrollY + 4) + 'px';
   pop.style.left = Math.max(8, rect.left) + 'px';
   pop.innerHTML = `
-    <div style="font-weight:600;font-size:12px;margin-bottom:8px;">Storage locations</div>
+    <div style="font-weight:600;font-size:12px;margin-bottom:8px;">Storage — ${esc(locLabel)}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
       <div>
-        <label class="ing-edit-label">West: Area</label>
-        <select class="order-stock-input" id="pop-storage-west-cat" onchange="updatePopStorageLoc('west')">${w.catOpts}</select>
+        <label class="ing-edit-label">Area</label>
+        <select class="order-stock-input" id="pop-storage-${curLoc}-cat" onchange="updatePopStorageLoc('${curLoc}')">${catOpts}</select>
       </div>
       <div>
-        <label class="ing-edit-label">West: Spot</label>
-        <select class="order-stock-input" id="pop-storage-west-loc">${w.locOpts}</select>
-      </div>
-      <div>
-        <label class="ing-edit-label">Centraal: Area</label>
-        <select class="order-stock-input" id="pop-storage-centraal-cat" onchange="updatePopStorageLoc('centraal')">${c.catOpts}</select>
-      </div>
-      <div>
-        <label class="ing-edit-label">Centraal: Spot</label>
-        <select class="order-stock-input" id="pop-storage-centraal-loc">${c.locOpts}</select>
+        <label class="ing-edit-label">Spot</label>
+        <select class="order-stock-input" id="pop-storage-${curLoc}-loc">${locOpts}</select>
       </div>
     </div>
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px;">
@@ -831,13 +820,16 @@ function updatePopStorageLoc(building) {
 }
 
 async function saveStorageFromPopover(ingredientId) {
-  const newLocs = {
-    west: { category: document.getElementById('pop-storage-west-cat').value, location: document.getElementById('pop-storage-west-loc').value },
-    centraal: { category: document.getElementById('pop-storage-centraal-cat').value, location: document.getElementById('pop-storage-centraal-loc').value },
-  };
+  const curLoc = currentOrdersLoc || S.currentLoc || 'west';
+  const catEl = document.getElementById('pop-storage-' + curLoc + '-cat');
+  const locEl = document.getElementById('pop-storage-' + curLoc + '-loc');
+  if (!catEl || !locEl) return;
 
-  // Update in full DB
+  // Update in full DB — only change the current location, preserve the other
   const ingFull = ingredientDbFull.find(i => i.id === ingredientId);
+  const newLocs = ingFull ? { ...(ingFull.storageLocations || {}) } : {};
+  newLocs[curLoc] = { category: catEl.value, location: locEl.value };
+
   if (ingFull) {
     ingFull.storageLocations = newLocs;
     try {

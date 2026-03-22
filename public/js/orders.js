@@ -69,12 +69,9 @@ function formatStorageLoc(s) {
 function getStorageCategory(db, building) {
   if (!db || !db.storageLocations) return '';
   const s = db.storageLocations[building];
-  if (s) return typeof s === 'string' ? s : (s.category || '');
-  // Fallback to other location
-  const other = building === 'west' ? 'centraal' : 'west';
-  const os = db.storageLocations[other];
-  if (os) return typeof os === 'string' ? os : (os.category || '');
-  return '';
+  if (!s) return '';
+  if (typeof s === 'string') return s;
+  return s.category || '';
 }
 
 function renderStorageBadge(db, loc) {
@@ -82,19 +79,10 @@ function renderStorageBadge(db, loc) {
   const building = loc || currentOrdersLoc || 'west';
   const s = db.storageLocations[building];
   const label = formatStorageLoc(s);
-  if (label) {
-    const cat = getStorageCategory(db, building);
-    const color = cat ? getStorageColor(cat, building) : '#999';
-    return `<span class="stock-badge" style="cursor:pointer;font-size:10px;background:${color}22;color:${color};border:1px solid ${color}44;" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to edit">${esc(label)}</span>`;
-  }
-  // Fallback: show the other location's storage dimmed
-  const other = building === 'west' ? 'centraal' : 'west';
-  const otherLabel = formatStorageLoc(db.storageLocations[other]);
-  if (!otherLabel) return '';
-  const otherCat = getStorageCategory(db, other);
-  const color = otherCat ? getStorageColor(otherCat, other) : '#999';
-  const prefix = other === 'west' ? 'W' : 'C';
-  return `<span class="stock-badge" style="cursor:pointer;font-size:10px;background:${color}11;color:${color}88;border:1px dashed ${color}44;" onclick="openStoragePopover('${esc(db.id)}',this)" title="${prefix}: ${esc(otherLabel)} (click to set ${building})">${prefix}: ${esc(otherLabel)}</span>`;
+  if (!label) return `<span class="stock-badge" style="cursor:pointer;font-size:10px;color:var(--text2);border:1px dashed var(--border2);" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to set">No location set</span>`;
+  const cat = getStorageCategory(db, building);
+  const color = cat ? getStorageColor(cat, building) : '#999';
+  return `<span class="stock-badge" style="cursor:pointer;font-size:10px;background:${color}22;color:${color};border:1px solid ${color}44;" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to edit">${esc(label)}</span>`;
 }
 
 function calcOrderUnits(amountGrams, dbEntry) {
