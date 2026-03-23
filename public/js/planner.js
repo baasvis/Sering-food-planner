@@ -60,9 +60,20 @@ function renderLocationPlan(loc) {
   ];
 
   const days = getVisibleDays(_plannerDayOffset);
+  const assigning = S.assigningBatchId;
+  const assignBatch = assigning ? S.batches.find(b => b.id === assigning) : null;
 
   const invBtn = getInventoryButton(loc);
   let html = renderDayNav(_plannerDayOffset, -14, 14, 'changePlannerDay', '');
+
+  // Assign mode banner
+  if (assignBatch) {
+    html += `<div class="assign-banner">
+      <span>Click a slot to assign <strong>${esc(assignBatch.name)}</strong></span>
+      <button class="btn btn-sm" onclick="cancelAssignMode()">Cancel</button>
+    </div>`;
+  }
+
   html += `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
     <button class="btn btn-primary" onclick="openNewDish()">+ New batch</button>
     ${invBtn}
@@ -73,13 +84,9 @@ function renderLocationPlan(loc) {
   const otherLabel = loc === 'west' ? 'Centraal' : 'West';
 
   typeGroups.forEach(tg => {
-    const collapseKey = `${loc}-${tg.key}`;
-    if (S.collapsedTypes[collapseKey] === undefined) S.collapsedTypes[collapseKey] = true;
-    const isCollapsed = !!S.collapsedTypes[collapseKey];
-
-    // Type section header — clickable to toggle dish list
+    // Type section header (no collapse — dish lists moved to batch pool)
     html += `<div class="type-section">`;
-    html += `<div class="type-section-hdr" style="cursor:pointer;" onclick="toggleTypeCollapse('${collapseKey}')"><span class="type-dot ${tg.cls}"></span>${tg.label}<span class="collapse-arrow">${isCollapsed ? '&#9654;' : '&#9660;'}</span></div>`;
+    html += `<div class="type-section-hdr"><span class="type-dot ${tg.cls}"></span>${tg.label}</div>`;
 
     // Calendar grid for this type
     html += `<div class="week-scroll"><div class="week-grid"><div></div>`;
@@ -97,60 +104,104 @@ function renderLocationPlan(loc) {
       html += `<div class="meal-lbl">${mealLabel}</div>`;
       days.forEach(d => {
         const isoDate = dateToIso(d.date);
-        const gc = getGuests(loc, isoDate, meal);
         const k = `${loc}-${isoDate}-${meal}`;
         const slotDishes = (S.planner[k] || []).filter(dish => dish.type === tg.key);
         const slotServed = isServicePast({loc, date: isoDate, meal});
-        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}" onclick="openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">`;
+        const assignTarget = assigning ? ' slot-assign-target' : '';
+        const slotClick = assigning
+          ? `assignBatchToSlot('${loc}','${isoDate}','${meal}')`
+          : `openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')`;
+        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}${assignTarget}" onclick="${slotClick}">`;
         slotDishes.forEach(dish => {
           const trClass = dish.inTransit ? ' chip-tr-border' : '';
           const servedClass = slotServed ? ' dish-chip-served' : '';
           html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}"><span class="chip-nm">${esc(dish.name)}</span>${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
         });
-        html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div></div>`;
+        if (!assigning) {
+          html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div>`;
+        }
+        html += `</div>`;
       });
     });
 
     html += '</div></div>'; // close week-grid and week-scroll
-
-    // Collapsible dish list below the grid
-    const typeDishes = S.batches.filter(d => d.type === tg.key && (d.services || []).some(s => s.loc === loc));
-    if (typeDishes.length > 0 && !isCollapsed) {
-      html += `<div class="type-dish-list">`;
-      html += `<div class="dish-list-hdr">
-        <span></span>
-        <span>Batch</span>
-        <span>Cook date</span>
-        <span>Stock</span>
-        <span>+/&minus;</span>
-        <span>Location</span>
-        <span>Order</span>
-        <span></span>
-      </div>`;
-      html += renderDishListSplit(typeDishes);
-      html += `</div>`;
-    } else if (typeDishes.length > 0 && isCollapsed) {
-      html += `<div style="font-size:11px;color:var(--text3);padding:4px 0;cursor:pointer;" onclick="toggleTypeCollapse('${collapseKey}')">${typeDishes.length} batch${typeDishes.length !== 1 ? 'es' : ''} — click to expand</div>`;
-    }
-
     html += `</div>`; // close type-section
   });
 
-  // Also show dishes with no services (unassigned) that match this location
-  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
-  const unassigned = S.batches.filter(d => (d.services || []).length === 0 && d.location === loc);
-  if (unassigned.length > 0) {
-    html += `<div class="type-section">`;
-    html += `<div class="type-section-hdr" style="color:var(--text3);">Unassigned batches at ${locLabel}</div>`;
-    html += `<div class="dish-list-hdr">
-      <span></span><span>Batch</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
-    </div>`;
-    html += renderDishListSplit(unassigned);
-    html += `</div>`;
-  }
+  // ── Batch Pool ──────────────────────────────────────────
+  html += renderBatchPool(loc);
 
   document.getElementById('planner-content').innerHTML = html;
   renderSplitBar();
+}
+
+// ── BATCH POOL ──────────────────────────────────────────
+function renderBatchPool(loc) {
+  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+  // All batches at this location (has services here, or located here with no services)
+  const poolBatches = S.batches.filter(d => {
+    const hasSvcHere = (d.services || []).some(s => s.loc === loc);
+    const locatedHere = d.location === loc && (d.services || []).length === 0;
+    return hasSvcHere || locatedHere;
+  });
+
+  const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && d.storage !== 'Frozen'));
+  const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && d.storage !== 'Frozen'));
+  const frozen = poolBatches.filter(d => d.storage === 'Frozen');
+
+  let html = `<div class="batch-pool">`;
+  html += `<div class="batch-pool-hdr">Batches at ${locLabel} <span class="batch-pool-count">${poolBatches.length}</span></div>`;
+
+  if (poolBatches.length === 0) {
+    html += `<div class="empty" style="padding:12px 0;">No batches yet — create one with "+ New batch" above</div>`;
+  } else {
+    if (toCook.length) {
+      html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--amber);"></div>To cook <span class="dish-section-count">(${toCook.length})</span></div>`;
+      html += toCook.map(d => renderBatchTile(d, true)).join('');
+    }
+    if (cooked.length) {
+      html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--green);"></div>Cooked <span class="dish-section-count">(${cooked.length})</span></div>`;
+      html += cooked.map(d => renderBatchTile(d, true)).join('');
+    }
+    if (frozen.length) {
+      html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--blue);"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
+      html += frozen.map(d => renderBatchTile(d, true)).join('');
+    }
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+// ── ASSIGN MODE ─────────────────────────────────────────
+function startAssignMode(batchId) {
+  S.assigningBatchId = batchId;
+  rerenderCurrentView();
+}
+
+function cancelAssignMode() {
+  S.assigningBatchId = null;
+  rerenderCurrentView();
+}
+
+function assignBatchToSlot(loc, date, meal) {
+  const batchId = S.assigningBatchId;
+  if (!batchId) return;
+  const batch = S.batches.find(d => d.id === batchId);
+  if (!batch) { S.assigningBatchId = null; return; }
+  // Check if already assigned to this slot
+  const already = (batch.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal);
+  if (already) {
+    toast('Already assigned to this slot');
+    return;
+  }
+  if (!batch.services) batch.services = [];
+  batch.services.push({ loc, date, meal });
+  S.assigningBatchId = null;
+  rebuildPlanner();
+  scheduleSave();
+  rerenderCurrentView();
+  toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
 }
 
 // ── TRANSPORT VIEW ───────────────────────────────────────

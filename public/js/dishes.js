@@ -188,20 +188,22 @@ function toggleBatchExpand(id) {
   rerenderCurrentView();
 }
 
-function renderBatchTile(d) {
+function renderBatchTile(d, showAssign) {
   const { str, cls } = diffStr(d);
   const isExpanded = S.expandedBatches.has(d.id);
   const isSel = S.selected.has(d.id);
   const isStale = isDishStale(d);
+  const isAssigning = S.assigningBatchId === d.id;
   const locCls = d.location === 'centraal' ? 'loc-centraal' : 'loc-west';
   const transitCls = d.inTransit ? ' in-transit' : '';
   const frozenCls = d.storage === 'Frozen' ? ' frozen-row' : '';
   const staleCls = isStale ? ' stale-row' : '';
   const selCls = isSel ? ' selected' : '';
   const splitCls = d.parentId ? ' split-child' : '';
+  const assignCls = isAssigning ? ' assigning' : '';
 
   // Compact row
-  let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${splitCls}" data-id="${d.id}">
+  let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${splitCls}${assignCls}" data-id="${d.id}">
     <div class="batch-tile-compact" onclick="toggleBatchExpand('${d.id}')">
       <div class="sel-box${isSel ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelect('${d.id}')"></div>
       <span class="batch-type-dot batch-type-${(d.type||'Soup').toLowerCase().replace(/ /g,'-')}"></span>
@@ -209,6 +211,7 @@ function renderBatchTile(d) {
       <span class="batch-tile-stock ${cls}">${d.stock || 0}L <small>${str}</small></span>
       <span class="${logisticsBadgeClass(d)}" style="font-size:10px;">${logisticsShort(d)}</span>
       ${d.inTransit ? '<span class="batch-transit-badge">In transit</span>' : ''}
+      ${showAssign && !S.assigningBatchId ? `<button class="batch-assign-btn" onclick="event.stopPropagation();startAssignMode('${d.id}')">Assign</button>` : ''}
       <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
     </div>`;
 

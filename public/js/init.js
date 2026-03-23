@@ -56,6 +56,17 @@ function buildNav() {
   ).join('');
 }
 
+// ── GLOBAL KEY HANDLERS ──────────────────────────────────
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    // Cancel assign mode if active
+    if (S.assigningBatchId) { cancelAssignMode(); return; }
+    // Close modal if open
+    const modal = document.querySelector('.modal-bg');
+    if (modal) closeModal();
+  }
+});
+
 // ── BEFOREUNLOAD GUARD ────────────────────────────────────
 window.addEventListener('beforeunload', function(e) {
   if (saveState !== 'saved') {

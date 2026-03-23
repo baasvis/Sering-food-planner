@@ -82,6 +82,7 @@ let S = {
   },
   batches:[],
   expandedBatches: new Set(),
+  assigningBatchId: null,
   recipeIndex:[],
   ingredientDb:[],
   planner:{},

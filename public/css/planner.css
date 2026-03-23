@@ -183,3 +183,17 @@
   .batch-svc-label{display:inline-block;font-size:11px;padding:2px 6px;background:var(--bg2);border-radius:3px;margin:1px 2px;}
   .batch-svc-label.served{opacity:.5;text-decoration:line-through;}
   .batch-tile-actions{display:flex;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);}
+  .batch-tile.assigning{border-color:var(--blue);background:var(--blue-bg);box-shadow:0 0 0 2px var(--blue);}
+
+  /* ═══════════ BATCH POOL ═══════════ */
+  .batch-pool{margin-top:24px;padding-top:16px;border-top:2px solid var(--border);}
+  .batch-pool-hdr{font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+  .batch-pool-count{font-size:12px;font-weight:400;color:var(--text3);background:var(--bg2);padding:1px 8px;border-radius:10px;}
+  .batch-assign-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;border:1px solid var(--blue);background:transparent;color:var(--blue);cursor:pointer;white-space:nowrap;transition:all .12s;margin-left:auto;flex-shrink:0;}
+  .batch-assign-btn:hover{background:var(--blue);color:#fff;}
+
+  /* ═══════════ ASSIGN MODE ═══════════ */
+  .assign-banner{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--blue-bg);border:2px solid var(--blue);border-radius:var(--radius);margin-bottom:12px;font-size:13px;color:var(--blue);font-weight:500;}
+  .assign-banner .btn{border-color:var(--blue);color:var(--blue);}
+  .slot.slot-assign-target{border:2px dashed var(--blue);background:var(--blue-bg);cursor:crosshair;}
+  .slot.slot-assign-target:hover{background:color-mix(in srgb, var(--blue) 15%, var(--bg));}
