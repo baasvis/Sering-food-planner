@@ -333,53 +333,12 @@ function renderTransportView() {
       <button class="btn btn-sm" style="color:var(--green);border-color:var(--green);" onclick="markSelectedArrived()">Mark selected as arrived</button>
     </div>`;
 
-    const today = getToday();
-    const todayDow = today.getDay();
-    const mondayOff = todayDow === 0 ? -6 : 1 - todayDow;
-    const monday = new Date(today); monday.setDate(today.getDate() + mondayOff);
-
-    // Collect dishes per date
-    const byDate = {};
-    const noDayDishes = [];
+    // Show all transport batches in a single flat list (no date grouping)
+    html += `<div class="batch-tile-grid">`;
     transportDishes.forEach(d => {
-      const dates = new Set();
-      (d.services || []).forEach(s => { if (s.date) dates.add(s.date); });
-      if (dates.size === 0) { noDayDishes.push(d); return; }
-      dates.forEach(date => {
-        if (!byDate[date]) byDate[date] = [];
-        if (!byDate[date].find(x => x.id === d.id)) byDate[date].push(d);
-      });
+      html += renderBatchTile(d, false);
     });
-
-    // Render per day (show days that have dishes, sorted by date)
-    const sortedDates = Object.keys(byDate).sort();
-    const todayIso = dateToIso(today);
-    sortedDates.forEach(isoDate => {
-      const dishes = byDate[isoDate];
-      if (!dishes || dishes.length === 0) return;
-      const dayName = dateToDayName(isoDate);
-      const dt = new Date(isoDate + 'T12:00:00');
-      const dateStr = `${dt.getDate()}/${dt.getMonth()+1}`;
-      const isToday = isoDate === todayIso;
-      html += `<div class="type-section">`;
-      html += `<div class="type-section-hdr"${isToday ? ' style="color:var(--blue);"' : ''}>${dayName} ${dateStr}</div>`;
-      html += `<div class="dish-list-hdr">
-        <span></span><span>Batch</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
-      </div>`;
-      html += renderDishListSplit(dishes);
-      html += `</div>`;
-    });
-
-    // Dishes with no day assigned
-    if (noDayDishes.length > 0) {
-      html += `<div class="type-section">`;
-      html += `<div class="type-section-hdr" style="color:var(--text3);">No day assigned</div>`;
-      html += `<div class="dish-list-hdr">
-        <span></span><span>Batch</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
-      </div>`;
-      html += renderDishListSplit(noDayDishes);
-      html += `</div>`;
-    }
+    html += `</div>`;
 
     html += `</div>`; // close dishes in transport section
   } else {

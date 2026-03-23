@@ -40,6 +40,16 @@
     .add-slot-btn{font-size:9px;padding:1px 3px;}
     .copy-slot-btn{font-size:8px;padding:1px 3px;}
 
+    /* Batch tiles: compact for mobile */
+    .batch-tile-compact{gap:5px;padding:5px 8px;min-height:32px;}
+    .batch-tile-compact .sel-box{display:none;}
+    .batch-tile-name{font-size:12px;}
+    .batch-tile-stock{font-size:11px;}
+    .batch-assign-btn{display:none;}
+    .batch-pool-showAll{margin-top:12px;padding-top:10px;}
+    .btn-show-all-batches{padding:10px 12px;font-size:13px;}
+    .batch-detail-grid{grid-template-columns:1fr;gap:6px;}
+
     /* Dish list: card layout instead of grid */
     .dish-list-hdr{display:none;}
     .dish-row{display:block;padding:10px 12px;min-width:auto;}

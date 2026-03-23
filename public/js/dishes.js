@@ -210,7 +210,7 @@ function renderBatchTile(d, showAssign) {
       <span class="batch-type-dot batch-type-${(d.type||'Soup').toLowerCase().replace(/ /g,'-')}"></span>
       <span class="batch-tile-name">${esc(d.name)}</span>
       <span class="batch-tile-stock ${cls}">${d.stock || 0}L <small>${str}</small></span>
-      <span class="${logisticsBadgeClass(d)}" style="font-size:10px;">${logisticsShort(d)}</span>
+      <span class="batch-tile-logistics ${logisticsBadgeClass(d)}" style="font-size:10px;">${logisticsShort(d)}</span>
       ${d.inTransit ? '<span class="batch-transit-badge">In transit</span>' : ''}
       ${showAssign && !S.assigningBatchId ? `<button class="batch-assign-btn" onclick="event.stopPropagation();startAssignMode('${d.id}')">Assign</button>` : ''}
       <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
