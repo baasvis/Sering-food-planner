@@ -379,7 +379,7 @@ function renderStandardInventoryTab() {
 // ── Dishes tab ────────────────────────────────────────────
 
 function renderDishesTab() {
-  const orderedDishes = S.dishes.filter(d => d.orderFor);
+  const orderedDishes = S.batches.filter(d => d.orderFor);
   const combined = {};
 
   orderedDishes.forEach(dish => {
@@ -516,7 +516,7 @@ function renderDishesTab() {
 
 function renderCombinedOrderTab() {
   const combined = {};
-  const orderedDishes = S.dishes.filter(d => d.orderFor);
+  const orderedDishes = S.batches.filter(d => d.orderFor);
 
   function addToMap(name, amtGrams, isStandard, dishName) {
     const key = name.toLowerCase().trim();
@@ -707,7 +707,7 @@ function renderCombinedOrderTab() {
 
 function copyOrderCodes(supplier) {
   const items = [];
-  S.dishes.filter(d => d.orderFor).forEach(dish => {
+  S.batches.filter(d => d.orderFor).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
       if (db && db.orderCode && !db.orderCode.startsWith('http') && (db.source || '').toLowerCase().includes(supplier.toLowerCase())) {
@@ -721,7 +721,7 @@ function copyOrderCodes(supplier) {
 function copyDishOrderCodes(storageCat) {
   const curLoc = currentOrdersLoc || 'west';
   const items = new Set();
-  S.dishes.filter(d => d.orderFor).forEach(dish => {
+  S.batches.filter(d => d.orderFor).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
       if (db && db.orderCode && !db.orderCode.startsWith('http')) {
@@ -750,7 +750,7 @@ function copySiOrderCodes(storageCat) {
 
 function copyCombinedOrderCodes(supplier) {
   const items = new Set();
-  S.dishes.filter(d => d.orderFor).forEach(dish => {
+  S.batches.filter(d => d.orderFor).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
       if (db && db.orderCode && !db.orderCode.startsWith('http') && normalizeSupplier(db.source || '').toLowerCase().includes(supplier.toLowerCase())) {
@@ -879,7 +879,7 @@ function updateOrderStock(key, val) {
 }
 
 async function refreshAllRecipes() {
-  const dishes = S.dishes.filter(d => d.orderFor && d.recipeSheetId);
+  const dishes = S.batches.filter(d => d.orderFor && d.recipeSheetId);
   if (!dishes.length) { toast('No dishes with recipe sheets to refresh'); return; }
   toast('Refreshing ' + dishes.length + ' recipe(s)...');
   let ok = 0;

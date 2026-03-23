@@ -3,7 +3,7 @@
 const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const MEALS=['lunch','dinner'];
 const STORAGE=['Gastro','Frozen','Vac-packed'];
-const LOGISTICS=['Sering West','Transport to Sering Centraal','Transport to Sering West','Sering Centraal'];
+const LOCATIONS=['west','centraal'];
 const ALLERGENS=['Gluten','Soy','Nuts','Peanuts','Sesame','Celery','Mustard','Sulphites','Lupin','Onion','Garlic','Paprika'];
 
 // Ingredient database constants
@@ -69,7 +69,7 @@ const NAV_SCREENS = [
 let S = {
   currentLoc:'west',
   plannerSubTab:'west',
-  filters:{loc:'all',storage:'all',logistics:'all'},
+  filters:{loc:'all',storage:'all',inTransit:'all'},
   selected:new Set(),
   orderToggles:{dishes:true,standard:false},
   caterings:[],
@@ -80,7 +80,8 @@ let S = {
     west:{Mon:{lunch:100,dinner:110},Tue:{lunch:100,dinner:110},Wed:{lunch:100,dinner:110},Thu:{lunch:100,dinner:110},Fri:{lunch:80,dinner:90},Sat:{lunch:0,dinner:0},Sun:{lunch:0,dinner:0}},
     centraal:{Mon:{lunch:80,dinner:85},Tue:{lunch:80,dinner:85},Wed:{lunch:80,dinner:85},Thu:{lunch:80,dinner:85},Fri:{lunch:60,dinner:70},Sat:{lunch:0,dinner:0},Sun:{lunch:0,dinner:0}}
   },
-  dishes:[],
+  batches:[],
+  expandedBatches: new Set(),
   recipeIndex:[],
   ingredientDb:[],
   planner:{},

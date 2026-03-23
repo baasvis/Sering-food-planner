@@ -375,7 +375,8 @@ async function addDishFromRecipe(recipeId) {
     stock: 0,
     serving: r.servingSize || 280,
     storage: 'Gastro',
-    logistics: 'Sering West',
+    location: 'west',
+    inTransit: false,
     recipeSheetId: r.recipeSheetId || null,
     recipeVolume: r.recipeVolume || null,
     recipeIngredients: r.recipeIngredients ? [...r.recipeIngredients] : null,
@@ -383,14 +384,11 @@ async function addDishFromRecipe(recipeId) {
     extraAllergens: [],
     orderFor: false,
     parentId: null,
-    cookMode: 'day',
-    cookDay: null,
     cookDate: null,
-    cookConfirmed: false,
     services: [],
     createdAt: new Date().toISOString(),
   };
-  S.dishes.push(newDish);
+  S.batches.push(newDish);
   rebuildPlanner();
   scheduleSave();
   toast(esc(r.name) + ' added to menu planner');

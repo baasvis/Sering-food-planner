@@ -1,6 +1,17 @@
 // CORE LOGIC
 // ═══════════════════════════════════════════════════════════════════
 
+function isBatchCooked(d) {
+  return (d.stock || 0) > 0;
+}
+
+function locationBadge(d) {
+  if (d.location === 'centraal') {
+    return `<span class="badge b-centraal">Sering Centraal</span>`;
+  }
+  return `<span class="badge b-west">Sering West</span>`;
+}
+
 // Amsterdam time helper (shared — also used by planner.js inventory)
 function getAmsterdamNow() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
@@ -49,7 +60,7 @@ function isServicePast(svc) {
 
 function rebuildPlanner() {
   S.planner = {};
-  S.dishes.forEach(d => {
+  S.batches.forEach(d => {
     (d.services || []).forEach(svc => {
       const k = `${svc.loc}-${svc.date}-${svc.meal}`;
       if (!S.planner[k]) S.planner[k] = [];
@@ -59,8 +70,8 @@ function rebuildPlanner() {
 }
 
 function renderDishListSplit(dishes) {
-  const cooked = sortByCookDate(dishes.filter(d => d.cookConfirmed));
-  const uncooked = sortByCookDate(dishes.filter(d => !d.cookConfirmed));
+  const cooked = sortByCookDate(dishes.filter(d => isBatchCooked(d)));
+  const uncooked = sortByCookDate(dishes.filter(d => !isBatchCooked(d)));
   let html = '';
   if (uncooked.length > 0) {
     html += `<div class="cook-group-hdr uncooked-hdr">To cook (${uncooked.length})</div>`;
@@ -222,36 +233,39 @@ function storageBadgeClass(s) {
   return 'badge ' + (m[s] || 'b-gastro');
 }
 function cycleStorage(id) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   const idx = STORAGE.indexOf(d.storage || 'Gastro');
   d.storage = STORAGE[(idx + 1) % STORAGE.length];
   scheduleSave();
   rerenderCurrentView();
 }
-function logisticsBadge(l) {
-  if (l === 'Sering Centraal') return `<span class="badge b-centraal">Sering Centraal</span>`;
-  if (l === 'Transport to Sering Centraal') return `<span class="badge b-twc">&rarr; Sering Centraal</span>`;
-  if (l === 'Transport to Sering West') return `<span class="badge b-tww">&rarr; Sering West</span>`;
-  return `<span class="badge b-west">Sering West</span>`;
+function logisticsBadge(d) {
+  const loc = d.location || 'west';
+  const label = loc === 'centraal' ? 'Sering Centraal' : 'Sering West';
+  if (d.inTransit) {
+    const cls = loc === 'centraal' ? 'b-twc' : 'b-tww';
+    return `<span class="badge ${cls}">&rarr; ${label}</span>`;
+  }
+  return `<span class="badge ${loc === 'centraal' ? 'b-centraal' : 'b-west'}">${label}</span>`;
 }
-function logisticsBadgeClass(l) {
-  if (l === 'Sering Centraal') return 'badge b-centraal';
-  if (l === 'Transport to Sering Centraal') return 'badge b-twc';
-  if (l === 'Transport to Sering West') return 'badge b-tww';
-  return 'badge b-west';
+function logisticsBadgeClass(d) {
+  const loc = d.location || 'west';
+  if (d.inTransit) return 'badge ' + (loc === 'centraal' ? 'b-twc' : 'b-tww');
+  return 'badge ' + (loc === 'centraal' ? 'b-centraal' : 'b-west');
 }
-function logisticsShort(l) {
-  if (l === 'Sering Centraal') return 'Sering Centraal';
-  if (l === 'Transport to Sering Centraal') return '→ Sering Centraal';
-  if (l === 'Transport to Sering West') return '→ Sering West';
-  return 'Sering West';
+function logisticsShort(d) {
+  const loc = d.location || 'west';
+  const label = loc === 'centraal' ? 'Sering Centraal' : 'Sering West';
+  if (d.inTransit) return '\u2192 ' + label;
+  return label;
 }
-function cycleLogistics(id) {
-  const d = S.dishes.find(x => x.id === id);
+function cycleLocation(id) {
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
-  const idx = LOGISTICS.indexOf(d.logistics || 'Sering West');
-  d.logistics = LOGISTICS[(idx + 1) % LOGISTICS.length];
+  if (d.location === 'west') d.location = 'centraal';
+  else d.location = 'west';
+  d.inTransit = false;
   rebuildPlanner();
   scheduleSave();
   rerenderCurrentView();
@@ -259,7 +273,7 @@ function cycleLogistics(id) {
 
 // ── SERVED / ARCHIVE ─────────────────────────────────────
 function openServedDialog(id) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   showModal(`<h3>Mark "${esc(d.name)}" as served</h3>
     <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">This will remove it from the menu planner. Optionally rate it first:</p>
@@ -294,7 +308,7 @@ function setRating(key, val) {
 }
 
 function archiveDish(id, withRating) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   const rating = withRating ? { ...pendingRatings } : null;
   // Store in archive (in state for now)
@@ -323,7 +337,7 @@ function archiveDish(id, withRating) {
     }
   }
   // Remove from active dishes
-  S.dishes = S.dishes.filter(x => x.id !== id);
+  S.batches = S.batches.filter(x => x.id !== id);
   pendingRatings = { skill:0, speed:0, banger:0 };
   closeModal();
   rebuildPlanner();
@@ -341,7 +355,7 @@ function typeBadgeClass(t) {
 }
 const TYPES = ['Soup','Main course','Dessert'];
 function cycleType(id) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   const idx = TYPES.indexOf(d.type || 'Soup');
   d.type = TYPES[(idx + 1) % TYPES.length];
@@ -349,14 +363,14 @@ function cycleType(id) {
   rerenderCurrentView();
 }
 function toggleOrder(id) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.orderFor = !d.orderFor;
   scheduleSave();
   rerenderCurrentView();
 }
 function chipClass(d) {
-  if ((d.logistics || '').startsWith('Transport')) return 'chip-tr';
+  if (d.inTransit) return 'chip-tr';
   if (d.type === 'Soup') return 'chip-soup';
   if (d.type === 'Dessert') return 'chip-dessert';
   return 'chip-main';

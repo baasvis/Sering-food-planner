@@ -29,7 +29,7 @@ function renderCaterings() {
   sorted.forEach(c => {
     const deliveryLabel = { pickup: 'Pickup', delivery: 'Delivery', 'on-location': 'On location' }[c.deliveryMode] || c.deliveryMode;
     const dishList = (c.dishes || []).map(d => {
-      const dish = S.dishes.find(x => x.id === d.dishId);
+      const dish = S.batches.find(x => x.id === d.dishId);
       const serving = dish ? (dish.serving || 280) : 280;
       const peers = (c.dishes || []).filter(cd => cd.type === d.type).length;
       const liters = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * serving / 1000 * 10) / 10;
@@ -119,7 +119,7 @@ function openEditCatering(id) {
 function renderCateringDishList(c) {
   if (!c.dishes || c.dishes.length === 0) return '<div style="font-size:12px;color:var(--text3);">No dishes yet</div>';
   return c.dishes.map((d, i) => {
-    const dish = S.dishes.find(x => x.id === d.dishId);
+    const dish = S.batches.find(x => x.id === d.dishId);
     const serving = dish ? (dish.serving || 280) : 280;
     const peers = (c.dishes || []).filter(cd => cd.type === d.type).length;
     const liters = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * serving / 1000 * 10) / 10;
@@ -142,7 +142,7 @@ function renderCateringDishPicker(cateringId, query) {
   const q = query.toLowerCase();
 
   // Only show planned dishes (they have serving size + stock tracking)
-  const available = S.dishes
+  const available = S.batches
     .filter(d => !alreadyAdded.has(d.id))
     .filter(d => !q || d.name.toLowerCase().includes(q));
 
@@ -151,8 +151,8 @@ function renderCateringDishPicker(cateringId, query) {
   if (available.length > 0) {
     list += available.slice(0, 20).map(d => {
       const { str, cls } = diffStr(d);
-      const stockLoc = logisticsShort(d.logistics || 'Sering West');
-      const cookStatus = d.cookConfirmed ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
+      const stockLoc = logisticsShort(d);
+      const cookStatus = isBatchCooked(d) ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
       const serving = d.serving || 280;
       const sameTypePeers = (c.dishes || []).filter(cd => cd.type === d.type).length + 1; // +1 for this dish being added
       const cateringLiters = Math.round(((c.guestCount || 0) / sameTypePeers) * serving / 1000 * 10) / 10;
@@ -162,7 +162,7 @@ function renderCateringDishPicker(cateringId, query) {
           <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
             <span style="font-weight:600;">${d.stock}L stock</span>
             <span class="${cls}">${str}</span>
-            <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="font-size:10px;">${stockLoc}</span>
+            <span class="${logisticsBadgeClass(d)}" style="font-size:10px;">${stockLoc}</span>
             <span style="color:var(--text3);">+${cateringLiters}L for this catering</span>
             ${cookStatus ? `<span style="color:var(--text3);">${cookStatus}</span>` : ''}
           </div>
@@ -184,7 +184,7 @@ function renderCateringDishPicker(cateringId, query) {
 
 function addCateringDishFromPlanner(cateringId, dishId) {
   const c = S.caterings.find(x => x.id === cateringId);
-  const d = S.dishes.find(x => x.id === dishId);
+  const d = S.batches.find(x => x.id === dishId);
   if (!c || !d) return;
   if (!c.dishes) c.dishes = [];
   c.dishes.push({ dishId: d.id, name: d.name, type: d.type || 'Soup' });

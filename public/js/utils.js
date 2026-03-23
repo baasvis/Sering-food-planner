@@ -38,11 +38,11 @@ function setSaveState(state, msg) {
 }
 
 // ── Snapshot diffing for patch saves ──
-let _lastSaved = { dishes: new Map(), guests: '', caterings: new Map(), transportItems: new Map() };
+let _lastSaved = { batches: new Map(), guests: '', caterings: new Map(), transportItems: new Map() };
 
 function takeSnapshot() {
   _lastSaved = {
-    dishes: new Map(S.dishes.map(d => [d.id, JSON.stringify(d)])),
+    batches: new Map(S.batches.map(d => [d.id, JSON.stringify(d)])),
     guests: JSON.stringify(S.guests),
     caterings: new Map(S.caterings.map(c => [c.id, JSON.stringify(c)])),
     transportItems: new Map(S.transportItems.map(t => [t.id, JSON.stringify(t)])),
@@ -50,18 +50,18 @@ function takeSnapshot() {
 }
 
 function computePatch() {
-  const patch = { dishes: [], deletedDishes: [], guests: null,
+  const patch = { batches: [], deletedBatches: [], guests: null,
                   caterings: [], deletedCaterings: [],
                   transportItems: [], deletedTransportItems: [] };
 
-  // Dishes
-  const curDishIds = new Set(S.dishes.map(d => d.id));
-  for (const d of S.dishes) {
-    const prev = _lastSaved.dishes.get(d.id);
-    if (!prev || prev !== JSON.stringify(d)) patch.dishes.push(d);
+  // Batches
+  const curBatchIds = new Set(S.batches.map(d => d.id));
+  for (const d of S.batches) {
+    const prev = _lastSaved.batches.get(d.id);
+    if (!prev || prev !== JSON.stringify(d)) patch.batches.push(d);
   }
-  for (const [id] of _lastSaved.dishes) {
-    if (!curDishIds.has(id)) patch.deletedDishes.push(id);
+  for (const [id] of _lastSaved.batches) {
+    if (!curBatchIds.has(id)) patch.deletedBatches.push(id);
   }
 
   // Guests (small fixed structure — send full if changed)
@@ -91,7 +91,7 @@ function computePatch() {
 }
 
 function patchIsEmpty(p) {
-  return p.dishes.length === 0 && p.deletedDishes.length === 0 &&
+  return p.batches.length === 0 && p.deletedBatches.length === 0 &&
          p.guests === null &&
          p.caterings.length === 0 && p.deletedCaterings.length === 0 &&
          p.transportItems.length === 0 && p.deletedTransportItems.length === 0;
@@ -142,7 +142,7 @@ async function loadData() {
     const data = await apiGet('/api/data');
     if (data.guests) S.guests = data.guests;
     if (data.recipeIndex) S.recipeIndex = data.recipeIndex;
-    if (data.dishes) S.dishes = data.dishes;
+    if (data.batches) S.batches = data.batches;
     if (data.caterings) S.caterings = data.caterings;
     if (data.transportItems) S.transportItems = data.transportItems;
     takeSnapshot();

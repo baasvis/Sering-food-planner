@@ -103,7 +103,7 @@ function renderLocationPlan(loc) {
         const slotServed = isServicePast({loc, date: isoDate, meal});
         html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}" onclick="openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">`;
         slotDishes.forEach(dish => {
-          const trClass = (dish.logistics || '').startsWith('Transport') ? ' chip-tr-border' : '';
+          const trClass = dish.inTransit ? ' chip-tr-border' : '';
           const servedClass = slotServed ? ' dish-chip-served' : '';
           html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}"><span class="chip-nm">${esc(dish.name)}</span>${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
         });
@@ -114,7 +114,7 @@ function renderLocationPlan(loc) {
     html += '</div></div>'; // close week-grid and week-scroll
 
     // Collapsible dish list below the grid
-    const typeDishes = S.dishes.filter(d => d.type === tg.key && (d.services || []).some(s => s.loc === loc));
+    const typeDishes = S.batches.filter(d => d.type === tg.key && (d.services || []).some(s => s.loc === loc));
     if (typeDishes.length > 0 && !isCollapsed) {
       html += `<div class="type-dish-list">`;
       html += `<div class="dish-list-hdr">
@@ -136,9 +136,9 @@ function renderLocationPlan(loc) {
     html += `</div>`; // close type-section
   });
 
-  // Also show dishes with no services (unassigned) that match this location's logistics
+  // Also show dishes with no services (unassigned) that match this location
   const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
-  const unassigned = S.dishes.filter(d => (d.services || []).length === 0 && (d.logistics === locLabel || d.logistics === 'Transport to ' + (loc === 'west' ? 'Sering West' : 'Sering Centraal')));
+  const unassigned = S.batches.filter(d => (d.services || []).length === 0 && d.location === loc);
   if (unassigned.length > 0) {
     html += `<div class="type-section">`;
     html += `<div class="type-section-hdr" style="color:var(--text3);">Unassigned dishes at ${locLabel}</div>`;
@@ -155,7 +155,7 @@ function renderLocationPlan(loc) {
 
 // ── TRANSPORT VIEW ───────────────────────────────────────
 function renderTransportView() {
-  const transportDishes = S.dishes.filter(d => (d.logistics || '').startsWith('Transport'));
+  const transportDishes = S.batches.filter(d => d.inTransit === true);
 
   let html = `<div id="split-bar-area"></div>`;
 
@@ -267,10 +267,9 @@ function markSelectedArrived() {
   if (selected.length === 0) { toast('Select dishes first using the checkboxes'); return; }
   let count = 0;
   selected.forEach(id => {
-    const d = S.dishes.find(x => x.id === id);
-    if (d && (d.logistics || '').startsWith('Transport')) {
-      // "Transport to Sering West" → "Sering West", "Transport to Sering Centraal" → "Sering Centraal"
-      d.logistics = d.logistics.replace('Transport to ', '');
+    const d = S.batches.find(x => x.id === id);
+    if (d && d.inTransit) {
+      d.inTransit = false;
       count++;
     }
   });
@@ -284,7 +283,7 @@ function markSelectedArrived() {
 
 // ── ADD DISH MODAL ───────────────────────────────────────
 function removeDishFromSlot(dishId, loc, date, meal) {
-  const dish = S.dishes.find(d => d.id === dishId);
+  const dish = S.batches.find(d => d.id === dishId);
   if (dish) { dish.services = (dish.services || []).filter(s => !(s.loc === loc && s.date === date && s.meal === meal)); }
   rebuildPlanner(); rerenderCurrentView(); scheduleSave();
 }
@@ -364,12 +363,12 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab,
   const typeLabel = typeFilter ? ` (${typeFilter === 'Main course' ? 'Mains' : typeFilter + 's'})` : '';
 
   // Build filtered lists for counts and display
-  let allAvail = S.dishes.filter(d => !existing.includes(d.id));
+  let allAvail = S.batches.filter(d => !existing.includes(d.id));
   if (typeFilter) allAvail = allAvail.filter(d => d.type === typeFilter);
 
-  const cookedDishes = allAvail.filter(d => d.cookConfirmed && d.logistics === locLabel);
-  const plannedDishes = sortByCookDate(allAvail.filter(d => !d.cookConfirmed && (d.services || []).length > 0));
-  const activeDishRecipeIds = new Set(S.dishes.map(d => d.recipeSheetId).filter(Boolean));
+  const cookedDishes = allAvail.filter(d => isBatchCooked(d) && d.location === locFilter && !d.inTransit);
+  const plannedDishes = sortByCookDate(allAvail.filter(d => !isBatchCooked(d) && (d.services || []).length > 0));
+  const activeDishRecipeIds = new Set(S.batches.map(d => d.recipeSheetId).filter(Boolean));
   let allRecipes = S.recipeIndex.filter(r => !activeDishRecipeIds.has(r.recipeSheetId));
   if (typeFilter) allRecipes = allRecipes.filter(r => r.type === typeFilter);
 
@@ -389,14 +388,14 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab,
     const { diff, str, cls } = diffStr(d);
     const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
     const agHtml = allAg.slice(0, 4).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
-    const cookInfo = d.cookConfirmed ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
-    const stockLoc = logisticsShort(d.logistics || 'Sering West');
+    const cookInfo = isBatchCooked(d) ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
+    const stockLoc = logisticsShort(d);
     return `<div class="dish-opt" onclick="confirmAddDish('${d.id}','${loc}','${date}','${meal}')">
       <div style="flex:1;">
         <div><span style="font-weight:500;">${esc(d.name)}</span> ${typeBadge(d.type)} ${storageBadge(d.storage || 'Gastro')}</div>
         <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
           <span class="${cls}">${d.stock}L stock &middot; ${str}</span>
-          <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="font-size:10px;">${stockLoc}</span>
+          <span class="${logisticsBadgeClass(d)}" style="font-size:10px;">${stockLoc}</span>
           ${agHtml ? `<span>${agHtml}</span>` : ''}
           ${cookInfo ? `<span style="color:var(--text3);">${cookInfo}</span>` : ''}
         </div>
@@ -503,7 +502,7 @@ function searchAddModal() {
 }
 
 function confirmAddDish(dishId, loc, date, meal) {
-  const dish = S.dishes.find(d => d.id === dishId);
+  const dish = S.batches.find(d => d.id === dishId);
   if (dish) { if (!dish.services) dish.services = []; dish.services.push({ loc, date, meal }); }
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`${dish.name} added to ${dateToDayName(date)} ${meal}`);
@@ -512,7 +511,6 @@ function confirmAddDish(dishId, loc, date, meal) {
 function addRecipeToSlot(recipeId, loc, date, meal) {
   const r = S.recipeIndex.find(x => x.id === recipeId);
   if (!r) return;
-  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
   const newDish = {
     id: newId(),
     name: r.name,
@@ -520,7 +518,8 @@ function addRecipeToSlot(recipeId, loc, date, meal) {
     stock: 0,
     serving: r.servingSize || 280,
     storage: 'Gastro',
-    logistics: locLabel,
+    location: loc,
+    inTransit: false,
     recipeSheetId: r.recipeSheetId || null,
     recipeVolume: r.recipeVolume || null,
     recipeIngredients: r.recipeIngredients ? [...r.recipeIngredients] : null,
@@ -528,14 +527,11 @@ function addRecipeToSlot(recipeId, loc, date, meal) {
     extraAllergens: [],
     orderFor: false,
     parentId: null,
-    cookMode: 'day',
-    cookDay: null,
     cookDate: null,
-    cookConfirmed: false,
     services: [{ loc, date, meal }],
     createdAt: new Date().toISOString(),
   };
-  S.dishes.push(newDish);
+  S.batches.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`${r.name} added to ${dateToDayName(date)} ${meal}`);
 }
@@ -548,7 +544,6 @@ function addPlaceholderDish() {
   const type = typeFilter || 'Soup';
   const typeLabel = type === 'Main course' ? 'Main' : type;
   const name = `${dayName} ${typeLabel}`;
-  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
 
   const newDish = {
     id: newId(),
@@ -557,19 +552,17 @@ function addPlaceholderDish() {
     stock: 0,
     serving: 280,
     storage: 'Gastro',
-    logistics: locLabel,
+    location: loc,
+    inTransit: false,
     allergens: [],
     extraAllergens: [],
     orderFor: false,
     parentId: null,
-    cookMode: 'day',
-    cookDay: null,
     cookDate: null,
-    cookConfirmed: false,
     services: [{ loc, date, meal }],
     createdAt: new Date().toISOString(),
   };
-  S.dishes.push(newDish);
+  S.batches.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`Placeholder "${name}" added to ${dayName} ${meal}`);
 }
@@ -621,11 +614,11 @@ function getInventoryButton(loc) {
 
 function openInventory(loc) {
   const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
-  const dishes = S.dishes.filter(d => {
-    if (!d.cookConfirmed) return false; // Only cooked dishes need inventory
+  const dishes = S.batches.filter(d => {
+    if (!isBatchCooked(d)) return false; // Only cooked dishes need inventory
     const atLoc = (d.services || []).some(s => s.loc === loc);
-    const logMatch = d.logistics === locLabel || d.logistics === 'Transport to ' + (loc === 'west' ? 'Sering Centraal' : 'Sering West');
-    return atLoc || logMatch;
+    const locMatch = d.location === loc;
+    return atLoc || locMatch;
   });
 
   if (dishes.length === 0) {
@@ -677,7 +670,7 @@ function openInventory(loc) {
 }
 
 function updateInventoryStock(id, value) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.stock = parseFloat(value) || 0;
   scheduleSave();

@@ -3,14 +3,17 @@ let dishSort = { col: 'default', dir: 'asc' };
 
 function renderDishesOverview() {
   const f = S.filters;
-  const filtered = S.dishes.filter(d => {
+  const filtered = S.batches.filter(d => {
     if (f.loc !== 'all') {
-      const ml = (f.loc === 'west' && (d.logistics === 'Sering West' || d.logistics === 'Transport to Sering Centraal')) || (f.loc === 'centraal' && (d.logistics === 'Sering Centraal' || d.logistics === 'Transport to Sering West'));
+      const ml = d.location === f.loc;
       const sl = (d.services || []).some(s => s.loc === f.loc);
       if (!ml && !sl) return false;
     }
     if (f.storage !== 'all' && d.storage !== f.storage) return false;
-    if (f.logistics !== 'all' && d.logistics !== f.logistics) return false;
+    if (f.inTransit !== 'all') {
+      const wantTransit = f.inTransit === 'true';
+      if (!!d.inTransit !== wantTransit) return false;
+    }
     return true;
   });
 
@@ -55,11 +58,9 @@ function renderDishesOverview() {
     </div>
     <div class="filter-sep"></div>
     <div style="display:flex;gap:4px;flex-wrap:wrap;">
-      <button class="fc ${f.logistics === 'all' ? 'on' : ''}" onclick="setFilter('logistics','all')">All logistics</button>
-      <button class="fc ${f.logistics === 'Sering West' ? 'on' : ''}" onclick="setFilter('logistics','Sering West')">At West</button>
-      <button class="fc ${f.logistics === 'Transport to Sering Centraal' ? 'on' : ''}" onclick="setFilter('logistics','Transport to Sering Centraal')">&rarr; Centraal</button>
-      <button class="fc ${f.logistics === 'Transport to Sering West' ? 'on' : ''}" onclick="setFilter('logistics','Transport to Sering West')">&rarr; West</button>
-      <button class="fc ${f.logistics === 'Sering Centraal' ? 'on' : ''}" onclick="setFilter('logistics','Sering Centraal')">At Centraal</button>
+      <button class="fc ${f.inTransit === 'all' ? 'on' : ''}" onclick="setFilter('inTransit','all')">All</button>
+      <button class="fc ${f.inTransit === 'false' ? 'on' : ''}" onclick="setFilter('inTransit','false')">At location</button>
+      <button class="fc ${f.inTransit === 'true' ? 'on' : ''}" onclick="setFilter('inTransit','true')">In transit</button>
     </div>
   </div>
   <div style="display:flex;gap:12px;font-size:10px;color:var(--text3);margin-bottom:8px;padding:4px 0;">
@@ -104,17 +105,15 @@ function cookDateSortVal(ddmmyyyy) {
   return ddmmyyyy;
 }
 
-function logisticsRowClass(l) {
-  if (l === 'Sering West') return 'log-west';
-  if (l === 'Sering Centraal') return 'log-centraal';
-  if (l === 'Transport to Sering Centraal') return 'log-twc';
-  if (l === 'Transport to Sering West') return 'log-tww';
-  return 'log-west';
+function logisticsRowClass(d) {
+  const loc = d.location || 'west';
+  if (d.inTransit) return loc === 'centraal' ? 'log-twc' : 'log-tww';
+  return loc === 'centraal' ? 'log-centraal' : 'log-west';
 }
 
 function renderDishGroups(dishes) {
-  const toCook = dishes.filter(d => !d.cookConfirmed && d.storage !== 'Frozen');
-  const cooked = dishes.filter(d => d.cookConfirmed && d.storage !== 'Frozen');
+  const toCook = dishes.filter(d => !isBatchCooked(d) && d.storage !== 'Frozen');
+  const cooked = dishes.filter(d => isBatchCooked(d) && d.storage !== 'Frozen');
   const frozen = dishes.filter(d => d.storage === 'Frozen');
 
   let html = '';
@@ -150,7 +149,7 @@ function renderDishRow(d) {
   const isFrozen = d.storage === 'Frozen';
   const cookHtml = getCookCellHtml(d);
   const isStale = isDishStale(d);
-  const logClass = logisticsRowClass(d.logistics || 'Sering West');
+  const logClass = logisticsRowClass(d);
   return `<div class="dish-row ${logClass}${d.parentId ? ' split-child' : ''}${isSel ? ' selected' : ''}${isStale ? ' stale-row' : ''}${isFrozen ? ' frozen-row' : ''}">
     <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
     <div>
@@ -167,30 +166,34 @@ function renderDishRow(d) {
       </div>
     </div>
     <div class="col-cook">${cookHtml}</div>
-    <div class="col-stock"><input class="inline-edit inline-edit-stock${d.cookConfirmed ? '' : ' stock-locked'}" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" ${d.cookConfirmed ? '' : 'disabled title="Cook this dish first to set stock"'} /></div>
+    <div class="col-stock"><input class="inline-edit inline-edit-stock" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" /></div>
     <div class="col-diff ${cls}" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</div>
     <div class="col-logistics">
-      <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLogistics('${d.id}')" title="Click to change">${logisticsShort(d.logistics || 'Sering West')}</span>
+      <span class="${logisticsBadgeClass(d)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLocation('${d.id}')" title="Click to change">${logisticsShort(d)}</span>
     </div>
     <div><button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button></div>
     <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
     <div class="m-stock-row">
       <label style="font-size:12px;color:var(--text2);">Stock</label>
-      <input class="m-stock-input${d.cookConfirmed ? '' : ' stock-locked'}" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" ${d.cookConfirmed ? '' : 'disabled'} />
+      <input class="m-stock-input" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" />
       <span style="font-size:12px;color:var(--text2);">L</span>
       <span class="${cls}" style="font-size:12px;" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</span>
-      <span class="${logisticsBadgeClass(d.logistics || 'Sering West')}" style="cursor:pointer;font-size:10px;" onclick="event.stopPropagation();cycleLogistics('${d.id}')">${logisticsShort(d.logistics || 'Sering West')}</span>
+      <span class="${logisticsBadgeClass(d)}" style="cursor:pointer;font-size:10px;" onclick="event.stopPropagation();cycleLocation('${d.id}')">${logisticsShort(d)}</span>
       <button class="btn btn-sm served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')" style="margin-left:auto;">Served</button>
     </div>
   </div>`;
 }
 
 function inlineEdit(id, field, value) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   if (field === 'name') { d.name = value.trim() || d.name; }
-  else if (field === 'stock') { d.stock = parseFloat(value) || 0; }
-  else if (field === 'logistics') { d.logistics = value; }
+  else if (field === 'stock') {
+    d.stock = parseFloat(value) || 0;
+    // Auto-set cook date when stock first entered
+    if (d.stock > 0 && !d.cookDate) d.cookDate = dateToStr(getToday());
+  }
+  else if (field === 'location') { d.location = value; d.inTransit = false; }
   rebuildPlanner();
   scheduleSave();
   // Re-render only the computed columns without full re-render (to keep focus)
@@ -204,7 +207,7 @@ function inlineEdit(id, field, value) {
 }
 
 function inlineRemoveAllergen(id, allergen) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.allergens = (d.allergens || []).filter(a => a !== allergen);
   d.extraAllergens = (d.extraAllergens || []).filter(a => a !== allergen);
@@ -213,7 +216,7 @@ function inlineRemoveAllergen(id, allergen) {
 }
 
 function inlineAddAllergenStart(id) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   const container = document.getElementById('ag-inline-' + id);
   if (!container || container.querySelector('.allergen-add-select')) return;
@@ -257,7 +260,7 @@ function inlineAddAllergenStart(id) {
 function inlineAddAllergenConfirm(id, value) {
   const val = value.trim();
   if (!val) { rerenderCurrentView(); return; }
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   if (!d.extraAllergens) d.extraAllergens = [];
   const allExisting = [...(d.allergens || []), ...d.extraAllergens];
@@ -311,10 +314,7 @@ function getCookDayOptions() {
 }
 
 function isDishCooked(d) {
-  if (!d.cookDate) return false;
-  const cd = strToDate(d.cookDate);
-  if (!cd) return false;
-  return cd <= getToday() && d.cookConfirmed;
+  return isBatchCooked(d);
 }
 
 function isCookDayToday(d) {
@@ -322,11 +322,11 @@ function isCookDayToday(d) {
   const cd = strToDate(d.cookDate);
   if (!cd) return false;
   const today = getToday();
-  return cd.getTime() === today.getTime() && !d.cookConfirmed;
+  return cd.getTime() === today.getTime() && !isBatchCooked(d);
 }
 
 function isDishStale(d) {
-  if (!d.cookConfirmed || !d.cookDate) return false;
+  if (!isBatchCooked(d) || !d.cookDate) return false;
   if (d.storage === 'Frozen') return false;
   const cd = strToDate(d.cookDate);
   if (!cd) return false;
@@ -335,7 +335,7 @@ function isDishStale(d) {
 }
 
 function daysSinceCooked(d) {
-  if (!d.cookConfirmed || !d.cookDate) return 0;
+  if (!isBatchCooked(d) || !d.cookDate) return 0;
   const cd = strToDate(d.cookDate);
   if (!cd) return 0;
   return Math.floor((getToday() - cd) / (1000*60*60*24));
@@ -344,8 +344,8 @@ function daysSinceCooked(d) {
 function getCookCellHtml(d) {
   const opts = getCookDayOptions();
 
-  // Already cooked (confirmed) — show date + stale warning + editable date
-  if (d.cookConfirmed && d.cookDate) {
+  // Already cooked (stock > 0) — show date + stale warning + editable date
+  if (isBatchCooked(d) && d.cookDate) {
     const stale = isDishStale(d);
     const days = daysSinceCooked(d);
     let html = `<input type="date" class="cook-date-input" value="${cookDateToISO(d.cookDate)}" onchange="setCookDateDirect('${d.id}',this.value)" onclick="event.stopPropagation()" title="Change cooked date" />`;
@@ -359,7 +359,7 @@ function getCookCellHtml(d) {
     return `<button class="cook-today-btn" onclick="event.stopPropagation();confirmCooked('${d.id}')">Click to mark as cooked</button>`;
   }
   // Has a planned future day — show dropdown (with option to switch to date)
-  if (d.cookDate && !d.cookConfirmed) {
+  if (d.cookDate && !isBatchCooked(d)) {
     return `<select class="cook-select has-date" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
       <option value="">Select day/date</option>
       ${opts.map(o => `<option value="${o.value}"${d.cookDate === o.value ? ' selected' : ''}>${o.label}</option>`).join('')}
@@ -389,7 +389,7 @@ function isoToCookDate(iso) {
 }
 
 function setCookDay(id, value) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   if (value === '__date') {
     // Replace the select with a date input
@@ -410,35 +410,29 @@ function setCookDay(id, value) {
     return;
   }
   d.cookDate = value || null;
-  d.cookConfirmed = false;
-  d.cookMode = 'day';
   scheduleSave();
   rerenderCurrentView();
 }
 
 function setCookDateDirect(id, isoDate) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.cookDate = isoToCookDate(isoDate);
-  // If the date is today or in the past, mark as confirmed
+  // If the date is today or in the past and stock is 0, auto-fill stock
   const picked = new Date(isoDate);
   const today = getToday();
-  d.cookConfirmed = picked <= today;
-  d.cookMode = 'date';
-  // Auto-fill stock to required amount if just confirmed and stock was 0
-  if (d.cookConfirmed && (!d.stock || d.stock === 0)) {
+  if (picked <= today && (!d.stock || d.stock === 0)) {
     d.stock = calcRequired(d);
+    toast(esc(d.name) + ' marked as cooked — stock set to ' + d.stock + 'L');
   }
   scheduleSave();
   rerenderCurrentView();
-  if (d.cookConfirmed) toast(esc(d.name) + ' marked as cooked — stock set to ' + d.stock + 'L');
 }
 
 function confirmCooked(id) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.cookDate = dateToStr(getToday());
-  d.cookConfirmed = true;
   // Auto-fill stock to required amount if stock was 0
   if (!d.stock || d.stock === 0) {
     d.stock = calcRequired(d);
@@ -467,22 +461,22 @@ function calcRequiredForLoc(dish, loc) {
 function renderSplitBar() {
   const area = document.getElementById('split-bar-area');
   if (!area || S.selected.size === 0) { if (area) area.innerHTML = ''; return; }
-  const selD = [...S.selected].map(id => S.dishes.find(d => d.id === id)).filter(Boolean);
+  const selD = [...S.selected].map(id => S.batches.find(d => d.id === id)).filter(Boolean);
   const names = selD.map(d => d.name).join(', ');
-  const hasWest = selD.some(d => d.logistics === 'Sering West');
-  const hasCentraal = selD.some(d => d.logistics === 'Sering Centraal');
+  const hasWest = selD.some(d => d.location === 'west' && !d.inTransit);
+  const hasCentraal = selD.some(d => d.location === 'centraal' && !d.inTransit);
 
   // Calculate smart amounts for transport splits (capped at surplus)
   let smartCentraalAmt = 0;
   let smartWestAmt = 0;
   selD.forEach(d => {
-    if (d.logistics === 'Sering West') {
+    if (d.location === 'west' && !d.inTransit) {
       const neededHere = calcRequiredForLoc(d, 'west');
       const surplus = Math.max(0, d.stock - neededHere);
       const neededThere = calcRequiredForLoc(d, 'centraal');
       smartCentraalAmt += Math.min(neededThere, surplus);
     }
-    if (d.logistics === 'Sering Centraal') {
+    if (d.location === 'centraal' && !d.inTransit) {
       const neededHere = calcRequiredForLoc(d, 'centraal');
       const surplus = Math.max(0, d.stock - neededHere);
       const neededThere = calcRequiredForLoc(d, 'west');
@@ -497,7 +491,7 @@ function renderSplitBar() {
     <span style="font-size:12px;color:var(--text2);flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(names)}</span>
     <label>Amount (L)</label><input type="number" id="sp-amt" min="0.1" step="0.5" value="10" style="width:68px;"/>
     <label>Storage</label><select id="sp-storage">${STORAGE.map(s => `<option>${s}</option>`).join('')}</select>
-    <label>Logistics</label><select id="sp-logistics">${LOGISTICS.map(l => `<option>${l}</option>`).join('')}</select>
+    <label>Location</label><select id="sp-location">${LOCATIONS.map(l => `<option value="${l}">${l === 'west' ? 'Sering West' : 'Sering Centraal'}</option>`).join('')}</select>
     <button class="btn btn-primary" onclick="doSplit(false)">Split off</button>
     ${hasWest ? `<button class="btn btn-purple" onclick="doTransportSplit('centraal',${smartCentraalAmt})">Split ${smartCentraalAmt}L &rarr; Centraal</button>` : ''}
     ${hasCentraal ? `<button class="btn btn-purple" onclick="doTransportSplit('west',${smartWestAmt})">Split ${smartWestAmt}L &rarr; West</button>` : ''}
@@ -508,15 +502,16 @@ function renderSplitBar() {
 function doSplit(isTransport, targetLoc, smartAmounts) {
   const manualAmt = parseFloat(document.getElementById('sp-amt').value);
   const defaultStorage = document.getElementById('sp-storage').value;
-  const logistics = isTransport ? (targetLoc === 'centraal' ? 'Transport to Sering Centraal' : 'Transport to Sering West') : document.getElementById('sp-logistics').value;
+  const splitLocation = isTransport ? targetLoc : document.getElementById('sp-location').value;
+  const splitInTransit = isTransport ? true : false;
   let errors = [];
   [...S.selected].forEach(id => {
-    const d = S.dishes.find(x => x.id === id);
+    const d = S.batches.find(x => x.id === id);
     if (!d) return;
     // Inherit storage from source dish (frozen stays frozen)
     const storage = isTransport ? (d.storage || defaultStorage) : defaultStorage;
     // Calculate how much is needed at the current location
-    const currentLoc = d.logistics === 'Sering West' ? 'west' : 'centraal';
+    const currentLoc = d.location || 'west';
     const neededHere = calcRequiredForLoc(d, currentLoc);
     // Surplus = what can be split off (never more than stock minus local need)
     const surplus = Math.max(0, Math.round((d.stock - neededHere) * 10) / 10);
@@ -532,23 +527,22 @@ function doSplit(isTransport, targetLoc, smartAmounts) {
     if (!amt || amt <= 0) return;
     // Cap at surplus — can't split off more than what's not needed here
     if (amt > surplus) {
-      if (surplus <= 0) { errors.push(`"${d.name}" needs all ${d.stock}L at ${d.logistics} (${neededHere}L required)`); return; }
+      if (surplus <= 0) { errors.push(`"${d.name}" needs all ${d.stock}L at ${d.location === 'centraal' ? 'Sering Centraal' : 'Sering West'} (${neededHere}L required)`); return; }
       amt = surplus;
     }
     d.stock = Math.round((d.stock - amt) * 10) / 10;
     const targetLocName = targetLoc === 'centraal' ? 'centraal' : 'west';
     const newDish = {
-      id: newId(), name: d.name, type: d.type, storage, logistics, stock: amt,
+      id: newId(), name: d.name, type: d.type, storage, location: splitLocation, inTransit: splitInTransit, stock: amt,
       serving: d.serving || 280, recipeSheetId: d.recipeSheetId,
       recipeVolume: d.recipeVolume,
       recipeIngredients: d.recipeIngredients ? [...d.recipeIngredients] : undefined,
       allergens: [...(d.allergens || [])], extraAllergens: [...(d.extraAllergens || [])],
-      orderFor: false, parentId: d.id, cookDate: d.cookDate, cookMode: d.cookMode,
-      cookDay: d.cookDay, cookConfirmed: d.cookConfirmed || false,
+      orderFor: false, parentId: d.id, cookDate: d.cookDate,
       services: isTransport ? ((d.services || []).filter(s => s.loc === targetLocName)) : []
     };
     if (isTransport) d.services = (d.services || []).filter(s => s.loc !== targetLocName);
-    S.dishes.push(newDish);
+    S.batches.push(newDish);
   });
   if (errors.length) { alert('Cannot split: ' + errors.join(', ')); return; }
   S.selected.clear(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
@@ -598,7 +592,7 @@ function openNewDishScratch() {
     <div class="fr"><label>Stock (liters)</label><input type="number" id="nd-stock" value="0" step="0.5" min="0" /></div>
     <div class="fr"><label>Serving size (ml per guest)</label><input type="number" id="nd-serving" value="280" /></div>
     <div class="fr"><label>Storage state</label><select id="nd-storage">${STORAGE.map(s => `<option>${s}</option>`).join('')}</select></div>
-    <div class="fr"><label>Location</label><select id="nd-logistics">${LOGISTICS.map(l => `<option>${l}</option>`).join('')}</select></div>
+    <div class="fr"><label>Location</label><select id="nd-location">${LOCATIONS.map(l => `<option value="${l}">${l === 'west' ? 'Sering West' : 'Sering Centraal'}</option>`).join('')}</select></div>
     <div class="fr"><label>Recipe Google Sheet ID (optional)</label>
       <input type="text" id="nd-sheetid" placeholder="Paste the sheet ID from the URL" />
       <div style="font-size:11px;color:var(--text2);margin-top:4px;">Found in the sheet URL: /spreadsheets/d/<strong>THIS_PART</strong>/edit</div>
@@ -619,10 +613,11 @@ async function saveNewDish() {
     stock: parseFloat(document.getElementById('nd-stock').value) || 0,
     serving: parseInt(document.getElementById('nd-serving').value) || 280,
     storage: document.getElementById('nd-storage').value,
-    logistics: document.getElementById('nd-logistics').value,
+    location: document.getElementById('nd-location').value,
+    inTransit: false,
     recipeSheetId: sheetId || null,
     allergens: [], extraAllergens: [], orderFor: false, parentId: null,
-    cookMode: 'day', cookDay: null, cookDate: null, services: []
+    cookDate: null, services: []
   };
   if (sheetId) {
     try {
@@ -634,14 +629,14 @@ async function saveNewDish() {
       toast('Recipe data loaded from Google Sheet');
     } catch (e) { toastError('Could not fetch recipe: ' + e.message); }
   }
-  S.dishes.push(newDish);
+  S.batches.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`"${name}" added`);
 }
 
 // ── EDIT DISH ─────────────────────────────────────────────
 function openEditDish(id) {
-  const d = S.dishes.find(x => x.id === id);
+  const d = S.batches.find(x => x.id === id);
   if (!d) return;
   const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
   const agHtml = allAg.map(a => {
@@ -658,8 +653,12 @@ function openEditDish(id) {
     <div class="fr"><label>Storage state</label><select id="ed-storage">
       ${STORAGE.map(s => `<option${d.storage === s ? ' selected' : ''}>${s}</option>`).join('')}
     </select></div>
-    <div class="fr"><label>Logistics</label><select id="ed-logistics">
-      ${LOGISTICS.map(l => `<option${d.logistics === l ? ' selected' : ''}>${l}</option>`).join('')}
+    <div class="fr"><label>Location</label><select id="ed-location">
+      ${LOCATIONS.map(l => `<option value="${l}"${d.location === l ? ' selected' : ''}>${l === 'west' ? 'Sering West' : 'Sering Centraal'}</option>`).join('')}
+    </select></div>
+    <div class="fr"><label>In transit?</label><select id="ed-intransit">
+      <option value="false"${!d.inTransit ? ' selected' : ''}>No — at location</option>
+      <option value="true"${d.inTransit ? ' selected' : ''}>Yes — in transport</option>
     </select></div>
     <div class="fr"><label>Cook date / day</label>
       <div class="cook-toggle">
@@ -694,7 +693,7 @@ function openEditDish(id) {
 }
 
 function setCookMode(id, mode) {
-  const d = S.dishes.find(x => x.id === id); if (!d) return;
+  const d = S.batches.find(x => x.id === id); if (!d) return;
   d.cookMode = mode;
   document.getElementById('ct-day').classList.toggle('active', mode === 'day');
   document.getElementById('ct-date').classList.toggle('active', mode === 'date');
@@ -704,7 +703,7 @@ function setCookMode(id, mode) {
 }
 
 function addExtraAllergen(id) {
-  const d = S.dishes.find(x => x.id === id); if (!d) return;
+  const d = S.batches.find(x => x.id === id); if (!d) return;
   const inp = document.getElementById('ag-new');
   const val = (inp.value || '').trim(); if (!val) return;
   if (!d.extraAllergens) d.extraAllergens = [];
@@ -714,7 +713,7 @@ function addExtraAllergen(id) {
 }
 
 function removeExtraAllergen(id, allergen) {
-  const d = S.dishes.find(x => x.id === id); if (!d) return;
+  const d = S.batches.find(x => x.id === id); if (!d) return;
   d.extraAllergens = (d.extraAllergens || []).filter(a => a !== allergen);
   refreshAllergenTags(d);
 }
@@ -728,7 +727,7 @@ function refreshAllergenTags(d) {
 }
 
 async function refreshRecipe(id) {
-  const d = S.dishes.find(x => x.id === id); if (!d || !d.recipeSheetId) return;
+  const d = S.batches.find(x => x.id === id); if (!d || !d.recipeSheetId) return;
   try {
     const recipe = await apiGet(`/api/recipe?sheetId=${d.recipeSheetId}`);
     if (recipe.allergens) d.allergens = recipe.allergens;
@@ -741,12 +740,13 @@ async function refreshRecipe(id) {
 }
 
 function saveEditDish(id) {
-  const d = S.dishes.find(x => x.id === id); if (!d) return;
+  const d = S.batches.find(x => x.id === id); if (!d) return;
   d.name = document.getElementById('ed-name').value;
   d.stock = parseFloat(document.getElementById('ed-stock').value) || 0;
   d.type = document.getElementById('ed-type').value;
   d.storage = document.getElementById('ed-storage').value;
-  d.logistics = document.getElementById('ed-logistics').value;
+  d.location = document.getElementById('ed-location').value;
+  d.inTransit = document.getElementById('ed-intransit').value === 'true';
   d.orderFor = document.getElementById('ed-order').value === 'true';
   if (d.cookMode === 'day') { const el = document.getElementById('ed-cookday'); if (el) d.cookDay = el.value || null; }
   else { const el = document.getElementById('ed-cookdate'); if (el) d.cookDate = el.value || null; }
@@ -756,7 +756,7 @@ function saveEditDish(id) {
 
 function deleteDish(id) {
   if (!confirm('Delete this dish? This cannot be undone.')) return;
-  S.dishes = S.dishes.filter(d => d.id !== id);
+  S.batches = S.batches.filter(d => d.id !== id);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast('Dish deleted');
 }

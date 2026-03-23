@@ -107,15 +107,14 @@ function isChoppableIngredient(name) {
 }
 
 function isDishAtLocation(dish, loc) {
-  if (loc === 'west') return dish.logistics === 'Sering West' || dish.logistics === 'Transport to Sering Centraal';
-  return dish.logistics === 'Sering Centraal' || dish.logistics === 'Transport to Sering West';
+  return dish.location === loc;
 }
 
 function getCookDateDishes(loc, date) {
   const dateStr = dateToStr(date);
-  return S.dishes.filter(d =>
+  return S.batches.filter(d =>
     d.cookDate === dateStr &&
-    !d.cookConfirmed &&
+    !isBatchCooked(d) &&
     isDishAtLocation(d, loc)
   );
 }
@@ -158,7 +157,7 @@ function getVegIngredients(dishes) {
 
 // Per-dish starch selector (Rice or Pasta)
 function setDishStarch(dishId, starch) {
-  const d = S.dishes.find(x => x.id === dishId);
+  const d = S.batches.find(x => x.id === dishId);
   if (!d) return;
   d.starch = (d.starch === starch) ? null : starch;
   scheduleSave();
@@ -245,8 +244,8 @@ function toggleHeatItem(dishId) {
 }
 
 function toggleCookItem(dishId) {
-  const d = S.dishes.find(x => x.id === dishId);
-  if (d && !d.cookConfirmed) {
+  const d = S.batches.find(x => x.id === dishId);
+  if (d && !isBatchCooked(d)) {
     // Actually mark the dish as cooked (same as "click to mark as cooked" on the tile)
     confirmCooked(dishId);
     // Also tick off the local checkbox
@@ -408,14 +407,14 @@ function renderDashboardContent() {
   const menuTomorrow = getMenuDishes(loc, tomorrowIso);
 
   // Heat up: split by lunch and dinner service
-  const heatUpLunch  = (S.planner[`${loc}-${todayIso}-lunch`]  || []).filter(d => d.cookConfirmed);
-  const heatUpDinner = (S.planner[`${loc}-${todayIso}-dinner`] || []).filter(d => d.cookConfirmed);
+  const heatUpLunch  = (S.planner[`${loc}-${todayIso}-lunch`]  || []).filter(d => isBatchCooked(d));
+  const heatUpDinner = (S.planner[`${loc}-${todayIso}-dinner`] || []).filter(d => isBatchCooked(d));
   const hasHeatUp = heatUpLunch.length > 0 || heatUpDinner.length > 0;
 
   // Cook: split into today lunch, today dinner, tomorrow
-  const cookLunch    = (S.planner[`${loc}-${todayIso}-lunch`]  || []).filter(d => !d.cookConfirmed);
-  const cookDinner   = (S.planner[`${loc}-${todayIso}-dinner`] || []).filter(d => !d.cookConfirmed);
-  const cookTomorrow = menuTomorrow.filter(d => !d.cookConfirmed);
+  const cookLunch    = (S.planner[`${loc}-${todayIso}-lunch`]  || []).filter(d => !isBatchCooked(d));
+  const cookDinner   = (S.planner[`${loc}-${todayIso}-dinner`] || []).filter(d => !isBatchCooked(d));
+  const cookTomorrow = menuTomorrow.filter(d => !isBatchCooked(d));
   const hasCook = cookLunch.length > 0 || cookDinner.length > 0 || cookTomorrow.length > 0;
 
   const vegToday    = getVegIngredients(menuToday);
