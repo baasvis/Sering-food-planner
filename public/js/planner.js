@@ -111,7 +111,7 @@ function renderLocationPlan(loc) {
         const slotClick = assigning
           ? `assignBatchToSlot('${loc}','${isoDate}','${meal}')`
           : `openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')`;
-        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}${assignTarget}" onclick="${slotClick}">`;
+        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}${assignTarget}" onclick="${slotClick}" ondragover="slotDragOver(event)" ondragleave="slotDragLeave(event)" ondrop="slotDrop(event,'${loc}','${isoDate}','${meal}')">`;
         slotDishes.forEach(dish => {
           const trClass = dish.inTransit ? ' chip-tr-border' : '';
           const servedClass = slotServed ? ' dish-chip-served' : '';
@@ -125,52 +125,148 @@ function renderLocationPlan(loc) {
     });
 
     html += '</div></div>'; // close week-grid and week-scroll
+
+    // Per-type batch pool directly below this type's calendar
+    html += renderTypeBatchPool(loc, tg.key, tg.label, tg.cls);
+
     html += `</div>`; // close type-section
   });
 
-  // ── Batch Pool ──────────────────────────────────────────
-  html += renderBatchPool(loc);
+  // ── "Show all batches" collapsible section ──────────────
+  html += renderShowAllBatches(loc);
 
   document.getElementById('planner-content').innerHTML = html;
   renderSplitBar();
 }
 
-// ── BATCH POOL ──────────────────────────────────────────
-function renderBatchPool(loc) {
-  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
-  // All batches at this location (has services here, or located here with no services)
-  const poolBatches = S.batches.filter(d => {
+// ── BATCH POOL (per-type, below each calendar) ─────────
+function getPoolBatches(loc) {
+  return S.batches.filter(d => {
     const hasSvcHere = (d.services || []).some(s => s.loc === loc);
     const locatedHere = d.location === loc && (d.services || []).length === 0;
     return hasSvcHere || locatedHere;
   });
+}
+
+function renderTypeBatchPool(loc, typeKey, typeLabel, typeCls) {
+  const poolBatches = getPoolBatches(loc).filter(d => d.type === typeKey);
+  if (poolBatches.length === 0) return '';
 
   const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && d.storage !== 'Frozen'));
   const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && d.storage !== 'Frozen'));
   const frozen = poolBatches.filter(d => d.storage === 'Frozen');
 
-  let html = `<div class="batch-pool">`;
-  html += `<div class="batch-pool-hdr">Batches at ${locLabel} <span class="batch-pool-count">${poolBatches.length}</span></div>`;
+  let html = `<div class="batch-pool batch-pool-inline">`;
+  html += `<div class="batch-pool-hdr"><span class="type-dot ${typeCls}"></span>${typeLabel} <span class="batch-pool-count">${poolBatches.length}</span></div>`;
 
-  if (poolBatches.length === 0) {
-    html += `<div class="empty" style="padding:12px 0;">No batches yet — create one with "+ New batch" above</div>`;
-  } else {
+  const renderGroup = (batches) => {
+    return `<div class="batch-tile-grid">${batches.map(d => renderBatchTile(d, true)).join('')}</div>`;
+  };
+
+  if (toCook.length) {
+    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--amber);"></div>To cook <span class="dish-section-count">(${toCook.length})</span></div>`;
+    html += renderGroup(toCook);
+  }
+  if (cooked.length) {
+    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--green);"></div>Cooked <span class="dish-section-count">(${cooked.length})</span></div>`;
+    html += renderGroup(cooked);
+  }
+  if (frozen.length) {
+    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--blue);"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
+    html += renderGroup(frozen);
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+// ── "SHOW ALL BATCHES" COLLAPSIBLE ──────────────────────
+function toggleShowAllBatches() {
+  S.showAllBatches = !S.showAllBatches;
+  rerenderCurrentView();
+}
+
+function renderShowAllBatches(loc) {
+  const poolBatches = getPoolBatches(loc);
+  if (poolBatches.length === 0) return '';
+
+  let html = `<div class="batch-pool-showAll">`;
+  html += `<button class="btn-show-all-batches" onclick="toggleShowAllBatches()">
+    ${S.showAllBatches ? '▾ Hide all batches' : '▸ Show all batches'} <span class="batch-pool-count">${poolBatches.length}</span>
+  </button>`;
+
+  if (S.showAllBatches) {
+    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && d.storage !== 'Frozen'));
+    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && d.storage !== 'Frozen'));
+    const frozen = poolBatches.filter(d => d.storage === 'Frozen');
+
+    const renderGroup = (batches) => {
+      return `<div class="batch-tile-grid">${batches.map(d => renderBatchTile(d, true)).join('')}</div>`;
+    };
+
     if (toCook.length) {
       html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--amber);"></div>To cook <span class="dish-section-count">(${toCook.length})</span></div>`;
-      html += toCook.map(d => renderBatchTile(d, true)).join('');
+      html += renderGroup(toCook);
     }
     if (cooked.length) {
       html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--green);"></div>Cooked <span class="dish-section-count">(${cooked.length})</span></div>`;
-      html += cooked.map(d => renderBatchTile(d, true)).join('');
+      html += renderGroup(cooked);
     }
     if (frozen.length) {
       html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--blue);"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
-      html += frozen.map(d => renderBatchTile(d, true)).join('');
+      html += renderGroup(frozen);
     }
   }
 
   html += `</div>`;
   return html;
+}
+
+// ── DRAG & DROP ─────────────────────────────────────────
+function batchDragStart(e, batchId) {
+  S.draggingBatchId = batchId;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', batchId);
+  e.target.closest('.batch-tile').classList.add('dragging');
+  // Highlight all slots as drop targets
+  document.querySelectorAll('.slot').forEach(s => s.classList.add('slot-assign-target'));
+}
+
+function batchDragEnd(e) {
+  S.draggingBatchId = null;
+  const tile = e.target.closest('.batch-tile');
+  if (tile) tile.classList.remove('dragging');
+  document.querySelectorAll('.slot').forEach(s => {
+    s.classList.remove('slot-assign-target', 'slot-drag-over');
+  });
+}
+
+function slotDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('slot-drag-over');
+}
+
+function slotDragLeave(e) {
+  e.currentTarget.classList.remove('slot-drag-over');
+}
+
+function slotDrop(e, loc, date, meal) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('slot-drag-over');
+  const batchId = S.draggingBatchId || e.dataTransfer.getData('text/plain');
+  if (!batchId) return;
+  const batch = S.batches.find(d => d.id === batchId);
+  if (!batch) return;
+  const already = (batch.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal);
+  if (already) { toast('Already assigned to this slot'); return; }
+  if (!batch.services) batch.services = [];
+  batch.services.push({ loc, date, meal });
+  S.draggingBatchId = null;
+  rebuildPlanner();
+  scheduleSave();
+  rerenderCurrentView();
+  toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
 }
 
 // ── ASSIGN MODE ─────────────────────────────────────────

@@ -201,9 +201,10 @@ function renderBatchTile(d, showAssign) {
   const selCls = isSel ? ' selected' : '';
   const splitCls = d.parentId ? ' split-child' : '';
   const assignCls = isAssigning ? ' assigning' : '';
+  const expandCls = isExpanded ? ' expanded' : '';
 
   // Compact row
-  let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${splitCls}${assignCls}" data-id="${d.id}">
+  let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${splitCls}${assignCls}${expandCls}" data-id="${d.id}" draggable="true" ondragstart="batchDragStart(event,'${d.id}')" ondragend="batchDragEnd(event)">
     <div class="batch-tile-compact" onclick="toggleBatchExpand('${d.id}')">
       <div class="sel-box${isSel ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelect('${d.id}')"></div>
       <span class="batch-type-dot batch-type-${(d.type||'Soup').toLowerCase().replace(/ /g,'-')}"></span>

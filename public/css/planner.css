@@ -186,11 +186,28 @@
   .batch-tile.assigning{border-color:var(--blue);background:var(--blue-bg);box-shadow:0 0 0 2px var(--blue);}
 
   /* ═══════════ BATCH POOL ═══════════ */
-  .batch-pool{margin-top:24px;padding-top:16px;border-top:2px solid var(--border);}
-  .batch-pool-hdr{font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+  .batch-pool{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
+  .batch-pool-inline{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);}
+  .batch-pool-hdr{font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:8px;}
   .batch-pool-count{font-size:12px;font-weight:400;color:var(--text3);background:var(--bg2);padding:1px 8px;border-radius:10px;}
   .batch-assign-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;border:1px solid var(--blue);background:transparent;color:var(--blue);cursor:pointer;white-space:nowrap;transition:all .12s;margin-left:auto;flex-shrink:0;}
   .batch-assign-btn:hover{background:var(--blue);color:#fff;}
+
+  /* Batch tile grid — 3 columns on desktop */
+  .batch-tile-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;}
+  .batch-tile-grid .batch-tile.expanded{grid-column:1/-1;}
+  @media(max-width:1024px){.batch-tile-grid{grid-template-columns:repeat(2,1fr);}}
+  @media(max-width:600px){.batch-tile-grid{grid-template-columns:1fr;}}
+
+  /* "Show all batches" button */
+  .batch-pool-showAll{margin-top:20px;padding-top:16px;border-top:2px solid var(--border);}
+  .btn-show-all-batches{width:100%;padding:12px 16px;font-size:14px;font-weight:600;border:2px dashed var(--border2);border-radius:var(--radius);background:var(--bg);color:var(--text);cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:8px;}
+  .btn-show-all-batches:hover{border-color:var(--text2);background:var(--bg2);}
+
+  /* ═══════════ DRAG & DROP ═══════════ */
+  .batch-tile[draggable]{cursor:grab;}
+  .batch-tile.dragging{opacity:.4;transform:scale(.97);}
+  .slot.slot-drag-over{border:2px solid var(--blue);background:color-mix(in srgb, var(--blue) 20%, var(--bg));transform:scale(1.02);transition:all .1s;}
 
   /* ═══════════ ASSIGN MODE ═══════════ */
   .assign-banner{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--blue-bg);border:2px solid var(--blue);border-radius:var(--radius);margin-bottom:12px;font-size:13px;color:var(--blue);font-weight:500;}
