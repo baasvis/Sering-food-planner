@@ -85,8 +85,9 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
   - Multiple sources for same day are averaged (not summed) to prevent double-counting during POS transition
   - "Apply predictions" button fills guest inputs; staff can manually adjust for events/reservations
 - Unified Week Plan tab with sub-tabs: Sering West, Sering Centraal, To Transport, Caterings, Overview
-- Location sub-tabs: calendar grid organised by dish type (Soups/Mains/Desserts), each with day×meal slots + dish list below with inline editing. Day-by-day navigation (today ±14 days), same as Guests tab
-- Dish lists split into "To cook" / "Cooked" sections, sorted by cook date
+- Location sub-tabs: calendar grid organised by batch type (Soups/Mains/Desserts), each with day×meal slots. Day-by-day navigation (today ±14 days), same as Guests tab
+- Unified batch pool below the week grid: shows all batches at the location, grouped by "To cook" / "Cooked" / "Frozen". Compact batch tiles with click-to-expand detail panel.
+- Select-then-assign flow: click "Assign" on a batch tile → grid slots highlight as drop targets → click a slot to assign the batch there. Replaces the old per-type collapsible dish lists. The + button and add modal remain for creating new batches from recipes or placeholders.
 - Cook date column: red highlight when unset, bold when planned. Stock locked until marked as cooked, auto-fills to required amount on cook.
 - Requirement breakdown tooltip on +/- column (hover to see per-service and per-catering demand)
 - Caterings module: name, date, guest count, delivery mode, auto-calculated dish requirements (guest count × serving size ÷ same-type peers), logistics notes
@@ -128,7 +129,7 @@ public/
     dashboard.js       — Dashboard screen
     predictions.js     — CSV parsing (Tebi + Lightspeed), categorization, prediction engine, shared day-navigation helpers
     guests.js          — Guest counts screen, upload UI, predictions display
-    planner.js         — Week plan: sub-tabs, location grids, transport view, add-dish modal
+    planner.js         — Week plan: sub-tabs, location grids, batch pool, assign mode, transport view, add-dish modal
     dishes.js          — Dish rows, overview, cook workflow, inline editing
     caterings.js       — Caterings CRUD, dish picker, auto-calculated requirements
     recipes.js         — Recipe index screen
