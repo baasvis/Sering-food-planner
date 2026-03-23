@@ -75,11 +75,11 @@ function renderDishListSplit(dishes) {
   let html = '';
   if (uncooked.length > 0) {
     html += `<div class="cook-group-hdr uncooked-hdr">To cook (${uncooked.length})</div>`;
-    uncooked.forEach(d => { html += renderDishRow(d); });
+    uncooked.forEach(d => { html += renderBatchTile(d); });
   }
   if (cooked.length > 0) {
     html += `<div class="cook-group-hdr cooked-hdr">Cooked (${cooked.length})</div>`;
-    cooked.forEach(d => { html += renderDishRow(d); });
+    cooked.forEach(d => { html += renderBatchTile(d); });
   }
   return html;
 }

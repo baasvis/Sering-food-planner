@@ -70,18 +70,15 @@ function renderDishesOverview() {
     <span><span style="display:inline-block;width:10px;height:10px;background:#EF9F27;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Transport → West</span>
   </div>
   <div id="split-bar-area"></div>
-  <div class="dish-list-hdr">
-    <span></span>
-    <span class="${sCls('name')}" onclick="dishSortBy('name')">Batch${arrow('name')}</span>
-    <span class="${sCls('date')}" onclick="dishSortBy('date')">Cook date${arrow('date')}</span>
-    <span class="${sCls('stock')}" onclick="dishSortBy('stock')">Stock${arrow('stock')}</span>
-    <span class="${sCls('diff')}" onclick="dishSortBy('diff')">+/&minus;${arrow('diff')}</span>
-    <span>Location</span>
-    <span>Order</span>
-    <span></span>
+  <div style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--text2);margin-bottom:8px;">
+    <span>${sorted.length} batch${sorted.length !== 1 ? 'es' : ''}</span>
+    <span style="margin-left:auto;">Sort:</span>
+    <button class="fc ${dishSort.col === 'name' ? 'on' : ''}" onclick="dishSortBy('name')">Name${arrow('name')}</button>
+    <button class="fc ${dishSort.col === 'date' ? 'on' : ''}" onclick="dishSortBy('date')">Cook date${arrow('date')}</button>
+    <button class="fc ${dishSort.col === 'stock' ? 'on' : ''}" onclick="dishSortBy('stock')">Stock${arrow('stock')}</button>
+    <button class="fc ${dishSort.col === 'diff' ? 'on' : ''}" onclick="dishSortBy('diff')">+/-${arrow('diff')}</button>
   </div>
-  <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${sorted.length} batch${sorted.length !== 1 ? 'es' : ''}${dishSort.col !== 'default' ? ` · sorted by ${dishSort.col}` : ''}</div>
-  ${sorted.length === 0 ? '<div class="empty">No batches match these filters</div>' : (dishSort.col !== 'default' ? sorted.map(d => renderDishRow(d)).join('') : renderDishGroups(sorted))}`;
+  ${sorted.length === 0 ? '<div class="empty">No batches match these filters</div>' : (dishSort.col !== 'default' ? sorted.map(d => renderBatchTile(d)).join('') : renderDishGroups(sorted))}`;
 
   document.getElementById('planner-content').innerHTML = html;
   renderSplitBar();
@@ -120,23 +117,23 @@ function renderDishGroups(dishes) {
 
   if (toCook.length) {
     html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--amber);"></div>To cook <span class="dish-section-count">(${toCook.length})</span></div>`;
-    html += toCook.map(d => renderDishRow(d)).join('');
+    html += toCook.map(d => renderBatchTile(d)).join('');
   }
 
   if (cooked.length) {
     html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--green);"></div>Cooked <span class="dish-section-count">(${cooked.length})</span></div>`;
-    html += cooked.map(d => renderDishRow(d)).join('');
+    html += cooked.map(d => renderBatchTile(d)).join('');
   }
 
   if (frozen.length) {
     html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--blue);"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
-    html += frozen.map(d => renderDishRow(d)).join('');
+    html += frozen.map(d => renderBatchTile(d)).join('');
   }
 
   return html;
 }
 
-function renderDishRow(d) {
+function renderBatchTile(d) {
   const req = calcRequired(d);
   const { diff, str, cls } = diffStr(d);
   const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
@@ -184,6 +181,128 @@ function renderDishRow(d) {
   </div>`;
 }
 
+// ── BATCH TILE (compact/expand) ──────────────────────────
+function toggleBatchExpand(id) {
+  if (S.expandedBatches.has(id)) S.expandedBatches.delete(id);
+  else S.expandedBatches.add(id);
+  rerenderCurrentView();
+}
+
+function renderBatchTile(d) {
+  const { str, cls } = diffStr(d);
+  const isExpanded = S.expandedBatches.has(d.id);
+  const isSel = S.selected.has(d.id);
+  const isStale = isDishStale(d);
+  const locCls = d.location === 'centraal' ? 'loc-centraal' : 'loc-west';
+  const transitCls = d.inTransit ? ' in-transit' : '';
+  const frozenCls = d.storage === 'Frozen' ? ' frozen-row' : '';
+  const staleCls = isStale ? ' stale-row' : '';
+  const selCls = isSel ? ' selected' : '';
+  const splitCls = d.parentId ? ' split-child' : '';
+
+  // Compact row
+  let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${splitCls}" data-id="${d.id}">
+    <div class="batch-tile-compact" onclick="toggleBatchExpand('${d.id}')">
+      <div class="sel-box${isSel ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelect('${d.id}')"></div>
+      <span class="batch-type-dot batch-type-${(d.type||'Soup').toLowerCase().replace(/ /g,'-')}"></span>
+      <span class="batch-tile-name">${esc(d.name)}</span>
+      <span class="batch-tile-stock ${cls}">${d.stock || 0}L <small>${str}</small></span>
+      <span class="${logisticsBadgeClass(d)}" style="font-size:10px;">${logisticsShort(d)}</span>
+      ${d.inTransit ? '<span class="batch-transit-badge">In transit</span>' : ''}
+      <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
+    </div>`;
+
+  // Expanded detail panel
+  if (isExpanded) {
+    const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
+    const svcLbls = (d.services || []).map(s => {
+      const ml = s.meal === 'lunch' ? 'L' : 'D';
+      const lc = s.loc === 'west' ? 'SW' : 'SC';
+      const past = isServicePast(s) ? ' served' : '';
+      return `<span class="batch-svc-label${past}"><strong>${dateToDayName(s.date)}</strong> ${ml} ${lc}</span>`;
+    }).join(' ');
+    const cookHtml = getCookCellHtml(d);
+    const breakdown = calcRequiredBreakdown(d);
+
+    html += `<div class="batch-tile-expanded">
+      <div class="batch-detail-grid">
+        <div class="batch-detail-section">
+          <label>Name</label>
+          <input class="inline-edit" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
+        </div>
+        <div class="batch-detail-section">
+          <label>Stock</label>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input class="inline-edit" type="number" value="${d.stock || 0}" step="0.5" min="0" style="width:70px;" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" />
+            <span style="color:var(--text2);">L</span>
+            <span class="${cls}" style="font-weight:600;">${str}</span>
+          </div>
+          ${breakdown.length ? `<div class="batch-breakdown">${breakdown.map(l => `<div>${l}</div>`).join('')}</div>` : ''}
+        </div>
+        <div class="batch-detail-section">
+          <label>Cook date</label>
+          ${cookHtml}
+        </div>
+        <div class="batch-detail-section">
+          <label>Type</label>
+          <span class="${typeBadgeClass(d.type)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleType('${d.id}')">${d.type}</span>
+        </div>
+        <div class="batch-detail-section">
+          <label>Storage</label>
+          <span class="${storageBadgeClass(d.storage || 'Gastro')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleStorage('${d.id}')">${d.storage || 'Gastro'}</span>
+        </div>
+        <div class="batch-detail-section">
+          <label>Location</label>
+          <span class="${logisticsBadgeClass(d)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLocation('${d.id}')">${logisticsShort(d)}</span>
+        </div>
+        <div class="batch-detail-section">
+          <label>Serving</label>
+          <span>${d.serving || 280} ml/guest</span>
+        </div>
+        ${d.recipeSheetId ? `<div class="batch-detail-section"><label>Recipe</label><a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" class="recipe-btn" onclick="event.stopPropagation()">Open recipe &#8599;</a></div>` : ''}
+        <div class="batch-detail-section">
+          <label>Services</label>
+          <div>${svcLbls || '<span style="color:var(--red);font-weight:600;">No services assigned</span>'}</div>
+        </div>
+        <div class="batch-detail-section">
+          <label>Allergens</label>
+          <div class="allergen-inline">
+            ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
+            <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}')">+</button>
+          </div>
+        </div>
+        ${d.note !== undefined ? `<div class="batch-detail-section"><label>Note</label><input class="inline-edit" value="${esc(d.note || '')}" placeholder="Add a note..." onchange="inlineEdit('${d.id}','note',this.value)" onclick="event.stopPropagation()" /></div>` : ''}
+      </div>
+      <div class="batch-tile-actions">
+        <button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button>
+        ${isBatchCooked(d)
+          ? `<button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button>`
+          : `<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteBatch('${d.id}')">Delete</button>`
+        }
+      </div>
+    </div>`;
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function deleteBatch(id) {
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  if (isBatchCooked(d)) {
+    toast('Cannot delete a cooked batch — serve it first');
+    return;
+  }
+  S.batches = S.batches.filter(x => x.id !== id);
+  S.expandedBatches.delete(id);
+  S.selected.delete(id);
+  rebuildPlanner();
+  scheduleSave();
+  rerenderCurrentView();
+  toast(esc(d.name) + ' deleted');
+}
+
 function inlineEdit(id, field, value) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
@@ -194,6 +313,7 @@ function inlineEdit(id, field, value) {
     if (d.stock > 0 && !d.cookDate) d.cookDate = dateToStr(getToday());
   }
   else if (field === 'location') { d.location = value; d.inTransit = false; }
+  else if (field === 'note') { d.note = value; }
   rebuildPlanner();
   scheduleSave();
   // Re-render only the computed columns without full re-render (to keep focus)
