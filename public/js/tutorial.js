@@ -24,22 +24,22 @@ const TUTORIALS = {
     {
       selector: '#dash-menu-card',
       title: "Today's menu",
-      body: "Every dish planned for today. Allergens are listed so front-of-house always knows what's in each dish.",
+      body: "Every batch planned for today. Allergens are listed so front-of-house always knows what's in each batch.",
     },
     {
       selector: '.dash-starch-picker',
       title: 'Pick a starch',
-      body: "For each main dish, tap Rice or Pasta. The total kilos to cook will appear below the meal — no guessing or mental maths needed.",
+      body: "For each main batch, tap Rice or Pasta. The total kilos to cook will appear below the meal — no guessing or mental maths needed.",
     },
     {
       selector: '#dash-heatup-card',
       title: 'What to heat up',
-      body: "These dishes are already fully cooked. Your only job here is to reheat them in time for service — no cooking needed.",
+      body: "These batches are already fully cooked. Your only job here is to reheat them in time for service — no cooking needed.",
     },
     {
       selector: '#dash-cook-card',
       title: 'What to cook',
-      body: "These dishes still need cooking. They're split into today's lunch, today's dinner, and anything being batch-cooked for upcoming days. Tick each off when done.",
+      body: "These batches still need cooking. They're split into today's lunch, today's dinner, and anything being batch-cooked for upcoming days. Tick each off when done.",
     },
     {
       selector: '#dash-prep-card',
@@ -91,18 +91,18 @@ const TUTORIALS = {
     },
     {
       selector: '.dish-chip',
-      title: 'A planned dish',
-      body: "Each chip is one dish assigned to that meal. Colours show the type — green is soup, blue is main, purple is dessert.",
+      title: 'A planned batch',
+      body: "Each chip is one batch assigned to that meal. Colours show the type — green is soup, blue is main, purple is dessert.",
     },
     {
       selector: '.add-slot-btn',
-      title: 'Add a dish',
-      body: "Tap + to add a dish to this meal. You'll pick from your recipe library. A dish can appear on multiple days.",
+      title: 'Add a batch',
+      body: "Tap + to add a batch to this meal. You'll pick from your recipe library. A batch can appear on multiple days.",
     },
     {
       selector: '.type-dish-list',
-      title: 'Unscheduled dishes',
-      body: "Dishes that aren't on the plan yet live here. Drag them into the grid — or use the + button on any slot.",
+      title: 'Unscheduled batches',
+      body: "Batches that aren't on the plan yet live here. Drag them into the grid — or use the + button on any slot.",
     },
   ],
 
@@ -111,22 +111,22 @@ const TUTORIALS = {
     {
       selector: '.ri-filter-bar',
       title: 'Filter by type',
-      body: "Quickly narrow the list to just soups, mains, or desserts. Use the search box to find a dish by name.",
+      body: "Quickly narrow the list to just soups, mains, or desserts. Use the search box to find a recipe by name.",
     },
     {
       selector: '.ri-table',
       title: 'Your recipe library',
-      body: "Every dish De Sering makes is listed here. Tap any row to open the full recipe with ingredients, method, and allergens.",
+      body: "Every recipe De Sering makes is listed here. Tap any row to open the full recipe with ingredients, method, and allergens.",
     },
     {
       selector: '.ri-name-cell',
       title: 'Open a recipe',
-      body: "Tap a dish name to see the full recipe. Ingredient amounts scale automatically based on the guest count you've set for that day.",
+      body: "Tap a recipe name to see the full details. Ingredient amounts scale automatically based on the guest count you've set for that day.",
     },
     {
       selector: '.allergen-pill',
       title: 'Allergens',
-      body: "Allergen tags appear on every recipe and are shown on the Dashboard menu too — so front-of-house can always check what's in each dish.",
+      body: "Allergen tags appear on every recipe and are shown on the Dashboard menu too — so front-of-house can always check what's in each batch.",
     },
   ],
 
@@ -135,7 +135,7 @@ const TUTORIALS = {
     {
       selector: '.order-tab-bar',
       title: 'Order views',
-      body: "Four ways to see what needs ordering: this week's dish ingredients, your standard stock items, a combined supplier list, and the full ingredient database.",
+      body: "Four ways to see what needs ordering: this week's batch ingredients, your standard stock items, a combined supplier list, and the full ingredient database.",
     },
     {
       selector: '.order-tab-btn',

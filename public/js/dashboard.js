@@ -355,7 +355,7 @@ function renderDashboardContent() {
     menuHtml += `<div class="dash-section">
       <div class="dash-section-hdr">${mealLabel} <span class="dash-section-guests">${gc} guests</span></div>`;
     if (dishes.length === 0) {
-      menuHtml += `<div class="dash-empty">No dishes planned</div>`;
+      menuHtml += `<div class="dash-empty">No batches planned</div>`;
     } else {
       const typeOrder = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
       const sorted = [...dishes].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
@@ -483,10 +483,10 @@ function renderDashboardContent() {
     <!-- 👨‍🍳 WHAT TO COOK -->
     <div class="dash-card" id="dash-cook-card">
       <div class="dash-card-title"><span class="dash-card-icon">👨‍🍳</span> What to cook
-        <span class="dash-card-subtitle">Dishes that still need to be cooked — stay 1 day ahead!</span>
+        <span class="dash-card-subtitle">Batches that still need to be cooked — stay 1 day ahead!</span>
       </div>
       ${!hasCook
-        ? `<div class="dash-empty">All dishes are cooked — great job! 🎉</div>`
+        ? `<div class="dash-empty">All batches are cooked — great job! 🎉</div>`
         : `${cookLunch.length > 0 ? `
           <div class="dash-todo-group-hdr">🍴 Today — Lunch service</div>
           ${cookLunch.map(d => cookDishRow(d, 'cook today', S.cookChecked, 'toggleCookItem', todayIso, 'lunch')).join('')}` : ''}
@@ -495,7 +495,7 @@ function renderDashboardContent() {
           ${cookDinner.map(d => cookDishRow(d, 'cook today', S.cookChecked, 'toggleCookItem', todayIso, 'dinner')).join('')}` : ''}
         ${cookTomorrow.length > 0 ? `
           <div class="dash-todo-group-hdr"${(cookLunch.length + cookDinner.length) > 0 ? ' style="margin-top:10px;"' : ''}>📅 Future service</div>
-          <div class="dash-todo-group-sub">Cook the full batch now — these dishes are on the plan for upcoming slots</div>
+          <div class="dash-todo-group-sub">Cook the full batch now — these batches are on the plan for upcoming slots</div>
           ${cookTomorrow.map(d => cookDishRow(d, 'upcoming', S.cookChecked, 'toggleCookItem')).join('')}` : ''}`
       }
     </div>

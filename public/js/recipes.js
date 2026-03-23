@@ -233,7 +233,7 @@ async function fetchAndAddRecipe() {
 
     closeModal();
     renderRecipeIndex();
-    toast(esc(newRecipe.name) + ' added to dish index');
+    toast(esc(newRecipe.name) + ' added to recipe index');
   } catch (e) {
     toastError('Could not fetch recipe: ' + e.message);
   }
@@ -354,7 +354,7 @@ async function saveEditRecipe(id) {
 async function deleteRecipeIndex(id) {
   const entry = S.recipeIndex.find(x => x.id === id);
   const name = entry ? entry.name : 'this recipe';
-  if (!confirm('Remove "' + name + '" from the dish index?')) return;
+  if (!confirm('Remove "' + name + '" from the recipe index?')) return;
   try {
     const r = await fetch('/api/recipe-index/' + id, { method: 'DELETE' });
     if (r.status === 401) { doLogout(); return; }
@@ -391,5 +391,5 @@ async function addDishFromRecipe(recipeId) {
   S.batches.push(newDish);
   rebuildPlanner();
   scheduleSave();
-  toast(esc(r.name) + ' added to menu planner');
+  toast(esc(r.name) + ' added as batch to menu planner');
 }

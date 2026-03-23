@@ -71,7 +71,7 @@ let S = {
   plannerSubTab:'west',
   filters:{loc:'all',storage:'all',inTransit:'all'},
   selected:new Set(),
-  orderToggles:{dishes:true,standard:false},
+  orderToggles:{batches:true,standard:false},
   caterings:[],
   transportItems:[],
   collapsedTypes:{},

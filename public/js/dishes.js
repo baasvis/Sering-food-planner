@@ -43,7 +43,7 @@ function renderDishesOverview() {
 
   const html = `
   <div class="btn-row" style="margin-bottom:12px;">
-    <button class="btn btn-primary" onclick="openNewDish()">+ New dish</button>
+    <button class="btn btn-primary" onclick="openNewDish()">+ New batch</button>
   </div>
   <div class="filter-bar">
     <div style="display:flex;gap:4px;flex-wrap:wrap;">
@@ -72,7 +72,7 @@ function renderDishesOverview() {
   <div id="split-bar-area"></div>
   <div class="dish-list-hdr">
     <span></span>
-    <span class="${sCls('name')}" onclick="dishSortBy('name')">Dish${arrow('name')}</span>
+    <span class="${sCls('name')}" onclick="dishSortBy('name')">Batch${arrow('name')}</span>
     <span class="${sCls('date')}" onclick="dishSortBy('date')">Cook date${arrow('date')}</span>
     <span class="${sCls('stock')}" onclick="dishSortBy('stock')">Stock${arrow('stock')}</span>
     <span class="${sCls('diff')}" onclick="dishSortBy('diff')">+/&minus;${arrow('diff')}</span>
@@ -80,8 +80,8 @@ function renderDishesOverview() {
     <span>Order</span>
     <span></span>
   </div>
-  <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${sorted.length} dish${sorted.length !== 1 ? 'es' : ''}${dishSort.col !== 'default' ? ` · sorted by ${dishSort.col}` : ''}</div>
-  ${sorted.length === 0 ? '<div class="empty">No dishes match these filters</div>' : (dishSort.col !== 'default' ? sorted.map(d => renderDishRow(d)).join('') : renderDishGroups(sorted))}`;
+  <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${sorted.length} batch${sorted.length !== 1 ? 'es' : ''}${dishSort.col !== 'default' ? ` · sorted by ${dishSort.col}` : ''}</div>
+  ${sorted.length === 0 ? '<div class="empty">No batches match these filters</div>' : (dishSort.col !== 'default' ? sorted.map(d => renderDishRow(d)).join('') : renderDishGroups(sorted))}`;
 
   document.getElementById('planner-content').innerHTML = html;
   renderSplitBar();
@@ -569,22 +569,22 @@ function renderNewDishModal(searchQuery) {
         <div style="font-size:11px;color:var(--text2);">${r.costPerServing || ''}</div>
       </div>`;
     }).join('')
-    : `<div class="empty" style="padding:12px;">${S.recipeIndex.length === 0 ? 'No recipes in index yet. Add some in the Dish index tab.' : 'No recipes match "' + esc(searchQuery) + '"'}</div>`;
+    : `<div class="empty" style="padding:12px;">${S.recipeIndex.length === 0 ? 'No recipes in index yet. Add some in the Recipes tab.' : 'No recipes match "' + esc(searchQuery) + '"'}</div>`;
 
-  showModal(`<h3>Add dish to menu</h3>
+  showModal(`<h3>Add batch to menu</h3>
     <div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Pick from your recipe index:</div>
     <input type="text" class="dish-search" placeholder="Search recipes..." value="${esc(searchQuery)}"
       oninput="renderNewDishModal(this.value)" autofocus />
     <div class="dish-opts-list" style="max-height:260px;">${recipeList}</div>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
       <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Or create from scratch:</div>
-      <button class="btn" onclick="openNewDishScratch()">Create blank dish</button>
+      <button class="btn" onclick="openNewDishScratch()">Create blank batch</button>
     </div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
 }
 
 function openNewDishScratch() {
-  showModal(`<h3>New dish</h3>
+  showModal(`<h3>New batch</h3>
     <div class="fr"><label>Name</label><input type="text" id="nd-name" placeholder="e.g. Mushroom soup" /></div>
     <div class="fr"><label>Type</label><select id="nd-type">
       <option>Soup</option><option>Main course</option><option>Dessert</option>
@@ -599,13 +599,13 @@ function openNewDishScratch() {
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveNewDish()">Create dish</button>
+      <button class="btn btn-primary" onclick="saveNewDish()">Create batch</button>
     </div>`);
 }
 
 async function saveNewDish() {
   const name = document.getElementById('nd-name').value.trim();
-  if (!name) { alert('Please enter a dish name'); return; }
+  if (!name) { alert('Please enter a batch name'); return; }
   const sheetId = document.getElementById('nd-sheetid').value.trim();
   const newDish = {
     id: newId(), name,
@@ -751,12 +751,12 @@ function saveEditDish(id) {
   if (d.cookMode === 'day') { const el = document.getElementById('ed-cookday'); if (el) d.cookDay = el.value || null; }
   else { const el = document.getElementById('ed-cookdate'); if (el) d.cookDate = el.value || null; }
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-  toast('Dish saved');
+  toast('Batch saved');
 }
 
 function deleteDish(id) {
-  if (!confirm('Delete this dish? This cannot be undone.')) return;
+  if (!confirm('Delete this batch? This cannot be undone.')) return;
   S.batches = S.batches.filter(d => d.id !== id);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-  toast('Dish deleted');
+  toast('Batch deleted');
 }

@@ -64,7 +64,7 @@ function renderLocationPlan(loc) {
   const invBtn = getInventoryButton(loc);
   let html = renderDayNav(_plannerDayOffset, -14, 14, 'changePlannerDay', '');
   html += `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
-    <button class="btn btn-primary" onclick="openNewDish()">+ New dish</button>
+    <button class="btn btn-primary" onclick="openNewDish()">+ New batch</button>
     ${invBtn}
   </div>
   <div id="split-bar-area"></div>`;
@@ -88,7 +88,7 @@ function renderLocationPlan(loc) {
     days.forEach(d => {
       const dispDate = `${d.date.getDate()}/${d.date.getMonth()+1}`;
       const isoDate = dateToIso(d.date);
-      html += `<div class="day-hdr${d.isToday ? ' today-hdr' : ''}${d.isPast ? ' past-hdr' : ''}">${d.dayName}<span class="gt-date">${dispDate}</span><button class="copy-day-btn" onclick="event.stopPropagation();copyDayToOther('${loc}','${isoDate}')" title="Copy all ${d.dayName} dishes to ${otherLabel}">&rarr; ${otherLabel}</button></div>`;
+      html += `<div class="day-hdr${d.isToday ? ' today-hdr' : ''}${d.isPast ? ' past-hdr' : ''}">${d.dayName}<span class="gt-date">${dispDate}</span><button class="copy-day-btn" onclick="event.stopPropagation();copyDayToOther('${loc}','${isoDate}')" title="Copy all ${d.dayName} batches to ${otherLabel}">&rarr; ${otherLabel}</button></div>`;
     });
 
     // Meal rows
@@ -119,7 +119,7 @@ function renderLocationPlan(loc) {
       html += `<div class="type-dish-list">`;
       html += `<div class="dish-list-hdr">
         <span></span>
-        <span>Dish</span>
+        <span>Batch</span>
         <span>Cook date</span>
         <span>Stock</span>
         <span>+/&minus;</span>
@@ -130,7 +130,7 @@ function renderLocationPlan(loc) {
       html += renderDishListSplit(typeDishes);
       html += `</div>`;
     } else if (typeDishes.length > 0 && isCollapsed) {
-      html += `<div style="font-size:11px;color:var(--text3);padding:4px 0;cursor:pointer;" onclick="toggleTypeCollapse('${collapseKey}')">${typeDishes.length} dish${typeDishes.length !== 1 ? 'es' : ''} — click to expand</div>`;
+      html += `<div style="font-size:11px;color:var(--text3);padding:4px 0;cursor:pointer;" onclick="toggleTypeCollapse('${collapseKey}')">${typeDishes.length} batch${typeDishes.length !== 1 ? 'es' : ''} — click to expand</div>`;
     }
 
     html += `</div>`; // close type-section
@@ -141,9 +141,9 @@ function renderLocationPlan(loc) {
   const unassigned = S.batches.filter(d => (d.services || []).length === 0 && d.location === loc);
   if (unassigned.length > 0) {
     html += `<div class="type-section">`;
-    html += `<div class="type-section-hdr" style="color:var(--text3);">Unassigned dishes at ${locLabel}</div>`;
+    html += `<div class="type-section-hdr" style="color:var(--text3);">Unassigned batches at ${locLabel}</div>`;
     html += `<div class="dish-list-hdr">
-      <span></span><span>Dish</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
+      <span></span><span>Batch</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
     </div>`;
     html += renderDishListSplit(unassigned);
     html += `</div>`;
@@ -181,7 +181,7 @@ function renderTransportView() {
   // ── Dishes being transported ──
   if (transportDishes.length > 0) {
     html += `<div class="type-section">`;
-    html += `<div class="type-section-hdr">Dishes in transport</div>`;
+    html += `<div class="type-section-hdr">Batches in transport</div>`;
     html += `<div style="margin-bottom:8px;display:flex;gap:6px;">
       <button class="btn btn-sm" style="color:var(--green);border-color:var(--green);" onclick="markSelectedArrived()">Mark selected as arrived</button>
     </div>`;
@@ -217,7 +217,7 @@ function renderTransportView() {
       html += `<div class="type-section">`;
       html += `<div class="type-section-hdr"${isToday ? ' style="color:var(--blue);"' : ''}>${dayName} ${dateStr}</div>`;
       html += `<div class="dish-list-hdr">
-        <span></span><span>Dish</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
+        <span></span><span>Batch</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
       </div>`;
       html += renderDishListSplit(dishes);
       html += `</div>`;
@@ -228,7 +228,7 @@ function renderTransportView() {
       html += `<div class="type-section">`;
       html += `<div class="type-section-hdr" style="color:var(--text3);">No day assigned</div>`;
       html += `<div class="dish-list-hdr">
-        <span></span><span>Dish</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
+        <span></span><span>Batch</span><span>Cook date</span><span>Stock</span><span>+/&minus;</span><span>Location</span><span>Order</span><span></span>
       </div>`;
       html += renderDishListSplit(noDayDishes);
       html += `</div>`;
@@ -236,7 +236,7 @@ function renderTransportView() {
 
     html += `</div>`; // close dishes in transport section
   } else {
-    html += `<div class="empty" style="margin-top:12px;">No dishes marked for transport</div>`;
+    html += `<div class="empty" style="margin-top:12px;">No batches marked for transport</div>`;
   }
 
   document.getElementById('planner-content').innerHTML = html;
@@ -264,7 +264,7 @@ function deliverTransportItem(id) {
 
 function markSelectedArrived() {
   const selected = [...S.selected];
-  if (selected.length === 0) { toast('Select dishes first using the checkboxes'); return; }
+  if (selected.length === 0) { toast('Select batches first using the checkboxes'); return; }
   let count = 0;
   selected.forEach(id => {
     const d = S.batches.find(x => x.id === id);
@@ -277,7 +277,7 @@ function markSelectedArrived() {
   if (count > 0) {
     scheduleSave();
     rerenderCurrentView();
-    toast(`${count} dish${count > 1 ? 'es' : ''} marked as arrived`);
+    toast(`${count} batch${count > 1 ? 'es' : ''} marked as arrived`);
   }
 }
 
@@ -312,9 +312,9 @@ function copyDayToOther(fromLoc, date) {
   });
   if (added > 0) {
     rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-    toast(`${added} dish${added > 1 ? 'es' : ''} copied to ${toLabel} ${dayName}`);
+    toast(`${added} batch${added > 1 ? 'es' : ''} copied to ${toLabel} ${dayName}`);
   } else {
-    toast('All dishes already assigned there');
+    toast('All batches already assigned there');
   }
 }
 
@@ -337,9 +337,9 @@ function copySlotToOther(fromLoc, date, meal) {
 
   if (added > 0) {
     rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-    toast(`${added} dish${added > 1 ? 'es' : ''} copied to ${toLabel} ${dateToDayName(date)} ${meal}`);
+    toast(`${added} batch${added > 1 ? 'es' : ''} copied to ${toLabel} ${dateToDayName(date)} ${meal}`);
   } else {
-    toast('All dishes already assigned there');
+    toast('All batches already assigned there');
   }
 }
 
@@ -421,10 +421,10 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab,
   let listHtml = '';
   if (tab === 'cooked') {
     listHtml = filteredCooked.length > 0 ? renderDishOpts(filteredCooked)
-      : `<div class="empty">No cooked dishes at ${locLabel}${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
+      : `<div class="empty">No cooked batches at ${locLabel}${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
   } else if (tab === 'planned') {
     listHtml = filteredPlanned.length > 0 ? renderDishOpts(filteredPlanned)
-      : `<div class="empty">No planned dishes${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
+      : `<div class="empty">No planned batches${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
   } else {
     listHtml = filteredRecipes.length > 0 ? renderRecipeOpts(filteredRecipes)
       : `<div class="empty">No recipes available${typeLabel}${searchQuery ? ' matching "' + esc(searchQuery) + '"' : ''}</div>`;
@@ -622,12 +622,12 @@ function openInventory(loc) {
   });
 
   if (dishes.length === 0) {
-    toast('No cooked dishes at ' + locLabel);
+    toast('No cooked batches at ' + locLabel);
     return;
   }
 
   let html = `<h3>Inventory — ${locLabel}</h3>`;
-  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Update stock for each dish, or mark as served.</div>`;
+  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Update stock for each batch, or mark as served.</div>`;
   html += `<div class="inv-list">`;
 
   const sorted = [...dishes].sort((a, b) => {

@@ -47,7 +47,7 @@ function renderCaterings() {
           <button class="btn btn-sm btn-danger" onclick="deleteCatering('${c.id}')">Delete</button>
         </div>
       </div>
-      ${dishList ? `<div style="margin-top:8px;">${dishList}</div>` : '<div style="font-size:12px;color:var(--text3);margin-top:8px;">No dishes added yet</div>'}
+      ${dishList ? `<div style="margin-top:8px;">${dishList}</div>` : '<div style="font-size:12px;color:var(--text3);margin-top:8px;">No batches added yet</div>'}
       ${c.logisticsNotes ? `<div style="font-size:12px;color:var(--text2);margin-top:6px;background:var(--bg2);padding:6px 10px;border-radius:var(--radius);">${esc(c.logisticsNotes)}</div>` : ''}
     </div>`;
   });
@@ -105,9 +105,9 @@ function openEditCatering(id) {
     </select></div>
     <div class="fr"><label>Logistics notes</label><textarea id="ct-notes" rows="3" style="width:100%;font-size:13px;border:1px solid var(--border2);border-radius:var(--radius);padding:8px;background:var(--bg);color:var(--text);font-family:inherit;">${esc(c.logisticsNotes || '')}</textarea></div>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-      <label style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:6px;display:block;">Dishes</label>
+      <label style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:6px;display:block;">Batches</label>
       <div id="ct-dish-list">${renderCateringDishList(c)}</div>
-      <button class="btn btn-sm" style="margin-top:6px;" onclick="openAddCateringDish('${id}')">+ Add dish</button>
+      <button class="btn btn-sm" style="margin-top:6px;" onclick="openAddCateringDish('${id}')">+ Add batch</button>
     </div>
     <div class="modal-actions">
       <button class="btn btn-danger btn-sm" onclick="deleteCatering('${id}')">Delete</button>
@@ -117,7 +117,7 @@ function openEditCatering(id) {
 }
 
 function renderCateringDishList(c) {
-  if (!c.dishes || c.dishes.length === 0) return '<div style="font-size:12px;color:var(--text3);">No dishes yet</div>';
+  if (!c.dishes || c.dishes.length === 0) return '<div style="font-size:12px;color:var(--text3);">No batches yet</div>';
   return c.dishes.map((d, i) => {
     const dish = S.batches.find(x => x.id === d.dishId);
     const serving = dish ? (dish.serving || 280) : 280;
@@ -171,10 +171,10 @@ function renderCateringDishPicker(cateringId, query) {
     }).join('');
   }
 
-  if (!list) list = `<div class="empty">No planned dishes found${q ? ' matching "' + esc(q) + '"' : ''}</div>`;
+  if (!list) list = `<div class="empty">No planned batches found${q ? ' matching "' + esc(q) + '"' : ''}</div>`;
 
-  showModal(`<h3>Add dish to catering</h3>
-    <input type="text" class="dish-search" id="ct-dish-search" placeholder="Search planned dishes..." value="${esc(query)}"
+  showModal(`<h3>Add batch to catering</h3>
+    <input type="text" class="dish-search" id="ct-dish-search" placeholder="Search planned batches..." value="${esc(query)}"
       oninput="renderCateringDishPicker('${cateringId}',this.value)" />
     <div class="dish-opts-list" style="max-height:300px;">${list}</div>
     <div class="modal-actions"><button class="btn" onclick="openEditCatering('${cateringId}')">Back</button></div>`);

@@ -7,7 +7,7 @@ let standardInventory = { west: [], centraal: [] };  // per-location weekly base
 let siLoaded = false;
 let siLoadCalled = false;
 let siSaveTimeout = null;
-let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'dishes' | 'ingredientDb'
+let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'batches' | 'ingredientDb'
 let currentOrdersLoc = '';  // set on first render from S.currentLoc
 let siSearchQuery = '';
 
@@ -240,13 +240,13 @@ function renderOrders() {
   const tabBar = `<div class="order-tab-bar">
     <button class="order-tab-btn${currentOrdersTab === 'combined' ? ' active' : ''}" onclick="switchOrdersTab('combined')">🛒 Combined Order</button>
     <button class="order-tab-btn${currentOrdersTab === 'standard' ? ' active' : ''}" onclick="switchOrdersTab('standard')">📦 Standard Inventory</button>
-    <button class="order-tab-btn${currentOrdersTab === 'dishes' ? ' active' : ''}" onclick="switchOrdersTab('dishes')">🍽️ Dish Ingredients</button>
+    <button class="order-tab-btn${currentOrdersTab === 'batches' ? ' active' : ''}" onclick="switchOrdersTab('batches')">🍽️ Batch Ingredients</button>
     <button class="order-tab-btn${currentOrdersTab === 'ingredientDb' ? ' active' : ''}" onclick="switchOrdersTab('ingredientDb')">🗄️ Ingredient Database</button>
   </div>`;
 
   let content;
   if (currentOrdersTab === 'standard') content = renderStandardInventoryTab();
-  else if (currentOrdersTab === 'dishes') content = renderDishesTab();
+  else if (currentOrdersTab === 'batches') content = renderDishesTab();
   else if (currentOrdersTab === 'ingredientDb') content = renderIngredientDbTab();
   else content = renderCombinedOrderTab();
 
@@ -419,7 +419,7 @@ function renderDishesTab() {
   const dishesWithSheets = orderedDishes.filter(d => d.recipeSheetId);
   let html = `<div style="margin-bottom:20px;">
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <span>Ingredient order (${orderedDishes.length} dish${orderedDishes.length !== 1 ? 'es' : ''} flagged)</span>
+      <span>Ingredient order (${orderedDishes.length} batch${orderedDishes.length !== 1 ? 'es' : ''} flagged)</span>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="font-weight:400;font-size:12px;color:var(--text2);">${orderedDishes.map(d => esc(d.name)).join(' · ')}</span>
         ${dishesWithSheets.length ? `<button class="copy-all-btn" onclick="refreshAllRecipes()">↻ Refresh recipe data</button>` : ''}
@@ -428,9 +428,9 @@ function renderDishesTab() {
 
   if (!ingList.length) {
     if (orderedDishes.length === 0) {
-      html += `<div class="empty">No dishes flagged for order. In the Week plan, toggle the order flag on dishes you want to include.</div>`;
+      html += `<div class="empty">No batches flagged for order. In the Week plan, toggle the order flag on batches you want to include.</div>`;
     } else {
-      html += `<div class="empty">Dishes are flagged but have no recipe data. Make sure they have a linked recipe sheet with ingredients.</div>`;
+      html += `<div class="empty">Batches are flagged but have no recipe data. Make sure they have a linked recipe sheet with ingredients.</div>`;
     }
   } else {
     storageOrder.forEach(storageCat => {
@@ -447,7 +447,7 @@ function renderDishesTab() {
         <div style="overflow-x:auto;"><table class="ing-table">
         <thead><tr>
           <th>Ingredient</th><th>Category</th><th>Storage</th><th>Order code</th>
-          <th>Amount needed</th><th>In stock</th><th>To order</th><th>Order units</th><th>For dishes</th>
+          <th>Amount needed</th><th>In stock</th><th>To order</th><th>Order units</th><th>For batches</th>
         </tr></thead><tbody>`;
 
       items.forEach(ing => {
@@ -552,7 +552,7 @@ function renderCombinedOrderTab() {
   });
 
   if (!Object.keys(combined).length) {
-    return `<div class="empty">No items to order. Add items to Standard Inventory or flag dishes for ordering in the Week plan.</div>`;
+    return `<div class="empty">No items to order. Add items to Standard Inventory or flag batches for ordering in the Week plan.</div>`;
   }
 
   const ingList = Object.values(combined).sort((a, b) => a.name.localeCompare(b.name)).map(ing => {
@@ -880,7 +880,7 @@ function updateOrderStock(key, val) {
 
 async function refreshAllRecipes() {
   const dishes = S.batches.filter(d => d.orderFor && d.recipeSheetId);
-  if (!dishes.length) { toast('No dishes with recipe sheets to refresh'); return; }
+  if (!dishes.length) { toast('No batches with recipe sheets to refresh'); return; }
   toast('Refreshing ' + dishes.length + ' recipe(s)...');
   let ok = 0;
   for (const d of dishes) {
