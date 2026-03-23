@@ -465,7 +465,10 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab,
     ${locToggleHtml}
     <div class="sub-tab-bar" style="margin-bottom:10px;" id="add-modal-tabs">${tabBarHtml}</div>
     <div class="dish-opts-list" style="max-height:340px;" id="add-modal-list">${listHtml}</div>
-    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+    <div class="modal-actions">
+      <button class="btn" style="background:var(--blue);color:white;" onclick="addPlaceholderDish()">+ Placeholder</button>
+      <button class="btn" onclick="closeModal()">Close</button>
+    </div>`);
   const si = document.getElementById('planner-search');
   if (si) { si.focus(); si.setSelectionRange(si.value.length, si.value.length); }
 }
@@ -535,6 +538,40 @@ function addRecipeToSlot(recipeId, loc, date, meal) {
   S.dishes.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`${r.name} added to ${dateToDayName(date)} ${meal}`);
+}
+
+function addPlaceholderDish() {
+  const s = S._addModalState;
+  if (!s) return;
+  const { loc, date, meal, typeFilter } = s;
+  const dayName = dateToDayName(date);
+  const type = typeFilter || 'Soup';
+  const typeLabel = type === 'Main course' ? 'Main' : type;
+  const name = `${dayName} ${typeLabel}`;
+  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+
+  const newDish = {
+    id: newId(),
+    name,
+    type,
+    stock: 0,
+    serving: 280,
+    storage: 'Gastro',
+    logistics: locLabel,
+    allergens: [],
+    extraAllergens: [],
+    orderFor: false,
+    parentId: null,
+    cookMode: 'day',
+    cookDay: null,
+    cookDate: null,
+    cookConfirmed: false,
+    services: [{ loc, date, meal }],
+    createdAt: new Date().toISOString(),
+  };
+  S.dishes.push(newDish);
+  closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
+  toast(`Placeholder "${name}" added to ${dayName} ${meal}`);
 }
 
 // ── INVENTORY ────────────────────────────────────────────
