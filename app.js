@@ -18,6 +18,7 @@ app.use('/api/auth', authRouter);
 app.use('/api', authRouter.requireAuth);
 
 app.use('/api/data',              require('./routes/data'));
+app.use('/api/batches',           require('./routes/batches'));
 app.use('/api',                   require('./routes/recipes'));
 app.use('/api/ingredients',       require('./routes/ingredients'));
 app.use('/api',                   require('./routes/guests'));

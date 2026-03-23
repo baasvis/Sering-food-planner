@@ -7,40 +7,28 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Dish {
+model Batch {
   id                String    @id
   name              String
   type              String    // 'Soup', 'Main course', 'Dessert'
   stock             Float     @default(0)
   serving           Int       @default(280)
   storage           String    @default("Gastro")
-  logistics         String    @default("Sering West")
+  location          String    @default("west")
+  inTransit         Boolean   @default(false) @map("in_transit")
   allergens         String[]
   extraAllergens    String[]  @map("extra_allergens")
   orderFor          Boolean   @default(false) @map("order_for")
-  cookMode          String    @default("day") @map("cook_mode")
-  cookDay           String?   @map("cook_day")
   cookDate          String?   @map("cook_date")
-  cookConfirmed     Boolean   @default(false) @map("cook_confirmed")
   recipeSheetId     String?   @map("recipe_sheet_id")
   recipeVolume      Float?    @map("recipe_volume")
   recipeIngredients Json?     @map("recipe_ingredients")
   parentId          String?   @map("parent_id")
+  note              String    @default("")
+  services          Json      @default("[]")
   createdAt         String    @map("created_at")
-  services          Service[]
 
-  @@map("dishes")
-}
-
-model Service {
-  id       String @id
-  dishId   String @map("dish_id")
-  location String
-  date     String
-  meal     String
-  dish     Dish   @relation(fields: [dishId], references: [id], onDelete: Cascade)
-
-  @@map("services")
+  @@map("batches")
 }
 
 model Guest {

@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateDishes, validateGuests, withWriteLock, dbWriteDishes, dbWriteGuests, dbWriteCaterings, dbWriteTransportItems } = require('../lib/db');
+const { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateBatches, validateGuests, withWriteLock, dbWriteBatches, dbWriteGuests, dbWriteCaterings, dbWriteTransportItems } = require('../lib/db');
 
 router.get('/', async (req, res) => {
   try { res.json(await dbReadAll()); }
@@ -8,20 +8,20 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const dishes = req.body.dishes || [];
+    const batches = req.body.batches || [];
     const guests = req.body.guests || getDefaultGuests();
     const caterings = req.body.caterings || [];
     const transportItems = req.body.transportItems || [];
 
-    const dishErr = validateDishes(dishes);
-    if (dishErr) return res.status(400).json({ error: dishErr });
+    const batchErr = validateBatches(batches);
+    if (batchErr) return res.status(400).json({ error: batchErr });
     const guestErr = validateGuests(guests);
     if (guestErr) return res.status(400).json({ error: guestErr });
 
-    await dbWriteAll(dishes, guests, caterings, transportItems);
+    await dbWriteAll(batches, guests, caterings, transportItems);
 
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
-    dbAppendLog(user.email, user.name, 'save', `${dishes.length} dishes`);
+    dbAppendLog(user.email, user.name, 'save', `${batches.length} batches`);
 
     res.json({ ok: true, savedAt: new Date().toISOString() });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -46,22 +46,22 @@ function checkConcurrent(user) {
 
 router.post('/patch', async (req, res) => {
   try {
-    const { dishes, deletedDishes, guests, caterings, deletedCaterings,
+    const { batches, deletedBatches, guests, caterings, deletedCaterings,
             transportItems, deletedTransportItems } = req.body;
 
     await withWriteLock(async () => {
       const current = await dbReadAll();
 
-      // Merge dishes
-      if ((dishes && dishes.length) || (deletedDishes && deletedDishes.length)) {
-        const dishMap = new Map(current.dishes.map(d => [d.id, d]));
-        if (deletedDishes) deletedDishes.forEach(id => dishMap.delete(id));
-        if (dishes && dishes.length) {
-          const dishErr = validateDishes(dishes);
-          if (dishErr) throw new Error(dishErr);
-          dishes.forEach(d => dishMap.set(d.id, d));
+      // Merge batches
+      if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
+        const batchMap = new Map(current.batches.map(b => [b.id, b]));
+        if (deletedBatches) deletedBatches.forEach(id => batchMap.delete(id));
+        if (batches && batches.length) {
+          const batchErr = validateBatches(batches);
+          if (batchErr) throw new Error(batchErr);
+          batches.forEach(b => batchMap.set(b.id, b));
         }
-        await dbWriteDishes([...dishMap.values()]);
+        await dbWriteBatches([...batchMap.values()]);
       }
 
       // Merge guests
@@ -99,7 +99,7 @@ router.post('/patch', async (req, res) => {
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     const concurrent = checkConcurrent(user);
     dbAppendLog(user.email, user.name, 'patch',
-      `D:${(dishes||[]).length}u/${(deletedDishes||[]).length}d G:${guests?'y':'n'} C:${(caterings||[]).length}/${(deletedCaterings||[]).length}d T:${(transportItems||[]).length}/${(deletedTransportItems||[]).length}d`);
+      `B:${(batches||[]).length}u/${(deletedBatches||[]).length}d G:${guests?'y':'n'} C:${(caterings||[]).length}/${(deletedCaterings||[]).length}d T:${(transportItems||[]).length}/${(deletedTransportItems||[]).length}d`);
 
     const result = { ok: true, savedAt: new Date().toISOString() };
     if (concurrent) result.concurrent = concurrent;

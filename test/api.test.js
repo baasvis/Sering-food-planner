@@ -8,6 +8,7 @@ const T = 'test-' + Date.now() + '-';
 
 afterAll(async () => {
   // Clean up test data
+  await prisma.batch.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.recipeIndex.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.ingredient.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.standardInventory.deleteMany({ where: { id: { startsWith: T } } });
@@ -71,22 +72,144 @@ describe('GET /api/data', () => {
   it('returns planner state', async () => {
     const res = await request(app).get('/api/data');
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('dishes');
+    expect(res.body).toHaveProperty('batches');
     expect(res.body).toHaveProperty('guests');
     expect(res.body).toHaveProperty('caterings');
     expect(res.body).toHaveProperty('recipeIndex');
     expect(res.body).toHaveProperty('transportItems');
-    expect(Array.isArray(res.body.dishes)).toBe(true);
+    expect(Array.isArray(res.body.batches)).toBe(true);
   });
 });
 
 describe('POST /api/data', () => {
-  it('rejects invalid dishes', async () => {
+  it('rejects invalid batches', async () => {
     const res = await request(app)
       .post('/api/data')
-      .send({ dishes: [{ id: 'x', name: 'Bad', type: 'INVALID' }] });
+      .send({ batches: [{ id: 'x', name: 'Bad', type: 'INVALID' }] });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid type/i);
+  });
+});
+
+// ── Batch CRUD ──
+
+describe('Batch CRUD API', () => {
+  const batchId = T + 'batch-1';
+
+  it('POST /api/batches — creates a batch', async () => {
+    const res = await request(app)
+      .post('/api/batches')
+      .send({
+        id: batchId,
+        name: 'Test Tomatensoep',
+        type: 'Soup',
+        stock: 0,
+        serving: 280,
+        storage: 'Gastro',
+        location: 'west',
+        services: [{ loc: 'west', date: '2026-04-01', meal: 'lunch' }],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBe(batchId);
+    expect(res.body.name).toBe('Test Tomatensoep');
+    expect(res.body.location).toBe('west');
+    expect(res.body.services).toHaveLength(1);
+  });
+
+  it('POST /api/batches — rejects duplicate id', async () => {
+    const res = await request(app)
+      .post('/api/batches')
+      .send({
+        id: batchId,
+        name: 'Duplicate',
+        type: 'Soup',
+        stock: 0,
+        serving: 280,
+        storage: 'Gastro',
+        location: 'west',
+        services: [],
+      });
+    expect(res.status).toBe(409);
+  });
+
+  it('POST /api/batches — rejects invalid location', async () => {
+    const res = await request(app)
+      .post('/api/batches')
+      .send({
+        id: T + 'bad-loc',
+        name: 'Bad Location',
+        type: 'Soup',
+        stock: 0,
+        serving: 280,
+        storage: 'Gastro',
+        location: 'invalid',
+        services: [],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid location/i);
+  });
+
+  it('GET /api/batches — lists batches', async () => {
+    const res = await request(app).get('/api/batches');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    const found = res.body.find(b => b.id === batchId);
+    expect(found).toBeTruthy();
+  });
+
+  it('GET /api/batches/:id — returns single batch', async () => {
+    const res = await request(app).get('/api/batches/' + batchId);
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(batchId);
+    expect(res.body.name).toBe('Test Tomatensoep');
+  });
+
+  it('GET /api/batches/:id — 404 for unknown id', async () => {
+    const res = await request(app).get('/api/batches/nonexistent');
+    expect(res.status).toBe(404);
+  });
+
+  it('PATCH /api/batches/:id — partial update', async () => {
+    const res = await request(app)
+      .patch('/api/batches/' + batchId)
+      .send({ stock: 5.0, note: 'Extra thick today' });
+    expect(res.status).toBe(200);
+    expect(res.body.stock).toBe(5.0);
+    expect(res.body.note).toBe('Extra thick today');
+    expect(res.body.name).toBe('Test Tomatensoep'); // unchanged
+  });
+
+  it('PATCH /api/batches/:id — 404 for unknown id', async () => {
+    const res = await request(app)
+      .patch('/api/batches/nonexistent')
+      .send({ stock: 1 });
+    expect(res.status).toBe(404);
+  });
+
+  it('DELETE /api/batches/:id — rejects when stock > 0', async () => {
+    const res = await request(app).delete('/api/batches/' + batchId);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/stock > 0/);
+  });
+
+  it('DELETE /api/batches/:id — succeeds when stock = 0', async () => {
+    // First set stock to 0
+    await request(app)
+      .patch('/api/batches/' + batchId)
+      .send({ stock: 0 });
+
+    const res = await request(app).delete('/api/batches/' + batchId);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // Verify it's gone
+    const check = await request(app).get('/api/batches/' + batchId);
+    expect(check.status).toBe(404);
+  });
+
+  it('DELETE /api/batches/:id — 404 for unknown id', async () => {
+    const res = await request(app).delete('/api/batches/nonexistent');
+    expect(res.status).toBe(404);
   });
 });
 

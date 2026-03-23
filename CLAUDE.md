@@ -18,6 +18,7 @@ lib/
 routes/
   auth.js              — Login, logout, session, requireAuth middleware
   data.js              — GET/POST /api/data + POST /api/data/patch (main planner state)
+  batches.js           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
   recipes.js           — Recipe index CRUD + single recipe fetch
   ingredients.js       — Ingredient CRUD + stock management
   ingredients-import.js — Hanos XLSX upload + CSV migration
@@ -74,8 +75,13 @@ Key chain: `state.js` -> `auth.js` -> `utils.js` -> `core.js` -> [feature files]
 - CSS split into per-screen files in `public/css/` — add new screen styles to the matching file
 
 ## Key Data Flow
-- `GET /api/data` returns `{dishes, guests, recipeIndex, caterings, transportItems}`
-- `POST /api/data` saves `{dishes, guests, caterings, transportItems}`
+- `GET /api/data` returns `{batches, guests, recipeIndex, caterings, transportItems}`
+- `POST /api/data` saves `{batches, guests, caterings, transportItems}`
+- `POST /api/data/patch` merges `{batches, deletedBatches, guests, caterings, ...}`
+- Batch CRUD: `GET/POST /api/batches`, `GET/PATCH/DELETE /api/batches/:id`
+- Batch = physical container of food. Lifecycle: PLANNED → COOKED → SERVING → DONE
+- Key batch fields: `location` ("west"/"centraal"), `inTransit` (bool), `services` (embedded JSON), `cookDate`, `note`
+- Cannot delete a batch with stock > 0 (real food exists)
 - Ingredient DB has separate endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`
 - Ingredient stock endpoints: `/api/ingredients/stock`, `/api/ingredients/stock/bulk`
 - Ingredient migration: `POST /api/ingredients/migrate` (accepts oldCsv + hanosCsv, supports `?dryRun=true`)
