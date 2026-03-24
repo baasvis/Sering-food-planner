@@ -689,6 +689,205 @@ function addPlaceholderDish() {
   toast(`Placeholder "${name}" added to ${dayName} ${meal}`);
 }
 
+// ── REPLACE BATCH ────────────────────────────────────────
+
+function openReplaceBatch(batchId) {
+  const old = S.batches.find(d => d.id === batchId);
+  if (!old) return;
+  if (isBatchCooked(old)) { toast('Cannot replace a cooked batch'); return; }
+  if (!(old.services || []).length) { toast('Batch has no services to transfer'); return; }
+
+  S._replaceState = { oldBatchId: batchId, searchQuery: '', tab: 'batches' };
+  renderReplaceModal();
+}
+
+function renderReplaceModal() {
+  const rs = S._replaceState;
+  if (!rs) return;
+  const old = S.batches.find(d => d.id === rs.oldBatchId);
+  if (!old) return;
+
+  // Show which services will be transferred
+  const svcLabels = (old.services || []).map(s =>
+    `${dateToDayName(s.date)} ${s.meal}`
+  ).join(', ');
+
+  // Candidates: same type, not the old batch, not cooked
+  let candidates = S.batches.filter(d =>
+    d.id !== old.id && d.type === old.type && !isBatchCooked(d)
+  );
+  // Recipes not already active
+  const activeDishRecipeIds = new Set(S.batches.map(d => d.recipeSheetId).filter(Boolean));
+  let recipes = S.recipeIndex.filter(r =>
+    !activeDishRecipeIds.has(r.recipeSheetId) && (r.type || 'Soup') === old.type
+  );
+
+  // Apply search
+  if (rs.searchQuery) {
+    const q = rs.searchQuery.toLowerCase();
+    candidates = candidates.filter(d => d.name.toLowerCase().includes(q));
+    recipes = recipes.filter(r => r.name.toLowerCase().includes(q));
+  }
+
+  // Render batch options
+  const renderBatchOpts = (batches) => batches.map(d => {
+    const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
+    const agHtml = allAg.slice(0, 4).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
+    const cookInfo = d.cookDate ? 'Cook: ' + d.cookDate : '';
+    const svcCount = (d.services || []).length;
+    const svcNote = svcCount > 0 ? `${svcCount} service${svcCount > 1 ? 's' : ''}` : 'Unassigned';
+    return `<div class="dish-opt" onclick="confirmReplaceBatch('${d.id}')">
+      <div style="flex:1;">
+        <div><span style="font-weight:500;">${esc(d.name)}</span> ${storageBadge(d.storage || 'Gastro')}</div>
+        <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
+          <span style="color:var(--text3);">${svcNote}</span>
+          ${agHtml ? `<span>${agHtml}</span>` : ''}
+          ${cookInfo ? `<span style="color:var(--text3);">${cookInfo}</span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const renderRecipeOpts = (recs) => recs.slice(0, 20).map(r => {
+    const ags = (r.allergens || []).slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
+    return `<div class="dish-opt" onclick="replaceWithRecipe('${r.id}')">
+      <div style="flex:1;">
+        <div><span style="font-weight:500;">${esc(r.name)}</span></div>
+        <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
+          ${ags}
+          ${r.costPerServing ? `<span style="color:var(--text3);">${esc(r.costPerServing)}</span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Tabs
+  const tabs = [
+    { id: 'batches', label: 'Batches', count: candidates.length },
+    { id: 'recipes', label: 'Recipes', count: recipes.length },
+  ];
+  const tabBarHtml = tabs.map(t =>
+    `<button class="sub-tab ${rs.tab === t.id ? 'active' : ''}" onclick="event.stopPropagation();switchReplaceTab('${t.id}')">${t.label} <span style="opacity:.6;font-size:11px;">${t.count}</span></button>`
+  ).join('');
+
+  let listHtml = '';
+  if (rs.tab === 'batches') {
+    listHtml = candidates.length > 0 ? renderBatchOpts(candidates)
+      : `<div class="empty">No uncooked ${old.type.toLowerCase()} batches available${rs.searchQuery ? ' matching "' + esc(rs.searchQuery) + '"' : ''}</div>`;
+  } else {
+    listHtml = recipes.length > 0 ? renderRecipeOpts(recipes)
+      : `<div class="empty">No recipes available${rs.searchQuery ? ' matching "' + esc(rs.searchQuery) + '"' : ''}</div>`;
+  }
+
+  // If modal already open, update in place
+  const existingTabs = document.getElementById('replace-modal-tabs');
+  if (existingTabs) {
+    existingTabs.innerHTML = tabBarHtml;
+    document.getElementById('replace-modal-list').innerHTML = listHtml;
+    return;
+  }
+
+  const typeLabel = old.type === 'Main course' ? 'main' : old.type.toLowerCase();
+  showModal(`<h3>Replace ${esc(old.name)}</h3>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:10px;">Assigned to: ${svcLabels}</div>
+    <input type="text" class="dish-search" id="replace-search" placeholder="Search ${typeLabel}s..." value="${esc(rs.searchQuery)}"
+      oninput="searchReplaceModal()" />
+    <div class="sub-tab-bar" style="margin-bottom:10px;" id="replace-modal-tabs">${tabBarHtml}</div>
+    <div class="dish-opts-list" style="max-height:340px;" id="replace-modal-list">${listHtml}</div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+    </div>`);
+  const si = document.getElementById('replace-search');
+  if (si) si.focus();
+}
+
+function switchReplaceTab(tab) {
+  const rs = S._replaceState;
+  if (!rs) return;
+  rs.tab = tab;
+  rs.searchQuery = (document.getElementById('replace-search') || {}).value || '';
+  renderReplaceModal();
+}
+
+function searchReplaceModal() {
+  const rs = S._replaceState;
+  if (!rs) return;
+  rs.searchQuery = (document.getElementById('replace-search') || {}).value || '';
+  renderReplaceModal();
+}
+
+function confirmReplaceBatch(newBatchId) {
+  const rs = S._replaceState;
+  if (!rs) return;
+  const old = S.batches.find(d => d.id === rs.oldBatchId);
+  const replacement = S.batches.find(d => d.id === newBatchId);
+  if (!old || !replacement) return;
+
+  // Transfer services, deduplicating
+  const existing = replacement.services || [];
+  (old.services || []).forEach(svc => {
+    const dup = existing.some(e => e.loc === svc.loc && e.date === svc.date && e.meal === svc.meal);
+    if (!dup) existing.push(svc);
+  });
+  replacement.services = existing;
+
+  // Delete old batch
+  const oldName = old.name;
+  S.batches = S.batches.filter(d => d.id !== old.id);
+  if (!S.deletedBatches) S.deletedBatches = [];
+  S.deletedBatches.push(old.id);
+
+  closeModal();
+  rebuildPlanner();
+  rerenderCurrentView();
+  scheduleSave();
+  toast(`Replaced ${oldName} with ${replacement.name}`);
+}
+
+function replaceWithRecipe(recipeId) {
+  const rs = S._replaceState;
+  if (!rs) return;
+  const old = S.batches.find(d => d.id === rs.oldBatchId);
+  const r = S.recipeIndex.find(x => x.id === recipeId);
+  if (!old || !r) return;
+
+  // Create new batch from recipe with old batch's services
+  const newBatch = {
+    id: newId(),
+    name: r.name,
+    type: r.type || 'Soup',
+    stock: 0,
+    serving: r.servingSize || 280,
+    storage: 'Gastro',
+    location: old.location,
+    inTransit: false,
+    recipeSheetId: r.recipeSheetId || null,
+    recipeVolume: r.recipeVolume || null,
+    recipeIngredients: r.recipeIngredients ? [...r.recipeIngredients] : null,
+    allergens: [...(r.allergens || [])],
+    extraAllergens: [],
+    orderFor: false,
+    parentId: null,
+    cookDate: null,
+    note: '',
+    services: [...(old.services || [])],
+    createdAt: new Date().toISOString(),
+  };
+  S.batches.push(newBatch);
+
+  // Delete old batch
+  const oldName = old.name;
+  S.batches = S.batches.filter(d => d.id !== old.id);
+  if (!S.deletedBatches) S.deletedBatches = [];
+  S.deletedBatches.push(old.id);
+
+  closeModal();
+  rebuildPlanner();
+  rerenderCurrentView();
+  scheduleSave();
+  toast(`Replaced ${oldName} with ${r.name}`);
+}
+
 // ── INVENTORY ────────────────────────────────────────────
 // getAmsterdamNow() is defined in core.js (shared with isServicePast)
 
