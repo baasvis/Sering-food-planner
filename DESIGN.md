@@ -102,7 +102,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
   - Standard Inventory: cooks build a weekly base order (persistent, server-side JSON), searchable from ingredient DB, shows order codes per item
   - Dish Ingredients: per-dish ingredient aggregation from recipe sheets, in-stock input, to-order calculation
   - Combined Order: merges both lists, sums overlapping ingredients, grouped by storage category per location
-  - Hanos add-to-cart integration: "Send to Hanos" bulk button per storage group + per-row cart buttons. Confirmation modal lists items before sending. Uses Hanos OCC v2 API (OAuth login, cart management). Requires HANOS_USER + HANOS_PASS env vars; buttons hidden when not configured.
+  - Hanos add-to-cart integration: "Send to Hanos" bulk button per storage group + per-row cart buttons. Confirmation modal lists items before sending. Uses Hanos OCC v2 API (OAuth login, cart management). Per-location credentials: HANOS_USER_WEST/HANOS_PASS_WEST and HANOS_USER_CENTRAAL/HANOS_PASS_CENTRAAL. Buttons only show for locations with configured credentials.
 - Ingredient database integration (separate Google Sheet with supplier codes, units, prices)
 - Feedback system (floating purple button, structured form with 4 types, stores to Google Sheets)
 - Mobile responsive layout (card-based dishes on phone, bottom-sheet modals, fixed bottom navigation bar with icons, compact sticky header)
