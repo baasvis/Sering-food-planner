@@ -168,7 +168,7 @@ function addToStandardInventory(name, unit) {
   const list = standardInventory[loc] || [];
   const exists = list.find(i => i.name.toLowerCase().trim() === name.toLowerCase().trim());
   if (exists) return;
-  list.push({ id: newId(), name, amount: 0, unit: unit || 'g' });
+  list.push({ id: newId(), name, amount: 0, unit: 'units' });
   standardInventory[loc] = list;
   siSearchQuery = '';
   saveStandardInventory(loc);
@@ -184,11 +184,12 @@ function removeSiItem(idx) {
   renderOrders();
 }
 
-function updateSiAmount(idx, val) {
+function updateSiAmount(idx, val, isOrderUnits) {
   const loc = currentOrdersLoc || 'west';
   const list = standardInventory[loc] || [];
   if (list[idx]) {
     list[idx].amount = parseFloat(val) || 0;
+    if (isOrderUnits) list[idx].unit = 'units'; // migrate legacy items on edit
     debouncedSaveSI();
   }
 }
@@ -262,26 +263,39 @@ function renderStandardInventoryTab() {
   const curLoc = currentOrdersLoc || 'west';
   const siItems = standardInventory[curLoc] || [];
 
-  // Build enriched list (same approach as combined/dishes tabs)
+  // Build enriched list — amount is in order units (e.g. 6x bags)
+  // Legacy items have unit=Grams/Kilos — auto-convert to order units
   const ingList = siItems.map((item, idx) => {
     const db = lookupIngredient(item.name);
-    const amtGrams = toGrams(item.amount, item.unit || 'g');
+    const unitGrams = db ? (db.unitRecalc || db.orderAmount || 0) : 0;
+    const isLegacy = item.unit && item.unit !== 'units' && item.unit.toLowerCase() !== 'units';
+    let orderUnits;
+    let amtGrams;
+    if (isLegacy && unitGrams > 0) {
+      // Convert legacy raw amount to order units
+      amtGrams = toGrams(item.amount || 0, item.unit);
+      orderUnits = Math.ceil(amtGrams / unitGrams);
+    } else {
+      orderUnits = item.amount || 0;
+      amtGrams = orderUnits * unitGrams;
+    }
     return {
       ...item,
       idx,
       db,
+      orderUnits,
+      unitGrams,
       amountInGrams: amtGrams,
       supplier: normalizeSupplier((db && db.source) || ''),
       orderCode: db ? db.orderCode : '',
-      orderCalc: db ? calcOrderUnits(amtGrams, db) : null,
     };
   });
 
-  // Calculate total value using calcOrderUnits (consistent with combined tab)
+  // Calculate total value from order units × price
   let totalValue = 0;
   ingList.forEach(ing => {
-    if (ing.db && ing.db.orderPrice && ing.orderCalc && ing.orderCalc.units > 0) {
-      totalValue += ing.orderCalc.units * ing.db.orderPrice;
+    if (ing.db && ing.db.orderPrice && ing.orderUnits > 0) {
+      totalValue += ing.orderUnits * ing.db.orderPrice;
     }
   });
 
@@ -318,25 +332,27 @@ function renderStandardInventoryTab() {
           <th>Storage</th>
           <th>Order code</th>
           <th>Unit / Price</th>
-          <th>Amount / week</th>
-          <th>Order units</th>
+          <th>Order units / week</th>
+          <th>Total weight</th>
           <th></th>
         </tr></thead><tbody>`;
 
       items.forEach(ing => {
         const db = ing.db;
-        const dbUnit = db && db.unit ? esc(db.unit) : (ing.unit ? esc(ing.unit) : 'g');
         const isUrl = ing.orderCode && (ing.orderCode.startsWith('http') || ing.orderCode.startsWith('www'));
         let codeDisplay;
         if (!db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
         else if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">\u2014</span>';
         else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
         else codeDisplay = `<span class="order-code">${esc(ing.orderCode)}</span>`;
-        const unitPrice = db ? (db.orderUnit ? esc(db.orderUnit) : dbUnit) + (db.orderPrice ? ' \u00B7 \u20AC' + Number(db.orderPrice).toFixed(2) : '') : dbUnit;
 
-        const orderUnits = ing.orderCalc && ing.orderCalc.units > 0
-          ? `<span class="order-amt">${ing.orderCalc.units}x</span> <span class="order-units">(${ing.orderCalc.perUnit} ${esc(ing.orderCalc.unitType)})</span>`
-          : (ing.amount > 0 ? '<span style="color:var(--text2);font-size:11px;">\u2014</span>' : '');
+        const orderUnitLabel = db && db.orderUnit ? esc(db.orderUnit) : '';
+        const unitPrice = db ? (orderUnitLabel || 'unit') + (db.orderPrice ? ' \u00B7 \u20AC' + Number(db.orderPrice).toFixed(2) : '') : '';
+
+        // Total weight from order units
+        const totalWeightDisplay = ing.amountInGrams > 0
+          ? `<span class="order-units">${formatGrams(ing.amountInGrams).amount} ${formatGrams(ing.amountInGrams).unit}</span>`
+          : (ing.orderUnits > 0 && !ing.unitGrams ? '<span style="color:var(--text2);font-size:10px;">no weight/unit</span>' : '<span style="color:var(--text2);font-size:11px;">\u2014</span>');
 
         itemsHtml += `<tr>
           <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}</td>
@@ -344,8 +360,11 @@ function renderStandardInventoryTab() {
           <td>${renderStorageBadge(db)}</td>
           <td>${codeDisplay}</td>
           <td style="font-size:12px;">${unitPrice}</td>
-          <td><input class="order-stock-input" type="number" min="0" step="any" value="${ing.amount > 0 ? ing.amount : ''}" placeholder="0" oninput="updateSiAmount(${ing.idx}, this.value)" /></td>
-          <td>${orderUnits}</td>
+          <td style="white-space:nowrap;">
+            <input class="order-stock-input" type="number" min="0" step="1" value="${ing.orderUnits > 0 ? ing.orderUnits : ''}" placeholder="0" style="width:55px;" oninput="updateSiAmount(${ing.idx}, this.value, true)" />
+            <span class="order-units" style="margin-left:2px;">x ${orderUnitLabel || 'units'}</span>
+          </td>
+          <td>${totalWeightDisplay}</td>
           <td><button class="btn btn-danger btn-sm" onclick="removeSiItem(${ing.idx})">Remove</button></td>
         </tr>`;
       });
@@ -540,18 +559,28 @@ function renderCombinedOrderTab() {
     });
   });
 
-  // Add standard inventory for current location — try to merge with dish ingredient keys by fuzzy name
+  // Add standard inventory for current location — convert to grams (handles legacy + new format)
   const siItems = standardInventory[currentOrdersLoc || 'west'] || [];
   siItems.forEach(item => {
     if (!item.amount || item.amount <= 0) return;
     const db = lookupIngredient(item.name);
     const canonicalName = db ? db.name : item.name;
+    const unitGrams = db ? (db.unitRecalc || db.orderAmount || 0) : 0;
+    const isLegacy = item.unit && item.unit !== 'units' && item.unit.toLowerCase() !== 'units';
+    let amtGrams;
+    if (isLegacy && unitGrams > 0) {
+      amtGrams = toGrams(item.amount, item.unit); // legacy: amount is raw grams/kg
+    } else if (unitGrams > 0) {
+      amtGrams = item.amount * unitGrams; // new: amount is order units
+    } else {
+      amtGrams = toGrams(item.amount, item.unit); // fallback
+    }
     // Find an existing key that matches this item
     const matchingKey = Object.keys(combined).find(k =>
       k === item.name.toLowerCase().trim() || k === canonicalName.toLowerCase().trim()
     );
     const nameToUse = matchingKey ? combined[matchingKey].name : canonicalName;
-    addToMap(nameToUse, toGrams(item.amount, item.unit), true, null);
+    addToMap(nameToUse, amtGrams, true, null);
   });
 
   if (!Object.keys(combined).length) {
