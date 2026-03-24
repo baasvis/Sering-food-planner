@@ -22,6 +22,11 @@ const TUTORIALS = {
       body: "How many people are eating lunch and dinner today. You set these numbers in the Guests tab — they update here automatically.",
     },
     {
+      selector: '#dash-flow-card',
+      title: 'Guest flow',
+      body: "A graph showing the estimated number of guests arriving per 5 minutes. Toggle between Lunch and Dinner to see each service. The peak label shows the busiest moment — plan your plating around it.",
+    },
+    {
       selector: '#dash-menu-card',
       title: "Today's menu",
       body: "Every batch planned for today. Allergens are listed so front-of-house always knows what's in each batch.",

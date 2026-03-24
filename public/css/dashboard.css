@@ -102,6 +102,15 @@
   .dash-prep-tmrw{font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;background:var(--purple-bg);color:var(--purple);text-transform:uppercase;letter-spacing:.04em;flex-shrink:0;}
   .dash-empty{font-size:13px;color:var(--text3);font-style:italic;padding:12px 8px;}
 
+  /* Guest flow chart */
+  .dash-flow-toggles{display:flex;gap:3px;}
+  .dash-flow-toggle{font-size:11px;font-weight:600;padding:4px 12px;border-radius:10px;border:1px solid var(--border2);background:transparent;color:var(--text3);cursor:pointer;transition:all .12s;white-space:nowrap;}
+  .dash-flow-toggle:hover{border-color:var(--text2);color:var(--text2);}
+  .dash-flow-toggle.active[data-meal="lunch"]{background:var(--amber-bg);color:var(--amber);border-color:rgba(186,117,23,.4);}
+  .dash-flow-toggle.active[data-meal="dinner"]{background:var(--purple-bg);color:var(--purple);border-color:rgba(83,74,183,.4);}
+  .dash-flow-canvas-wrap{margin-top:10px;width:100%;overflow:hidden;}
+  .dash-flow-canvas-wrap canvas{display:block;width:100%;}
+
   /* Legacy dashboard items kept for backwards compat */
   .dash-full-width{grid-column:1/-1;}
   .dash-alert{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:var(--radius);margin-bottom:6px;}

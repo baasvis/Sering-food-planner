@@ -213,6 +213,182 @@ function setDashboardLoc(loc) {
   loadPrepChecklist(loc).then(() => { renderDashboardContent(); renderTeamTodos(); });
 }
 
+// ── Guest Flow Chart ─────────────────────────────────────
+// Shows estimated guest arrivals per 5-minute interval as a line chart.
+// Uses a gaussian distribution applied to the expected total guest count.
+
+let _guestFlowMeal = 'lunch'; // current toggle state
+
+function setGuestFlowMeal(meal) {
+  _guestFlowMeal = meal;
+  document.querySelectorAll('.dash-flow-toggle').forEach(b => b.classList.toggle('active', b.dataset.meal === meal));
+  drawGuestFlowChart();
+}
+
+// Gaussian bell curve: returns value 0-1 centered at `center` with spread `sigma`
+function gaussian(x, center, sigma) {
+  return Math.exp(-0.5 * Math.pow((x - center) / sigma, 2));
+}
+
+// Build a distribution of guest arrivals per 5-min slot for a meal.
+// Returns array of { time: "HH:MM", guests: number }
+function buildGuestFlowData(totalGuests, meal) {
+  // Service windows (in minutes from midnight)
+  const LUNCH = { start: 12 * 60, end: 14 * 60, peak: 12 * 60 + 35, sigma: 22 };
+  const DINNER = { start: 18 * 60, end: 21 * 60, peak: 19 * 60 + 10, sigma: 30 };
+  const cfg = meal === 'lunch' ? LUNCH : DINNER;
+
+  const slots = [];
+  // Generate raw weights
+  let totalWeight = 0;
+  for (let t = cfg.start; t < cfg.end; t += 5) {
+    const w = gaussian(t, cfg.peak, cfg.sigma);
+    slots.push({ min: t, weight: w });
+    totalWeight += w;
+  }
+
+  // Normalize and scale to total guests
+  return slots.map(s => {
+    const h = Math.floor(s.min / 60);
+    const m = s.min % 60;
+    return {
+      time: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
+      guests: Math.round((s.weight / totalWeight) * totalGuests * 10) / 10
+    };
+  });
+}
+
+function drawGuestFlowChart() {
+  const canvas = document.getElementById('guest-flow-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  // HiDPI support
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const w = rect.width;
+  const h = 180;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.scale(dpr, dpr);
+
+  const loc = S.dashboardLoc;
+  const todayIso = dateToIso(getToday());
+  const totalGuests = getGuests(loc, todayIso, _guestFlowMeal);
+  const data = buildGuestFlowData(totalGuests, _guestFlowMeal);
+
+  // Detect dark mode
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const textColor = isDark ? '#a0a09a' : '#6b6b66';
+  const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+  const lineColor = _guestFlowMeal === 'lunch' ? (isDark ? '#E4A84D' : '#BA7517') : (isDark ? '#8B82E0' : '#534AB7');
+  const fillColor = _guestFlowMeal === 'lunch' ? (isDark ? 'rgba(228,168,77,0.12)' : 'rgba(186,117,23,0.08)') : (isDark ? 'rgba(139,130,224,0.12)' : 'rgba(83,74,183,0.08)');
+
+  // Chart padding
+  const pad = { top: 16, right: 16, bottom: 28, left: 36 };
+  const cw = w - pad.left - pad.right;
+  const ch = h - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, w, h);
+
+  if (totalGuests === 0) {
+    ctx.fillStyle = textColor;
+    ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No guest data for today', w / 2, h / 2);
+    return;
+  }
+
+  const maxGuests = Math.max(...data.map(d => d.guests), 1);
+  // Round up to nice number for y-axis
+  const yMax = Math.ceil(maxGuests / 2) * 2 || 2;
+
+  // X/Y mappers
+  const xOf = i => pad.left + (i / (data.length - 1)) * cw;
+  const yOf = v => pad.top + ch - (v / yMax) * ch;
+
+  // Grid lines (3 horizontal)
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 3; i++) {
+    const yVal = (yMax / 3) * i;
+    const y = yOf(yVal);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(w - pad.right, y);
+    ctx.stroke();
+    // Y labels
+    ctx.fillStyle = textColor;
+    ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(Math.round(yVal), pad.left - 6, y + 3);
+  }
+
+  // X labels (every 30 minutes)
+  ctx.fillStyle = textColor;
+  ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  data.forEach((d, i) => {
+    const mins = parseInt(d.time.split(':')[1]);
+    if (mins === 0 || mins === 30) {
+      ctx.fillText(d.time, xOf(i), h - 6);
+    }
+  });
+
+  // Fill area under curve
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), yOf(0));
+  data.forEach((d, i) => ctx.lineTo(xOf(i), yOf(d.guests)));
+  ctx.lineTo(xOf(data.length - 1), yOf(0));
+  ctx.closePath();
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  data.forEach((d, i) => {
+    if (i === 0) ctx.moveTo(xOf(i), yOf(d.guests));
+    else ctx.lineTo(xOf(i), yOf(d.guests));
+  });
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = 2.5;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Current time indicator (vertical line if within service window)
+  const now = new Date();
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  const startMins = parseInt(data[0].time.split(':')[0]) * 60 + parseInt(data[0].time.split(':')[1]);
+  const endMins = parseInt(data[data.length - 1].time.split(':')[0]) * 60 + parseInt(data[data.length - 1].time.split(':')[1]);
+  if (nowMins >= startMins && nowMins <= endMins) {
+    const progress = (nowMins - startMins) / (endMins - startMins);
+    const nowX = pad.left + progress * cw;
+    ctx.strokeStyle = isDark ? 'rgba(232,107,90,0.6)' : 'rgba(153,60,29,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(nowX, pad.top);
+    ctx.lineTo(nowX, pad.top + ch);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // "Now" label
+    ctx.fillStyle = isDark ? '#E86B5A' : '#993C1D';
+    ctx.font = 'bold 9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Now', nowX, pad.top - 4);
+  }
+
+  // Peak label
+  const peakIdx = data.reduce((best, d, i) => d.guests > data[best].guests ? i : best, 0);
+  const peakD = data[peakIdx];
+  ctx.fillStyle = lineColor;
+  ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`~${Math.round(peakD.guests)}/5min`, xOf(peakIdx), yOf(peakD.guests) - 8);
+}
+
 // ── Day todos (heat/cook checkboxes + custom notes) ───
 function _dayTodosKey() { return `sering-todos-${todayIso()}`; }
 
@@ -454,6 +630,18 @@ function renderDashboardContent() {
       </div>
     </div>
 
+    <div class="dash-card" id="dash-flow-card">
+      <div class="dash-card-title">
+        <span class="dash-card-icon">📈</span> Guest flow
+        <span class="dash-card-subtitle">Estimated arrivals per 5 min</span>
+        <div class="dash-flow-toggles" style="margin-left:auto;">
+          <button class="dash-flow-toggle${_guestFlowMeal === 'lunch' ? ' active' : ''}" data-meal="lunch" onclick="setGuestFlowMeal('lunch')">Lunch</button>
+          <button class="dash-flow-toggle${_guestFlowMeal === 'dinner' ? ' active' : ''}" data-meal="dinner" onclick="setGuestFlowMeal('dinner')">Dinner</button>
+        </div>
+      </div>
+      <div class="dash-flow-canvas-wrap"><canvas id="guest-flow-canvas"></canvas></div>
+    </div>
+
     <div class="dash-card" id="dash-menu-card">
       <div class="dash-card-title"><span class="dash-card-icon">🍲</span> Today's menu
         <span class="dash-card-subtitle">Pick Rice or Pasta for each main — totals appear below each meal</span>
@@ -511,6 +699,7 @@ function renderDashboardContent() {
   `;
 
   renderPrepChecklist();
+  drawGuestFlowChart();
 }
 
 function renderPrepChecklist() {
