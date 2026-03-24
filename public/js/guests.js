@@ -257,10 +257,15 @@ async function handleFiles(fileList) {
 async function saveUploadedHistory() {
   if (!_pendingUpload) return;
   try {
-    await apiPost('/api/guest-history', { ..._pendingUpload.aggregated, deviceMap: _pendingUpload.deviceMap });
+    await apiPost('/api/guest-history', {
+      ..._pendingUpload.aggregated,
+      deviceMap: _pendingUpload.deviceMap,
+      flowDistribution: _pendingUpload.flowDistribution,
+    });
     const data = await apiGet('/api/guest-history');
     S.guestHistory = data;
     if (data && (data.west || data.centraal)) S.predictions = predictGuests(data);
+    if (data && data.flowDistribution) S.guestFlowDistribution = data.flowDistribution;
     _pendingUpload = null;
     toast('History saved — predictions updated');
     renderGuests();

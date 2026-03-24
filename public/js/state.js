@@ -99,6 +99,7 @@ let S = {
   teamTodosOpen: false,     // floating panel expanded state
   guestHistory:null,
   predictions:null,
+  guestFlowDistribution:null,
   guestsNextWeeks:{},
   storageConfig: null, // loaded from /api/storage-config
 };

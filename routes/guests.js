@@ -17,6 +17,8 @@ function guestHistoryToJson(histRows, metaRows) {
       try { result.deviceMap = JSON.parse(row.value); } catch (e) { result.deviceMap = {}; }
     } else if (row.key === 'lastUpdated') {
       result.lastUpdated = row.value;
+    } else if (row.key === 'flowDistribution') {
+      try { result.flowDistribution = JSON.parse(row.value); } catch (e) { result.flowDistribution = null; }
     }
   }
   return result;
@@ -105,6 +107,46 @@ router.post('/guest-history', async (req, res) => {
         create: { key: 'lastUpdated', value: existing.lastUpdated },
         update: { value: existing.lastUpdated },
       });
+
+      // Merge and store flow distribution (per-5-min arrival patterns)
+      if (incoming.flowDistribution) {
+        let existingFlow = {};
+        try {
+          const row = await tx.guestHistoryMeta.findUnique({ where: { key: 'flowDistribution' } });
+          if (row) existingFlow = JSON.parse(row.value);
+        } catch (e) { /* ignore parse errors */ }
+        // Merge: new data overwrites per loc/meal/dow
+        for (const loc of Object.keys(incoming.flowDistribution)) {
+          if (!existingFlow[loc]) existingFlow[loc] = {};
+          for (const meal of Object.keys(incoming.flowDistribution[loc])) {
+            if (!existingFlow[loc][meal]) existingFlow[loc][meal] = {};
+            for (const dow of Object.keys(incoming.flowDistribution[loc][meal])) {
+              const newBuckets = incoming.flowDistribution[loc][meal][dow];
+              const oldBuckets = existingFlow[loc][meal][dow] || {};
+              // Weighted merge: 30% old + 70% new (favours fresh data)
+              const merged = {};
+              const allKeys = new Set([...Object.keys(oldBuckets), ...Object.keys(newBuckets)]);
+              for (const k of allKeys) {
+                const o = parseFloat(oldBuckets[k]) || 0;
+                const n = parseFloat(newBuckets[k]) || 0;
+                if (o > 0 && n > 0) merged[k] = Math.round((o * 0.3 + n * 0.7) * 10000) / 10000;
+                else merged[k] = n || o;
+              }
+              // Re-normalize to sum to 1.0
+              const total = Object.values(merged).reduce((s, v) => s + v, 0);
+              if (total > 0) {
+                for (const k of Object.keys(merged)) merged[k] = Math.round((merged[k] / total) * 10000) / 10000;
+              }
+              existingFlow[loc][meal][dow] = merged;
+            }
+          }
+        }
+        await tx.guestHistoryMeta.upsert({
+          where: { key: 'flowDistribution' },
+          create: { key: 'flowDistribution', value: JSON.stringify(existingFlow) },
+          update: { value: JSON.stringify(existingFlow) },
+        });
+      }
     });
     res.json({ ok: true });
   } catch (e) {

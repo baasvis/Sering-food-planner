@@ -247,6 +247,9 @@ async function loadGuestHistory() {
     if (data && (data.west || data.centraal)) {
       S.predictions = predictGuests(data);
     }
+    if (data && data.flowDistribution) {
+      S.guestFlowDistribution = data.flowDistribution;
+    }
   } catch (e) {
     console.warn('Could not load guest history:', e.message);
   }

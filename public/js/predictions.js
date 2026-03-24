@@ -61,6 +61,7 @@ const AGG_MEALS = ['lunch', 'dinner', 'staff_lunch', 'staff_dinner'];
 function categorizeUploadedFiles(fileContents, existingDeviceMap) {
   // Each source file gets its own layer — we average overlapping days at the end
   const layers = [];
+  const allTimeEvents = [];
   const deviceMap = { ...(existingDeviceMap || {}) };
   let totalMealRows = 0;
   let unmappedRows = 0;
@@ -76,6 +77,7 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
       totalRows += rows.length;
       const result = categorizeTebiData(rows, deviceMap);
       layers.push(result.aggregated);
+      allTimeEvents.push(...result.timeEvents);
       Object.assign(deviceMap, result.deviceMap);
       totalMealRows += result.stats.totalMealRows;
       unmappedRows += result.stats.unmappedRows;
@@ -89,12 +91,14 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
       const result = categorizeProfitCenterData(rows, date);
       layers.push(result.aggregated);
       totalMealRows += result.totalMealRows;
+      // ProfitCenter has no per-row timestamps — no timeEvents
 
     } else if (format === 'lightspeed') {
       const rows = parseSemicolonCSV(text);
       totalRows += rows.length;
       const result = categorizeLightspeedData(rows);
       layers.push(result.aggregated);
+      allTimeEvents.push(...result.timeEvents);
       totalMealRows += result.totalMealRows;
 
     } else {
@@ -104,6 +108,9 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
 
   // Merge layers: average when multiple sources have data for the same day/loc/meal
   const aggregated = averageLayers(layers);
+
+  // Build normalized flow distributions from time events
+  const flowDistribution = buildFlowDistribution(allTimeEvents);
 
   const allDates = new Set();
   for (const loc of ['west', 'centraal']) {
@@ -116,6 +123,7 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
   return {
     aggregated,
     deviceMap,
+    flowDistribution,
     stats: {
       totalRows,
       totalMealRows,
@@ -135,6 +143,48 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
       }
     }
   };
+}
+
+// ── Flow Distribution Builder ─────────────────────────────────────────────
+// Takes an array of time events [{loc, meal, date, minuteOfDay}, ...] and
+// builds normalized per-5-min distributions grouped by location, meal, and
+// day-of-week. Each bucket value is a fraction of total guests for that group.
+
+function buildFlowDistribution(timeEvents) {
+  if (!timeEvents || timeEvents.length === 0) return null;
+
+  const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  // Collect raw counts: loc → meal → dow → { bucket: count }
+  const raw = {};
+
+  for (const ev of timeEvents) {
+    const bucket = Math.floor(ev.minuteOfDay / 5) * 5; // round down to 5-min
+    const dow = DAY_NAMES[new Date(ev.date + 'T12:00:00').getDay()];
+
+    if (!raw[ev.loc]) raw[ev.loc] = {};
+    if (!raw[ev.loc][ev.meal]) raw[ev.loc][ev.meal] = {};
+    if (!raw[ev.loc][ev.meal][dow]) raw[ev.loc][ev.meal][dow] = {};
+    raw[ev.loc][ev.meal][dow][bucket] = (raw[ev.loc][ev.meal][dow][bucket] || 0) + 1;
+  }
+
+  // Normalize each group to fractions summing to 1.0
+  const dist = {};
+  for (const loc of Object.keys(raw)) {
+    dist[loc] = {};
+    for (const meal of Object.keys(raw[loc])) {
+      dist[loc][meal] = {};
+      for (const dow of Object.keys(raw[loc][meal])) {
+        const buckets = raw[loc][meal][dow];
+        const total = Object.values(buckets).reduce((s, v) => s + v, 0);
+        if (total === 0) continue;
+        dist[loc][meal][dow] = {};
+        for (const [bucket, count] of Object.entries(buckets)) {
+          dist[loc][meal][dow][bucket] = Math.round((count / total) * 10000) / 10000;
+        }
+      }
+    }
+  }
+  return dist;
 }
 
 // Average overlapping data across layers. If two sources both have West lunch
@@ -254,6 +304,7 @@ function categorizeProfitCenterData(rows, date) {
 
 function categorizeLightspeedData(rows) {
   const aggregated = emptyAggregated();
+  const timeEvents = [];
   let totalMealRows = 0;
 
   for (const row of rows) {
@@ -265,26 +316,46 @@ function categorizeLightspeedData(rows) {
     const date = parseLightspeedDate(dateStr);
     if (!date) continue;
     const hour = parseLightspeedHour(dateStr);
+    const minuteOfDay = parseLightspeedMinuteOfDay(dateStr);
 
+    let meal = null;
     if (name === 'Lunch' || name === 'lunch card guest') {
       totalMealRows += qty;
       aggregated.centraal.lunch[date] = (aggregated.centraal.lunch[date] || 0) + qty;
+      meal = 'lunch';
     } else if (name === 'Donation Dinner Sering') {
       totalMealRows += qty;
       aggregated.centraal.dinner[date] = (aggregated.centraal.dinner[date] || 0) + qty;
+      meal = 'dinner';
     } else if (name === 'Staff & volunteers meals') {
       totalMealRows += qty;
       if (hour < 17) {
         aggregated.centraal.lunch[date] = (aggregated.centraal.lunch[date] || 0) + qty;
         aggregated.centraal.staff_lunch[date] = (aggregated.centraal.staff_lunch[date] || 0) + qty;
+        meal = 'lunch';
       } else {
         aggregated.centraal.dinner[date] = (aggregated.centraal.dinner[date] || 0) + qty;
         aggregated.centraal.staff_dinner[date] = (aggregated.centraal.staff_dinner[date] || 0) + qty;
+        meal = 'dinner';
+      }
+    }
+    if (meal && minuteOfDay !== null) {
+      for (let q = 0; q < qty; q++) {
+        timeEvents.push({ loc: 'centraal', meal, date, minuteOfDay });
       }
     }
   }
 
-  return { aggregated, totalMealRows };
+  return { aggregated, totalMealRows, timeEvents };
+}
+
+// Extract minute-of-day from Lightspeed "D/MM/YY HH:MM" → integer (0-1439)
+function parseLightspeedMinuteOfDay(dateStr) {
+  if (!dateStr) return null;
+  const timePart = dateStr.split(' ')[1];
+  if (!timePart) return null;
+  const [h, m] = timePart.split(':');
+  return (parseInt(h) || 0) * 60 + (parseInt(m) || 0);
 }
 
 // Extract hour from Lightspeed date "D/MM/YY HH:MM" → integer hour
@@ -333,6 +404,7 @@ function categorizeTebiData(allRows, existingDeviceMap) {
 
   // Step 2: count meals per day per location per type
   const aggregated = emptyAggregated();
+  const timeEvents = [];
   let totalMealRows = 0;
   let unmappedRows = 0;
   const MEAL_NAMES = ['Lunch', 'Lunch card guest', 'Dinner donation', 'Stadspas Dinner', 'DSC Dinner', 'Staff & volunteer meals'];
@@ -355,20 +427,30 @@ function categorizeTebiData(allRows, existingDeviceMap) {
     if (!loc) { unmappedRows++; continue; }
 
     totalMealRows++;
+    const minuteOfDay = extractMinuteOfDayFromTebiRow(row);
 
+    let meal = null;
     if (name === 'Lunch' || name === 'Lunch card guest') {
       aggregated[loc].lunch[date] = (aggregated[loc].lunch[date] || 0) + qty;
+      meal = 'lunch';
     } else if (name === 'Dinner donation' || name === 'Stadspas Dinner' || name === 'DSC Dinner') {
       aggregated[loc].dinner[date] = (aggregated[loc].dinner[date] || 0) + qty;
+      meal = 'dinner';
     } else if (name === 'Staff & volunteer meals') {
-      // Extract hour from Date closed: "3/16/26, 12:03 PM" or Invoice ID timestamp
       const hour = extractHourFromTebiRow(row);
       if (hour < 17) {
         aggregated[loc].lunch[date] = (aggregated[loc].lunch[date] || 0) + qty;
         aggregated[loc].staff_lunch[date] = (aggregated[loc].staff_lunch[date] || 0) + qty;
+        meal = 'lunch';
       } else {
         aggregated[loc].dinner[date] = (aggregated[loc].dinner[date] || 0) + qty;
         aggregated[loc].staff_dinner[date] = (aggregated[loc].staff_dinner[date] || 0) + qty;
+        meal = 'dinner';
+      }
+    }
+    if (meal && minuteOfDay !== null) {
+      for (let q = 0; q < qty; q++) {
+        timeEvents.push({ loc, meal, date, minuteOfDay });
       }
     }
   }
@@ -384,6 +466,7 @@ function categorizeTebiData(allRows, existingDeviceMap) {
   return {
     aggregated,
     deviceMap,
+    timeEvents,
     stats: {
       totalRows: allRows.length,
       totalMealRows,
@@ -402,6 +485,18 @@ function categorizeTebiData(allRows, existingDeviceMap) {
       }
     }
   };
+}
+
+// Extract minute-of-day from Tebi Invoice ID timestamp → integer (0-1439) or null
+// "723192|2026-03-16T16:30:00Z|INVOICE|..." → 990 (16*60+30)
+function extractMinuteOfDayFromTebiRow(row) {
+  const invoiceId = row['Invoice ID'] || '';
+  const parts = invoiceId.split('|');
+  if (parts.length >= 2) {
+    const match = parts[1].match(/T(\d{2}):(\d{2})/);
+    if (match) return parseInt(match[1]) * 60 + parseInt(match[2]);
+  }
+  return null;
 }
 
 // Extract hour from a Tebi ProductOrders row.

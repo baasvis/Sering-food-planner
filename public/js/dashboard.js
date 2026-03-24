@@ -231,15 +231,39 @@ function gaussian(x, center, sigma) {
 }
 
 // Build a distribution of guest arrivals per 5-min slot for a meal.
+// Uses real historical distribution if available, falls back to gaussian.
 // Returns array of { time: "HH:MM", guests: number }
-function buildGuestFlowData(totalGuests, meal) {
-  // Service windows (in minutes from midnight)
+function buildGuestFlowData(totalGuests, meal, loc) {
+  // Check for real distribution data
+  const today = getToday();
+  const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dow = DAY_NAMES[today.getDay()];
+  const dist = S.guestFlowDistribution;
+
+  if (dist && dist[loc] && dist[loc][meal] && dist[loc][meal][dow]) {
+    const buckets = dist[loc][meal][dow];
+    // Convert bucket map to sorted array
+    const entries = Object.entries(buckets)
+      .map(([minStr, frac]) => ({ min: parseInt(minStr), frac }))
+      .sort((a, b) => a.min - b.min);
+    if (entries.length >= 3) {
+      return entries.map(e => {
+        const h = Math.floor(e.min / 60);
+        const m = e.min % 60;
+        return {
+          time: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
+          guests: Math.round(e.frac * totalGuests * 10) / 10
+        };
+      });
+    }
+  }
+
+  // Fallback: gaussian distribution
   const LUNCH = { start: 12 * 60, end: 14 * 60, peak: 12 * 60 + 35, sigma: 22 };
   const DINNER = { start: 18 * 60, end: 21 * 60, peak: 19 * 60 + 10, sigma: 30 };
   const cfg = meal === 'lunch' ? LUNCH : DINNER;
 
   const slots = [];
-  // Generate raw weights
   let totalWeight = 0;
   for (let t = cfg.start; t < cfg.end; t += 5) {
     const w = gaussian(t, cfg.peak, cfg.sigma);
@@ -247,7 +271,6 @@ function buildGuestFlowData(totalGuests, meal) {
     totalWeight += w;
   }
 
-  // Normalize and scale to total guests
   return slots.map(s => {
     const h = Math.floor(s.min / 60);
     const m = s.min % 60;
@@ -277,7 +300,7 @@ function drawGuestFlowChart() {
   const loc = S.dashboardLoc;
   const todayIso = dateToIso(getToday());
   const totalGuests = getGuests(loc, todayIso, _guestFlowMeal);
-  const data = buildGuestFlowData(totalGuests, _guestFlowMeal);
+  const data = buildGuestFlowData(totalGuests, _guestFlowMeal, loc);
 
   // Detect dark mode
   const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
