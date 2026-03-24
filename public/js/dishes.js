@@ -722,10 +722,11 @@ function doTransportSplit(tl, smartAmt) { doSplit(true, tl, true); }
 
 // ── NEW DISH ──────────────────────────────────────────────
 function openNewDish() {
-  renderNewDishModal('');
+  searchNewDishModal();
 }
 
-function renderNewDishModal(searchQuery) {
+function searchNewDishModal() {
+  const searchQuery = (document.getElementById('new-dish-search') || {}).value || '';
   let recipes = S.recipeIndex;
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
@@ -741,11 +742,18 @@ function renderNewDishModal(searchQuery) {
     }).join('')
     : `<div class="empty" style="padding:12px;">${S.recipeIndex.length === 0 ? 'No recipes in index yet. Add some in the Recipes tab.' : 'No recipes match "' + esc(searchQuery) + '"'}</div>`;
 
+  // If modal already open, only update the list
+  const existingList = document.getElementById('new-dish-list');
+  if (existingList) {
+    existingList.innerHTML = recipeList;
+    return;
+  }
+
   showModal(`<h3>Add batch to menu</h3>
     <div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Pick from your recipe index:</div>
-    <input type="text" class="dish-search" placeholder="Search recipes..." value="${esc(searchQuery)}"
-      oninput="renderNewDishModal(this.value)" autofocus />
-    <div class="dish-opts-list" style="max-height:260px;">${recipeList}</div>
+    <input type="text" class="dish-search" id="new-dish-search" placeholder="Search recipes..." value="${esc(searchQuery)}"
+      oninput="searchNewDishModal()" autofocus />
+    <div class="dish-opts-list" style="max-height:260px;" id="new-dish-list">${recipeList}</div>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
       <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Or create from scratch:</div>
       <button class="btn" onclick="openNewDishScratch()">Create blank batch</button>

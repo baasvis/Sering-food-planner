@@ -591,7 +591,7 @@ function renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab,
       <button class="btn" onclick="closeModal()">Close</button>
     </div>`);
   const si = document.getElementById('planner-search');
-  if (si) { si.focus(); si.setSelectionRange(si.value.length, si.value.length); }
+  if (si) si.focus();
 }
 
 function updateAddModal(loc, date, meal, existing, typeFilter, tab) {

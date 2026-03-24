@@ -3,6 +3,11 @@ let riSearch = '';
 let riTypeFilter = 'all';
 let riSort = { col: 'name', dir: 'asc' };
 
+function updateRiSearch(el) {
+  riSearch = el.value;
+  updateRecipeResults();
+}
+
 function parseCost(s) {
   if (!s) return null;
   const m = s.toString().replace(/[^0-9.,]/g,'').replace(',','.');
@@ -30,6 +35,26 @@ function avgRating(r) {
 }
 
 function renderRecipeIndex() {
+  const types = [...new Set(S.recipeIndex.map(r => r.type).filter(Boolean))];
+
+  let html = `
+  <div class="btn-row" style="margin-bottom:12px;">
+    <button class="btn btn-primary" onclick="openAddRecipe()">+ Add recipe</button>
+    <span style="font-size:12px;color:var(--text2);margin-left:8px;">${S.recipeIndex.length} recipes in index</span>
+  </div>
+  <input class="ri-search" id="ri-search-input" placeholder="Search recipes..." value="${esc(riSearch)}" oninput="updateRiSearch(this)" />
+  <div class="ri-filter-bar">
+    <button class="fc ${riTypeFilter === 'all' ? 'on' : ''}" onclick="riTypeFilter='all';updateRecipeResults()">All types</button>
+    ${types.map(t => `<button class="fc ${riTypeFilter === t ? 'on' : ''}" onclick="riTypeFilter='${t}';updateRecipeResults()">${t}</button>`).join('')}
+  </div>
+  <div id="ri-results"></div>`;
+
+  document.getElementById('screen-recipe-index').innerHTML = html;
+  updateRecipeResults();
+}
+
+// Update only the results portion — search input stays in the DOM
+function updateRecipeResults() {
   let filtered = S.recipeIndex;
   if (riTypeFilter !== 'all') filtered = filtered.filter(r => r.type === riTypeFilter);
   if (riSearch) {
@@ -37,7 +62,6 @@ function renderRecipeIndex() {
     filtered = filtered.filter(r => r.name.toLowerCase().includes(q) || (r.allergens||[]).join(' ').toLowerCase().includes(q));
   }
 
-  // Sort
   const sorted = [...filtered].sort((a, b) => {
     let va, vb;
     switch (riSort.col) {
@@ -56,9 +80,6 @@ function renderRecipeIndex() {
     return 0;
   });
 
-  const types = [...new Set(S.recipeIndex.map(r => r.type).filter(Boolean))];
-
-  // Compute cost ranges per type for conditional formatting
   const costsByType = {};
   filtered.forEach(r => {
     const c = parseCost(r.costPerServing);
@@ -71,26 +92,16 @@ function renderRecipeIndex() {
   const arrow = (col) => riSort.col === col ? (riSort.dir === 'asc' ? '▲' : '▼') : '↕';
   const thCls = (col) => riSort.col === col ? 'sorted' : '';
 
-  let html = `
-  <div class="btn-row" style="margin-bottom:12px;">
-    <button class="btn btn-primary" onclick="openAddRecipe()">+ Add recipe</button>
-    <span style="font-size:12px;color:var(--text2);margin-left:8px;">${S.recipeIndex.length} recipes in index</span>
-  </div>
-  <input class="ri-search" placeholder="Search recipes..." value="${esc(riSearch)}" oninput="riSearch=this.value;renderRecipeIndex()" />
-  <div class="ri-filter-bar">
-    <button class="fc ${riTypeFilter === 'all' ? 'on' : ''}" onclick="riTypeFilter='all';renderRecipeIndex()">All types</button>
-    ${types.map(t => `<button class="fc ${riTypeFilter === t ? 'on' : ''}" onclick="riTypeFilter='${t}';renderRecipeIndex()">${t}</button>`).join('')}
-  </div>`;
-
+  let html = '';
   if (sorted.length === 0 && S.recipeIndex.length === 0) {
-    html += `<div class="ri-empty">
+    html = `<div class="ri-empty">
       <p style="font-size:16px;font-weight:600;">No recipes yet</p>
       <p>Add your first recipe by clicking "+ Add recipe" and pasting a Google Sheet link.</p>
     </div>`;
   } else if (sorted.length === 0) {
-    html += `<div class="ri-empty"><p>No recipes match your search</p></div>`;
+    html = `<div class="ri-empty"><p>No recipes match your search</p></div>`;
   } else {
-    html += `<div class="ri-table-wrap"><table class="ri-table">
+    html = `<div class="ri-table-wrap"><table class="ri-table">
     <thead><tr>
       <th class="${thCls('name')}" onclick="riSortBy('name')">Name <span class="sort-arrow">${arrow('name')}</span></th>
       <th class="${thCls('type')}" onclick="riSortBy('type')">Type <span class="sort-arrow">${arrow('type')}</span></th>
@@ -132,7 +143,8 @@ function renderRecipeIndex() {
     html += `</tbody></table></div>`;
   }
 
-  document.getElementById('screen-recipe-index').innerHTML = html;
+  const container = document.getElementById('ri-results');
+  if (container) container.innerHTML = html;
 }
 
 function riSortBy(col) {
@@ -142,7 +154,7 @@ function riSortBy(col) {
     riSort.col = col;
     riSort.dir = col === 'cost' || col === 'rating' || col === 'banger' || col === 'served' ? 'desc' : 'asc';
   }
-  renderRecipeIndex();
+  updateRecipeResults();
 }
 
 function openAddRecipe() {

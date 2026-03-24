@@ -74,6 +74,13 @@ Key chain: `state.js` -> `auth.js` -> `utils.js` -> `core.js` -> [feature files]
 - Navigation screens defined in `NAV_SCREENS` array (state.js) — add new screens there, not in HTML
 - CSS split into per-screen files in `public/css/` — add new screen styles to the matching file
 
+## Search/Filter Input Rule
+When a search or filter input triggers a re-render, **never replace the input's own DOM element**.
+Use the split-container pattern: put results in a separate `<div id="xxx-results">` and only update that.
+- Screen-level: render the search input once in the parent, update only `#results-container.innerHTML`
+- Modal-level: on first open call `showModal()` with full HTML; on subsequent updates check for an existing element (e.g. `document.getElementById('my-list')`) and only replace the list innerHTML
+- See `recipes.js` (`renderRecipeIndex` + `updateRecipeResults`) and `planner.js` (`renderAddModal`) for examples
+
 ## Key Data Flow
 - `GET /api/data` returns `{batches, guests, recipeIndex, caterings, transportItems}`
 - `POST /api/data` saves `{batches, guests, caterings, transportItems}`

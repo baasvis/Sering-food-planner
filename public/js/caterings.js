@@ -141,7 +141,6 @@ function renderCateringDishPicker(cateringId, query) {
   const alreadyAdded = new Set((c?.dishes || []).map(d => d.dishId));
   const q = query.toLowerCase();
 
-  // Only show planned dishes (they have serving size + stock tracking)
   const available = S.batches
     .filter(d => !alreadyAdded.has(d.id))
     .filter(d => !q || d.name.toLowerCase().includes(q));
@@ -154,7 +153,7 @@ function renderCateringDishPicker(cateringId, query) {
       const stockLoc = logisticsShort(d);
       const cookStatus = isBatchCooked(d) ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
       const serving = d.serving || 280;
-      const sameTypePeers = (c.dishes || []).filter(cd => cd.type === d.type).length + 1; // +1 for this dish being added
+      const sameTypePeers = (c.dishes || []).filter(cd => cd.type === d.type).length + 1;
       const cateringLiters = Math.round(((c.guestCount || 0) / sameTypePeers) * serving / 1000 * 10) / 10;
       return `<div class="dish-opt" onclick="addCateringDishFromPlanner('${cateringId}','${d.id}')">
         <div style="flex:1;">
@@ -173,13 +172,20 @@ function renderCateringDishPicker(cateringId, query) {
 
   if (!list) list = `<div class="empty">No planned batches found${q ? ' matching "' + esc(q) + '"' : ''}</div>`;
 
+  // If modal already open, only update the list
+  const existingList = document.getElementById('ct-dish-list');
+  if (existingList) {
+    existingList.innerHTML = list;
+    return;
+  }
+
   showModal(`<h3>Add batch to catering</h3>
     <input type="text" class="dish-search" id="ct-dish-search" placeholder="Search planned batches..." value="${esc(query)}"
-      oninput="renderCateringDishPicker('${cateringId}',this.value)" />
-    <div class="dish-opts-list" style="max-height:300px;">${list}</div>
+      oninput="renderCateringDishPicker('${cateringId}',(document.getElementById('ct-dish-search')||{}).value||'')" />
+    <div class="dish-opts-list" style="max-height:300px;" id="ct-dish-list">${list}</div>
     <div class="modal-actions"><button class="btn" onclick="openEditCatering('${cateringId}')">Back</button></div>`);
   const si = document.getElementById('ct-dish-search');
-  if (si) { si.focus(); si.setSelectionRange(si.value.length, si.value.length); }
+  if (si) si.focus();
 }
 
 function addCateringDishFromPlanner(cateringId, dishId) {
