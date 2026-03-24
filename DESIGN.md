@@ -76,7 +76,8 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - **Auth**: Google Sign-In with allowed email list
 
 **Completed features:**
-- Dashboard with today's menu, guests, stock alerts, week overview
+- Dashboard with today's menu, guests, guest flow chart, stock alerts, week overview
+- Guest flow chart on dashboard: canvas line chart showing estimated guest arrivals per 5-minute interval. Gaussian distribution applied to expected guest count. Lunch/Dinner toggle (amber/purple), "Now" time indicator during service, peak label. Dark mode + HiDPI aware.
 - Guest count tables per location (West + Centraal) with live totals, day-by-day navigation (today ±14 days), editable for current and future weeks
 - Guest prediction from historical POS data: upload Tebi or Lightspeed CSV exports, auto-detect format, predict guest counts using winsorized weighted averages with trend detection
   - Supports 3 CSV formats: Tebi ProductOrdersReport, Tebi ProductReportByProfitCenter, Lightspeed receipt-items
