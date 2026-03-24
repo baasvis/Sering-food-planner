@@ -51,10 +51,8 @@ class HanosClient {
   }
 
   /** OAuth password-grant login */
-  async login() {
-    const username = process.env.HANOS_USER;
-    const password = process.env.HANOS_PASS;
-    if (!username || !password) throw new Error('HANOS_USER / HANOS_PASS not configured');
+  async login(username, password) {
+    if (!username || !password) throw new Error('Hanos credentials not configured for this location');
 
     const body = new URLSearchParams({
       grant_type: 'password',
@@ -228,46 +226,67 @@ class HanosClient {
   }
 
   /** Initialize: login → personalization → cart */
-  async init() {
-    await this.login();
+  async init(username, password) {
+    await this.login(username, password);
     await this.fetchPersonalizationId();
     await this.getOrCreateCart();
   }
 }
 
-// ── Singleton client (re-created per request batch to keep tokens fresh) ────
+// ── Per-location credentials ────────────────────────────────────────────────
 
-let _client = null;
-let _clientCreatedAt = 0;
+function getCredentials(location) {
+  const loc = (location || '').toLowerCase();
+  if (loc === 'centraal') {
+    return { user: process.env.HANOS_USER_CENTRAAL, pass: process.env.HANOS_PASS_CENTRAAL };
+  }
+  // Default to west
+  return { user: process.env.HANOS_USER_WEST, pass: process.env.HANOS_PASS_WEST };
+}
+
+// ── Per-location singleton clients ──────────────────────────────────────────
+
+const _clients = {};       // { west: HanosClient, centraal: HanosClient }
+const _clientTimes = {};   // { west: timestamp, centraal: timestamp }
 const CLIENT_TTL = 10 * 60 * 1000; // 10 minutes
 
-async function getClient() {
+async function getClient(location) {
+  const loc = (location || 'west').toLowerCase();
   const now = Date.now();
-  if (_client && (now - _clientCreatedAt) < CLIENT_TTL) return _client;
-  _client = new HanosClient();
-  await _client.init();
-  _clientCreatedAt = now;
-  return _client;
+  if (_clients[loc] && (now - (_clientTimes[loc] || 0)) < CLIENT_TTL) return _clients[loc];
+
+  const { user, pass } = getCredentials(loc);
+  if (!user || !pass) throw new Error(`Hanos credentials not configured for ${loc}`);
+
+  const client = new HanosClient();
+  await client.init(user, pass);
+  _clients[loc] = client;
+  _clientTimes[loc] = now;
+  return client;
 }
 
 // ── Routes ──────────────────────────────────────────────────────────────────
 
-/** GET /api/hanos/status — check if credentials are configured */
+/** GET /api/hanos/status — check which locations have credentials configured */
 router.get('/status', (req, res) => {
+  const west = getCredentials('west');
+  const centraal = getCredentials('centraal');
   res.json({
-    configured: !!(process.env.HANOS_USER && process.env.HANOS_PASS),
+    configured: !!(west.user && west.pass) || !!(centraal.user && centraal.pass),
+    west: !!(west.user && west.pass),
+    centraal: !!(centraal.user && centraal.pass),
   });
 });
 
 /** POST /api/hanos/add-to-cart — add items to Hanos cart */
 router.post('/add-to-cart', async (req, res) => {
   try {
-    const { items } = req.body;
+    const { items, location } = req.body;
     if (!Array.isArray(items) || !items.length) {
       return res.status(400).json({ error: 'items array required' });
     }
 
-    const client = await getClient();
+    const client = await getClient(location || 'west');
     const results = [];
 
     for (const item of items) {
@@ -298,8 +317,9 @@ router.post('/add-to-cart', async (req, res) => {
   } catch (e) {
     console.error('[Hanos] add-to-cart error:', e.message);
     // Reset client on auth failure
-    _client = null;
-    _clientCreatedAt = 0;
+    const loc = (req.body.location || 'west').toLowerCase();
+    delete _clients[loc];
+    delete _clientTimes[loc];
     res.status(500).json({ error: e.message });
   }
 });
@@ -307,7 +327,7 @@ router.post('/add-to-cart', async (req, res) => {
 /** GET /api/hanos/cart — view current Hanos cart */
 router.get('/cart', async (req, res) => {
   try {
-    const client = await getClient();
+    const client = await getClient(req.query.location || 'west');
     const cart = await client.getCart();
     const entries = (cart.entries || []).map(e => {
       const p = e.product || {};
@@ -326,8 +346,9 @@ router.get('/cart', async (req, res) => {
     });
   } catch (e) {
     console.error('[Hanos] cart error:', e.message);
-    _client = null;
-    _clientCreatedAt = 0;
+    const loc = (req.query.location || 'west').toLowerCase();
+    delete _clients[loc];
+    delete _clientTimes[loc];
     res.status(500).json({ error: e.message });
   }
 });

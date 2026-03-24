@@ -10,7 +10,7 @@ let siSaveTimeout = null;
 let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'batches' | 'ingredientDb'
 let currentOrdersLoc = '';  // set on first render from S.currentLoc
 let siSearchQuery = '';
-let hanosConfigured = false;
+let hanosStatus = { configured: false, west: false, centraal: false };
 let hanosStatusChecked = false;
 
 // ── Shared helpers ────────────────────────────────────────
@@ -614,7 +614,7 @@ function renderCombinedOrderTab() {
     const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
 
     const catColor = getStorageColor(storageCat, curLoc);
-    const hanosItems = hanosConfigured ? items.filter(i => i.orderCode && !i.orderCode.startsWith('http')) : [];
+    const hanosItems = isHanosEnabled() ? items.filter(i => i.orderCode && !i.orderCode.startsWith('http')) : [];
     const hanosBulkBtn = hanosItems.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk('${esc(storageCat)}')" title="Add all items to Hanos cart">🛒 Send to Hanos</button>` : '';
 
     html += `<div class="storage-group" data-storage-cat="${esc(storageCat)}" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
@@ -669,7 +669,7 @@ function renderCombinedOrderTab() {
 
       const orderAmtGrams = hasStockValue ? toOrderGrams : ing.totalGrams;
       const orderCalc = ing.db ? calcOrderUnits(orderAmtGrams, ing.db) : null;
-      const hanosBtn = (hanosConfigured && ing.orderCode && !isUrl && orderCalc && orderCalc.units > 0)
+      const hanosBtn = (isHanosEnabled() && ing.orderCode && !isUrl && orderCalc && orderCalc.units > 0)
         ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
         : '';
       const orderUnitsDisplay = orderCalc && orderCalc.units > 0
@@ -784,12 +784,16 @@ async function checkHanosStatus() {
   if (hanosStatusChecked) return;
   hanosStatusChecked = true;
   try {
-    const data = await apiGet('/api/hanos/status');
-    hanosConfigured = data.configured;
+    hanosStatus = await apiGet('/api/hanos/status');
   } catch (e) {
     console.error('Hanos status check failed:', e);
-    hanosConfigured = false;
+    hanosStatus = { configured: false, west: false, centraal: false };
   }
+}
+
+function isHanosEnabled() {
+  const loc = currentOrdersLoc || 'west';
+  return hanosStatus[loc] || false;
 }
 
 /** Collect all Hanos items from the combined order table that need ordering */
@@ -850,7 +854,7 @@ async function hanosAddSingle(orderCode, name) {
 
   toast(`Adding ${name} to Hanos cart...`);
   try {
-    const resp = await apiPost('/api/hanos/add-to-cart', { items: [{ orderCode, quantity, unit: 'ST' }] });
+    const resp = await apiPost('/api/hanos/add-to-cart', { items: [{ orderCode, quantity, unit: 'ST' }], location: currentOrdersLoc || 'west' });
     if (resp.ok > 0) {
       toast(`Added ${quantity}x ${name} to Hanos cart`);
     } else {
@@ -915,6 +919,7 @@ async function hanosExecuteBulk(storageCat) {
   try {
     const resp = await apiPost('/api/hanos/add-to-cart', {
       items: items.map(i => ({ orderCode: i.orderCode, quantity: i.quantity, unit: i.unit })),
+      location: currentOrdersLoc || 'west',
     });
 
     const progEl = document.getElementById('hanos-progress');
