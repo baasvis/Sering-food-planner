@@ -12,16 +12,19 @@
 server.js              — Express app entry point, mounts routers, global error handler
 lib/
   config.js            — Configuration, env vars
-  db.js                — Prisma client, row transformers, dbReadAll/dbWriteAll, validators
+  db.js                — Prisma client, generic entity writer, validators, row transformers
   recipe-sheets.js     — Google Sheets client (external recipe reading only)
   hanos-parser.js      — Hanos quantity parser (hoeveelheid → grams)
+  hanos-categories.js  — Hanos product category → app type/category mapping
+  csv-parser.js        — Simple CSV parser (quoted fields, reusable)
 routes/
   auth.js              — Login, logout, session, requireAuth middleware
   data.js              — GET/POST /api/data + POST /api/data/patch (main planner state)
   batches.js           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
   recipes.js           — Recipe index CRUD + single recipe fetch
   ingredients.js       — Ingredient CRUD + stock management
-  ingredients-import.js — Hanos XLSX upload + CSV migration
+  ingredients-import.js — Hanos XLSX upload + CSV migration (uses lib/csv-parser, lib/hanos-categories)
+  hanos.js             — Hanos API client (OAuth, cart management, add-to-cart)
   guests.js            — Guest history + next-weeks predictions
   inventory.js         — Standard inventory (per-location) + storage config + prep checklist + activity log
   feedback.js          — User feedback
@@ -39,19 +42,26 @@ public/
     tutorial.css       — Tutorial overlay and tooltips
     mobile.css         — All mobile/responsive overrides, bottom nav
   js/
-    state.js           — Constants (DAYS, MEALS, etc.) + NAV_SCREENS + storage config helpers + global state object S
+    state.js           — Constants, NAV_SCREENS, storage config helpers, global state object S
     auth.js            — Google Sign-In, sessions
     utils.js           — API helpers (apiGet/apiPost), save system, toast, prep checklist
-    core.js            — rebuildPlanner, calcRequired, diffStr, badges, isServicePast
-    dashboard.js       — showScreen(), Dashboard screen
+    core.js            — Calculations (calcRequired, diffStr), badges, isServicePast, choppable detection, date helpers
+    batch-tile.js      — Reusable batch tile component (renderBatchTile, cook workflow, inline editing)
+    guest-flow.js      — Guest arrival flow chart (buildGuestFlowData, drawGuestFlowChart)
+    dashboard.js       — showScreen(), Dashboard screen (meal cards, prep checklist, team todos)
     predictions.js     — Guest prediction from POS CSV data
     guests.js          — Guest count tables
-    planner.js         — Week plan grid + transport + inventory modal
-    dishes.js          — Dish list + cook workflow + CRUD
+    planner.js         — Week plan grid, sub-tabs, day navigation, inventory modal
+    planner-pool.js    — Batch pool rendering, drag/drop, assign mode
+    planner-transport.js — Transport view, transport item CRUD, mark-arrived
+    dishes.js          — Dish overview table, sorting/filtering, new/edit/delete batch modals
     caterings.js       — Catering events
     recipes.js         — Recipe index/library
-    orders.js          — Order overview (combined, standard inventory, dish ingredients tabs)
-    ingredient-db.js   — Ingredient database editor + supplier import
+    orders-helpers.js  — Shared order state + helper functions (toGrams, lookupIngredient, calcOrderUnits)
+    orders-inventory.js — Standard inventory API, tab render, search/add/remove
+    orders.js          — Main order render, combined order tab, dishes tab, Hanos integration
+    ingredient-db.js   — Ingredient database editor, search, inline edit, stock, storage
+    ingredient-db-import.js — Hanos XLSX upload UI, CSV migration UI
     feedback.js        — Feedback form
     tutorial.js        — Guided tutorial system
     init.js            — Modal system, esc helper, buildNav(), beforeunload guard, initApp (MUST load last)
@@ -59,7 +69,7 @@ public/
 
 ## Script Load Order
 Scripts must load in the order listed in index.html. Earlier scripts define globals used by later ones.
-Key chain: `state.js` -> `auth.js` -> `utils.js` -> `core.js` -> [feature files] -> `init.js` (last)
+Key chain: `state.js` → `auth.js` → `utils.js` → `core.js` → `batch-tile.js` → `guest-flow.js` → `dashboard.js` → `predictions.js` → `guests.js` → `planner.js` → `planner-pool.js` → `planner-transport.js` → `dishes.js` → `caterings.js` → `recipes.js` → `orders-helpers.js` → `orders-inventory.js` → `orders.js` → `ingredient-db.js` → `ingredient-db-import.js` → `feedback.js` → `tutorial.js` → `init.js` (last)
 
 ## Conventions
 - All frontend functions are global (no modules, no import/export)

@@ -4,66 +4,63 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const { prisma, dbAppendLog } = require('../lib/db');
 const { parseHanosQuantityGrams } = require('../lib/hanos-parser');
+const { mapHanosCategory } = require('../lib/hanos-categories');
+const { parseCsv } = require('../lib/csv-parser');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
-// Hanos category → app type + category mapping
-const HANOS_TYPE_MAP = {
-  'Aardappelen en aardappelproducten': { types: ['Food'], category: 'Grains & Starches' },
-  'Antipasti en Olijven': { types: ['Food'], category: 'Canned & Preserved' },
-  'Bak- en dessertprodukten': { types: ['Food'], category: 'Baking & Dessert' },
-  'Brood': { types: ['Food'], category: 'Grains & Starches' },
-  'Brood en banket': { types: ['Food'], category: 'Grains & Starches' },
-  'Champignons en paddenstoelen': { types: ['Food'], category: 'Vegetables & Fruit' },
-  'Chocolade': { types: ['Food'], category: 'Baking & Dessert' },
-  'Chocolade en suikerwerk': { types: ['Food'], category: 'Baking & Dessert' },
-  'Conserven': { types: ['Food'], category: 'Canned & Preserved' },
-  'Fruit': { types: ['Food'], category: 'Vegetables & Fruit' },
-  'Groente en fruit': { types: ['Food'], category: 'Vegetables & Fruit' },
-  'Groenten': { types: ['Food'], category: 'Vegetables & Fruit' },
-  'Grondstoffen en ingrediënten': { types: ['Food'], category: 'Sauces & Condiments' },
-  'IJs- en handijs': { types: ['Food'], category: 'Baking & Dessert' },
-  'Internationale keuken': { types: ['Food'], category: 'Sauces & Condiments' },
-  'Kaas': { types: ['Food'], category: 'Dairy & Alternatives' },
-  'Kruiden': { types: ['Food'], category: 'Herbs & Spices' },
-  'Kruiden en specerijen': { types: ['Food'], category: 'Herbs & Spices' },
-  'Maaltijdversierders': { types: ['Food'], category: 'Herbs & Spices' },
-  'Overige diepvriesproducten': { types: ['Food'], category: 'Canned & Preserved' },
-  'Rijst en Deegwaren': { types: ['Food'], category: 'Grains & Starches' },
-  'Sauzen': { types: ['Food'], category: 'Sauces & Condiments' },
-  'Snacks': { types: ['Food'], category: 'Snacks' },
-  'Suiker': { types: ['Food'], category: 'Baking & Dessert' },
-  "Tapenades en pesto's": { types: ['Food'], category: 'Sauces & Condiments' },
-  'Texturas': { types: ['Food'], category: 'Herbs & Spices' },
-  'Vetten en olie': { types: ['Food'], category: 'Oils & Fats' },
-  'Zeewier en zeewierproducten': { types: ['Food'], category: 'Seaweed & Specialty' },
-  'Zuivel': { types: ['Food'], category: 'Dairy & Alternatives' },
-  'Zuren en azijn': { types: ['Food'], category: 'Sauces & Condiments' },
-  // Drinks
-  'Bieren': { types: ['Drinks'], category: 'Beer' },
-  'Gedistilleerd': { types: ['Drinks'], category: 'Spirits & Liqueurs' },
-  'Koude dranken': { types: ['Drinks'], category: 'Juices & Soft Drinks' },
-  'Warme dranken': { types: ['Drinks'], category: 'Coffee & Tea' },
-  'Wijn': { types: ['Drinks'], category: 'Wine' },
-  // Non-food
-  'Aan Tafel': { types: ['FOH Supplies'], category: 'Tableware & FOH' },
-  'Bar en buffet': { types: ['FOH Equipment'], category: 'Tableware & FOH' },
-  'Barbecues en benodigdheden': { types: ['Kitchen Equipment'], category: 'Kitchen Equipment' },
-  'Disposables': { types: ['FOH Supplies'], category: 'Disposables & Packaging' },
-  'Kantoor en administratie': { types: ['Office'], category: 'Office & Admin' },
-  'Keuken': { types: ['Kitchen Equipment'], category: 'Kitchen Equipment' },
-  'Keukenapparatuur': { types: ['Kitchen Equipment'], category: 'Kitchen Equipment' },
-  'Kleding en textiel': { types: ['Kitchen Equipment'], category: 'Clothing & Textiles' },
-  'Persoonlijke verzorging': { types: ['Cleaning'], category: 'Cleaning & Hygiene' },
-  'Schoonmaak en hygiëne': { types: ['Cleaning'], category: 'Cleaning & Hygiene' },
-  'Veiligheid': { types: ['Kitchen Equipment'], category: 'Kitchen Equipment' },
+// ── Shared helpers for XLSX and CSV parsing ──
+
+const NUTRITION_KEYS = {
+  'Energie (kJ)': 'energyKj', 'Energie (Kcal)': 'energyKcal',
+  'Eiwitten (gram)': 'protein', 'Koolhydraten (gram)': 'carbs',
+  '- waarvan suiker (gram)': 'sugar', 'Vet (gram)': 'fat',
+  '- waarvan verzadigd (gram)': 'saturatedFat',
+  'Vezels (gram)': 'fiber', 'Zout (gram)': 'salt',
 };
 
-function mapHanosCategory(hanosCat) {
-  return HANOS_TYPE_MAP[hanosCat] || { types: ['Food'], category: '' };
+/** Extract nutrition values from a row using column index map */
+function parseNutrition(row, nutColMap) {
+  const nutrition = {};
+  for (const [key, idx] of Object.entries(nutColMap)) {
+    if (idx >= 0 && row[idx] != null && row[idx] !== '') {
+      const v = parseFloat(row[idx]);
+      if (!isNaN(v)) nutrition[key] = v;
+    }
+  }
+  return Object.keys(nutrition).length ? nutrition : null;
 }
 
-// Upload and parse Hanos XLSX — returns parsed products for review
+/** Build nutrition column index map from headers */
+function buildNutritionColMap(headers) {
+  const map = {};
+  for (const [headerName, key] of Object.entries(NUTRITION_KEYS)) {
+    map[key] = headers.indexOf(headerName);
+  }
+  return map;
+}
+
+/** Extract price history from month columns in a row */
+function parsePriceHistory(row, monthCols) {
+  const history = [];
+  monthCols.forEach(mc => {
+    const raw = row[mc.idx];
+    if (raw == null || raw === '' || raw === 0 || raw === '0') return;
+    const cleaned = typeof raw === 'string' ? raw.replace(/[€\s]/g, '').replace(',', '.') : String(raw);
+    const val = parseFloat(cleaned);
+    if (!isNaN(val) && val > 0) history.push({ month: mc.name.trim(), price: Math.round(val * 100) / 100 });
+  });
+  return history;
+}
+
+/** Find month columns (pattern "Jan-24", "Feb-25", etc.) from header array */
+function findMonthCols(headers) {
+  return headers.map((h, i) => ({ name: String(h || '').trim(), idx: i }))
+    .filter(c => /^[A-Z][a-z]{2}-\d{2}$/.test(c.name));
+}
+
+// ── Upload and parse Hanos XLSX — returns parsed products for review ──
+
 router.post('/upload-supplier', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
@@ -80,36 +77,13 @@ router.post('/upload-supplier', upload.single('file'), (req, res) => {
     const qtyIdx = col('hoeveelheid');
     const stdQtyIdx = col('hoeveelheid_standaard');
     const catIdx = col('categorie');
-    const subCatIdx = col('subcategorie');
 
-    // Find month columns for recent order detection
-    const monthCols = headers.map((h, i) => ({ name: h, idx: i }))
-      .filter(c => /^[A-Z][a-z]{2}-\d{2}$/.test(c.name));
+    const monthCols = findMonthCols(headers);
     const last6 = monthCols.slice(-6);
-
-    // Nutrition column indices
-    const nutIdx = {
-      energyKj: col('Energie (kJ)'), energyKcal: col('Energie (Kcal)'),
-      protein: col('Eiwitten (gram)'), carbs: col('Koolhydraten (gram)'),
-      sugar: col('- waarvan suiker (gram)'), fat: col('Vet (gram)'),
-      saturatedFat: col('- waarvan verzadigd (gram)'),
-      fiber: col('Vezels (gram)'), salt: col('Zout (gram)'),
-    };
+    const nutColMap = buildNutritionColMap(headers);
 
     const products = data.slice(1).filter(r => r[titleIdx]).map(r => {
       const recentOrders = last6.reduce((sum, mc) => sum + (parseFloat(r[mc.idx]) || 0), 0);
-      const priceHistory = [];
-      monthCols.forEach(mc => {
-        const raw = r[mc.idx];
-        if (raw == null || raw === '' || raw === 0) return;
-        const val = typeof raw === 'string' ? parseFloat(raw.replace(/[€\s,]/g, '').replace(',', '.')) : parseFloat(raw);
-        if (!isNaN(val) && val > 0) priceHistory.push({ month: mc.name.trim(), price: Math.round(val * 100) / 100 });
-      });
-      const nutrition = {};
-      Object.entries(nutIdx).forEach(([key, idx]) => {
-        if (idx >= 0 && r[idx] != null && r[idx] !== '') nutrition[key] = parseFloat(r[idx]) || 0;
-      });
-
       return {
         title: r[titleIdx] || '',
         orderCode: String(r[codeIdx] || ''),
@@ -117,11 +91,11 @@ router.post('/upload-supplier', upload.single('file'), (req, res) => {
         orderUnit: r[qtyIdx] || '',
         orderUnitStandard: r[stdQtyIdx] || '',
         category: r[catIdx] || '',
-        subcategory: r[subCatIdx] || '',
+        subcategory: r[col('subcategorie')] || '',
         orderAmountGrams: parseHanosQuantityGrams(r[qtyIdx] || ''),
         recentOrders: Math.round(recentOrders * 10) / 10,
-        priceHistory,
-        nutrition: Object.keys(nutrition).length ? nutrition : null,
+        priceHistory: parsePriceHistory(r, monthCols),
+        nutrition: parseNutrition(r, nutColMap),
       };
     });
 
@@ -132,7 +106,8 @@ router.post('/upload-supplier', upload.single('file'), (req, res) => {
   }
 });
 
-// Migration: merge old CSV ingredient DB + Hanos CSV, new schema
+// ── Migration: merge old CSV ingredient DB + Hanos CSV ──
+
 router.post('/migrate', upload.fields([
   { name: 'oldCsv', maxCount: 1 },
   { name: 'hanosCsv', maxCount: 1 },
@@ -149,17 +124,12 @@ router.post('/migrate', upload.fields([
         const cols = line.split(',');
         const name = (cols[1] || '').trim();
         if (!name || name === 'Name') return;
-        const rawCode = (cols[6] || '').trim();
-        const code = rawCode.replace(/[^0-9]/g, '');
+        const code = (cols[6] || '').trim().replace(/[^0-9]/g, '');
         if (code) {
           oldByCode[code] = {
-            name,
-            category: (cols[0] || '').trim(),
-            unit: (cols[2] || 'Grams').trim(),
-            source: (cols[3] || '').trim(),
-            notes: (cols[23] || '').trim(),
-            storageLocation: (cols[15] || '').trim(),
-            allergens: (cols[14] || '').trim(),
+            name, category: (cols[0] || '').trim(), unit: (cols[2] || 'Grams').trim(),
+            source: (cols[3] || '').trim(), notes: (cols[23] || '').trim(),
+            storageLocation: (cols[15] || '').trim(), allergens: (cols[14] || '').trim(),
           };
         }
       });
@@ -167,24 +137,12 @@ router.post('/migrate', upload.fields([
 
     // Parse Hanos CSV
     const merged = [];
-    let matchedCount = 0;
-    let hanosOnlyCount = 0;
+    let matchedCount = 0, hanosOnlyCount = 0;
+
     if (req.files.hanosCsv && req.files.hanosCsv[0]) {
       const csvText = req.files.hanosCsv[0].buffer.toString('utf8');
-      const lines = csvText.split('\n');
-      if (lines.length < 2) return res.json({ error: 'Empty Hanos file' });
-
-      // Parse header
-      const headerLine = lines[0];
-      const headers = [];
-      let inQuote = false, field = '';
-      for (let i = 0; i < headerLine.length; i++) {
-        const ch = headerLine[i];
-        if (ch === '"') { inQuote = !inQuote; }
-        else if (ch === ',' && !inQuote) { headers.push(field.trim()); field = ''; }
-        else { field += ch; }
-      }
-      headers.push(field.trim());
+      const { headers, rows } = parseCsv(csvText);
+      if (headers.length === 0) return res.json({ error: 'Empty Hanos file' });
 
       const col = (name) => headers.indexOf(name);
       const titleIdx = col('title');
@@ -194,78 +152,35 @@ router.post('/migrate', upload.fields([
       const stdQtyIdx = col('hoeveelheid_standaard');
       const catIdx = col('categorie');
 
-      // Nutrition indices
-      const nutCols = {
-        energyKj: col('Energie (kJ)'), energyKcal: col('Energie (Kcal)'),
-        protein: col('Eiwitten (gram)'), carbs: col('Koolhydraten (gram)'),
-        sugar: col('- waarvan suiker (gram)'), fat: col('Vet (gram)'),
-        saturatedFat: col('- waarvan verzadigd (gram)'),
-        fiber: col('Vezels (gram)'), salt: col('Zout (gram)'),
-      };
-
-      // Find month columns
-      const monthCols = headers.map((h, i) => ({ name: h.trim(), idx: i }))
-        .filter(c => /^[A-Z][a-z]{2}-\d{2}$/.test(c.name));
+      const monthCols = findMonthCols(headers);
       const last12 = monthCols.slice(-12);
+      const nutColMap = buildNutritionColMap(headers);
 
-      // Parse each Hanos row
-      for (let li = 1; li < lines.length; li++) {
-        if (!lines[li].trim()) continue;
-        const r = [];
-        let inQ = false, f = '';
-        for (let i = 0; i < lines[li].length; i++) {
-          const ch = lines[li][i];
-          if (ch === '"') { inQ = !inQ; }
-          else if (ch === ',' && !inQ) { r.push(f.trim()); f = ''; }
-          else { f += ch; }
-        }
-        r.push(f.trim());
-
+      for (const r of rows) {
         const title = r[titleIdx] || '';
         const code = String(r[codeIdx] || '').trim();
         if (!title || !code) continue;
 
         const price = r[priceIdx] != null ? parseFloat(r[priceIdx]) : null;
-        const hanosCat = r[catIdx] || '';
-        const mapped = mapHanosCategory(hanosCat);
+        const mapped = mapHanosCategory(r[catIdx] || '');
         const orderAmountGrams = parseHanosQuantityGrams(r[qtyIdx] || '');
-
-        const priceHistory = [];
-        monthCols.forEach(mc => {
-          const raw = r[mc.idx];
-          if (!raw || raw === '' || raw === '0') return;
-          const cleaned = raw.replace(/[€\s]/g, '').replace(',', '.');
-          const val = parseFloat(cleaned);
-          if (!isNaN(val) && val > 0) priceHistory.push({ month: mc.name, price: Math.round(val * 100) / 100 });
-        });
 
         const recentOrders = last12.reduce((sum, mc) => {
           const raw = r[mc.idx];
           if (!raw) return sum;
-          const val = parseFloat(raw.replace(/[€\s]/g, '').replace(',', '.'));
+          const val = parseFloat(String(raw).replace(/[€\s]/g, '').replace(',', '.'));
           return sum + (isNaN(val) ? 0 : (val > 0 ? 1 : 0));
         }, 0);
 
-        const nutrition = {};
-        Object.entries(nutCols).forEach(([key, idx]) => {
-          if (idx >= 0 && r[idx] != null && r[idx] !== '') {
-            const v = parseFloat(r[idx]);
-            if (!isNaN(v)) nutrition[key] = v;
-          }
-        });
-
         const old = oldByCode[code];
-        const name = old ? old.name : title;
-        if (old) matchedCount++;
-        else hanosOnlyCount++;
+        if (old) matchedCount++; else hanosOnlyCount++;
 
         const pricePer100g = (price && orderAmountGrams > 0)
-          ? Math.round((price / orderAmountGrams) * 10000) / 100
-          : 0;
+          ? Math.round((price / orderAmountGrams) * 10000) / 100 : 0;
 
         merged.push({
           id: crypto.randomUUID(),
-          name,
+          name: old ? old.name : title,
           supplierName: title,
           types: mapped.types,
           category: mapped.category,
@@ -278,11 +193,11 @@ router.post('/migrate', upload.fields([
           orderAmountGrams,
           priceLevel: '',
           pricePer100g,
-          priceHistory,
+          priceHistory: parsePriceHistory(r, monthCols),
           priceAlert: false,
           storageLocations: old && old.storageLocation ? { west: old.storageLocation } : {},
           stock: {},
-          nutrition: Object.keys(nutrition).length ? nutrition : {},
+          nutrition: parseNutrition(r, nutColMap) || {},
           allergens: old ? old.allergens : '',
           notes: old ? old.notes : '',
           active: recentOrders > 0,
@@ -291,17 +206,16 @@ router.post('/migrate', upload.fields([
     }
 
     const stats = {
-      total: merged.length,
-      matched: matchedCount,
-      hanosOnly: hanosOnlyCount,
-      active: merged.filter(i => i.active).length,
-      inactive: merged.filter(i => !i.active).length,
-      oldDbSize: Object.keys(oldByCode).length,
-      dryRun,
+      total: merged.length, matched: matchedCount, hanosOnly: hanosOnlyCount,
+      active: merged.filter(i => i.active).length, inactive: merged.filter(i => !i.active).length,
+      oldDbSize: Object.keys(oldByCode).length, dryRun,
     };
 
     if (dryRun) {
-      return res.json({ ...stats, sample: merged.slice(0, 20).map(i => ({ name: i.name, supplierName: i.supplierName, types: i.types, category: i.category, active: i.active, orderCode: i.orderCode })) });
+      return res.json({ ...stats, sample: merged.slice(0, 20).map(i => ({
+        name: i.name, supplierName: i.supplierName, types: i.types,
+        category: i.category, active: i.active, orderCode: i.orderCode,
+      })) });
     }
 
     await prisma.$transaction([

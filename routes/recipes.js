@@ -31,44 +31,27 @@ router.post('/recipe-index', async (req, res) => {
   const recipe = req.body;
   if (!recipe || !recipe.id || !recipe.name) return res.status(400).json({ error: 'id and name required' });
   try {
+    const fields = {
+      name: recipe.name,
+      type: recipe.type || 'Soup',
+      recipeSheetId: recipe.recipeSheetId || null,
+      allergens: recipe.allergens || [],
+      costPerServing: recipe.costPerServing || '',
+      structure: recipe.structure || '',
+      seasonality: recipe.seasonality || '',
+      servingTemp: recipe.servingTemp || '',
+      servingSize: recipe.servingSize || 280,
+      recipeVolume: recipe.recipeVolume || null,
+      recipeIngredients: recipe.recipeIngredients || undefined,
+      avgSkill: recipe.avgSkill || 0,
+      avgSpeed: recipe.avgSpeed || 0,
+      avgBanger: recipe.avgBanger || 0,
+      timesServed: recipe.timesServed || 0,
+    };
     await prisma.recipeIndex.upsert({
       where: { id: recipe.id },
-      create: {
-        id: recipe.id,
-        name: recipe.name,
-        type: recipe.type || 'Soup',
-        recipeSheetId: recipe.recipeSheetId || null,
-        allergens: recipe.allergens || [],
-        costPerServing: recipe.costPerServing || '',
-        structure: recipe.structure || '',
-        seasonality: recipe.seasonality || '',
-        servingTemp: recipe.servingTemp || '',
-        servingSize: recipe.servingSize || 280,
-        recipeVolume: recipe.recipeVolume || null,
-        recipeIngredients: recipe.recipeIngredients || undefined,
-        createdAt: recipe.createdAt || new Date().toISOString(),
-        avgSkill: recipe.avgSkill || 0,
-        avgSpeed: recipe.avgSpeed || 0,
-        avgBanger: recipe.avgBanger || 0,
-        timesServed: recipe.timesServed || 0,
-      },
-      update: {
-        name: recipe.name,
-        type: recipe.type || 'Soup',
-        recipeSheetId: recipe.recipeSheetId || null,
-        allergens: recipe.allergens || [],
-        costPerServing: recipe.costPerServing || '',
-        structure: recipe.structure || '',
-        seasonality: recipe.seasonality || '',
-        servingTemp: recipe.servingTemp || '',
-        servingSize: recipe.servingSize || 280,
-        recipeVolume: recipe.recipeVolume || null,
-        recipeIngredients: recipe.recipeIngredients || undefined,
-        avgSkill: recipe.avgSkill || 0,
-        avgSpeed: recipe.avgSpeed || 0,
-        avgBanger: recipe.avgBanger || 0,
-        timesServed: recipe.timesServed || 0,
-      },
+      create: { id: recipe.id, createdAt: recipe.createdAt || new Date().toISOString(), ...fields },
+      update: fields,
     });
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'recipe-index', `saved "${recipe.name}"`);
