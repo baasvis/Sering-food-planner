@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-03-21*
+*Last updated: 2026-03-24*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -100,7 +100,8 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Order overview with 3-tab layout: Combined Order (default), Standard Inventory, Dish Ingredients
   - Standard Inventory: cooks build a weekly base order (persistent, server-side JSON), searchable from ingredient DB, shows order codes per item
   - Dish Ingredients: per-dish ingredient aggregation from recipe sheets, in-stock input, to-order calculation
-  - Combined Order: merges both lists, sums overlapping ingredients, grouped by supplier (Hanos first)
+  - Combined Order: merges both lists, sums overlapping ingredients, grouped by storage category per location
+  - Hanos add-to-cart integration: "Send to Hanos" bulk button per storage group + per-row cart buttons. Confirmation modal lists items before sending. Uses Hanos OCC v2 API (OAuth login, cart management). Requires HANOS_USER + HANOS_PASS env vars; buttons hidden when not configured.
 - Ingredient database integration (separate Google Sheet with supplier codes, units, prices)
 - Feedback system (floating purple button, structured form with 4 types, stores to Google Sheets)
 - Mobile responsive layout (card-based dishes on phone, bottom-sheet modals, fixed bottom navigation bar with icons, compact sticky header)
@@ -120,6 +121,7 @@ routes/
   guests.js            — Guest history + next-weeks predictions
   inventory.js         — Standard inventory + prep checklist + activity log
   feedback.js          — User feedback
+  hanos.js             — Hanos OCC v2 API client (OAuth, cart, add-to-cart) + Express routes
   health.js            — Health check endpoint
 public/
   index.html           — HTML shell + login screen (~75 lines)
