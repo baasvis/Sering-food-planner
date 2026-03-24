@@ -12,6 +12,7 @@ let currentOrdersLoc = '';  // set on first render from S.currentLoc
 let siSearchQuery = '';
 let hanosStatus = { configured: false, west: false, centraal: false };
 let hanosStatusChecked = false;
+let combinedIncludeDishes = true; // toggle: include dish ingredients in combined order
 
 // ── Shared helpers ────────────────────────────────────────
 
@@ -559,12 +560,14 @@ function renderCombinedOrderTab() {
     }
   }
 
-  // Add dish ingredients
-  orderedDishes.forEach(dish => {
-    calcIngredientsFromRecipe(dish).forEach(ing => {
-      addToMap(ing.name, toGrams(ing.amount, ing.unit), false, dish.name);
+  // Add dish ingredients (if toggle is on)
+  if (combinedIncludeDishes) {
+    orderedDishes.forEach(dish => {
+      calcIngredientsFromRecipe(dish).forEach(ing => {
+        addToMap(ing.name, toGrams(ing.amount, ing.unit), false, dish.name);
+      });
     });
-  });
+  }
 
   // Add standard inventory for current location — convert to grams (handles legacy + new format)
   const siItems = standardInventory[currentOrdersLoc || 'west'] || [];
@@ -643,6 +646,12 @@ function renderCombinedOrderTab() {
   html += `<div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <span>Combined Order &mdash; ${esc(curLoc === 'west' ? 'Sering West' : 'Sering Centraal')}</span>
       <span style="font-size:13px;font-weight:600;">${totalValue > 0 ? 'Estimated: \u20AC' + totalValue.toFixed(2) : ''}</span>
+    </div>
+    <div class="order-toggle-bar">
+      <label class="order-toggle${combinedIncludeDishes ? ' on' : ''}" onclick="combinedIncludeDishes=!combinedIncludeDishes;renderOrders();">
+        <span class="tbox${combinedIncludeDishes ? ' on' : ''}"><span class="tknob"></span></span>
+        Include batch ingredients
+      </label>
     </div>`;
 
   storageOrder.forEach(storageCat => {
