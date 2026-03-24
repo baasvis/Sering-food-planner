@@ -784,7 +784,10 @@ async function checkHanosStatus() {
   if (hanosStatusChecked) return;
   hanosStatusChecked = true;
   try {
+    const prev = hanosStatus.configured;
     hanosStatus = await apiGet('/api/hanos/status');
+    // Re-render if status changed (first load with credentials configured)
+    if (!prev && hanosStatus.configured) renderOrders();
   } catch (e) {
     console.error('Hanos status check failed:', e);
     hanosStatus = { configured: false, west: false, centraal: false };
