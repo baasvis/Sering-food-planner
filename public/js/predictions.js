@@ -153,11 +153,21 @@ function categorizeUploadedFiles(fileContents, existingDeviceMap) {
 function buildFlowDistribution(timeEvents) {
   if (!timeEvents || timeEvents.length === 0) return null;
 
+  // Only include events within actual service windows
+  const SERVICE_WINDOWS = {
+    lunch:  { start: 12 * 60, end: 14 * 60 },   // 12:00 — 14:00
+    dinner: { start: 18 * 60, end: 21 * 60 },    // 18:00 — 21:00
+  };
+
   const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   // Collect raw counts: loc → meal → dow → { bucket: count }
   const raw = {};
 
   for (const ev of timeEvents) {
+    // Filter to service window
+    const win = SERVICE_WINDOWS[ev.meal];
+    if (!win || ev.minuteOfDay < win.start || ev.minuteOfDay >= win.end) continue;
+
     const bucket = Math.floor(ev.minuteOfDay / 5) * 5; // round down to 5-min
     const dow = DAY_NAMES[new Date(ev.date + 'T12:00:00').getDay()];
 
@@ -487,14 +497,27 @@ function categorizeTebiData(allRows, existingDeviceMap) {
   };
 }
 
-// Extract minute-of-day from Tebi Invoice ID timestamp → integer (0-1439) or null
-// "723192|2026-03-16T16:30:00Z|INVOICE|..." → 990 (16*60+30)
+// Extract minute-of-day from Tebi "Date closed" column (local time) → integer (0-1439) or null
+// Format: "3/16/26, 12:03 PM" or "3/16/26, 6:30 PM"
+// Falls back to Invoice ID timestamp (UTC) if Date closed is unavailable
 function extractMinuteOfDayFromTebiRow(row) {
+  const dateClosed = row['Date closed'] || '';
+  // Try "Date closed" first — it's in local time
+  const match12h = dateClosed.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (match12h) {
+    let h = parseInt(match12h[1]);
+    const m = parseInt(match12h[2]);
+    const ampm = match12h[3].toUpperCase();
+    if (ampm === 'PM' && h !== 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return h * 60 + m;
+  }
+  // Fallback: Invoice ID UTC timestamp (less accurate — off by timezone)
   const invoiceId = row['Invoice ID'] || '';
   const parts = invoiceId.split('|');
   if (parts.length >= 2) {
-    const match = parts[1].match(/T(\d{2}):(\d{2})/);
-    if (match) return parseInt(match[1]) * 60 + parseInt(match[2]);
+    const matchUtc = parts[1].match(/T(\d{2}):(\d{2})/);
+    if (matchUtc) return parseInt(matchUtc[1]) * 60 + parseInt(matchUtc[2]);
   }
   return null;
 }
