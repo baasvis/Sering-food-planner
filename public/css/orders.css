@@ -76,3 +76,9 @@
   .price-alert-banner{background:var(--red-bg);border:1px solid var(--red);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;}
   .price-alert-banner strong{color:var(--red);}
   .order-shortfall-row{display:grid;grid-template-columns:1fr 100px 80px;gap:8px;align-items:center;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:var(--radius);margin-bottom:3px;padding-left:10px;}
+
+  /* Hanos add-to-cart */
+  .hanos-btn{background:none;border:1px solid var(--border2);border-radius:var(--radius);cursor:pointer;font-size:13px;padding:2px 6px;margin-left:4px;vertical-align:middle;line-height:1;transition:all .15s;}
+  .hanos-btn:hover{border-color:var(--blue);background:var(--blue-bg);}
+  .hanos-bulk-btn{font-size:12px;padding:5px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin-left:4px;font-weight:500;transition:all .15s;}
+  .hanos-bulk-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg);}

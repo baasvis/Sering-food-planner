@@ -24,6 +24,7 @@ app.use('/api/ingredients',       require('./routes/ingredients'));
 app.use('/api',                   require('./routes/guests'));
 app.use('/api',                   require('./routes/inventory'));
 app.use('/api/feedback',          require('./routes/feedback'));
+app.use('/api/hanos',             require('./routes/hanos'));
 app.use('/api/health',            require('./routes/health'));
 
 // ── Global error handler ──

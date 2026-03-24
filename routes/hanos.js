@@ -1,0 +1,335 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// HANOS API CLIENT — Add-to-Cart via OCC v2
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Ported from hanos_add_to_cart.py. The Hanos webshop runs on SAP Commerce
+// Cloud (OCC v2) with OAuth 2.0. This module handles:
+//   1. OAuth password-grant login
+//   2. Personalization ID retrieval
+//   3. Cart find-or-create
+//   4. Adding products to cart
+//
+// Credentials come from env vars HANOS_USER + HANOS_PASS (shared org account).
+
+const express = require('express');
+const router = express.Router();
+
+// ── Constants (from Hanos SPA JS bundle) ────────────────────────────────────
+
+const BASE_URL = 'https://api.hanos.nl';
+const OCC_BASE = `${BASE_URL}/occ/v2/hanos-nl`;
+const TOKEN_URL = `${BASE_URL}/authorizationserver/oauth/token`;
+
+// OAuth client credentials (public — embedded in the Hanos SPA)
+const CLIENT_ID = 'mobile_android';
+const CLIENT_SECRET = 'Qi9#Ze!TqhiQybhdRMDJbP&uz87RBck&*Zr2YBmr';
+
+const COMMON_HEADERS = {
+  'Accept': 'application/json, text/plain, */*',
+  'Origin': 'https://www.hanos.nl',
+  'Referer': 'https://www.hanos.nl/',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'X-Anonymous-Consents': '%5B%5D',
+};
+
+// ── HanosClient ─────────────────────────────────────────────────────────────
+
+class HanosClient {
+  constructor() {
+    this.accessToken = null;
+    this.refreshToken = null;
+    this.personalizationId = null;
+    this.cartId = null;
+  }
+
+  /** Build headers for OCC requests */
+  _headers(extra = {}) {
+    const h = { ...COMMON_HEADERS, ...extra };
+    if (this.accessToken) h['Authorization'] = `Bearer ${this.accessToken}`;
+    if (this.personalizationId) h['occ-personalization-id'] = this.personalizationId;
+    return h;
+  }
+
+  /** OAuth password-grant login */
+  async login() {
+    const username = process.env.HANOS_USER;
+    const password = process.env.HANOS_PASS;
+    if (!username || !password) throw new Error('HANOS_USER / HANOS_PASS not configured');
+
+    const body = new URLSearchParams({
+      grant_type: 'password',
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      username,
+      password,
+    });
+
+    const resp = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { ...COMMON_HEADERS, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (resp.status === 400) {
+      const err = await resp.json().catch(() => ({}));
+      const desc = err.error_description || 'Unknown error';
+      throw new Error(`Hanos login failed: ${desc}`);
+    }
+    if (!resp.ok) throw new Error(`Hanos login HTTP ${resp.status}`);
+
+    const data = await resp.json();
+    this.accessToken = data.access_token;
+    this.refreshToken = data.refresh_token || null;
+    console.log(`[Hanos] Logged in (token expires in ${data.expires_in || '?'}s)`);
+    return data;
+  }
+
+  /** Use refresh token to get a new access token */
+  async _refreshAccessToken() {
+    if (!this.refreshToken) throw new Error('No refresh token — call login() first');
+
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      refresh_token: this.refreshToken,
+    });
+
+    const resp = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { ...COMMON_HEADERS, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) throw new Error(`Token refresh failed: HTTP ${resp.status}`);
+
+    const data = await resp.json();
+    this.accessToken = data.access_token;
+    this.refreshToken = data.refresh_token || this.refreshToken;
+    console.log(`[Hanos] Token refreshed`);
+    return data;
+  }
+
+  /** Fetch personalization ID from server headers */
+  async fetchPersonalizationId() {
+    if (this.personalizationId) return this.personalizationId;
+
+    const resp = await fetch(`${OCC_BASE}/cms/pages?pageType=ContentPage&pageLabelOrId=/&lang=en&curr=EUR`, {
+      headers: this._headers(),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) throw new Error(`Personalization fetch HTTP ${resp.status}`);
+
+    this.personalizationId = resp.headers.get('occ-personalization-id');
+    if (!this.personalizationId) {
+      const crypto = require('crypto');
+      this.personalizationId = crypto.randomUUID();
+      console.log(`[Hanos] Generated personalization ID: ${this.personalizationId}`);
+    } else {
+      console.log(`[Hanos] Personalization ID: ${this.personalizationId}`);
+    }
+    return this.personalizationId;
+  }
+
+  /** Get active cart or create a new one */
+  async getOrCreateCart() {
+    const resp = await fetch(`${OCC_BASE}/hanosUsers/current/carts?lang=en&curr=EUR&fields=FULL`, {
+      headers: this._headers(),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) throw new Error(`Cart fetch HTTP ${resp.status}`);
+
+    const data = await resp.json();
+    const carts = data.carts || [];
+
+    if (carts.length) {
+      this.cartId = carts[0].code;
+      console.log(`[Hanos] Found cart ${this.cartId} (${carts[0].totalItems || 0} items)`);
+      return this.cartId;
+    }
+
+    // Create new cart
+    const createResp = await fetch(`${OCC_BASE}/hanosUsers/current/carts?lang=en&curr=EUR`, {
+      method: 'POST',
+      headers: this._headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!createResp.ok) throw new Error(`Cart create HTTP ${createResp.status}`);
+
+    const cart = await createResp.json();
+    this.cartId = cart.code;
+    console.log(`[Hanos] Created cart ${this.cartId}`);
+    return this.cartId;
+  }
+
+  /** Add a product to the active cart */
+  async addToCart(productCode, quantity = 1, unitCode = 'ST') {
+    if (!this.cartId) await this.getOrCreateCart();
+
+    const url = `${OCC_BASE}/hanosUsers/current/carts/${this.cartId}/entries?lang=en&curr=EUR&defaultUnit=15975108`;
+    const payload = {
+      product: { code: productCode },
+      note: '',
+      aumQuantities: [{
+        formattedQuantity: quantity,
+        conversionFactor: 1,
+        unitCode,
+        unitName: unitCode === 'COL' ? 'carton' : 'Bin',
+      }],
+    };
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: this._headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (resp.status === 401 && this.refreshToken) {
+      // Token expired — refresh and retry
+      await this._refreshAccessToken();
+      const retry = await fetch(url, {
+        method: 'POST',
+        headers: this._headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!retry.ok) {
+        const errBody = await retry.text().catch(() => '');
+        throw new Error(`Add to cart failed after refresh: HTTP ${retry.status} — ${errBody}`);
+      }
+      return await retry.json();
+    }
+
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => '');
+      throw new Error(`Add to cart HTTP ${resp.status} — ${errBody}`);
+    }
+
+    const data = await resp.json();
+    const entry = data.entry || {};
+    const product = entry.product || {};
+    console.log(`[Hanos] Added ${quantity}x ${product.formattedName || productCode}`);
+    return data;
+  }
+
+  /** Fetch full cart contents */
+  async getCart() {
+    if (!this.cartId) await this.getOrCreateCart();
+
+    const resp = await fetch(
+      `${OCC_BASE}/hanosUsers/current/carts/${this.cartId}?requestQuoteForSessionCart=false&lang=en&curr=EUR&fields=FULL`,
+      { headers: this._headers(), signal: AbortSignal.timeout(15000) }
+    );
+    if (!resp.ok) throw new Error(`Cart fetch HTTP ${resp.status}`);
+    return await resp.json();
+  }
+
+  /** Initialize: login → personalization → cart */
+  async init() {
+    await this.login();
+    await this.fetchPersonalizationId();
+    await this.getOrCreateCart();
+  }
+}
+
+// ── Singleton client (re-created per request batch to keep tokens fresh) ────
+
+let _client = null;
+let _clientCreatedAt = 0;
+const CLIENT_TTL = 10 * 60 * 1000; // 10 minutes
+
+async function getClient() {
+  const now = Date.now();
+  if (_client && (now - _clientCreatedAt) < CLIENT_TTL) return _client;
+  _client = new HanosClient();
+  await _client.init();
+  _clientCreatedAt = now;
+  return _client;
+}
+
+// ── Routes ──────────────────────────────────────────────────────────────────
+
+/** GET /api/hanos/status — check if credentials are configured */
+router.get('/status', (req, res) => {
+  res.json({
+    configured: !!(process.env.HANOS_USER && process.env.HANOS_PASS),
+  });
+});
+
+/** POST /api/hanos/add-to-cart — add items to Hanos cart */
+router.post('/add-to-cart', async (req, res) => {
+  try {
+    const { items } = req.body;
+    if (!Array.isArray(items) || !items.length) {
+      return res.status(400).json({ error: 'items array required' });
+    }
+
+    const client = await getClient();
+    const results = [];
+
+    for (const item of items) {
+      const { orderCode, quantity, unit } = item;
+      if (!orderCode) {
+        results.push({ orderCode, success: false, error: 'No order code' });
+        continue;
+      }
+      try {
+        const data = await client.addToCart(orderCode, quantity || 1, unit || 'ST');
+        const entry = data.entry || {};
+        const product = entry.product || {};
+        results.push({
+          orderCode,
+          success: true,
+          name: product.formattedName || '',
+          quantity: entry.formattedQuantity || quantity,
+        });
+      } catch (e) {
+        console.error(`[Hanos] Failed to add ${orderCode}:`, e.message);
+        results.push({ orderCode, success: false, error: e.message });
+      }
+    }
+
+    const ok = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+    res.json({ ok, failed, total: results.length, results });
+  } catch (e) {
+    console.error('[Hanos] add-to-cart error:', e.message);
+    // Reset client on auth failure
+    _client = null;
+    _clientCreatedAt = 0;
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** GET /api/hanos/cart — view current Hanos cart */
+router.get('/cart', async (req, res) => {
+  try {
+    const client = await getClient();
+    const cart = await client.getCart();
+    const entries = (cart.entries || []).map(e => {
+      const p = e.product || {};
+      return {
+        code: p.code,
+        name: p.formattedName || '?',
+        manufacturer: p.formattedManufacturer || '',
+        quantity: e.formattedQuantity || '?',
+      };
+    });
+    res.json({
+      cartId: client.cartId,
+      totalItems: cart.totalItems || 0,
+      total: (cart.totalPrice || {}).formattedValue || '?',
+      entries,
+    });
+  } catch (e) {
+    console.error('[Hanos] cart error:', e.message);
+    _client = null;
+    _clientCreatedAt = 0;
+    res.status(500).json({ error: e.message });
+  }
+});
+
+module.exports = router;

@@ -10,6 +10,8 @@ let siSaveTimeout = null;
 let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'batches' | 'ingredientDb'
 let currentOrdersLoc = '';  // set on first render from S.currentLoc
 let siSearchQuery = '';
+let hanosConfigured = false;
+let hanosStatusChecked = false;
 
 // ── Shared helpers ────────────────────────────────────────
 
@@ -231,6 +233,7 @@ function renderOrders() {
 
   if (!currentOrdersLoc) currentOrdersLoc = S.currentLoc || 'west';
   rebuildStorageCategories(currentOrdersLoc);
+  checkHanosStatus();
 
   const locBar = `<div class="order-loc-bar">
     <button class="order-loc-btn${currentOrdersLoc === 'west' ? ' active' : ''}" onclick="switchOrdersLoc('west')">Sering West</button>
@@ -611,12 +614,16 @@ function renderCombinedOrderTab() {
     const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
 
     const catColor = getStorageColor(storageCat, curLoc);
-    html += `<div class="storage-group" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+    const hanosItems = hanosConfigured ? items.filter(i => i.orderCode && !i.orderCode.startsWith('http')) : [];
+    const hanosBulkBtn = hanosItems.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk('${esc(storageCat)}')" title="Add all items to Hanos cart">🛒 Send to Hanos</button>` : '';
+
+    html += `<div class="storage-group" data-storage-cat="${esc(storageCat)}" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
         <span class="storage-group-dot" style="background:${catColor};"></span>
         <span style="font-weight:600;font-size:14px;">${esc(storageCat)}</span>
         <span style="font-size:12px;color:var(--text2);">(${items.length} item${items.length !== 1 ? 's' : ''})</span>
         ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyCombinedOrderCodes('${esc(storageCat)}')">Copy all codes</button>` : ''}
+        ${hanosBulkBtn}
       </div>
       <div style="overflow-x:auto;"><table class="ing-table">
       <thead><tr>
@@ -662,8 +669,11 @@ function renderCombinedOrderTab() {
 
       const orderAmtGrams = hasStockValue ? toOrderGrams : ing.totalGrams;
       const orderCalc = ing.db ? calcOrderUnits(orderAmtGrams, ing.db) : null;
+      const hanosBtn = (hanosConfigured && ing.orderCode && !isUrl && orderCalc && orderCalc.units > 0)
+        ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
+        : '';
       const orderUnitsDisplay = orderCalc && orderCalc.units > 0
-        ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`
+        ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>${hanosBtn}`
         : (orderAmtGrams === 0 ? '<span class="to-order-zero">\u2014</span>' : '<span style="color:var(--text2);font-size:11px;">\u2014</span>');
 
       // Breakdown (shown on click)
@@ -766,6 +776,163 @@ function copyCombinedOrderCodes(supplier) {
   });
   const arr = [...items];
   if (arr.length) navigator.clipboard.writeText(arr.join('\n')).then(() => toast(arr.length + ' order codes copied'));
+}
+
+// ── Hanos integration ────────────────────────────────────
+
+async function checkHanosStatus() {
+  if (hanosStatusChecked) return;
+  hanosStatusChecked = true;
+  try {
+    const data = await apiGet('/api/hanos/status');
+    hanosConfigured = data.configured;
+  } catch (e) {
+    console.error('Hanos status check failed:', e);
+    hanosConfigured = false;
+  }
+}
+
+/** Collect all Hanos items from the combined order table that need ordering */
+function collectHanosItems(storageCat) {
+  const rows = document.querySelectorAll('.ing-table tr[data-combined-key]');
+  const items = [];
+  rows.forEach(row => {
+    // If filtering by storage category, check the group
+    if (storageCat) {
+      const group = row.closest('.storage-group');
+      if (!group || !group.dataset.storageCat || group.dataset.storageCat !== storageCat) return;
+    }
+    const key = row.dataset.combinedKey;
+    const dbName = row.dataset.dbname;
+    const db = dbName ? lookupIngredient(dbName) : null;
+    if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
+
+    // Calculate order units for this row
+    const neededGrams = parseFloat(row.dataset.needed) || 0;
+    const dbStock = getDbStockTotal(db);
+    const hasManual = combinedOrderStock[key] !== undefined;
+    const effectiveStock = hasManual ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
+    const hasStockValue = hasManual || dbStock > 0;
+    const toOrderGrams = hasStockValue ? Math.max(0, neededGrams - effectiveStock) : neededGrams;
+    const calc = calcOrderUnits(toOrderGrams, db);
+    if (!calc || calc.units <= 0) return;
+
+    items.push({
+      name: db.name,
+      orderCode: db.orderCode,
+      quantity: calc.units,
+      unit: 'ST',
+      unitLabel: db.orderUnit || '',
+    });
+  });
+  return items;
+}
+
+/** Send a single item to Hanos cart */
+async function hanosAddSingle(orderCode, name) {
+  const db = lookupIngredient(name);
+  if (!db) return;
+
+  // Calculate quantity from the DOM row
+  const key = name.toLowerCase().trim();
+  const row = document.querySelector(`[data-combined-key="${key}"]`);
+  let quantity = 1;
+  if (row) {
+    const neededGrams = parseFloat(row.dataset.needed) || 0;
+    const dbStock = getDbStockTotal(db);
+    const hasManual = combinedOrderStock[key] !== undefined;
+    const effectiveStock = hasManual ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
+    const hasStockValue = hasManual || dbStock > 0;
+    const toOrderGrams = hasStockValue ? Math.max(0, neededGrams - effectiveStock) : neededGrams;
+    const calc = calcOrderUnits(toOrderGrams, db);
+    if (calc && calc.units > 0) quantity = calc.units;
+  }
+
+  toast(`Adding ${name} to Hanos cart...`);
+  try {
+    const resp = await apiPost('/api/hanos/add-to-cart', { items: [{ orderCode, quantity, unit: 'ST' }] });
+    if (resp.ok > 0) {
+      toast(`Added ${quantity}x ${name} to Hanos cart`);
+    } else {
+      const err = resp.results && resp.results[0] ? resp.results[0].error : 'Unknown error';
+      toast(`Failed: ${err}`, true);
+    }
+  } catch (e) {
+    toast('Hanos error: ' + e.message, true);
+  }
+}
+
+/** Show confirmation modal for bulk Hanos add */
+function hanosConfirmBulk(storageCat) {
+  const items = collectHanosItems(storageCat);
+  if (!items.length) {
+    toast('No items with order codes and quantities to send');
+    return;
+  }
+
+  const listHtml = items.map(i =>
+    `<tr><td style="font-weight:500;">${esc(i.name)}</td>
+     <td style="font-family:monospace;font-size:12px;">${esc(i.orderCode)}</td>
+     <td style="text-align:right;font-weight:600;">${i.quantity}x</td>
+     <td style="font-size:12px;color:var(--text2);">${esc(i.unitLabel)}</td></tr>`
+  ).join('');
+
+  const label = storageCat ? esc(storageCat) : 'all groups';
+
+  showModal(`
+    <h3 style="margin-bottom:12px;">Add to Hanos Cart</h3>
+    <p style="font-size:13px;margin-bottom:12px;">Send <strong>${items.length} item(s)</strong> from ${label} to the Hanos cart:</p>
+    <div style="max-height:300px;overflow-y:auto;margin-bottom:16px;">
+      <table class="ing-table" style="font-size:12px;">
+        <thead><tr><th>Item</th><th>Code</th><th>Qty</th><th>Unit</th></tr></thead>
+        <tbody>${listHtml}</tbody>
+      </table>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn btn-sm" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-sm" style="background:var(--blue);color:#fff;border-color:var(--blue);" onclick="hanosExecuteBulk('${esc(storageCat || '')}')">Send to Hanos</button>
+    </div>
+  `);
+}
+
+/** Execute bulk add after confirmation */
+async function hanosExecuteBulk(storageCat) {
+  const items = collectHanosItems(storageCat || null);
+  if (!items.length) { closeModal(); return; }
+
+  // Update modal to show progress
+  const modalBody = document.querySelector('.modal');
+  if (modalBody) {
+    modalBody.innerHTML = `
+      <h3 style="margin-bottom:12px;">Sending to Hanos...</h3>
+      <p style="font-size:13px;">Adding ${items.length} item(s) to cart. Please wait...</p>
+      <div style="margin-top:16px;height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
+        <div style="height:100%;background:var(--blue);width:0%;transition:width .3s;" id="hanos-progress"></div>
+      </div>
+    `;
+  }
+
+  try {
+    const resp = await apiPost('/api/hanos/add-to-cart', {
+      items: items.map(i => ({ orderCode: i.orderCode, quantity: i.quantity, unit: i.unit })),
+    });
+
+    const progEl = document.getElementById('hanos-progress');
+    if (progEl) progEl.style.width = '100%';
+
+    setTimeout(() => {
+      closeModal();
+      if (resp.failed === 0) {
+        toast(`All ${resp.ok} items added to Hanos cart`);
+      } else {
+        toast(`${resp.ok} added, ${resp.failed} failed`, true);
+        console.warn('Hanos bulk results:', resp.results);
+      }
+    }, 400);
+  } catch (e) {
+    closeModal();
+    toast('Hanos error: ' + e.message, true);
+  }
 }
 
 // ── Existing helpers ──────────────────────────────────────
