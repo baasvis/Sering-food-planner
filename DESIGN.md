@@ -90,6 +90,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - "Show all batches" collapsible section at the bottom of the calendar showing every batch at the location regardless of type.
 - Drag-and-drop assignment: drag a batch tile onto any calendar slot to assign it. Visual feedback with slot highlighting on dragover.
 - Select-then-assign flow (alternative): click "Assign" on a batch tile → grid slots highlight as drop targets → click a slot to assign the batch there. The + button and add modal remain for creating new batches from recipes or placeholders.
+- Replace batch: uncooked batches with services show a "Replace" button. Opens a modal to pick a replacement (existing same-type batch or recipe). All services transfer from old to new batch; old batch is deleted.
 - Cook date column: red highlight when unset, bold when planned. Stock locked until marked as cooked, auto-fills to required amount on cook.
 - Requirement breakdown tooltip on +/- column (hover to see per-service and per-catering demand)
 - Caterings module: name, date, guest count, delivery mode, auto-calculated dish requirements (guest count × serving size ÷ same-type peers), logistics notes
