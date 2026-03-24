@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-03-21*
+*Last updated: 2026-03-23*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -69,10 +69,10 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 
 ## 3. Current State (What's Built)
 
-### Food Planner (v1 — live in production)
+### Food Planner (v2 — live in production)
 - **Repo**: https://github.com/baasvis/Sering-food-planner
-- **Stack**: Node.js/Express, vanilla JS (split into 12 module files), Google Sheets as DB
-- **Hosting**: Railway (auto-deploy from GitHub)
+- **Stack**: Node.js/Express, vanilla JS (split into 12 module files), PostgreSQL via Prisma ORM
+- **Hosting**: Railway (auto-deploy from GitHub, Postgres plugin)
 - **Auth**: Google Sign-In with allowed email list
 
 **Completed features:**
@@ -108,17 +108,22 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 
 **File structure:**
 ```
-server.js              — Express app entry point, mounts routers (~65 lines)
+server.js              — Express app entry point, seed logic, graceful shutdown
+app.js                 — Express app, middleware, route mounting
 lib/
-  config.js            — Configuration, env vars, file paths
-  sheets.js            — Google Sheets client, row converters, validation, write lock
+  config.js            — Configuration, env vars
+  db.js                — Prisma client, row transformers, dbReadAll/dbWriteAll, validators, write lock
+  recipe-sheets.js     — Google Sheets client (external recipe reading only)
+  hanos-parser.js      — Hanos quantity parser
 routes/
   auth.js              — Login, logout, session, requireAuth middleware
-  data.js              — GET/POST /api/data (main planner state)
+  data.js              — GET/POST /api/data + POST /api/data/patch (bulk planner state)
+  batches.js           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
   recipes.js           — Recipe index CRUD + single recipe fetch
-  ingredients.js       — Ingredient CRUD + Hanos XLSX parser + upload
+  ingredients.js       — Ingredient CRUD + stock management
+  ingredients-import.js — Hanos XLSX upload + CSV migration
   guests.js            — Guest history + next-weeks predictions
-  inventory.js         — Standard inventory + prep checklist + activity log
+  inventory.js         — Standard inventory (per-location) + storage config + prep checklist + activity log
   feedback.js          — User feedback
   health.js            — Health check endpoint
 public/
@@ -155,21 +160,29 @@ DESIGN.md              — This document
 SETUP_GUIDE.md         — Installation instructions
 ```
 
-**Data model** (stored in Google Sheets):
+**Data model** (PostgreSQL via Prisma):
 
-| Entity | Key Fields | Sheet Tab |
-|--------|-----------|-----------|
-| Dish | id, name, type, stock, serving, storage, logistics, allergens, cookDate, cookConfirmed, recipeSheetId, recipeVolume, recipeIngredients | dishes |
-| Service | id, dish_id, location, day (0-6), meal (lunch/dinner) | services |
+| Entity | Key Fields | Table |
+|--------|-----------|-------|
+| Batch | id, name, type, stock, serving, storage, location, inTransit, allergens, cookDate, recipeSheetId, recipeIngredients, parentId, note, services (JSON) | batches |
 | Guests | location, day, lunch count, dinner count | guests |
 | Recipe Index | id, name, type, recipeSheetId, allergens, costPerServing, structure, seasonality, ratings, timesServed | recipe_index |
 | Catering | id, name, date, guestCount, deliveryMode, dishes (JSON), logisticsNotes | caterings |
 | Transport Item | id, text | transport_items |
 | Feedback | timestamp, user, type, screen, text, userAgent | feedback |
-| Ingredient DB | name, unit, source, costPer100, orderType, orderCode, orderAmount, allergens, storageLocation | separate sheet |
-| Standard Inventory | id, name, amount, unit | data/standard-inventory.json (server-side) |
+| Ingredient | name, unit, supplier, category, orderCode, orderUnit, prices, stock, allergens | ingredients |
+| Standard Inventory | id, name, amount, unit, location | standard_inventory |
 | Guest History | location, meal, date, count | guest_history (+ guest_history_meta for deviceMap) |
 | Guests Next Weeks | monday_key, location, day, meal, count | guests_next_weeks |
+
+**Batch model** (replaces old "Dish" model):
+- A batch = a physical container of food. Lifecycle: PLANNED → COOKED → SERVING → DONE
+- `location` ("west"/"centraal") + `inTransit` (boolean) replace old `logistics` field
+- `cookDate` replaces old `cookMode`/`cookDay`/`cookConfirmed` — stock > 0 means cooked
+- `services` embedded as JSON array [{loc, date, meal}] — no separate services table
+- Cannot delete a batch with stock > 0 (real food that exists in the kitchen)
+- Split/merge: new batch gets `parentId` → can merge stock back into parent only
+- CRUD endpoints: GET/POST/PATCH/DELETE /api/batches
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -256,25 +269,16 @@ The order of everything below is flexible. Build thin slices first, deepen based
 
 ## 5. Technical Architecture Evolution
 
-### Current: Simple Monolith (good for many more modules)
+### Current: Simple Monolith with PostgreSQL
 ```
-Browser ←→ Express Server ←→ Google Sheets (dishes, guests, recipes, ingredient DB, guest history, next-week guests)
-                            ←→ data/ JSON files (standard inventory)
+Browser ←→ Express Server ←→ PostgreSQL via Prisma (all operational data)
+                            ←→ Google Sheets (external recipe sheet reading only)
 ```
-- Single Node.js app on Railway
-- Google Sheets as database
+- Single Node.js app on Railway with Postgres plugin
+- PostgreSQL via Prisma ORM (migrated from Google Sheets on 2026-03-22)
+- Google Sheets only used for reading external recipe spreadsheets
 - Vanilla JS frontend, 12+ module files
 - Good for: food planner + drinks + tasks + basic finance + non-food inventory
-
-### When Needed: Database Migration ← triggered by full finance module
-```
-Browser ←→ Express Server ←→ PostgreSQL (primary data)
-                            ←→ Google Sheets (recipe imports, ingredient DB)
-```
-- Add PostgreSQL on Railway when we need real queries, aggregations, audit trails
-- Likely trigger: finance module going beyond simple revenue tracking
-- Migrate operational data; keep Google Sheets for recipe/ingredient imports
-- Stack unchanged: Node.js + Express + vanilla JS
 
 ### When Needed: User Roles ← triggered by scheduling or multi-location growth
 ```
@@ -349,7 +353,7 @@ All chosen for: (1) Claude compatibility, (2) stability, (3) readability by non-
 |-------|--------|-----------|
 | Frontend | Vanilla JS → React/Next.js when needed | No build step now. Claude knows it perfectly. Migrate later if complexity demands. |
 | Backend | Node.js + Express | Most common web server. Massive ecosystem. Claude's strongest language. |
-| Database | Google Sheets → PostgreSQL | Sheets now (simple, good enough). Postgres when we need real queries (Phase 3). |
+| Database | PostgreSQL via Prisma | Migrated from Google Sheets (2026-03-22). Real queries, transactions, proper schema. |
 | Hosting | Railway | One-click deploy + database. Affordable. EU servers available. |
 | Auth | Google Sign-In | Everyone has Google. Zero password management. |
 | Version control | GitHub | Industry standard. |
@@ -375,9 +379,9 @@ The tutorials live in `public/js/tutorial.js`, organised by screen name (`dashbo
 ## 7. Data Ownership & Security
 
 - **All code**: Owned by De Sering, on GitHub
-- **All data**: Owned by De Sering, on Google Sheets (now) → PostgreSQL on Railway (Phase 3+)
+- **All data**: Owned by De Sering, on PostgreSQL (Railway)
 - **No vendor lock-in**: Standard technologies, exportable data, no proprietary formats
-- **Backups**: Railway automated PostgreSQL backups + Google Sheets version history
+- **Backups**: Railway automated PostgreSQL backups
 - **GDPR**: Privacy notice for staff data. Minimal collection. Deletion on request. EU hosting option.
 - **Auth**: Google Sign-In + allowed email list. Session-based. No passwords stored.
 - **Fault isolation**: Modules load independently. One breaking doesn't crash the others.
