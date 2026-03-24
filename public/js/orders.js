@@ -672,9 +672,18 @@ function renderCombinedOrderTab() {
       const hanosBtn = (isHanosEnabled() && ing.orderCode && !isUrl && orderCalc && orderCalc.units > 0)
         ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
         : '';
-      const orderUnitsDisplay = orderCalc && orderCalc.units > 0
-        ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>${hanosBtn}`
-        : (orderAmtGrams === 0 ? '<span class="to-order-zero">\u2014</span>' : '<span style="color:var(--text2);font-size:11px;">\u2014</span>');
+      // Show "g/piece" input for stuk items with no weight
+      const isStukNoWeight = ing.db && ing.db.orderCode && (!ing.db.orderAmount || ing.db.orderAmount <= 0);
+      let orderUnitsDisplay;
+      if (orderCalc && orderCalc.units > 0) {
+        orderUnitsDisplay = `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>${hanosBtn}`;
+      } else if (isStukNoWeight && orderAmtGrams > 0) {
+        orderUnitsDisplay = `<input class="order-stock-input gpstuk-input" type="number" min="1" step="1" placeholder="g/piece" title="Fill in grams per piece to calculate order units" onchange="saveGramsPerPiece('${esc(ing.db.id)}','${esc(key)}',this.value)" style="width:75px;" />`;
+      } else if (orderAmtGrams === 0) {
+        orderUnitsDisplay = '<span class="to-order-zero">\u2014</span>';
+      } else {
+        orderUnitsDisplay = '<span style="color:var(--text2);font-size:11px;">\u2014</span>';
+      }
 
       // Breakdown (shown on click)
       const parts = [];
@@ -940,6 +949,29 @@ async function hanosExecuteBulk(storageCat) {
   } catch (e) {
     closeModal();
     toast('Hanos error: ' + e.message, true);
+  }
+}
+
+// ── Grams-per-piece for stuk items ──────────────────────
+
+async function saveGramsPerPiece(ingredientId, combinedKey, value) {
+  const grams = parseInt(value, 10);
+  if (!grams || grams <= 0) return;
+
+  const db = S.ingredientDb.find(i => i.id === ingredientId);
+  if (!db) return;
+
+  // Update locally
+  db.orderAmount = grams;
+  db.unitRecalc = grams;
+
+  // Save to server
+  try {
+    await apiPost(`/api/ingredients/${ingredientId}`, { ...db, orderAmountGrams: grams });
+    toast(`Saved ${grams}g per piece for ${db.name}`);
+    renderOrders();
+  } catch (e) {
+    toast('Failed to save: ' + e.message, true);
   }
 }
 

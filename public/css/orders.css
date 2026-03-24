@@ -82,3 +82,4 @@
   .hanos-btn:hover{border-color:var(--blue);background:var(--blue-bg);}
   .hanos-bulk-btn{font-size:12px;padding:5px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin-left:4px;font-weight:500;transition:all .15s;}
   .hanos-bulk-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg);}
+  .gpstuk-input{border-color:var(--orange, #e67e22) !important;background:var(--orange-bg, #fef3e2) !important;}
