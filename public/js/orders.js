@@ -459,12 +459,16 @@ function renderDishesTab() {
       const items = byStorage[storageCat];
       const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
       const catColor = getStorageColor(storageCat, curLoc);
-      html += `<div class="storage-group" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      const hanosItemsForCat = isHanosEnabled() ? items.filter(i => i.orderCode && !i.orderCode.startsWith('http')) : [];
+      const hanosBatchBtn = hanosItemsForCat.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulkBatches('${esc(storageCat)}')" title="Add all items to Hanos cart">🛒 Send to Hanos</button>` : '';
+
+      html += `<div class="storage-group" data-storage-cat="${esc(storageCat)}" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
           <span class="storage-group-dot" style="background:${catColor};"></span>
           <span style="font-weight:600;font-size:14px;">${esc(storageCat)}</span>
           <span style="font-size:12px;color:var(--text2);">(${items.length} item${items.length !== 1 ? 's' : ''})</span>
           ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyDishOrderCodes('${esc(storageCat)}')">Copy all codes</button>` : ''}
+          ${hanosBatchBtn}
         </div>
         <div style="overflow-x:auto;"><table class="ing-table">
         <thead><tr>
@@ -502,8 +506,11 @@ function renderDishesTab() {
         const orderAmt = hasStockValue ? toOrder : amtNeeded;
         const orderAmtGrams = toGrams(orderAmt, dbUnit);
         const orderCalc = ing.db ? calcOrderUnits(orderAmtGrams, ing.db) : null;
+        const hanosBtnBatch = (isHanosEnabled() && ing.orderCode && !isUrl && orderCalc && orderCalc.units > 0)
+          ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
+          : '';
         const orderUnits = orderCalc && orderCalc.units > 0
-          ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`
+          ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>${hanosBtnBatch}`
           : (orderAmt === 0 ? '<span class="to-order-zero">\u2014</span>' : '<span style="color:var(--text2);font-size:11px;">\u2014</span>');
 
         html += `<tr data-stock-key="${esc(key)}" data-needed="${amtNeeded}" data-unit="${esc(dbUnit)}">
@@ -868,6 +875,7 @@ function collectHanosItems(storageCat) {
       quantity: calc.units,
       unit: 'ST',
       unitLabel: db.orderUnit || '',
+      price: db.orderPrice || 0,
     });
   });
   return items;
@@ -907,45 +915,119 @@ async function hanosAddSingle(orderCode, name) {
   }
 }
 
-/** Show confirmation modal for bulk Hanos add */
+/** Show confirmation modal for bulk Hanos add (combined order) */
 function hanosConfirmBulk(storageCat) {
   const items = collectHanosItems(storageCat);
   if (!items.length) {
     toast('No items with order codes and quantities to send');
     return;
   }
+  showHanosConfirmModal(items, storageCat, 'combined');
+}
 
-  const listHtml = items.map(i =>
-    `<tr><td style="font-weight:500;">${esc(i.name)}</td>
-     <td style="font-family:monospace;font-size:12px;">${esc(i.orderCode)}</td>
-     <td style="text-align:right;font-weight:600;">${i.quantity}x</td>
-     <td style="font-size:12px;color:var(--text2);">${esc(i.unitLabel)}</td></tr>`
-  ).join('');
+/** Collect Hanos items from batch ingredients tab */
+function collectHanosBatchItems(storageCat) {
+  const rows = document.querySelectorAll('.ing-table tr[data-stock-key]');
+  const items = [];
+  rows.forEach(row => {
+    if (storageCat) {
+      const group = row.closest('.storage-group');
+      if (!group || !group.dataset.storageCat || group.dataset.storageCat !== storageCat) return;
+    }
+    const key = row.dataset.stockKey;
+    const db = key ? lookupIngredient(key) : null;
+    if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
+
+    const amtNeeded = parseFloat(row.dataset.needed) || 0;
+    const dbUnit = row.dataset.unit || 'g';
+    const dbStock = getDbStockTotal(db);
+    const hasManual = orderInventory[key] !== undefined;
+    const effectiveStock = hasManual ? (parseFloat(orderInventory[key]) || 0) : dbStock;
+    const hasStockValue = hasManual || dbStock > 0;
+    const toOrder = hasStockValue ? Math.max(0, amtNeeded - effectiveStock) : amtNeeded;
+    const orderAmtGrams = toGrams(toOrder, dbUnit);
+    const calc = calcOrderUnits(orderAmtGrams, db);
+    if (!calc || calc.units <= 0) return;
+
+    items.push({
+      name: db.name,
+      orderCode: db.orderCode,
+      quantity: calc.units,
+      unit: 'ST',
+      unitLabel: db.orderUnit || '',
+      price: db.orderPrice || 0,
+    });
+  });
+  return items;
+}
+
+/** Show confirmation modal for batch ingredients Hanos add */
+function hanosConfirmBulkBatches(storageCat) {
+  const items = collectHanosBatchItems(storageCat);
+  if (!items.length) {
+    toast('No items with order codes and quantities to send');
+    return;
+  }
+  showHanosConfirmModal(items, storageCat, 'batches');
+}
+
+/** Shared confirmation modal with €200 warning */
+function showHanosConfirmModal(items, storageCat, source) {
+  // Check for items over €200
+  const expensiveItems = items.filter(i => i.price && i.quantity * i.price > 200);
+
+  let warningHtml = '';
+  if (expensiveItems.length) {
+    warningHtml = `<div style="background:var(--red-bg, #fde8e8);border:1px solid var(--red);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;">
+      <strong style="color:var(--red);">High-value items (over \u20AC200):</strong>
+      <ul style="margin:6px 0 0;padding-left:18px;font-size:12px;">
+        ${expensiveItems.map(i => `<li><strong>${esc(i.name)}</strong>: ${i.quantity}x \u00D7 \u20AC${i.price.toFixed(2)} = <strong>\u20AC${(i.quantity * i.price).toFixed(2)}</strong></li>`).join('')}
+      </ul>
+    </div>`;
+  }
+
+  const listHtml = items.map(i => {
+    const total = i.price ? i.quantity * i.price : 0;
+    const isExpensive = total > 200;
+    return `<tr${isExpensive ? ' style="background:var(--red-bg, #fde8e8);"' : ''}>
+      <td style="font-weight:500;">${esc(i.name)}</td>
+      <td style="font-family:monospace;font-size:12px;">${esc(i.orderCode)}</td>
+      <td style="text-align:right;font-weight:600;">${i.quantity}x</td>
+      <td style="font-size:12px;color:var(--text2);">${esc(i.unitLabel)}</td>
+      <td style="text-align:right;font-size:12px;${isExpensive ? 'color:var(--red);font-weight:600;' : ''}">${total > 0 ? '\u20AC' + total.toFixed(2) : ''}</td>
+    </tr>`;
+  }).join('');
 
   const label = storageCat ? esc(storageCat) : 'all groups';
+  const totalCost = items.reduce((sum, i) => sum + (i.price ? i.quantity * i.price : 0), 0);
 
   showModal(`
     <h3 style="margin-bottom:12px;">Add to Hanos Cart</h3>
     <p style="font-size:13px;margin-bottom:12px;">Send <strong>${items.length} item(s)</strong> from ${label} to the Hanos cart:</p>
-    <div style="max-height:300px;overflow-y:auto;margin-bottom:16px;">
+    ${warningHtml}
+    <div style="max-height:300px;overflow-y:auto;margin-bottom:12px;">
       <table class="ing-table" style="font-size:12px;">
-        <thead><tr><th>Item</th><th>Code</th><th>Qty</th><th>Unit</th></tr></thead>
+        <thead><tr><th>Item</th><th>Code</th><th>Qty</th><th>Unit</th><th>Est. cost</th></tr></thead>
         <tbody>${listHtml}</tbody>
       </table>
     </div>
+    ${totalCost > 0 ? `<p style="font-size:13px;font-weight:600;margin-bottom:12px;">Total estimated: \u20AC${totalCost.toFixed(2)}</p>` : ''}
     <div style="display:flex;gap:8px;justify-content:flex-end;">
       <button class="btn btn-sm" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-sm" style="background:var(--blue);color:#fff;border-color:var(--blue);" onclick="hanosExecuteBulk('${esc(storageCat || '')}')">Send to Hanos</button>
+      <button class="btn btn-sm" style="background:var(--blue);color:#fff;border-color:var(--blue);" onclick="hanosExecuteFromModal('${esc(source)}','${esc(storageCat || '')}')">
+        ${expensiveItems.length ? 'Confirm & Send' : 'Send to Hanos'}
+      </button>
     </div>
   `);
 }
 
-/** Execute bulk add after confirmation */
-async function hanosExecuteBulk(storageCat) {
-  const items = collectHanosItems(storageCat || null);
+/** Execute from the shared modal */
+async function hanosExecuteFromModal(source, storageCat) {
+  const items = source === 'batches'
+    ? collectHanosBatchItems(storageCat || null)
+    : collectHanosItems(storageCat || null);
   if (!items.length) { closeModal(); return; }
 
-  // Update modal to show progress
   const modalBody = document.querySelector('.modal');
   if (modalBody) {
     modalBody.innerHTML = `
