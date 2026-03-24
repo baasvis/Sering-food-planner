@@ -86,7 +86,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
   - "Apply predictions" button fills guest inputs; staff can manually adjust for events/reservations
 - Unified Week Plan tab with sub-tabs: Sering West, Sering Centraal, To Transport, Caterings, Overview
 - Location sub-tabs: calendar grid organised by batch type (Soups/Mains/Desserts), each with day×meal slots. Day-by-day navigation (today ±14 days), same as Guests tab
-- Per-type batch pools directly below each type's calendar (soups under soups grid, mains under mains grid). 3-column tile grid on desktop, 2 on tablet, 1 on mobile. Grouped by "To cook" / "Cooked" / "Frozen". Compact batch tiles with click-to-expand detail panel (expanded tiles span full width).
+- Per-type batch pools directly below each type's calendar (soups under soups grid, mains under mains grid). Collapsed by default behind a toggle button (type name + count); click to expand. 3-column tile grid on desktop, 2 on tablet, 1 on mobile. Grouped by "To cook" / "Cooked" / "Frozen". Compact batch tiles show cook date label (DD/M) — green for cooked, blue for planned, grey for unset — clickable to edit via date picker. Click-to-expand detail panel (expanded tiles span full width).
 - "Show all batches" collapsible section at the bottom of the calendar showing every batch at the location regardless of type.
 - Drag-and-drop assignment: drag a batch tile onto any calendar slot to assign it. Visual feedback with slot highlighting on dragover.
 - Select-then-assign flow (alternative): click "Assign" on a batch tile → grid slots highlight as drop targets → click a slot to assign the batch there. The + button and add modal remain for creating new batches from recipes or placeholders.
