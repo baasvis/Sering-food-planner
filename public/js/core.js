@@ -1,6 +1,96 @@
 // CORE LOGIC
 // ═══════════════════════════════════════════════════════════════════
 
+// ── Choppable ingredient detection ──────────────────────
+// Categories from ingredient DB that need chopping/prep
+const CHOPPABLE_CATEGORIES = [
+  'vegetables & fruit',       // production DB
+  'herbs & spices',           // fresh herbs (dried spices caught by PANTRY_KEYWORDS)
+  'vegetables', 'fruits', 'mushrooms', 'herbs', 'beans and legumes',  // seed DB fallback
+];
+
+// Fallback keywords for ingredients not found in DB — these are NOT choppable
+// NOTE: fresh herbs removed (parsley, basil, cilantro, thyme, rosemary) — herbs ARE choppable
+const PANTRY_KEYWORDS = [
+  'oil','olie','salt','zout','sugar','suiker','pepper','peper',
+  'vinegar','azijn','soy sauce','sojasaus','ketjap','tamari',
+  'flour','meel','bloem','butter','boter','margarine',
+  'cream','room','slagroom','milk','melk',
+  'stock','bouillon','broth',
+  'powder','poeder','cumin','komijn','cinnamon','kaneel',
+  'turmeric','kurkuma','paprikapoeder','chili powder','chilipoeder',
+  'nutmeg','nootmuskaat','cloves','kruidnagel',
+  'bay leaf','laurier',
+  'coconut milk','kokosmelk','coconut cream','kokosroom',
+  'tomato paste','tomatenpuree','tomato puree',
+  'mustard','mosterd','honey','honing','maple','ahorn',
+  'rice','rijst','pasta','noodles','noedels','couscous',
+  'sambal','sriracha','hot sauce','tabasco',
+  'water','cornstarch','maizena','agar','tapioca',
+  'yeast','gist','baking powder','bakpoeder','baking soda',
+  'breadcrumbs','paneermeel','panko',
+  'vanilla','vanille','extract','essence',
+  'miso','nutritional yeast','gistgvlokken',
+  'seaweed','nori','wakame','kombu',
+  'tahini','peanut butter','pindakaas',
+  'lemon juice','citroensap','lime juice','limoensap',
+  'paste','puree','purée','mashed',
+  'dried','gedroogd','gerist','gemalen','gehakt',
+  'cashew','almond','amandel','walnut','walnoot','hazelno','pecannot','pistachio','pinda','macadamia',
+  'seed','zaad','zaden','pitten',
+  'rozijn','raisin','vijg','dadel','pruim','moerbeien',
+  'noten','nuts','nibs','flakes','vlokken',
+  'agar','xanthan','xanthana','lecithin','inulin','isomalt','pectin','gelespessa',
+  'msg','maggi','liquid smoke',
+];
+
+// Build a lookup cache from ingredient DB (name/supplierName → category)
+let _ingredientCategoryCache = null;
+function getIngredientCategoryCache() {
+  if (_ingredientCategoryCache && _ingredientCategoryCache.size > 0) return _ingredientCategoryCache;
+  _ingredientCategoryCache = new Map();
+  (S.ingredientDb || []).forEach(ing => {
+    const cat = (ing.category || '').toLowerCase().trim();
+    if (!cat) return;
+    if (ing.name) _ingredientCategoryCache.set(ing.name.toLowerCase().trim(), cat);
+    if (ing.supplierName) _ingredientCategoryCache.set(ing.supplierName.toLowerCase().trim(), cat);
+  });
+  return _ingredientCategoryCache;
+}
+
+function isChoppableIngredient(name) {
+  const lower = name.toLowerCase().trim();
+  // Hard exclusion: pantry staples are never choppable regardless of DB category
+  if (PANTRY_KEYWORDS.some(kw => lower.includes(kw))) return false;
+  // Check ingredient DB categories
+  const cache = getIngredientCategoryCache();
+  // Exact match
+  const exact = cache.get(lower);
+  if (exact) return CHOPPABLE_CATEGORIES.includes(exact);
+  // Word-level fuzzy: "red onion" contains word "onion", "carrot (purple)" contains "carrot"
+  const wordBoundary = (haystack, needle) => {
+    const i = haystack.indexOf(needle);
+    if (i === -1) return false;
+    const before = i === 0 || /\W/.test(haystack[i - 1]);
+    const after = i + needle.length >= haystack.length || /\W/.test(haystack[i + needle.length]);
+    return before && after;
+  };
+  const matchedCats = [];
+  for (const [dbName, cat] of cache) {
+    if (dbName === lower) continue;
+    if (wordBoundary(dbName, lower) || wordBoundary(lower, dbName)) {
+      matchedCats.push(cat);
+    }
+  }
+  if (matchedCats.length > 0) {
+    return matchedCats.some(cat => CHOPPABLE_CATEGORIES.includes(cat));
+  }
+  // Not found in DB and not a pantry keyword — include it
+  return true;
+}
+
+// ── Core helpers ────────────────────────────────────────
+
 function isBatchCooked(d) {
   return (d.stock || 0) > 0;
 }
@@ -129,56 +219,49 @@ function getGuests(loc, dateStr, meal) {
   return ((S.guests[lk] || {})[dn] || {})[meal] || 0;
 }
 
-function calcRequired(dish) {
+// Shared core: calculates liters per service/catering for a dish
+// Returns { total, parts } where parts is an array of { liters, label } objects
+function _calcRequiredParts(dish) {
   let total = 0;
-  (dish.services || []).forEach(svc => {
-    if (isServicePast(svc)) return; // Skip served services — no longer pulling stock
-    const g = getGuests(svc.loc, svc.date, svc.meal);
-    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
-    const count = Math.max(peers.length, 1);
-    total += (g / count) * ((dish.serving || 280) / 1000);
-  });
-  // Add catering requirements (split by same-type peers)
-  (S.caterings || []).forEach(c => {
-    const cd = (c.dishes || []).find(cd => cd.dishId === dish.id);
-    if (cd) {
-      const peers = (c.dishes || []).filter(d => d.type === dish.type).length;
-      total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000);
-    }
-  });
-  return Math.round(total * 10) / 10;
-}
+  const parts = [];
+  const servingL = (dish.serving || 280) / 1000;
 
-function calcRequiredBreakdown(dish) {
-  const lines = [];
   (dish.services || []).forEach(svc => {
     const loc = svc.loc === 'west' ? 'Sering West' : 'Sering Centraal';
     const meal = svc.meal.charAt(0).toUpperCase() + svc.meal.slice(1);
     const dayName = dateToDayName(svc.date);
-    // Past services show as "served" instead of contributing liters
+
     if (isServicePast(svc)) {
-      lines.push(`✓ ${dayName} ${meal} ${loc} (served)`);
+      parts.push({ liters: 0, label: `✓ ${dayName} ${meal} ${loc} (served)`, served: true });
       return;
     }
     const g = getGuests(svc.loc, svc.date, svc.meal);
     const k = `${svc.loc}-${svc.date}-${svc.meal}`;
     const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
-    const count = Math.max(peers.length, 1);
-    const liters = Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
-    if (liters > 0) {
-      lines.push(`${liters}L — ${dayName} ${meal} ${loc}`);
-    }
+    const liters = Math.round((g / Math.max(peers.length, 1)) * servingL * 10) / 10;
+    total += liters;
+    if (liters > 0) parts.push({ liters, label: `${liters}L — ${dayName} ${meal} ${loc}` });
   });
+
   (S.caterings || []).forEach(c => {
     const cd = (c.dishes || []).find(cd => cd.dishId === dish.id);
     if (cd) {
       const peers = (c.dishes || []).filter(d => d.type === dish.type).length;
-      const liters = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000) * 10) / 10;
-      if (liters > 0) lines.push(`${liters}L — ${c.name} (${c.guestCount} guests${peers > 1 ? ', 1/' + peers + ' split' : ''})`);
+      const liters = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * servingL * 10) / 10;
+      total += liters;
+      if (liters > 0) parts.push({ liters, label: `${liters}L — ${c.name} (${c.guestCount} guests${peers > 1 ? ', 1/' + peers + ' split' : ''})` });
     }
   });
-  return lines;
+
+  return { total: Math.round(total * 10) / 10, parts };
+}
+
+function calcRequired(dish) {
+  return _calcRequiredParts(dish).total;
+}
+
+function calcRequiredBreakdown(dish) {
+  return _calcRequiredParts(dish).parts.map(p => p.label);
 }
 
 function calcTotalGuests(dish) {

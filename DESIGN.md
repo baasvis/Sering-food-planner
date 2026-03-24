@@ -110,40 +110,53 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 
 **File structure:**
 ```
-server.js              — Express app entry point, mounts routers (~65 lines)
+server.js              — Express app entry point, mounts routers
 lib/
-  config.js            — Configuration, env vars, file paths
-  sheets.js            — Google Sheets client, row converters, validation, write lock
+  config.js            — Configuration, env vars
+  db.js                — Prisma client, generic entity writer, validators, row transformers
+  recipe-sheets.js     — Google Sheets client (external recipe reading only)
+  hanos-parser.js      — Hanos quantity parser (hoeveelheid → grams)
+  hanos-categories.js  — Hanos product category → app type/category mapping
+  csv-parser.js        — Simple CSV parser (quoted fields, reusable)
 routes/
   auth.js              — Login, logout, session, requireAuth middleware
-  data.js              — GET/POST /api/data (main planner state)
+  data.js              — GET/POST /api/data + POST /api/data/patch (main planner state)
+  batches.js           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
   recipes.js           — Recipe index CRUD + single recipe fetch
-  ingredients.js       — Ingredient CRUD + Hanos XLSX parser + upload
-  guests.js            — Guest history + next-weeks predictions
-  inventory.js         — Standard inventory + prep checklist + activity log
-  feedback.js          — User feedback
+  ingredients.js       — Ingredient CRUD + stock management
+  ingredients-import.js — Hanos XLSX upload + CSV migration
   hanos.js             — Hanos OCC v2 API client (OAuth, cart, add-to-cart) + Express routes
+  guests.js            — Guest history + next-weeks predictions
+  inventory.js         — Standard inventory (per-location) + storage config + prep checklist + activity log
+  feedback.js          — User feedback
   health.js            — Health check endpoint
 public/
-  index.html           — HTML shell + login screen (~75 lines)
-  style.css            — All CSS styles (~620 lines)
+  index.html           — Shell HTML + login screen (nav generated from NAV_SCREENS)
+  css/                 — Per-screen CSS files (base, dashboard, guests, planner, orders, recipes, feedback, tutorial, mobile)
   js/
-    state.js           — Constants, app state
+    state.js           — Constants, NAV_SCREENS, storage config helpers, global state object S
     auth.js            — Google Sign-In, sessions
-    utils.js           — API, save system, toast, ingredient DB loading
-    core.js            — Planner rebuild, calculations, badges, served/archive
-    dashboard.js       — Dashboard screen
-    predictions.js     — CSV parsing (Tebi + Lightspeed), categorization, prediction engine, shared day-navigation helpers
-    guests.js          — Guest counts screen, upload UI, predictions display
-    planner.js         — Week plan: sub-tabs, location grids, batch pool, assign mode, transport view, add-dish modal
-    dishes.js          — Dish rows, overview, cook workflow, inline editing
+    utils.js           — API helpers (apiGet/apiPost), save system, toast, prep checklist
+    core.js            — Calculations (calcRequired, diffStr), badges, isServicePast, choppable detection, date helpers
+    batch-tile.js      — Reusable batch tile component (renderBatchTile, cook workflow, inline editing)
+    guest-flow.js      — Guest arrival flow chart (buildGuestFlowData, drawGuestFlowChart)
+    dashboard.js       — showScreen(), Dashboard screen (meal cards, prep checklist, team todos)
+    predictions.js     — CSV parsing (Tebi + Lightspeed), prediction engine, day-navigation helpers
+    guests.js          — Guest count tables, upload UI, predictions display
+    planner.js         — Week plan grid, sub-tabs, day navigation, inventory modal
+    planner-pool.js    — Batch pool rendering, drag/drop, assign mode
+    planner-transport.js — Transport view, transport item CRUD, mark-arrived
+    dishes.js          — Dish overview table, sorting/filtering, new/edit/delete batch modals
     caterings.js       — Caterings CRUD, dish picker, auto-calculated requirements
-    recipes.js         — Recipe index screen
-    orders.js          — Order overview (3-tab: Combined Order / Standard Inventory / Dish Ingredients)
-    ingredient-db.js   — Ingredient database editor + supplier import
+    recipes.js         — Recipe index/library
+    orders-helpers.js  — Shared order state + helpers (toGrams, lookupIngredient, calcOrderUnits)
+    orders-inventory.js — Standard inventory API, tab render, search/add/remove
+    orders.js          — Main order render, combined order tab, dishes tab, Hanos integration
+    ingredient-db.js   — Ingredient database editor, search, inline edit, stock, storage
+    ingredient-db-import.js — Hanos XLSX upload UI, CSV migration UI
     feedback.js        — Feedback button and form
     tutorial.js        — Interactive guided tutorial system
-    init.js            — Modal, HTML escape, app init
+    init.js            — Modal system, esc helper, buildNav(), beforeunload guard, initApp (MUST load last)
 data/
   standard-inventory.json  — Standard inventory (gitignored, persisted on server)
 seeds/

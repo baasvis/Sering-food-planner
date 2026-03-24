@@ -34,6 +34,8 @@ const COMMON_HEADERS = {
 
 // ── HanosClient ─────────────────────────────────────────────────────────────
 
+const FETCH_TIMEOUT = 15000;
+
 class HanosClient {
   constructor() {
     this.accessToken = null;
@@ -50,29 +52,32 @@ class HanosClient {
     return h;
   }
 
+  /** Centralized fetch with timeout and error context */
+  async _fetch(url, opts = {}, context = 'request') {
+    const resp = await fetch(url, { ...opts, signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+    if (!resp.ok && !opts._allowFailure) throw new Error(`${context} HTTP ${resp.status}`);
+    return resp;
+  }
+
   /** OAuth password-grant login */
   async login(username, password) {
     if (!username || !password) throw new Error('Hanos credentials not configured for this location');
 
     const body = new URLSearchParams({
-      grant_type: 'password',
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      username,
-      password,
+      grant_type: 'password', client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET, username, password,
     });
 
-    const resp = await fetch(TOKEN_URL, {
+    const resp = await this._fetch(TOKEN_URL, {
       method: 'POST',
       headers: { ...COMMON_HEADERS, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
-      signal: AbortSignal.timeout(15000),
-    });
+      _allowFailure: true,
+    }, 'Hanos login');
 
     if (resp.status === 400) {
       const err = await resp.json().catch(() => ({}));
-      const desc = err.error_description || 'Unknown error';
-      throw new Error(`Hanos login failed: ${desc}`);
+      throw new Error(`Hanos login failed: ${err.error_description || 'Unknown error'}`);
     }
     if (!resp.ok) throw new Error(`Hanos login HTTP ${resp.status}`);
 
@@ -88,19 +93,15 @@ class HanosClient {
     if (!this.refreshToken) throw new Error('No refresh token — call login() first');
 
     const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      refresh_token: this.refreshToken,
+      grant_type: 'refresh_token', client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET, refresh_token: this.refreshToken,
     });
 
-    const resp = await fetch(TOKEN_URL, {
+    const resp = await this._fetch(TOKEN_URL, {
       method: 'POST',
       headers: { ...COMMON_HEADERS, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!resp.ok) throw new Error(`Token refresh failed: HTTP ${resp.status}`);
+    }, 'Token refresh');
 
     const data = await resp.json();
     this.accessToken = data.access_token;
@@ -113,11 +114,10 @@ class HanosClient {
   async fetchPersonalizationId() {
     if (this.personalizationId) return this.personalizationId;
 
-    const resp = await fetch(`${OCC_BASE}/cms/pages?pageType=ContentPage&pageLabelOrId=/&lang=en&curr=EUR`, {
-      headers: this._headers(),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!resp.ok) throw new Error(`Personalization fetch HTTP ${resp.status}`);
+    const resp = await this._fetch(
+      `${OCC_BASE}/cms/pages?pageType=ContentPage&pageLabelOrId=/&lang=en&curr=EUR`,
+      { headers: this._headers() }, 'Personalization fetch',
+    );
 
     this.personalizationId = resp.headers.get('occ-personalization-id');
     if (!this.personalizationId) {
@@ -132,11 +132,10 @@ class HanosClient {
 
   /** Get active cart or create a new one */
   async getOrCreateCart() {
-    const resp = await fetch(`${OCC_BASE}/hanosUsers/current/carts?lang=en&curr=EUR&fields=FULL`, {
-      headers: this._headers(),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!resp.ok) throw new Error(`Cart fetch HTTP ${resp.status}`);
+    const resp = await this._fetch(
+      `${OCC_BASE}/hanosUsers/current/carts?lang=en&curr=EUR&fields=FULL`,
+      { headers: this._headers() }, 'Cart fetch',
+    );
 
     const data = await resp.json();
     const carts = data.carts || [];
@@ -148,13 +147,11 @@ class HanosClient {
     }
 
     // Create new cart
-    const createResp = await fetch(`${OCC_BASE}/hanosUsers/current/carts?lang=en&curr=EUR`, {
-      method: 'POST',
-      headers: this._headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({}),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!createResp.ok) throw new Error(`Cart create HTTP ${createResp.status}`);
+    const createResp = await this._fetch(
+      `${OCC_BASE}/hanosUsers/current/carts?lang=en&curr=EUR`,
+      { method: 'POST', headers: this._headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({}) },
+      'Cart create',
+    );
 
     const cart = await createResp.json();
     this.cartId = cart.code;
@@ -168,36 +165,19 @@ class HanosClient {
 
     const url = `${OCC_BASE}/hanosUsers/current/carts/${this.cartId}/entries?lang=en&curr=EUR&defaultUnit=15975108`;
     const payload = {
-      product: { code: productCode },
-      note: '',
+      product: { code: productCode }, note: '',
       aumQuantities: [{
-        formattedQuantity: quantity,
-        conversionFactor: 1,
-        unitCode,
+        formattedQuantity: quantity, conversionFactor: 1, unitCode,
         unitName: unitCode === 'COL' ? 'carton' : 'Bin',
       }],
     };
+    const fetchOpts = { method: 'POST', headers: this._headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(payload) };
 
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: this._headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15000),
-    });
+    const resp = await this._fetch(url, { ...fetchOpts, _allowFailure: true }, 'Add to cart');
 
     if (resp.status === 401 && this.refreshToken) {
-      // Token expired — refresh and retry
       await this._refreshAccessToken();
-      const retry = await fetch(url, {
-        method: 'POST',
-        headers: this._headers({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!retry.ok) {
-        const errBody = await retry.text().catch(() => '');
-        throw new Error(`Add to cart failed after refresh: HTTP ${retry.status} — ${errBody}`);
-      }
+      const retry = await this._fetch(url, fetchOpts, 'Add to cart after refresh');
       return await retry.json();
     }
 
@@ -217,11 +197,10 @@ class HanosClient {
   async getCart() {
     if (!this.cartId) await this.getOrCreateCart();
 
-    const resp = await fetch(
+    const resp = await this._fetch(
       `${OCC_BASE}/hanosUsers/current/carts/${this.cartId}?requestQuoteForSessionCart=false&lang=en&curr=EUR&fields=FULL`,
-      { headers: this._headers(), signal: AbortSignal.timeout(15000) }
+      { headers: this._headers() }, 'Cart fetch',
     );
-    if (!resp.ok) throw new Error(`Cart fetch HTTP ${resp.status}`);
     return await resp.json();
   }
 
