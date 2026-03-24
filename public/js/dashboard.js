@@ -378,6 +378,25 @@ function drawGuestFlowChart() {
     ctx.font = 'bold 9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('Now', nowX, pad.top - 4);
+
+    // Remaining guests: sum all slots after current time
+    const remaining = Math.round(data.reduce((sum, d) => {
+      const slotMins = parseInt(d.time.split(':')[0]) * 60 + parseInt(d.time.split(':')[1]);
+      return sum + (slotMins >= nowMins ? d.guests : 0);
+    }, 0));
+    // Interpolate Y value at the "Now" position for label placement
+    const slotWidth = (endMins - startMins) / (data.length - 1);
+    const floatIdx = (nowMins - startMins) / slotWidth;
+    const loIdx = Math.floor(floatIdx);
+    const hiIdx = Math.min(loIdx + 1, data.length - 1);
+    const frac = floatIdx - loIdx;
+    const nowGuests = data[loIdx].guests + (data[hiIdx].guests - data[loIdx].guests) * frac;
+    const labelY = yOf(nowGuests);
+    // Draw remaining label below the intersection point
+    ctx.fillStyle = isDark ? '#E86B5A' : '#993C1D';
+    ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${remaining} left`, nowX, labelY + 14);
   }
 
   // Peak label
