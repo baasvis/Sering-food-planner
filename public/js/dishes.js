@@ -209,6 +209,7 @@ function renderBatchTile(d, showAssign) {
       <div class="sel-box${isSel ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelect('${d.id}')"></div>
       <span class="batch-type-dot batch-type-${(d.type||'Soup').toLowerCase().replace(/ /g,'-')}"></span>
       <span class="batch-tile-name">${esc(d.name)}</span>
+      <span class="batch-tile-cook">${batchCookLabel(d)}</span>
       <span class="batch-tile-stock ${cls}">${d.stock || 0}L <small>${str}</small></span>
       <span class="batch-tile-logistics ${logisticsBadgeClass(d)}" style="font-size:10px;">${logisticsShort(d)}</span>
       ${d.inTransit ? '<span class="batch-transit-badge">In transit</span>' : ''}
@@ -463,6 +464,51 @@ function daysSinceCooked(d) {
   const cd = strToDate(d.cookDate);
   if (!cd) return 0;
   return Math.floor((getToday() - cd) / (1000*60*60*24));
+}
+
+// Short cook date label for the compact batch tile row
+function batchCookLabel(d) {
+  if (isBatchCooked(d) && d.cookDate) {
+    // Already cooked — show "Cooked DD/M"
+    const iso = cookDateToISO(d.cookDate);
+    const dt = new Date(iso);
+    if (!isNaN(dt)) {
+      const stale = isDishStale(d);
+      return `<span class="cook-label cooked${stale ? ' stale' : ''}" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Click to change cook date">${dt.getDate()}/${dt.getMonth()+1}</span>`;
+    }
+    return '';
+  }
+  if (d.cookDate) {
+    // Planned cook date — show "Cook DD/M"
+    const iso = cookDateToISO(d.cookDate);
+    const dt = new Date(iso);
+    if (!isNaN(dt)) {
+      return `<span class="cook-label planned" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Click to change cook date">${dt.getDate()}/${dt.getMonth()+1}</span>`;
+    }
+  }
+  // No cook date set
+  return `<span class="cook-label none" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Click to set cook date">no date</span>`;
+}
+
+// Inline date picker triggered from tile cook label
+function tileEditCookDate(id) {
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  // Create a temporary hidden date input, trigger it
+  const existing = document.getElementById('tile-cook-picker');
+  if (existing) existing.remove();
+  const inp = document.createElement('input');
+  inp.type = 'date';
+  inp.id = 'tile-cook-picker';
+  inp.style.cssText = 'position:fixed;top:-100px;left:-100px;opacity:0;';
+  inp.value = d.cookDate ? cookDateToISO(d.cookDate) : '';
+  inp.onchange = function() {
+    setCookDateDirect(id, this.value);
+    this.remove();
+  };
+  inp.onblur = function() { setTimeout(() => this.remove(), 200); };
+  document.body.appendChild(inp);
+  inp.showPicker ? inp.showPicker() : inp.click();
 }
 
 function getCookCellHtml(d) {

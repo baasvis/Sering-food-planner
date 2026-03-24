@@ -148,32 +148,48 @@ function getPoolBatches(loc) {
   });
 }
 
+function toggleTypeBatchPool(typeKey) {
+  if (!S.openBatchPools) S.openBatchPools = new Set();
+  if (S.openBatchPools.has(typeKey)) S.openBatchPools.delete(typeKey);
+  else S.openBatchPools.add(typeKey);
+  rerenderCurrentView();
+}
+
 function renderTypeBatchPool(loc, typeKey, typeLabel, typeCls) {
   const poolBatches = getPoolBatches(loc).filter(d => d.type === typeKey);
   if (poolBatches.length === 0) return '';
 
-  const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && d.storage !== 'Frozen'));
-  const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && d.storage !== 'Frozen'));
-  const frozen = poolBatches.filter(d => d.storage === 'Frozen');
+  if (!S.openBatchPools) S.openBatchPools = new Set();
+  const isOpen = S.openBatchPools.has(typeKey);
 
   let html = `<div class="batch-pool batch-pool-inline">`;
-  html += `<div class="batch-pool-hdr"><span class="type-dot ${typeCls}"></span>${typeLabel} <span class="batch-pool-count">${poolBatches.length}</span></div>`;
+  html += `<button class="batch-pool-toggle" onclick="toggleTypeBatchPool('${typeKey}')">
+    <span class="batch-pool-toggle-arrow">${isOpen ? '▾' : '▸'}</span>
+    <span class="type-dot ${typeCls}"></span>${typeLabel}
+    <span class="batch-pool-count">${poolBatches.length}</span>
+  </button>`;
 
-  const renderGroup = (batches) => {
-    return `<div class="batch-tile-grid">${batches.map(d => renderBatchTile(d, true)).join('')}</div>`;
-  };
+  if (isOpen) {
+    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && d.storage !== 'Frozen'));
+    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && d.storage !== 'Frozen'));
+    const frozen = poolBatches.filter(d => d.storage === 'Frozen');
 
-  if (toCook.length) {
-    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--amber);"></div>To cook <span class="dish-section-count">(${toCook.length})</span></div>`;
-    html += renderGroup(toCook);
-  }
-  if (cooked.length) {
-    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--green);"></div>Cooked <span class="dish-section-count">(${cooked.length})</span></div>`;
-    html += renderGroup(cooked);
-  }
-  if (frozen.length) {
-    html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--blue);"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
-    html += renderGroup(frozen);
+    const renderGroup = (batches) => {
+      return `<div class="batch-tile-grid">${batches.map(d => renderBatchTile(d, true)).join('')}</div>`;
+    };
+
+    if (toCook.length) {
+      html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--amber);"></div>To cook <span class="dish-section-count">(${toCook.length})</span></div>`;
+      html += renderGroup(toCook);
+    }
+    if (cooked.length) {
+      html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--green);"></div>Cooked <span class="dish-section-count">(${cooked.length})</span></div>`;
+      html += renderGroup(cooked);
+    }
+    if (frozen.length) {
+      html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--blue);"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
+      html += renderGroup(frozen);
+    }
   }
 
   html += `</div>`;
@@ -721,10 +737,8 @@ function getInventoryButton(loc) {
 function openInventory(loc) {
   const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
   const dishes = S.batches.filter(d => {
-    if (!isBatchCooked(d)) return false; // Only cooked dishes need inventory
-    const atLoc = (d.services || []).some(s => s.loc === loc);
-    const locMatch = d.location === loc;
-    return atLoc || locMatch;
+    if (!isBatchCooked(d)) return false; // Only cooked batches need inventory
+    return d.location === loc; // Only show batches physically at this location
   });
 
   if (dishes.length === 0) {

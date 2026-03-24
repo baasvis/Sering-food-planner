@@ -168,6 +168,13 @@
   .batch-type-dot.batch-type-main-course{background:var(--blue);}
   .batch-type-dot.batch-type-dessert{background:var(--purple);}
   .batch-tile-name{font-weight:500;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .batch-tile-cook{flex-shrink:0;}
+  .cook-label{font-size:10px;font-weight:600;padding:2px 6px;border-radius:3px;cursor:pointer;white-space:nowrap;}
+  .cook-label.cooked{background:var(--green-light,#e8f5e9);color:var(--green,#388e3c);}
+  .cook-label.cooked.stale{background:#fff3e0;color:var(--amber,#e65100);}
+  .cook-label.planned{background:#e3f2fd;color:var(--blue,#1565c0);}
+  .cook-label.none{background:var(--bg2);color:var(--text3);font-style:italic;font-weight:400;}
+  .cook-label:hover{opacity:.8;text-decoration:underline;}
   .batch-tile-stock{font-size:12px;font-weight:600;white-space:nowrap;flex-shrink:0;}
   .batch-tile-stock small{font-weight:400;opacity:.7;}
   .batch-transit-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 5px;border-radius:3px;background:#97C459;color:#fff;flex-shrink:0;}
@@ -192,6 +199,9 @@
   .batch-pool{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);min-width:0;overflow:hidden;}
   .batch-pool-inline{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);}
   .batch-pool-hdr{font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:8px;}
+  .batch-pool-toggle{width:100%;padding:8px 12px;font-size:13px;font-weight:700;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;display:flex;align-items:center;gap:8px;transition:all .12s;margin-bottom:4px;}
+  .batch-pool-toggle:hover{background:var(--bg2);border-color:var(--text3);}
+  .batch-pool-toggle-arrow{font-size:11px;color:var(--text3);width:14px;text-align:center;flex-shrink:0;}
   .batch-pool-count{font-size:12px;font-weight:400;color:var(--text3);background:var(--bg2);padding:1px 8px;border-radius:10px;}
   .batch-assign-btn{font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;border:1px solid var(--blue);background:transparent;color:var(--blue);cursor:pointer;white-space:nowrap;transition:all .12s;margin-left:auto;flex-shrink:0;}
   .batch-assign-btn:hover{background:var(--blue);color:#fff;}
