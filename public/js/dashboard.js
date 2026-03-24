@@ -240,19 +240,30 @@ function buildGuestFlowData(totalGuests, meal, loc) {
   const dow = DAY_NAMES[today.getDay()];
   const dist = S.guestFlowDistribution;
 
+  // Service windows: only show data within actual service hours
+  const SERVICE_WINDOWS = {
+    lunch:  { start: 12 * 60, end: 14 * 60 },
+    dinner: { start: 18 * 60, end: 21 * 60 },
+  };
+  const win = SERVICE_WINDOWS[meal];
+
   if (dist && dist[loc] && dist[loc][meal] && dist[loc][meal][dow]) {
     const buckets = dist[loc][meal][dow];
-    // Convert bucket map to sorted array
+    // Convert bucket map to sorted array, filter to service window
     const entries = Object.entries(buckets)
       .map(([minStr, frac]) => ({ min: parseInt(minStr), frac }))
+      .filter(e => e.min >= win.start && e.min < win.end)
       .sort((a, b) => a.min - b.min);
     if (entries.length >= 3) {
+      // Re-normalize fractions after filtering so they sum to 1
+      const fracSum = entries.reduce((s, e) => s + e.frac, 0);
+      const scale = fracSum > 0 ? 1 / fracSum : 1;
       return entries.map(e => {
         const h = Math.floor(e.min / 60);
         const m = e.min % 60;
         return {
           time: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
-          guests: Math.round(e.frac * totalGuests * 10) / 10
+          guests: Math.round(e.frac * scale * totalGuests * 10) / 10
         };
       });
     }
