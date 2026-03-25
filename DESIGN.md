@@ -91,7 +91,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - "Show all batches" collapsible section at the bottom of the calendar showing every batch at the location regardless of type.
 - Drag-and-drop assignment: drag a batch tile onto any calendar slot to assign it. Visual feedback with slot highlighting on dragover.
 - Select-then-assign flow (alternative): click "Assign" on a batch tile → grid slots highlight as drop targets → click a slot to assign the batch there. The + button and add modal remain for creating new batches from recipes or placeholders.
-- Replace batch: uncooked batches with services show a "Replace" button. Opens a modal to pick a replacement (existing same-type batch or recipe). All services transfer from old to new batch; old batch is deleted.
+- Replace batch: uncooked batches with services show a "Replace" button. Opens a modal to pick a replacement (existing same-type batch or recipe). All services transfer from old to new batch; catering references updated; old batch is deleted.
 - Cook date column: red highlight when unset, bold when planned. Stock locked until marked as cooked, auto-fills to required amount on cook.
 - Requirement breakdown tooltip on +/- column (hover to see per-service and per-catering demand)
 - Caterings module: name, date, guest count, delivery mode, auto-calculated dish requirements (guest count × serving size ÷ same-type peers), logistics notes
@@ -104,7 +104,9 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
   - Combined Order: merges both lists, sums overlapping ingredients, grouped by storage category per location
   - Hanos add-to-cart integration: "Send to Hanos" bulk button per storage group + per-row cart buttons. Confirmation modal lists items before sending. Uses Hanos OCC v2 API (OAuth login, cart management). Per-location credentials: HANOS_USER_WEST/HANOS_PASS_WEST and HANOS_USER_CENTRAAL/HANOS_PASS_CENTRAAL. Buttons only show for locations with configured credentials.
 - Ingredient database integration (separate Google Sheet with supplier codes, units, prices)
-- Feedback system (floating purple button, structured form with 4 types, stores to Google Sheets)
+- Feedback system (floating purple button, structured form with 4 types, stores to PostgreSQL)
+- Feedback admin screen: view all submitted feedback, filter by type, "Copy for Claude" button exports feedback as structured text for pasting into Claude Code chat
+- Dashboard allergen editing: add/remove allergens directly on today's menu cards (same inline flow as week plan)
 - Mobile responsive layout (card-based dishes on phone, bottom-sheet modals, fixed bottom navigation bar with icons, compact sticky header)
 - Logistics colour coding with legend, filter bars, section grouping (To cook / Cooked / Frozen)
 
@@ -142,6 +144,7 @@ public/
     orders.js          — Order overview (3-tab: Combined Order / Standard Inventory / Dish Ingredients)
     ingredient-db.js   — Ingredient database editor + supplier import
     feedback.js        — Feedback button and form
+    feedback-admin.js  — Feedback admin screen (view, filter, export)
     tutorial.js        — Interactive guided tutorial system
     init.js            — Modal, HTML escape, app init
 data/
