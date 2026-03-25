@@ -596,8 +596,8 @@ function renderDashboardContent() {
         // Allergens (combine dish + extra)
         const allergens = [...(d.allergens || []), ...(d.extraAllergens || [])];
         const allergenHtml = allergens.length
-          ? allergens.map(a => `<span class="dash-allergen">${esc(a)}</span>`).join('')
-          : '<span class="dash-no-allergens">No allergens</span>';
+          ? allergens.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')
+          : '';
 
         // Recipe link
         const recipeLink = d.recipeSheetId
@@ -620,7 +620,7 @@ function renderDashboardContent() {
               ${recipeLink}
             </div>
             <div class="dash-menu-meta">
-              <div class="dash-allergen-row">${allergenHtml}</div>
+              <div class="dash-allergen-row allergen-inline" id="ag-inline-${d.id}">${allergenHtml}<button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}',event)" title="Add allergen">+</button></div>
               ${starchHtml}
             </div>
           </div>`;

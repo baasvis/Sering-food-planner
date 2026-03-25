@@ -157,7 +157,7 @@ function renderBatchTile(d) {
         ${d.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="recipe-btn">Recipe &#8599;</a>` : ''}
         <div class="allergen-inline" id="ag-inline-${d.id}" style="display:inline-flex;">
           ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
-          <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}')" title="Add allergen">+</button>
+          <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}',event)" title="Add allergen">+</button>
         </div>
         ${svcLbls ? `<span style="font-size:12px;color:var(--text);">${svcLbls}</span>` : '<span style="font-size:12px;font-weight:600;color:var(--red);">no day assigned</span>'}
       </div>
@@ -271,9 +271,9 @@ function renderBatchTile(d, showAssign) {
         </div>
         <div class="batch-detail-section">
           <label>Allergens</label>
-          <div class="allergen-inline">
+          <div class="allergen-inline" id="ag-inline-${d.id}">
             ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
-            <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}')">+</button>
+            <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}',event)" title="Add allergen">+</button>
           </div>
         </div>
         ${d.note !== undefined ? `<div class="batch-detail-section"><label>Note</label><input class="inline-edit" value="${esc(d.note || '')}" placeholder="Add a note..." onchange="inlineEdit('${d.id}','note',this.value)" onclick="event.stopPropagation()" /></div>` : ''}
@@ -293,6 +293,23 @@ function renderBatchTile(d, showAssign) {
   return html;
 }
 
+// Remove or replace a batch reference in all caterings
+function cleanCateringRefs(oldId, newId) {
+  (S.caterings || []).forEach(c => {
+    if (!c.dishes) return;
+    if (newId) {
+      // Replace: point catering dishes from old batch to new batch
+      const newBatch = S.batches.find(x => x.id === newId);
+      c.dishes = c.dishes.map(d => d.dishId === oldId
+        ? { ...d, dishId: newId, name: newBatch ? newBatch.name : d.name }
+        : d);
+    } else {
+      // Delete: remove references to the old batch
+      c.dishes = c.dishes.filter(d => d.dishId !== oldId);
+    }
+  });
+}
+
 function deleteBatch(id) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
@@ -301,6 +318,7 @@ function deleteBatch(id) {
     return;
   }
   S.batches = S.batches.filter(x => x.id !== id);
+  cleanCateringRefs(id, null);
   S.expandedBatches.delete(id);
   S.selected.delete(id);
   rebuildPlanner();
@@ -341,12 +359,14 @@ function inlineRemoveAllergen(id, allergen) {
   rerenderCurrentView();
 }
 
-function inlineAddAllergenStart(id) {
+function inlineAddAllergenStart(id, evt) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
-  const container = document.getElementById('ag-inline-' + id);
+  // Use the clicked button's parent to avoid duplicate-ID issues (e.g. dashboard shows same batch twice)
+  const btn = evt ? evt.target.closest('.allergen-add-btn') : null;
+  const container = btn ? btn.closest('.allergen-inline') : document.getElementById('ag-inline-' + id);
   if (!container || container.querySelector('.allergen-add-select')) return;
-  const btn = container.querySelector('.allergen-add-btn');
+  const addBtn = btn || container.querySelector('.allergen-add-btn');
   const allExisting = [...(d.allergens || []), ...(d.extraAllergens || [])];
   const available = ALLERGENS.filter(a => !allExisting.includes(a));
   const select = document.createElement('select');
@@ -369,7 +389,7 @@ function inlineAddAllergenStart(id) {
         if (this.value.trim()) inlineAddAllergenConfirm(id, this.value);
         else rerenderCurrentView();
       };
-      container.insertBefore(input, btn);
+      container.insertBefore(input, addBtn);
       input.focus();
     } else if (this.value) {
       inlineAddAllergenConfirm(id, this.value);
@@ -378,8 +398,8 @@ function inlineAddAllergenStart(id) {
   select.onblur = function() {
     if (!this.value) rerenderCurrentView();
   };
-  container.insertBefore(select, btn);
-  btn.style.display = 'none';
+  container.insertBefore(select, addBtn);
+  addBtn.style.display = 'none';
   select.focus();
 }
 

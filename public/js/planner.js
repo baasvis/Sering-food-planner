@@ -831,6 +831,9 @@ function confirmReplaceBatch(newBatchId) {
   });
   replacement.services = existing;
 
+  // Update catering references from old → replacement
+  cleanCateringRefs(old.id, newBatchId);
+
   // Delete old batch
   const oldName = old.name;
   S.batches = S.batches.filter(d => d.id !== old.id);
@@ -874,6 +877,9 @@ function replaceWithRecipe(recipeId) {
     createdAt: new Date().toISOString(),
   };
   S.batches.push(newBatch);
+
+  // Update catering references from old → new batch
+  cleanCateringRefs(old.id, newBatch.id);
 
   // Delete old batch
   const oldName = old.name;
