@@ -1413,7 +1413,8 @@ function renderStocktakeArea() {
     // Column headers + legend
     html += `<div class="stocktake-header" style="display:flex;align-items:center;padding:4px;margin-bottom:8px;font-size:11px;color:var(--text2);border-bottom:1px solid var(--border);">
       <div style="flex:1;">Item &nbsp; <span style="color:var(--green);">●</span> standard &nbsp; <span style="color:var(--purple, #7c3aed);">●</span> batches</div>
-      <div style="width:120px;text-align:center;">In stock</div>
+      <div style="width:55px;text-align:center;">Stock</div>
+      <div style="width:65px;"></div>
       <div style="width:90px;text-align:right;">To order</div>
     </div>`;
 
@@ -1447,10 +1448,10 @@ function renderStocktakeArea() {
             <div style="font-weight:500;">${esc(ing.name)}</div>
             ${breakdownLines}
           </div>
-          <div style="width:120px;display:flex;align-items:center;justify-content:center;gap:2px;">
+          <div style="width:55px;text-align:center;flex-shrink:0;">
             <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill || ''}" placeholder="0" style="width:50px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="stocktakeValues['${esc(ing.id)}']=this.value===''?undefined:parseFloat(this.value)||0;updateStocktakeToOrder(this)" />
-            <span class="order-units" style="font-size:10px;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(unitSuffix)}</span>
           </div>
+          <div style="width:65px;font-size:10px;color:var(--text2);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(unitSuffix)}</div>
           <div class="stocktake-to-order" style="width:90px;text-align:right;font-size:12px;" data-needed-base="${ing.neededBase}" data-order-unit-size="${ing.orderUnitSize || 0}" data-unit="${esc(ing.unit || 'g')}" data-order-unit="${esc(ing.orderUnit || '')}">
             ${_calcStocktakeToOrder(ing, prefill)}
           </div>
