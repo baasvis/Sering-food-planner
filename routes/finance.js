@@ -143,17 +143,28 @@ router.post('/sync', (req, res) => {
     syncProcess = null;
   });
 
-  // Kill sync after 5 minutes to prevent it from hanging forever
+  // Kill sync after 2 minutes to prevent it from hanging forever
   const syncTimeout = setTimeout(() => {
     if (syncProcess) {
-      console.error('[finance] Sync timed out after 5 minutes, killing process');
-      lastSyncError = 'Sync timed out after 5 minutes';
+      console.error('[finance] Sync timed out after 2 minutes, killing process');
+      lastSyncError = 'Sync timed out after 2 minutes. Output: ' + output.slice(-300);
       syncProcess.kill();
       syncProcess = null;
     }
-  }, 5 * 60 * 1000);
+  }, 2 * 60 * 1000);
 
   res.json({ status: 'syncing', startDate: start, endDate: end });
+});
+
+// ── POST /api/finance/sync-cancel ────────────────────────────────────────────
+router.post('/sync-cancel', (req, res) => {
+  if (syncProcess) {
+    console.log('[finance] Sync cancelled by user');
+    lastSyncError = 'Sync cancelled by user';
+    syncProcess.kill();
+    syncProcess = null;
+  }
+  res.json({ status: 'cancelled' });
 });
 
 // ── GET /api/finance/sync-status ────────────────────────────────────────────

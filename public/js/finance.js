@@ -200,6 +200,9 @@ async function renderFinance() {
   const syncBtnText = S.financeSyncing
     ? '<span class="fin-spinner"></span> Syncing...'
     : 'Sync from Tebi';
+  const cancelBtn = S.financeSyncing
+    ? '<button class="fin-cancel-btn" onclick="cancelSync()">Cancel</button>'
+    : '';
 
   el.innerHTML = `
     <div class="fin-header">
@@ -214,6 +217,7 @@ async function renderFinance() {
               onclick="triggerSync()" ${S.financeSyncing ? 'disabled' : ''}>
         ${syncBtnText}
       </button>
+      ${cancelBtn}
     </div>
 
     <div class="fin-month-summary">
@@ -433,6 +437,17 @@ async function setFinanceProductFilter(type, value) {
   if (type === 'loc') S.financeProductLoc = value;
   await loadFinanceProducts();
   renderFinance();
+}
+
+async function cancelSync() {
+  try {
+    await apiPost('/api/finance/sync-cancel', {});
+    S.financeSyncing = false;
+    renderFinance();
+    showToast('Sync cancelled');
+  } catch (e) {
+    showToast('Cancel failed: ' + e.message, 'error');
+  }
 }
 
 function changeFinanceWeek(delta) {

@@ -61,6 +61,17 @@
   opacity: 0.7;
   cursor: wait;
 }
+.fin-cancel-btn {
+  background: none;
+  border: 1px solid var(--red, #E86B5A);
+  color: var(--red, #E86B5A);
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fin-cancel-btn:hover { background: var(--red-bg, rgba(232,107,90,0.12)); }
 
 .fin-spinner {
   display: inline-block;
