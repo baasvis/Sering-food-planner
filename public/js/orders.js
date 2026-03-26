@@ -180,6 +180,7 @@ function updateSiTarget(ingredientId, val) {
   const orderUnits = parseFloat(val) || 0;
   const baseAmount = ing.orderUnitSize > 0 ? orderUnits * ing.orderUnitSize : orderUnits;
   ing.targetStock[loc] = baseAmount;
+  _updateSiToOrder(ingredientId, ing);
   clearTimeout(siTargetTimeout);
   siTargetTimeout = setTimeout(async () => {
     try {
@@ -198,12 +199,38 @@ function updateSiStock(ingredientId, val) {
   const orderUnits = parseFloat(val) || 0;
   const baseAmount = ing.orderUnitSize > 0 ? orderUnits * ing.orderUnitSize : orderUnits;
   ing.stock[loc] = { amount: baseAmount, date: new Date().toISOString().slice(0, 10) };
+  _updateSiToOrder(ingredientId, ing);
   clearTimeout(siStockTimeout);
   siStockTimeout = setTimeout(async () => {
     try {
       await apiPost('/api/ingredients/stock', { ingredientId, location: loc, amount: baseAmount });
     } catch (e) { toast('Failed to save stock: ' + e.message, true); }
   }, 800);
+}
+
+/** Inline update the to-order cell for a standard inventory row */
+function _updateSiToOrder(ingredientId, ing) {
+  const loc = currentOrdersLoc || 'west';
+  const row = document.querySelector(`tr[data-si-id="${ingredientId}"]`);
+  if (!row) return;
+  const toOrderCell = row.querySelector('.si-to-order');
+  if (!toOrderCell) return;
+
+  const targetBase = (ing.targetStock && ing.targetStock[loc]) || 0;
+  const stockBase = (ing.stock && ing.stock[loc]) ? (ing.stock[loc].amount || 0) : 0;
+  const deficit = Math.max(0, targetBase - stockBase);
+  const hasOrderUnit = ing.orderUnitSize > 0;
+  const orderUnitLabel = ing.orderUnit || '';
+  const unitSuffix = hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, ing.unit); return f.unit; })();
+
+  if (deficit > 0) {
+    const calc = hasOrderUnit ? calcOrderUnits(deficit, ing) : null;
+    toOrderCell.innerHTML = calc
+      ? `<span class="to-order-positive">${calc.units}x ${esc(unitSuffix)}</span>`
+      : (() => { const f = formatAmount(deficit, ing.unit); return `<span class="to-order-positive">${f.amount} ${f.unit}</span>`; })();
+  } else {
+    toOrderCell.innerHTML = '<span class="to-order-zero">\u2713 full</span>';
+  }
 }
 
 // ── Tab switching ─────────────────────────────────────────
@@ -347,7 +374,7 @@ function renderStandardInventoryTab() {
             : (() => { const f = formatAmount(ing.deficit, ing.unit); return `<span class="to-order-positive">${f.amount} ${f.unit}</span>`; })())
           : '<span class="to-order-zero">\u2713 full</span>';
 
-        itemsHtml += `<tr>
+        itemsHtml += `<tr data-si-id="${esc(ing.id)}">
           <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}</td>
           <td>${renderStorageBadge(ing)}</td>
           <td>${codeDisplay}</td>
@@ -360,7 +387,7 @@ function renderStandardInventoryTab() {
             <input class="order-stock-input" type="number" min="0" step="1" value="${ing.targetUnits > 0 ? ing.targetUnits : ''}" placeholder="0" style="width:55px;" oninput="updateSiTarget('${esc(ing.id)}', this.value)" />
             <span class="order-units" style="margin-left:2px;">x ${unitSuffix}</span>
           </td>
-          <td>${deficitDisplay}</td>
+          <td class="si-to-order">${deficitDisplay}</td>
           <td></td>
           <td><button class="btn btn-danger btn-sm" onclick="removeSiItem('${esc(ing.id)}')">Remove</button></td>
         </tr>`;
@@ -641,7 +668,7 @@ function renderCombinedOrderTab() {
     </div>`;
   }
 
-  const hanosAllCombinedBtn = isHanosEnabled() && allItems.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk()" title="Send entire combined order to Hanos cart">🛒 Send all to Hanos</button>` : '';
+  const hanosAllCombinedBtn = isHanosEnabled() && ingList.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk()" title="Send entire combined order to Hanos cart">🛒 Send all to Hanos</button>` : '';
   html += `<div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <span>Combined Order &mdash; ${esc(curLoc === 'west' ? 'Sering West' : 'Sering Centraal')}</span>
       <div style="display:flex;align-items:center;gap:8px;">
