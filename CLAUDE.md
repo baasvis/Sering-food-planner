@@ -110,5 +110,6 @@ Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 - Don't add a build step or bundler
 - Don't use import/export in frontend files
 - Don't change the Prisma schema without creating a migration (`npx prisma migrate dev`)
+- After any migration, always verify `prisma/schema.prisma` matches the DB: run `npx prisma db pull` then `npx prisma generate`, and ensure all fields use camelCase with `@map("snake_case")`. Commit the updated schema in the same PR.
 - Don't break the script load order in index.html
 - Don't remove withWriteLock from write endpoints
