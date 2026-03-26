@@ -16,6 +16,7 @@ function showScreen(name) {
   if (name === 'planner') renderWeekPlan();
   if (name === 'recipe-index') renderRecipeIndex();
   if (name === 'orders') renderOrders();
+  if (name === 'finance') renderFinance();
   if (name === 'feedback-admin') renderFeedbackAdmin();
 }
 

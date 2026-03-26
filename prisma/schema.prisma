@@ -195,3 +195,18 @@ model StorageConfig {
 
   @@map("storage_config")
 }
+
+model DailyRevenue {
+  id           Int    @id @default(autoincrement())
+  date         String
+  location     String
+  grossRevenue Float  @default(0) @map("gross_revenue")
+  netRevenue   Float  @default(0) @map("net_revenue")
+  sales        Int    @default(0)
+  covers       Int    @default(0)
+  invoiceCount Int    @default(0) @map("invoice_count")
+  syncedAt     String @map("synced_at")
+
+  @@unique([date, location])
+  @@map("daily_revenue")
+}
