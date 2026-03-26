@@ -888,52 +888,131 @@ function openAddIngredientModal() {
   const id = crypto.randomUUID();
 
   const typeChecks = INGREDIENT_TYPES.map(t =>
-    `<label class="ing-edit-type-label"><input type="checkbox" class="new-ing-type-cb" value="${esc(t)}" onchange="updateNewIngCategoryOptions()" /> ${esc(t)}</label>`
+    `<label class="ing-edit-type-label"><input type="checkbox" class="ing-edit-type-cb" value="${esc(t)}" onchange="updateEditCategoryOptions()" /> ${esc(t)}</label>`
   ).join('');
 
   const catSelect = '<option value="">— Select —</option>' + ALL_CATEGORIES.map(c =>
     `<option value="${esc(c)}">${esc(c)}</option>`
   ).join('');
 
+  const storageCatNames = Object.keys(STORAGE_CATEGORIES);
+  const emptyCatOpts = '<option value="">—</option>' + storageCatNames.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  const emptyLocOpts = '<option value="">—</option>';
+
   const modalHtml = `
-    <div style="padding:20px;max-width:550px;">
+    <div style="padding:20px;max-width:600px;">
       <h3 style="margin:0 0 16px;">Add Ingredient</h3>
-      <div style="display:grid;gap:10px;">
-        <div>
-          <label class="ing-edit-label">Name *</label>
-          <input class="order-stock-input" style="width:100%;" id="new-ing-name" placeholder="English name (e.g. Frozen Spinach)" />
+      <div style="margin-bottom:12px;padding:8px 12px;background:var(--bg2);border-radius:var(--radius);border:1px solid var(--border);">
+        <label class="ing-edit-label" style="margin-bottom:4px;">🔍 Hanos lookup — paste order code or URL</label>
+        <div style="display:flex;gap:6px;">
+          <input class="order-stock-input" style="flex:1;" id="ing-hanos-lookup" placeholder="e.g. 34295808 or https://www.hanos.nl/..." />
+          <button class="btn btn-sm" style="white-space:nowrap;background:var(--blue);color:white;" onclick="hanosLookupProduct()">Lookup</button>
         </div>
-        <div>
-          <label class="ing-edit-label">Types</label>
-          <div class="ing-edit-types">${typeChecks}</div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div>
-            <label class="ing-edit-label">Category</label>
-            <select class="order-stock-input" style="width:100%;" id="new-ing-category">${catSelect}</select>
+        <div id="ing-hanos-status" style="font-size:11px;color:var(--text2);margin-top:4px;"></div>
+      </div>
+      <div class="ing-edit-grid">
+        <div class="ing-edit-section">
+          <div class="ing-edit-row">
+            <div style="flex:2;">
+              <label class="ing-edit-label">Name *</label>
+              <input class="order-stock-input" style="width:100%;" value="" id="ing-edit-name" placeholder="English name (e.g. Frozen Spinach)" />
+            </div>
+            <div style="flex:2;">
+              <label class="ing-edit-label">Supplier name</label>
+              <input class="order-stock-input" style="width:100%;" value="" id="ing-edit-supplierName" placeholder="Hanos product name" />
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Supplier</label>
+              <input class="order-stock-input" style="width:100%;" value="" id="ing-edit-supplier" placeholder="e.g. Hanos" />
+            </div>
           </div>
-          <div>
-            <label class="ing-edit-label">Unit</label>
-            <select class="order-stock-input" style="width:100%;" id="new-ing-unit">
-              <option>Grams</option><option>ML</option><option>pieces</option>
-            </select>
+
+          <div class="ing-edit-row">
+            <div style="flex:1;">
+              <label class="ing-edit-label">Types</label>
+              <div class="ing-edit-types">${typeChecks}</div>
+            </div>
+          </div>
+
+          <div class="ing-edit-row">
+            <div style="flex:1;">
+              <label class="ing-edit-label">Category</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-category">${catSelect}</select>
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Unit</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-unit">
+                <option selected>Grams</option>
+                <option>ML</option>
+                <option>pieces</option>
+              </select>
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Price level</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-priceLevel">
+                <option value="">—</option>
+                ${PRICE_LEVELS.map(l => `<option value="${l}">${l}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="ing-edit-label">Active</label>
+              <div><input type="checkbox" id="ing-edit-active" checked /></div>
+            </div>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div>
-            <label class="ing-edit-label">Supplier</label>
-            <input class="order-stock-input" style="width:100%;" id="new-ing-supplier" placeholder="e.g. Hanos" />
+
+        <div class="ing-edit-section">
+          <div class="ing-edit-row">
+            <div style="flex:1;">
+              <label class="ing-edit-label">Order code</label>
+              <input class="order-stock-input" style="width:100%;" value="" id="ing-edit-orderCode" />
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Order unit</label>
+              <input class="order-stock-input" style="width:100%;" value="" id="ing-edit-orderUnit" />
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Price (\u20AC)</label>
+              <input class="order-stock-input" style="width:100%;" type="number" step="0.01" value="" placeholder="0.00" id="ing-edit-orderPrice" />
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Amount (g/ml)</label>
+              <input class="order-stock-input" style="width:100%;" type="number" step="1" value="" placeholder="0" id="ing-edit-orderUnitSize" />
+            </div>
           </div>
-          <div>
-            <label class="ing-edit-label">Order code</label>
-            <input class="order-stock-input" style="width:100%;" id="new-ing-orderCode" placeholder="e.g. 34225259" />
+
+          <div class="ing-edit-row">
+            <div style="flex:1;">
+              <label class="ing-edit-label">West: Area</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageWestCat" onchange="updateStorageLocOpts('west')">${emptyCatOpts}</select>
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">West: Spot</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageWestLoc">${emptyLocOpts}</select>
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Centraal: Area</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageCentraalCat" onchange="updateStorageLocOpts('centraal')">${emptyCatOpts}</select>
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Centraal: Spot</label>
+              <select class="order-stock-input" style="width:100%;" id="ing-edit-storageCentraalLoc">${emptyLocOpts}</select>
+            </div>
+          </div>
+
+          <div class="ing-edit-row">
+            <div style="flex:1;">
+              <label class="ing-edit-label">Allergens</label>
+              <input class="order-stock-input" style="width:100%;" value="" id="ing-edit-allergens" placeholder="Allergens" />
+            </div>
+            <div style="flex:1;">
+              <label class="ing-edit-label">Notes</label>
+              <input class="order-stock-input" style="width:100%;" value="" id="ing-edit-notes" placeholder="Notes..." />
+            </div>
           </div>
         </div>
-        <div>
-          <label class="ing-edit-label">Notes</label>
-          <input class="order-stock-input" style="width:100%;" id="new-ing-notes" placeholder="Optional notes" />
-        </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;margin-top:8px;">
           <button class="btn btn-sm" onclick="closeModal()">Cancel</button>
           <button class="btn btn-sm" style="background:var(--green);color:white;" onclick="saveNewIngredient('${id}')">Add ingredient</button>
         </div>
@@ -942,53 +1021,45 @@ function openAddIngredientModal() {
   showModal(modalHtml);
 }
 
-function updateNewIngCategoryOptions() {
-  const checks = document.querySelectorAll('.new-ing-type-cb');
-  const checked = [...checks].filter(c => c.checked).map(c => c.value);
-  const groups = new Set(checked.map(t => INGREDIENT_TYPE_TO_GROUP[t]).filter(Boolean));
-  let catOptions = [];
-  if (groups.size === 0) { catOptions = ALL_CATEGORIES; }
-  else { groups.forEach(g => { catOptions = catOptions.concat(INGREDIENT_CATEGORIES[g] || []); }); }
-
-  const sel = document.getElementById('new-ing-category');
-  if (!sel) return;
-  const current = sel.value;
-  sel.innerHTML = '<option value="">— Select —</option>' + catOptions.map(c =>
-    `<option value="${esc(c)}"${current===c?' selected':''}>${esc(c)}</option>`
-  ).join('');
-}
-
 async function saveNewIngredient(id) {
-  const name = document.getElementById('new-ing-name').value.trim();
+  const name = (document.getElementById('ing-edit-name')?.value || '').trim();
   if (!name) { toastError('Name is required'); return; }
 
-  const typeChecks = document.querySelectorAll('.new-ing-type-cb');
-  const types = [...typeChecks].filter(c => c.checked).map(c => c.value);
+  const checks = document.querySelectorAll('.ing-edit-type-cb');
+  const types = [...checks].filter(c => c.checked).map(c => c.value);
 
   const ing = {
     id,
     name,
-    supplierName: '',
+    supplierName: document.getElementById('ing-edit-supplierName')?.value.trim() || '',
     types,
-    category: document.getElementById('new-ing-category').value,
-    unit: document.getElementById('new-ing-unit').value,
-    supplier: document.getElementById('new-ing-supplier').value.trim(),
-    orderCode: document.getElementById('new-ing-orderCode').value.trim(),
-    orderUnit: '',
-    orderPrice: null,
-    orderUnitSize: 0,
+    category: document.getElementById('ing-edit-category')?.value || '',
+    unit: document.getElementById('ing-edit-unit')?.value || 'Grams',
+    supplier: document.getElementById('ing-edit-supplier')?.value.trim() || '',
+    orderCode: document.getElementById('ing-edit-orderCode')?.value.trim() || '',
+    orderUnit: document.getElementById('ing-edit-orderUnit')?.value.trim() || '',
+    orderPrice: parseFloat(document.getElementById('ing-edit-orderPrice')?.value) || 0,
+    orderUnitSize: parseFloat(document.getElementById('ing-edit-orderUnitSize')?.value) || 0,
+    priceLevel: document.getElementById('ing-edit-priceLevel')?.value || '',
+    active: document.getElementById('ing-edit-active')?.checked !== false,
+    allergens: document.getElementById('ing-edit-allergens')?.value.trim() || '',
+    notes: document.getElementById('ing-edit-notes')?.value.trim() || '',
+    storageLocations: {
+      west: { category: document.getElementById('ing-edit-storageWestCat')?.value || '', location: document.getElementById('ing-edit-storageWestLoc')?.value || '' },
+      centraal: { category: document.getElementById('ing-edit-storageCentraalCat')?.value || '', location: document.getElementById('ing-edit-storageCentraalLoc')?.value || '' },
+    },
     measureMode: 'weight',
-    priceLevel: '',
     pricePer100: 0,
     priceHistory: [],
     priceAlert: false,
-    storageLocations: {},
     stock: {},
     nutrition: {},
-    allergens: '',
-    notes: document.getElementById('new-ing-notes').value.trim(),
-    active: true,
   };
+
+  if (ing.orderPrice && ing.orderUnitSize) {
+    ing.pricePer100 = Math.round(ing.orderPrice / ing.orderUnitSize * 100 * 100) / 100;
+  }
+
   try {
     await apiPost('/api/ingredients/' + id, ing);
     ingredientDbFull.push(ing);
