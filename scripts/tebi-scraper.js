@@ -291,6 +291,116 @@ async function fetchDayData(page, startDate, endDate) {
   return results;
 }
 
+// ── Service Period Classification ────────────────────────────────────────────
+
+// Classify a timestamp into a service period
+// morning: 06:00–12:00, lunch: 12:00–14:00, afternoon: 14:00–18:00,
+// dinner: 18:00–21:00, bar: 21:00–06:00 (next day)
+function classifyServicePeriod(timestamp) {
+  if (!timestamp) return 'other';
+  const d = new Date(timestamp);
+  const hour = d.getHours();
+  const minute = d.getMinutes();
+  const time = hour * 60 + minute; // minutes since midnight
+
+  if (time >= 6 * 60 && time < 12 * 60) return 'morning';
+  if (time >= 12 * 60 && time < 14 * 60) return 'lunch';
+  if (time >= 14 * 60 && time < 18 * 60) return 'afternoon';
+  if (time >= 18 * 60 && time < 21 * 60) return 'dinner';
+  return 'bar'; // 21:00–06:00
+}
+
+// ── Invoice Line-Item Parsing ────────────────────────────────────────────────
+
+// Extract product-level revenue from invoice data
+function formatProductRevenue(invoices, profitCenters) {
+  if (!invoices || !Array.isArray(invoices.content)) return [];
+
+  // Build reverse map: profit center UUID → location name
+  const pcToLoc = {};
+  for (const [name, uuid] of Object.entries(profitCenters)) {
+    if (uuid && name !== 'all') pcToLoc[uuid] = name;
+  }
+
+  // Aggregate: key = date|location|meal|productName|productCategory
+  const agg = {};
+
+  for (const invoice of invoices.content) {
+    // Determine location from profit center
+    const pcUuid = invoice.profitCenterId || invoice.profitCenter?.id || '';
+    const location = pcToLoc[pcUuid] || 'unknown';
+
+    // Determine service period from invoice timestamp
+    const timestamp = invoice.createdAt || invoice.date || invoice.closedAt || '';
+    const meal = classifyServicePeriod(timestamp);
+
+    // Extract the date portion (YYYY-MM-DD)
+    const invoiceDate = timestamp ? timestamp.slice(0, 10) : '';
+
+    // Parse line items (Tebi calls them "items" or "lines")
+    const items = invoice.items || invoice.lines || invoice.lineItems || [];
+    for (const item of items) {
+      const productName = item.productName || item.name || item.description || 'Unknown';
+      const productCategory = item.productGroup || item.category || item.groupName || item.productGroupName || '';
+      const quantity = parseFloat(item.quantity || item.count || 1) || 1;
+
+      // Revenue: try various field names Tebi might use
+      const grossAmount = parseFloat(
+        item.totalGross || item.grossAmount || item.totalAmount ||
+        item.total || item.amount || item.price || 0
+      ) || 0;
+      const netAmount = parseFloat(
+        item.totalNet || item.netAmount || item.totalExclVat ||
+        item.totalExcludingVat || 0
+      ) || 0;
+
+      const key = `${invoiceDate}|${location}|${meal}|${productName}|${productCategory}`;
+      if (!agg[key]) {
+        agg[key] = {
+          date: invoiceDate,
+          location,
+          meal,
+          productName,
+          productCategory,
+          quantity: 0,
+          grossRevenue: 0,
+          netRevenue: 0,
+        };
+      }
+      agg[key].quantity += quantity;
+      agg[key].grossRevenue += grossAmount;
+      agg[key].netRevenue += netAmount;
+    }
+
+    // If invoice has no line items, record the invoice total as a single "Other" product
+    if (items.length === 0) {
+      const invoiceGross = parseFloat(invoice.totalGross || invoice.total || invoice.amount || 0) || 0;
+      const invoiceNet = parseFloat(invoice.totalNet || invoice.totalExclVat || 0) || 0;
+      if (invoiceGross > 0) {
+        const key = `${invoiceDate}|${location}|${meal}|Invoice Total|Other`;
+        if (!agg[key]) {
+          agg[key] = {
+            date: invoiceDate, location, meal,
+            productName: 'Invoice Total', productCategory: 'Other',
+            quantity: 0, grossRevenue: 0, netRevenue: 0,
+          };
+        }
+        agg[key].quantity += 1;
+        agg[key].grossRevenue += invoiceGross;
+        agg[key].netRevenue += invoiceNet;
+      }
+    }
+  }
+
+  // Round all amounts
+  return Object.values(agg).map(row => ({
+    ...row,
+    grossRevenue: Math.round(row.grossRevenue * 100) / 100,
+    netRevenue: Math.round(row.netRevenue * 100) / 100,
+    quantity: Math.round(row.quantity * 100) / 100,
+  }));
+}
+
 // ── Format Output ───────────────────────────────────────────────────────────
 
 // Sum a metric from chart data (hourly buckets → daily total)
@@ -349,6 +459,7 @@ async function main() {
   const startDate = args[0] || yesterday();
   const endDate = args[1] ? nextDay(args[1]) : nextDay(startDate);
   const showRaw = flags.includes('--raw');
+  const dumpInvoices = flags.includes('--dump-invoices');
 
   log(`Tebi Scraper — fetching ${startDate} to ${endDate}`);
   log(`Ledger: ${LEDGER_ID}, Headless: ${HEADLESS}`);
@@ -389,6 +500,28 @@ async function main() {
     console.log(JSON.stringify(summary, null, 2));
     console.log('='.repeat(60));
 
+    // Dump invoice structure for discovery
+    if (dumpInvoices && rawData.invoices && Array.isArray(rawData.invoices.content)) {
+      console.log('\n' + '='.repeat(60));
+      console.log('INVOICE STRUCTURE (first 3 invoices)');
+      console.log('='.repeat(60));
+      const sample = rawData.invoices.content.slice(0, 3);
+      console.log(JSON.stringify(sample, null, 2));
+      console.log('='.repeat(60));
+      console.log(`Total invoices: ${rawData.invoices.content.length}`);
+      if (sample[0]) {
+        console.log('Invoice keys:', Object.keys(sample[0]).join(', '));
+        const items = sample[0].items || sample[0].lines || sample[0].lineItems || [];
+        if (items.length > 0) {
+          console.log('Line item keys:', Object.keys(items[0]).join(', '));
+        }
+      }
+    }
+
+    // Parse product-level revenue from invoices
+    const productRevenue = formatProductRevenue(rawData.invoices, PROFIT_CENTERS);
+    summary.productRevenue = productRevenue;
+
     // Also output raw data for debugging
     if (showRaw) {
       console.log('\nRAW DATA:');
@@ -417,4 +550,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, login, fetchTebiAPI, fetchDayData, formatResults, sumMetric, PROFIT_CENTERS, CHART_TYPES };
+module.exports = { main, login, fetchTebiAPI, fetchDayData, formatResults, formatProductRevenue, classifyServicePeriod, sumMetric, PROFIT_CENTERS, CHART_TYPES };

@@ -226,6 +226,130 @@
   background: #fafafa;
 }
 
+/* ── Product breakdown ── */
+
+.fin-products-section {
+  margin-bottom: 1.5rem;
+}
+.fin-products-section h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  color: #666;
+}
+
+/* Filter pills */
+.fin-product-filters {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.fin-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.fin-filter-group label {
+  font-size: 0.8rem;
+  color: #888;
+  font-weight: 600;
+}
+.fin-pill-group {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.fin-pill {
+  background: none;
+  border: none;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  color: #666;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+.fin-pill:hover {
+  background: #f0f0f0;
+}
+.fin-pill.active {
+  background: var(--primary, #5b6abf);
+  color: #fff;
+}
+
+/* Category horizontal bar chart */
+.fin-cat-chart {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.fin-cat-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.fin-cat-row:last-child { margin-bottom: 0; }
+
+.fin-cat-label {
+  width: 120px;
+  min-width: 120px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #555;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fin-cat-bar-track {
+  flex: 1;
+  height: 22px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.fin-cat-bar {
+  height: 100%;
+  border-radius: 4px;
+  min-width: 2px;
+  transition: width 0.3s ease;
+}
+.fin-cat-value {
+  width: 110px;
+  min-width: 110px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #333;
+  text-align: right;
+}
+.fin-cat-pct {
+  font-weight: 400;
+  color: #999;
+  font-size: 0.75rem;
+}
+
+/* Product table */
+.fin-product-table-wrap {
+  max-height: 500px;
+  overflow-y: auto;
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 10px;
+}
+.fin-product-table {
+  border: none;
+}
+.fin-product-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
 /* ── Empty state ── */
 
 .fin-empty {
@@ -244,4 +368,9 @@
   .fin-table { font-size: 0.75rem; }
   .fin-table td, .fin-table th { padding: 0.35rem 0.25rem; }
   .fin-loc-label { font-size: 0.7rem; }
+  .fin-product-filters { flex-direction: column; gap: 0.5rem; }
+  .fin-filter-group { flex-wrap: wrap; }
+  .fin-pill { padding: 0.3rem 0.5rem; font-size: 0.72rem; }
+  .fin-cat-label { width: 80px; min-width: 80px; font-size: 0.72rem; }
+  .fin-cat-value { width: 90px; min-width: 90px; font-size: 0.72rem; }
 }

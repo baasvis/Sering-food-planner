@@ -210,3 +210,19 @@ model DailyRevenue {
   @@unique([date, location])
   @@map("daily_revenue")
 }
+
+model ProductRevenue {
+  id              Int    @id @default(autoincrement())
+  date            String
+  location        String
+  meal            String // morning, lunch, afternoon, dinner, bar
+  productName     String @map("product_name")
+  productCategory String @default("") @map("product_category")
+  quantity        Float  @default(0)
+  grossRevenue    Float  @default(0) @map("gross_revenue")
+  netRevenue      Float  @default(0) @map("net_revenue")
+  syncedAt        String @map("synced_at")
+
+  @@unique([date, location, meal, productName])
+  @@map("product_revenue")
+}

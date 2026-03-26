@@ -17,7 +17,7 @@ const LEDGER_ID = process.env.TEBI_LEDGER_ID || '723192';
 
 // Reuse scraper functions
 const {
-  login, fetchTebiAPI, fetchDayData, formatResults,
+  login, fetchTebiAPI, fetchDayData, formatResults, formatProductRevenue,
   PROFIT_CENTERS, CHART_TYPES,
 } = require('./tebi-scraper');
 
@@ -63,6 +63,52 @@ async function upsertRevenue(date, location, data) {
       syncedAt: now,
     },
   });
+}
+
+async function upsertProductRevenue(rows) {
+  if (!rows || rows.length === 0) return 0;
+
+  const now = new Date().toISOString();
+  let count = 0;
+
+  for (const row of rows) {
+    if (!row.date || !row.productName) continue;
+    try {
+      await prisma.productRevenue.upsert({
+        where: {
+          date_location_meal_productName: {
+            date: row.date,
+            location: row.location || 'unknown',
+            meal: row.meal || 'other',
+            productName: row.productName,
+          },
+        },
+        update: {
+          productCategory: row.productCategory || '',
+          quantity: row.quantity || 0,
+          grossRevenue: row.grossRevenue || 0,
+          netRevenue: row.netRevenue || 0,
+          syncedAt: now,
+        },
+        create: {
+          date: row.date,
+          location: row.location || 'unknown',
+          meal: row.meal || 'other',
+          productName: row.productName,
+          productCategory: row.productCategory || '',
+          quantity: row.quantity || 0,
+          grossRevenue: row.grossRevenue || 0,
+          netRevenue: row.netRevenue || 0,
+          syncedAt: now,
+        },
+      });
+      count++;
+    } catch (e) {
+      err(`  Failed to upsert product: ${row.productName}: ${e.message}`);
+    }
+  }
+
+  return count;
 }
 
 async function main() {
@@ -120,6 +166,13 @@ async function main() {
           covers: 0,
           invoiceCount: 0,
         });
+      }
+
+      // Upsert product-level revenue from invoice line items
+      const productRows = formatProductRevenue(rawData.invoices, PROFIT_CENTERS);
+      if (productRows.length > 0) {
+        const prodCount = await upsertProductRevenue(productRows);
+        log(`  Saved ${prodCount} product revenue rows for ${date}`);
       }
 
       log(`  Saved ${date}`);

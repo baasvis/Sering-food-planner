@@ -30,6 +30,22 @@ function fmtEuroFull(n) {
   return '€' + Number(n).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+const SERVICE_PERIODS = [
+  { key: 'all', label: 'All' },
+  { key: 'morning', label: 'Morning' },
+  { key: 'lunch', label: 'Lunch' },
+  { key: 'afternoon', label: 'Afternoon' },
+  { key: 'dinner', label: 'Dinner' },
+  { key: 'bar', label: 'Bar' },
+];
+
+const FINANCE_LOCATIONS = [
+  { key: 'all', label: 'All locations' },
+  { key: 'west', label: 'West' },
+  { key: 'centraal', label: 'Centraal' },
+  { key: 'testtafel', label: 'TestTafel' },
+];
+
 // ── Data loading ────────────────────────────────────────────────────────────
 
 async function loadFinanceData() {
@@ -49,6 +65,26 @@ async function loadFinanceData() {
   } catch (e) {
     console.error('Failed to load finance data:', e);
     S.financeData = [];
+  }
+
+  // Also load product data
+  await loadFinanceProducts();
+}
+
+async function loadFinanceProducts() {
+  const monday = getFinanceMonday(S.financeWeekOffset);
+  const sunday = new Date(monday);
+  sunday.setDate(sunday.getDate() + 6);
+
+  let url = `/api/finance/products?start=${fmtDate(monday)}&end=${fmtDate(sunday)}`;
+  if (S.financeProductLoc !== 'all') url += `&location=${S.financeProductLoc}`;
+  if (S.financeProductMeal !== 'all') url += `&meal=${S.financeProductMeal}`;
+
+  try {
+    S.financeProducts = await apiGet(url);
+  } catch (e) {
+    console.error('Failed to load product data:', e);
+    S.financeProducts = [];
   }
 }
 
@@ -265,7 +301,138 @@ async function renderFinance() {
         No revenue data yet. Click <strong>Sync from Tebi</strong> to pull data.
       </div>
     ` : ''}
+
+    ${renderProductBreakdown()}
   `;
+}
+
+// ── Product Breakdown ────────────────────────────────────────────────────────
+
+function renderProductBreakdown() {
+  const products = S.financeProducts || [];
+
+  // Aggregate by category for the bar chart
+  const catMap = {};
+  let totalGross = 0;
+  for (const row of products) {
+    const cat = row.productCategory || 'Other';
+    if (!catMap[cat]) catMap[cat] = { category: cat, gross: 0, net: 0, qty: 0 };
+    catMap[cat].gross += row.grossRevenue || 0;
+    catMap[cat].net += row.netRevenue || 0;
+    catMap[cat].qty += row.quantity || 0;
+    totalGross += row.grossRevenue || 0;
+  }
+  const categories = Object.values(catMap).sort((a, b) => b.gross - a.gross);
+  const maxCatGross = categories.length > 0 ? categories[0].gross : 1;
+
+  // Aggregate by product for the table (merge across dates)
+  const prodMap = {};
+  for (const row of products) {
+    const key = row.productName;
+    if (!prodMap[key]) {
+      prodMap[key] = { name: row.productName, category: row.productCategory || '', gross: 0, net: 0, qty: 0 };
+    }
+    prodMap[key].gross += row.grossRevenue || 0;
+    prodMap[key].net += row.netRevenue || 0;
+    prodMap[key].qty += row.quantity || 0;
+  }
+  const productList = Object.values(prodMap).sort((a, b) => b.gross - a.gross);
+
+  // Category bar colors (cycle through a palette)
+  const catColors = ['#5b6abf', '#4CAF50', '#FF9800', '#E91E63', '#00BCD4', '#9C27B0', '#FF5722', '#607D8B', '#795548', '#8BC34A'];
+
+  return `
+    <div class="fin-products-section">
+      <h3>Product breakdown</h3>
+
+      <div class="fin-product-filters">
+        <div class="fin-filter-group">
+          <label>Service</label>
+          <div class="fin-pill-group">
+            ${SERVICE_PERIODS.map(p =>
+              `<button class="fin-pill ${S.financeProductMeal === p.key ? 'active' : ''}"
+                       onclick="setFinanceProductFilter('meal','${p.key}')">${p.label}</button>`
+            ).join('')}
+          </div>
+        </div>
+        <div class="fin-filter-group">
+          <label>Location</label>
+          <div class="fin-pill-group">
+            ${FINANCE_LOCATIONS.map(l =>
+              `<button class="fin-pill ${S.financeProductLoc === l.key ? 'active' : ''}"
+                       onclick="setFinanceProductFilter('loc','${l.key}')">${l.label}</button>`
+            ).join('')}
+          </div>
+        </div>
+      </div>
+
+      ${products.length === 0 ? `
+        <div class="fin-empty" style="padding:1.5rem">No product data for this period. Sync from Tebi to pull invoice details.</div>
+      ` : `
+        <div class="fin-cat-chart">
+          ${categories.map((c, i) => {
+            const pct = Math.round((c.gross / maxCatGross) * 100);
+            const color = catColors[i % catColors.length];
+            const pctOfTotal = totalGross > 0 ? Math.round((c.gross / totalGross) * 100) : 0;
+            return `
+              <div class="fin-cat-row">
+                <div class="fin-cat-label">${esc(c.category)}</div>
+                <div class="fin-cat-bar-track">
+                  <div class="fin-cat-bar" style="width:${pct}%;background:${color}"></div>
+                </div>
+                <div class="fin-cat-value">${fmtEuro(c.gross)} <span class="fin-cat-pct">${pctOfTotal}%</span></div>
+              </div>`;
+          }).join('')}
+        </div>
+
+        <div class="fin-product-table-wrap">
+          <table class="fin-table fin-product-table">
+            <thead>
+              <tr>
+                <th style="text-align:left">Product</th>
+                <th style="text-align:left">Category</th>
+                <th>Qty</th>
+                <th>Gross</th>
+                <th>%</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${productList.slice(0, 50).map(p => {
+                const pctOfTotal = totalGross > 0 ? ((p.gross / totalGross) * 100).toFixed(1) : '0';
+                return `
+                  <tr>
+                    <td style="text-align:left">${esc(p.name)}</td>
+                    <td style="text-align:left;color:#888">${esc(p.category)}</td>
+                    <td>${Math.round(p.qty)}</td>
+                    <td>${fmtEuro(p.gross)}</td>
+                    <td>${pctOfTotal}%</td>
+                  </tr>`;
+              }).join('')}
+            </tbody>
+            ${productList.length > 0 ? `
+              <tfoot>
+                <tr class="fin-total-row">
+                  <td style="text-align:left"><strong>Total</strong></td>
+                  <td></td>
+                  <td><strong>${Math.round(productList.reduce((s, p) => s + p.qty, 0))}</strong></td>
+                  <td><strong>${fmtEuro(totalGross)}</strong></td>
+                  <td><strong>100%</strong></td>
+                </tr>
+              </tfoot>
+            ` : ''}
+          </table>
+        </div>
+        ${productList.length > 50 ? `<div style="text-align:center;color:#888;padding:0.5rem">Showing top 50 of ${productList.length} products</div>` : ''}
+      `}
+    </div>
+  `;
+}
+
+async function setFinanceProductFilter(type, value) {
+  if (type === 'meal') S.financeProductMeal = value;
+  if (type === 'loc') S.financeProductLoc = value;
+  await loadFinanceProducts();
+  renderFinance();
 }
 
 function changeFinanceWeek(delta) {

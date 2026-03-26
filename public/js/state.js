@@ -107,8 +107,11 @@ let S = {
   guestsNextWeeks:{},
   storageConfig: null, // loaded from /api/storage-config
   financeData: [],
+  financeProducts: [],
   financeSyncing: false,
   financeWeekOffset: 0,
+  financeProductMeal: 'all', // 'all', 'morning', 'lunch', 'afternoon', 'dinner', 'bar'
+  financeProductLoc: 'all', // 'all', 'west', 'centraal', 'testtafel'
 };
 
 // ═══════════════════════════════════════════════════════════════════

@@ -31,6 +31,52 @@ router.get('/revenue', async (req, res) => {
   res.json(rows);
 });
 
+// ── GET /api/finance/products ────────────────────────────────────────────────
+// Returns product-level revenue, optionally filtered by location and meal
+router.get('/products', async (req, res) => {
+  const { start, end, location, meal, groupBy } = req.query;
+  if (!start || !end) {
+    return res.status(400).json({ error: 'start and end query params required (YYYY-MM-DD)' });
+  }
+
+  const where = {
+    date: { gte: start, lte: end },
+  };
+  if (location) where.location = location;
+  if (meal) where.meal = meal;
+
+  const rows = await prisma.productRevenue.findMany({
+    where,
+    orderBy: [{ grossRevenue: 'desc' }],
+  });
+
+  // If groupBy=category, aggregate rows by productCategory
+  if (groupBy === 'category') {
+    const categories = {};
+    for (const row of rows) {
+      const cat = row.productCategory || 'Other';
+      if (!categories[cat]) {
+        categories[cat] = { productCategory: cat, quantity: 0, grossRevenue: 0, netRevenue: 0, products: 0 };
+      }
+      categories[cat].quantity += row.quantity;
+      categories[cat].grossRevenue += row.grossRevenue;
+      categories[cat].netRevenue += row.netRevenue;
+      categories[cat].products += 1;
+    }
+    // Round and sort
+    const result = Object.values(categories)
+      .map(c => ({
+        ...c,
+        grossRevenue: Math.round(c.grossRevenue * 100) / 100,
+        netRevenue: Math.round(c.netRevenue * 100) / 100,
+      }))
+      .sort((a, b) => b.grossRevenue - a.grossRevenue);
+    return res.json(result);
+  }
+
+  res.json(rows);
+});
+
 // ── POST /api/finance/sync ──────────────────────────────────────────────────
 // Triggers the Tebi sync worker as a child process
 router.post('/sync', (req, res) => {
