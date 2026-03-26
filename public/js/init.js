@@ -1,3 +1,14 @@
+// ── THEME ─────────────────────────────────────────────────
+// Apply saved theme immediately to prevent flash
+if (localStorage.getItem('theme') === 'dark') document.documentElement.classList.add('dark');
+
+function toggleTheme() {
+  const isDark = document.documentElement.classList.toggle('dark');
+  localStorage.setItem('theme', isDark ? 'dark' : 'light');
+  const btn = document.querySelector('.theme-toggle');
+  if (btn) btn.innerHTML = isDark ? '&#9788;' : '&#9790;';
+}
+
 // ── MODAL ─────────────────────────────────────────────────
 function showModal(content) {
   document.getElementById('modal-root').innerHTML = `<div class="modal-bg" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">${content}</div></div>`;
@@ -38,6 +49,7 @@ function buildNav() {
     <div class="user-menu" id="user-menu">
       <img id="user-avatar" src="" alt="" style="display:none;">
       <span id="user-name"></span>
+      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">${document.documentElement.classList.contains('dark') ? '&#9788;' : '&#9790;'}</button>
       <button onclick="doLogout()">Logout</button>
     </div>
   `;
