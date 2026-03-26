@@ -1312,6 +1312,8 @@ function getIngredientsForArea(areaName) {
     const stockBase = (ing.stock && ing.stock[loc]) ? (ing.stock[loc].amount || 0) : 0;
     const stockUnits = hasOrderUnit ? Math.round(stockBase / ing.orderUnitSize * 10) / 10 : stockBase;
     const neededBase = combined ? combined.totalGrams : 0;
+    const standardBase = combined ? combined.standardGrams : 0;
+    const dishBase = combined ? combined.dishGrams : 0;
     const neededCalc = hasOrderUnit && neededBase > 0 ? calcOrderUnits(neededBase, ing) : null;
     const spot = (ing.storageLocations[loc] && ing.storageLocations[loc].location) || '';
     return {
@@ -1320,6 +1322,8 @@ function getIngredientsForArea(areaName) {
       stockBase,
       stockUnits,
       neededBase,
+      standardBase,
+      dishBase,
       neededCalc,
       hasOrderUnit,
     };
@@ -1403,34 +1407,50 @@ function renderStocktakeArea() {
   if (!items.length) {
     html += `<div class="empty">No ingredients stored in this area.</div>`;
   } else {
+    // Column headers + legend
+    html += `<div style="display:flex;align-items:center;gap:6px;padding:4px;margin-bottom:8px;font-size:11px;color:var(--text2);border-bottom:1px solid var(--border);">
+      <div style="flex:1;">Item</div>
+      <div style="min-width:65px;text-align:right;">Need <span style="color:var(--green);">■</span>std <span style="color:var(--purple, #7c3aed);">■</span>batch</div>
+      <div style="min-width:85px;text-align:center;">In stock</div>
+      <div style="min-width:60px;text-align:right;">To order</div>
+    </div>`;
+
     Object.keys(bySpot).forEach(spot => {
       const spotItems = bySpot[spot];
-      html += `<div style="margin-bottom:20px;">
-        <div style="font-weight:600;font-size:14px;padding:6px 0;border-bottom:2px solid ${areaColor};margin-bottom:8px;color:var(--text1);">📍 ${esc(spot)}</div>
-        <div style="display:grid;gap:2px;">`;
+      html += `<div style="margin-bottom:16px;">
+        <div style="font-weight:600;font-size:13px;padding:4px 0;border-bottom:2px solid ${areaColor};margin-bottom:4px;color:var(--text1);">📍 ${esc(spot)}</div>`;
 
       spotItems.forEach(ing => {
         const orderUnitLabel = ing.orderUnit || '';
         const unitSuffix = ing.hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, ing.unit); return f.unit; })();
-        const neededDisplay = ing.neededCalc
-          ? `${ing.neededCalc.units}x ${esc(unitSuffix)}`
-          : (ing.neededBase > 0 ? (() => { const f = formatAmount(ing.neededBase, ing.unit); return `${f.amount} ${f.unit}`; })() : '<span style="color:var(--text2);">—</span>');
+
+        // Needed breakdown: standard (green) + batch (purple)
+        let neededParts = [];
+        if (ing.standardBase > 0) {
+          const sc = ing.hasOrderUnit ? calcOrderUnits(ing.standardBase, ing) : null;
+          const label = sc ? `${sc.units}x` : (() => { const f = formatAmount(ing.standardBase, ing.unit); return f.amount; })();
+          neededParts.push(`<span style="color:var(--green);font-weight:600;" title="Standard inventory">${label}</span>`);
+        }
+        if (ing.dishBase > 0) {
+          const dc = ing.hasOrderUnit ? calcOrderUnits(ing.dishBase, ing) : null;
+          const label = dc ? `${dc.units}x` : (() => { const f = formatAmount(ing.dishBase, ing.unit); return f.amount; })();
+          neededParts.push(`<span style="color:var(--purple, #7c3aed);font-weight:600;" title="Batch ingredients">${label}</span>`);
+        }
+        const neededDisplay = neededParts.length
+          ? neededParts.join(`<span style="color:var(--text2);margin:0 2px;">+</span>`) + ` <span style="font-size:10px;color:var(--text2);">${esc(unitSuffix)}</span>`
+          : '<span style="color:var(--text2);">—</span>';
 
         // Pre-fill with existing stocktake value or current stock
         const prefill = stocktakeValues[ing.id] !== undefined ? stocktakeValues[ing.id] : ing.stockUnits;
 
-        html += `<div class="stocktake-row" style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border);">
-          <div>
-            <span style="font-weight:500;">${esc(ing.name)}</span>
+        html += `<div class="stocktake-row" style="display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--border);">
+          <div style="flex:1;min-width:0;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(ing.name)}</div>
+          <div style="font-size:12px;min-width:65px;text-align:right;">${neededDisplay}</div>
+          <div style="display:flex;align-items:center;gap:2px;min-width:85px;">
+            <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill || ''}" placeholder="0" style="width:50px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="stocktakeValues['${esc(ing.id)}']=this.value===''?undefined:parseFloat(this.value)||0;updateStocktakeToOrder(this)" />
+            <span class="order-units" style="font-size:10px;">${esc(unitSuffix)}</span>
           </div>
-          <div style="text-align:right;font-size:12px;color:var(--text2);min-width:80px;">
-            <div>Need: ${neededDisplay}</div>
-          </div>
-          <div style="min-width:90px;display:flex;align-items:center;gap:3px;">
-            <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill || ''}" placeholder="0" style="width:55px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="stocktakeValues['${esc(ing.id)}']=this.value===''?undefined:parseFloat(this.value)||0;updateStocktakeToOrder(this)" />
-            <span class="order-units" style="font-size:11px;">${esc(unitSuffix)}</span>
-          </div>
-          <div class="stocktake-to-order" style="min-width:70px;text-align:right;font-size:12px;" data-needed-base="${ing.neededBase}" data-order-unit-size="${ing.orderUnitSize || 0}" data-unit="${esc(ing.unit || 'g')}" data-order-unit="${esc(ing.orderUnit || '')}">
+          <div class="stocktake-to-order" style="min-width:60px;text-align:right;font-size:12px;" data-needed-base="${ing.neededBase}" data-order-unit-size="${ing.orderUnitSize || 0}" data-unit="${esc(ing.unit || 'g')}" data-order-unit="${esc(ing.orderUnit || '')}">
             ${_calcStocktakeToOrder(ing, prefill)}
           </div>
         </div>`;
