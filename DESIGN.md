@@ -104,6 +104,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
   - Batch Ingredients: per-batch ingredient aggregation from recipe sheets, in-stock input, to-order calculation
   - Combined Order: merges standard + batch ingredients, sums overlapping items, grouped by storage category per location, breakdown on click
   - Hanos add-to-cart integration: top-level "Send all to Hanos" button + per-storage-group + per-row cart buttons. Confirmation modal lists items before sending. Uses Hanos OCC v2 API (OAuth login, cart management). Per-location credentials: HANOS_USER_WEST/HANOS_PASS_WEST and HANOS_USER_CENTRAAL/HANOS_PASS_CENTRAAL. Buttons only show for locations with configured credentials.
+  - Hanos product lookup: paste an order code or Hanos URL in the ingredient edit modal to auto-fill order code, unit, price, unit size, and supplier name. Uses GET /api/hanos/product/:code (OCC v2 product detail) + GET /api/hanos/search (catalog search).
   - Clicking any ingredient name opens full edit modal (all fields: name, supplier, types, category, unit, order code/unit/price/size, storage locations, allergens, notes, stock, nutrition)
   - Stocktake mode: "Do stocktake" button on Combined Order opens dedicated flow — area picker → per-area page with items grouped by spot → stock inputs with live to-order calculation → "Save & next area" or "Save & stop". Persists via /api/ingredients/stock/bulk.
 - Ingredient database (PostgreSQL via Prisma) with supplier codes, units, prices, storage locations, stock tracking
