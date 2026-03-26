@@ -10,8 +10,20 @@ const prisma = new PrismaClient();
 
 // In-memory sync state
 let syncProcess = null;
+let syncTimeout = null;
+let syncOutput = '';
 let lastSyncAt = null;
 let lastSyncError = null;
+
+function killSync(reason) {
+  if (syncTimeout) { clearTimeout(syncTimeout); syncTimeout = null; }
+  if (syncProcess) {
+    console.log(`[finance] Killing sync: ${reason}`);
+    lastSyncError = reason + (syncOutput ? '. Output: ' + syncOutput.slice(-300) : '');
+    try { syncProcess.kill('SIGKILL'); } catch (e) { /* already dead */ }
+    syncProcess = null;
+  }
+}
 
 // ── GET /api/finance/revenue ────────────────────────────────────────────────
 // Returns DailyRevenue rows for a date range
@@ -104,66 +116,52 @@ router.post('/sync', (req, res) => {
 
   console.log(`[finance] Starting sync: ${start} → ${end}`);
   lastSyncError = null;
+  syncOutput = '';
 
   syncProcess = spawn('node', args, {
     env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  let output = '';
   syncProcess.stdout.on('data', (data) => {
-    output += data.toString();
-    // Log each line
+    syncOutput += data.toString();
     data.toString().trim().split('\n').forEach(line => {
       if (line) console.log(`[finance] ${line}`);
     });
   });
 
   syncProcess.stderr.on('data', (data) => {
-    output += data.toString();
+    syncOutput += data.toString();
     console.error(`[finance] ${data.toString().trim()}`);
   });
 
   syncProcess.on('close', (code) => {
     console.log(`[finance] Sync finished with code ${code}`);
-    clearTimeout(syncTimeout);
+    if (syncTimeout) { clearTimeout(syncTimeout); syncTimeout = null; }
     if (code === 0) {
       lastSyncAt = new Date().toISOString();
       lastSyncError = null;
-    } else {
-      lastSyncError = `Sync failed (exit code ${code}). ${output.slice(-500)}`;
+    } else if (!lastSyncError) {
+      // Only set error if not already set by cancel/timeout
+      lastSyncError = `Sync failed (exit code ${code}). ${syncOutput.slice(-500)}`;
     }
     syncProcess = null;
   });
 
   syncProcess.on('error', (err) => {
     console.error(`[finance] Sync process error: ${err.message}`);
-    clearTimeout(syncTimeout);
-    lastSyncError = `Sync process error: ${err.message}`;
-    syncProcess = null;
+    killSync('Sync process error: ' + err.message);
   });
 
-  // Kill sync after 2 minutes to prevent it from hanging forever
-  const syncTimeout = setTimeout(() => {
-    if (syncProcess) {
-      console.error('[finance] Sync timed out after 2 minutes, killing process');
-      lastSyncError = 'Sync timed out after 2 minutes. Output: ' + output.slice(-300);
-      syncProcess.kill();
-      syncProcess = null;
-    }
-  }, 2 * 60 * 1000);
+  // Kill sync after 2 minutes
+  syncTimeout = setTimeout(() => killSync('Sync timed out after 2 minutes'), 2 * 60 * 1000);
 
   res.json({ status: 'syncing', startDate: start, endDate: end });
 });
 
 // ── POST /api/finance/sync-cancel ────────────────────────────────────────────
 router.post('/sync-cancel', (req, res) => {
-  if (syncProcess) {
-    console.log('[finance] Sync cancelled by user');
-    lastSyncError = 'Sync cancelled by user';
-    syncProcess.kill();
-    syncProcess = null;
-  }
+  killSync('Sync cancelled by user');
   res.json({ status: 'cancelled' });
 });
 
