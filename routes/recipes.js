@@ -110,14 +110,18 @@ router.get('/recipe', async (req, res) => {
     const sourceRows  = vals[10].values || [];
     const unitRows    = vals[11].values || [];
     const ingredients = [];
+    const seen = new Set();
     ingRows.forEach((row, i) => {
       if (!row[0] || !row[2]) return;
       const rawAmt = parseFloat(String(row[2]).replace(',','.'));
       if (!rawAmt || rawAmt <= 0) return;
       if (row[0].length > 80) return;
+      // Deduplicate: sheets often have a stockcube builder section that
+      // repeats the same ingredients within the J6:N40 range. Keep first.
+      const key = row[0].toLowerCase().trim();
+      if (seen.has(key)) return;
+      seen.add(key);
       // Use raw amount for ordering — that's how much you need to buy.
-      // After-cooking amount represents what ends up in the dish after loss,
-      // but purchasing must account for the full raw quantity.
       const amount = rawAmt;
       const unit = (unitRows[i] && unitRows[i][0]) || 'Grams';
       ingredients.push({
