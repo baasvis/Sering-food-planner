@@ -440,7 +440,20 @@ function formatProduct(p) {
     description: a.formattedName || a.description || '',
   }));
 
-  console.log(`[Hanos] Product ${p.code}: "${p.formattedName}", unit="${orderUnit}", netWeight=${netWeight}g, price=${price}, aums=${aums.length}`);
+  // Extract allergens from classifications
+  const allergens = [];
+  const classifications = p.classifications || [];
+  classifications.forEach(cl => {
+    (cl.features || []).forEach(feat => {
+      if (!feat.code || !feat.code.includes('Allergens')) return;
+      const val = feat.featureValues && feat.featureValues[0] ? feat.featureValues[0].value : '';
+      if (val && val.toLowerCase().includes('with') && !val.toLowerCase().includes('without')) {
+        allergens.push(feat.name || '');
+      }
+    });
+  });
+
+  console.log(`[Hanos] Product ${p.code}: "${p.formattedName}", unit="${orderUnit}", netWeight=${netWeight}g, price=${price}, allergens=${allergens.join(',')}`);
 
   return {
     code: p.code || '',
@@ -454,6 +467,7 @@ function formatProduct(p) {
     priceFormatted,
     unit: isLiquid ? 'ML' : 'Grams',
     categories,
+    allergens: allergens.join(', '),
     aums,
     imageUrl: p.images && p.images.length ? p.images[0].url : '',
     supplier: 'Hanos',

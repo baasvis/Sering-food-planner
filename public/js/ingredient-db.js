@@ -505,9 +505,15 @@ async function saveIngredientEdit(id) {
   const ing = ingredientDbFull.find(i => i.id === id);
   if (!ing) return;
 
+  const nameVal = (document.getElementById('ing-edit-name')?.value || '').trim();
+  if (!nameVal) { toastError('Name is required'); return; }
+  const catVal = document.getElementById('ing-edit-category')?.value || '';
+  if (!catVal) { toastError('Category is required'); return; }
+
   // Collect types from checkboxes
   const typeChecks = document.querySelectorAll('.ing-edit-type-cb');
   const types = [...typeChecks].filter(c => c.checked).map(c => c.value);
+  if (!types.length) { toastError('At least one type is required'); return; }
 
   // Collect nutrition
   const nutrition = {};
@@ -775,6 +781,11 @@ async function saveIngredientFromModal(id) {
   if (!ing) return;
   const newName = (document.getElementById('ing-edit-name')?.value || '').trim();
   if (!newName) { toastError('Name is required'); return; }
+  const category = document.getElementById('ing-edit-category')?.value || '';
+  if (!category) { toastError('Category is required'); return; }
+  const typeChecks = document.querySelectorAll('.ing-edit-type-cb');
+  const types = [...typeChecks].filter(c => c.checked).map(c => c.value);
+  if (!types.length) { toastError('At least one type is required'); return; }
 
   // Read all fields (same as saveIngredientEdit)
   ing.name = newName;
@@ -862,6 +873,7 @@ async function hanosLookupProduct() {
     setVal('ing-edit-orderUnitSize', product.orderUnitSize);
     setVal('ing-edit-supplierName', product.supplierName || product.name);
     setVal('ing-edit-supplier', 'Hanos');
+    if (product.allergens) setVal('ing-edit-allergens', product.allergens);
 
     // Set unit dropdown
     const unitSel = document.getElementById('ing-edit-unit');
@@ -1027,9 +1039,11 @@ function openAddIngredientModal() {
 async function saveNewIngredient(id) {
   const name = (document.getElementById('ing-edit-name')?.value || '').trim();
   if (!name) { toastError('Name is required'); return; }
-
+  const category = document.getElementById('ing-edit-category')?.value || '';
+  if (!category) { toastError('Category is required'); return; }
   const checks = document.querySelectorAll('.ing-edit-type-cb');
   const types = [...checks].filter(c => c.checked).map(c => c.value);
+  if (!types.length) { toastError('At least one type is required'); return; }
 
   const ing = {
     id,
