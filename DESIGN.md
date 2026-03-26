@@ -110,6 +110,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Feedback admin screen: view all submitted feedback, filter by type, "Copy for Claude" button exports feedback as structured text for pasting into Claude Code chat
 - Dashboard allergen editing: add/remove allergens directly on today's menu cards (same inline flow as week plan)
 - Mobile responsive layout (card-based dishes on phone, bottom-sheet modals, fixed bottom navigation bar with icons, compact sticky header)
+- Dark mode toggle: manual light/dark switch in top bar (moon/sun icon), saved to localStorage. Light mode is the default. CSS uses `:root.dark` class, not `prefers-color-scheme`.
 - Logistics colour coding with legend, filter bars, section grouping (To cook / Cooked / Frozen)
 
 **File structure:**
