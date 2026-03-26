@@ -324,6 +324,111 @@ router.post('/add-to-cart', async (req, res) => {
   }
 });
 
+/** GET /api/hanos/product/:code — fetch product details by order code */
+router.get('/product/:code', async (req, res) => {
+  try {
+    const code = req.params.code.trim();
+    if (!code) return res.status(400).json({ error: 'Product code required' });
+
+    // Use any available location for lookup
+    const loc = req.query.location || 'west';
+    const client = await getClient(loc);
+
+    const url = `${OCC_BASE}/products/${encodeURIComponent(code)}?lang=en&curr=EUR&fields=FULL`;
+    const resp = await fetch(url, {
+      headers: client._headers(),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (resp.status === 401 && client.refreshToken) {
+      await client._refreshAccessToken();
+      const retry = await fetch(url, {
+        headers: client._headers(),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!retry.ok) {
+        return res.status(retry.status).json({ error: `Product not found (HTTP ${retry.status})` });
+      }
+      const product = await retry.json();
+      return res.json(formatProduct(product));
+    }
+
+    if (!resp.ok) {
+      return res.status(resp.status).json({ error: `Product not found (HTTP ${resp.status})` });
+    }
+
+    const product = await resp.json();
+    res.json(formatProduct(product));
+  } catch (e) {
+    console.error('[Hanos] product lookup error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** GET /api/hanos/search — search Hanos product catalog */
+router.get('/search', async (req, res) => {
+  try {
+    const query = (req.query.q || '').trim();
+    if (!query) return res.status(400).json({ error: 'Search query required' });
+
+    const loc = req.query.location || 'west';
+    const client = await getClient(loc);
+
+    const url = `${OCC_BASE}/products/search?query=${encodeURIComponent(query)}&pageSize=10&lang=en&curr=EUR&fields=FULL`;
+    const resp = await fetch(url, {
+      headers: client._headers(),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!resp.ok) {
+      return res.status(resp.status).json({ error: `Search failed (HTTP ${resp.status})` });
+    }
+
+    const data = await resp.json();
+    const products = (data.products || []).map(formatProduct);
+    res.json({ results: products, total: data.pagination ? data.pagination.totalResults : products.length });
+  } catch (e) {
+    console.error('[Hanos] search error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Format a Hanos product response into our ingredient fields */
+function formatProduct(p) {
+  const { parseHanosQuantityGrams } = require('../lib/hanos-parser');
+
+  // Extract price from the product
+  const price = p.price ? p.price.value : null;
+  const priceFormatted = p.price ? p.price.formattedValue : '';
+
+  // Extract unit info from formattedHoeveelheid or categories
+  const hoeveelheid = p.formattedHoeveelheid || p.hoeveelheid || '';
+  const unitSizeGrams = parseHanosQuantityGrams(hoeveelheid);
+
+  // Determine base unit (grams vs ml)
+  const isLiquid = hoeveelheid.toLowerCase().includes('liter') || hoeveelheid.toLowerCase().includes('ml');
+
+  // Get category from Hanos categories
+  const categories = (p.categories || []).map(c => c.name || c.code || '').filter(Boolean);
+
+  return {
+    code: p.code || '',
+    name: p.formattedName || p.name || '',
+    supplierName: p.formattedName || '',
+    manufacturer: p.formattedManufacturer || '',
+    orderCode: p.code || '',
+    orderUnit: hoeveelheid || '',
+    orderUnitSize: unitSizeGrams,
+    orderPrice: price,
+    priceFormatted,
+    hoeveelheid,
+    unit: isLiquid ? 'ML' : 'Grams',
+    categories,
+    imageUrl: p.images && p.images.length ? p.images[0].url : '',
+    supplier: 'Hanos',
+  };
+}
+
 /** GET /api/hanos/cart — view current Hanos cart */
 router.get('/cart', async (req, res) => {
   try {

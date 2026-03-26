@@ -626,6 +626,14 @@ async function openIngredientModal(name) {
   const modalHtml = `
     <div style="padding:20px;max-width:600px;">
       <h3 style="margin:0 0 16px;">Edit: ${esc(ing.name)}</h3>
+      <div style="margin-bottom:12px;padding:8px 12px;background:var(--bg2);border-radius:var(--radius);border:1px solid var(--border);">
+        <label class="ing-edit-label" style="margin-bottom:4px;">🔍 Hanos lookup — paste order code or URL</label>
+        <div style="display:flex;gap:6px;">
+          <input class="order-stock-input" style="flex:1;" id="ing-hanos-lookup" placeholder="e.g. 34295808 or https://www.hanos.nl/..." />
+          <button class="btn btn-sm" style="white-space:nowrap;background:var(--blue);color:white;" onclick="hanosLookupProduct()">Lookup</button>
+        </div>
+        <div id="ing-hanos-status" style="font-size:11px;color:var(--text2);margin-top:4px;"></div>
+      </div>
       <div class="ing-edit-grid">
         <div class="ing-edit-section">
           <div class="ing-edit-row">
@@ -816,6 +824,63 @@ async function saveIngredientFromModal(id) {
     toast('Ingredient updated');
   } catch (e) {
     toastError('Save failed: ' + e.message);
+  }
+}
+
+/** Lookup a Hanos product by code or URL and fill in the form fields */
+async function hanosLookupProduct() {
+  const input = document.getElementById('ing-hanos-lookup');
+  const status = document.getElementById('ing-hanos-status');
+  if (!input || !status) return;
+
+  let raw = input.value.trim();
+  if (!raw) { status.innerHTML = '<span style="color:var(--red);">Enter a code or URL</span>'; return; }
+
+  // Extract code from URL if pasted (e.g. https://www.hanos.nl/p/34295808 or /product/34295808)
+  const urlMatch = raw.match(/\/p\/(\d+)/i) || raw.match(/\/product\/(\d+)/i) || raw.match(/\/(\d{6,})/);
+  const code = urlMatch ? urlMatch[1] : raw.replace(/\D/g, '');
+  if (!code) { status.innerHTML = '<span style="color:var(--red);">Could not extract product code</span>'; return; }
+
+  status.innerHTML = '<span style="color:var(--blue);">Looking up...</span>';
+
+  try {
+    const loc = (typeof currentOrdersLoc !== 'undefined' && currentOrdersLoc) || 'west';
+    const resp = await fetch(`/api/hanos/product/${encodeURIComponent(code)}?location=${loc}`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      status.innerHTML = `<span style="color:var(--red);">${esc(err.error || 'Product not found')}</span>`;
+      return;
+    }
+
+    const product = await resp.json();
+
+    // Fill in form fields
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+    setVal('ing-edit-orderCode', product.orderCode);
+    setVal('ing-edit-orderUnit', product.orderUnit);
+    if (product.orderPrice) setVal('ing-edit-orderPrice', product.orderPrice);
+    if (product.orderUnitSize) setVal('ing-edit-orderUnitSize', product.orderUnitSize);
+    setVal('ing-edit-supplierName', product.supplierName || product.name);
+    setVal('ing-edit-supplier', 'Hanos');
+
+    // Set unit dropdown
+    const unitSel = document.getElementById('ing-edit-unit');
+    if (unitSel && product.unit) unitSel.value = product.unit;
+
+    // If name field is empty, fill it too
+    const nameField = document.getElementById('ing-edit-name');
+    if (nameField && !nameField.value.trim()) {
+      nameField.value = product.name;
+    }
+
+    // Show success with product details
+    const priceStr = product.priceFormatted || (product.orderPrice ? '\u20AC' + Number(product.orderPrice).toFixed(2) : '');
+    status.innerHTML = `<span style="color:var(--green);">\u2713 Found: ${esc(product.name)}</span>` +
+      (priceStr ? ` <span style="color:var(--text2);">${esc(priceStr)}</span>` : '') +
+      (product.orderUnit ? ` <span style="color:var(--text2);">— ${esc(product.orderUnit)}</span>` : '');
+
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--red);">Lookup failed: ${esc(e.message)}</span>`;
   }
 }
 
