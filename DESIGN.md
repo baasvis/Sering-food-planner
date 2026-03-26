@@ -98,12 +98,14 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Transport view: "Mark selected as arrived" (changes logistics to destination), custom transport items list (free-text, disappear on delivery)
 - Dish management with inline editing, cook date tracking, stock levels, +/- status pills, sortable columns
 - Recipe index (library) with single + bulk import from Google Sheets, ratings, conditional cost colouring
-- Order overview with 3-tab layout: Combined Order (default), Standard Inventory, Dish Ingredients
-  - Standard Inventory: cooks build a weekly base order (persistent, server-side JSON), searchable from ingredient DB, shows order codes per item
-  - Dish Ingredients: per-dish ingredient aggregation from recipe sheets, in-stock input, to-order calculation
-  - Combined Order: merges both lists, sums overlapping ingredients, grouped by storage category per location
-  - Hanos add-to-cart integration: "Send to Hanos" bulk button per storage group + per-row cart buttons. Confirmation modal lists items before sending. Uses Hanos OCC v2 API (OAuth login, cart management). Per-location credentials: HANOS_USER_WEST/HANOS_PASS_WEST and HANOS_USER_CENTRAAL/HANOS_PASS_CENTRAAL. Buttons only show for locations with configured credentials.
-- Ingredient database integration (separate Google Sheet with supplier codes, units, prices)
+- Order overview with 4-tab layout: Combined Order (default), Standard Inventory, Batch Ingredients, Ingredient Database
+  - All tabs display amounts in order units (e.g. "5x Bak 1 kilogram") when ingredient has orderUnitSize, falling back to formatted metric (kg/L) otherwise. Stock inputs use order units with labels.
+  - Standard Inventory: cooks build a weekly base order (persistent, per-location PostgreSQL JSON), searchable from ingredient DB, target stock in order units
+  - Batch Ingredients: per-batch ingredient aggregation from recipe sheets, in-stock input, to-order calculation
+  - Combined Order: merges standard + batch ingredients, sums overlapping items, grouped by storage category per location, breakdown on click
+  - Hanos add-to-cart integration: top-level "Send all to Hanos" button + per-storage-group + per-row cart buttons. Confirmation modal lists items before sending. Uses Hanos OCC v2 API (OAuth login, cart management). Per-location credentials: HANOS_USER_WEST/HANOS_PASS_WEST and HANOS_USER_CENTRAAL/HANOS_PASS_CENTRAAL. Buttons only show for locations with configured credentials.
+  - Clicking any ingredient name opens full edit modal (all fields: name, supplier, types, category, unit, order code/unit/price/size, storage locations, allergens, notes, stock, nutrition)
+- Ingredient database (PostgreSQL via Prisma) with supplier codes, units, prices, storage locations, stock tracking
 - Feedback system (floating purple button, structured form with 4 types, stores to PostgreSQL)
 - Feedback admin screen: view all submitted feedback, filter by type, "Copy for Claude" button exports feedback as structured text for pasting into Claude Code chat
 - Dashboard allergen editing: add/remove allergens directly on today's menu cards (same inline flow as week plan)
