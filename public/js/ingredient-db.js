@@ -855,11 +855,11 @@ async function hanosLookupProduct() {
     const product = await resp.json();
 
     // Fill in form fields
-    const setVal = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el && val !== undefined && val !== null && val !== '') el.value = val; };
     setVal('ing-edit-orderCode', product.orderCode);
     setVal('ing-edit-orderUnit', product.orderUnit);
-    if (product.orderPrice) setVal('ing-edit-orderPrice', product.orderPrice);
-    if (product.orderUnitSize) setVal('ing-edit-orderUnitSize', product.orderUnitSize);
+    setVal('ing-edit-orderPrice', product.orderPrice);
+    setVal('ing-edit-orderUnitSize', product.orderUnitSize);
     setVal('ing-edit-supplierName', product.supplierName || product.name);
     setVal('ing-edit-supplier', 'Hanos');
 
@@ -875,9 +875,12 @@ async function hanosLookupProduct() {
 
     // Show success with product details
     const priceStr = product.priceFormatted || (product.orderPrice ? '\u20AC' + Number(product.orderPrice).toFixed(2) : '');
-    status.innerHTML = `<span style="color:var(--green);">\u2713 Found: ${esc(product.name)}</span>` +
-      (priceStr ? ` <span style="color:var(--text2);">${esc(priceStr)}</span>` : '') +
-      (product.orderUnit ? ` <span style="color:var(--text2);">— ${esc(product.orderUnit)}</span>` : '');
+    const unitStr = product.orderUnit || '';
+    const sizeStr = product.orderUnitSize ? `(${product.orderUnitSize}${product.unit === 'ML' ? 'ml' : 'g'})` : '';
+    status.innerHTML = `<span style="color:var(--green);">\u2713 ${esc(product.name)}</span>` +
+      (unitStr ? ` — ${esc(unitStr)}` : '') +
+      (sizeStr ? ` ${esc(sizeStr)}` : '') +
+      (priceStr ? ` — ${esc(priceStr)}` : '');
 
   } catch (e) {
     status.innerHTML = `<span style="color:var(--red);">Lookup failed: ${esc(e.message)}</span>`;

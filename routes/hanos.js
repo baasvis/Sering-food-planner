@@ -397,57 +397,66 @@ router.get('/search', async (req, res) => {
 function formatProduct(p) {
   const { parseHanosQuantityGrams } = require('../lib/hanos-parser');
 
-  // Extract price — try multiple locations
-  const price = p.price ? p.price.value : (p.pricePerUnit ? p.pricePerUnit.value : null);
+  // Price — from price object
+  const price = p.price ? p.price.value : null;
   const priceFormatted = p.price ? p.price.formattedValue : '';
 
-  // Extract unit info — try many possible field names from SAP OCC v2
-  const hoeveelheid = p.formattedHoeveelheid || p.hoeveelheid
-    || p.contentUnit || p.salesUnit || p.unit || '';
+  // Unit info from OCC v2 fields:
+  //   contentUnit = "kilogram"/"liter"/"stuk"
+  //   numbercontentunits = 1.0
+  //   netWeight = 1000.0 (grams)
+  //   priceUnitLabel = "1 kilogram" (best for display)
+  //   aums = [{unitName:"KG", conversionFactor:1, ...}, {unitName:"cheese", conversionFactor:1.5, ...}]
+  const contentUnit = p.contentUnit || '';
+  const numUnits = p.numbercontentunits || 0;
+  const netWeight = p.netWeight || 0; // in grams
 
-  // Also try to get quantity from AUM (alternative units of measure) data
-  const aums = p.aumDataList || p.aums || [];
-  let aumUnit = '';
-  if (aums.length && !hoeveelheid) {
-    const firstAum = aums[0];
-    aumUnit = firstAum.formattedName || firstAum.description || firstAum.unitName || '';
+  // Build orderUnit display string (e.g. "1 kilogram", "Pak 1 liter")
+  let orderUnit = p.priceUnitLabel || '';
+  if (!orderUnit && numUnits && contentUnit) {
+    orderUnit = `${numUnits} ${contentUnit}`;
   }
 
-  const unitStr = hoeveelheid || aumUnit || '';
-  let unitSizeGrams = parseHanosQuantityGrams(unitStr);
-
-  // If no hoeveelheid found, try to extract from formattedName
-  // e.g. "Winterpeen kist 10 kilogram" → "kist 10 kilogram"
+  // Calculate unit size in grams/ml
+  let unitSizeGrams = netWeight; // netWeight is already in grams
+  if (!unitSizeGrams && orderUnit) {
+    unitSizeGrams = parseHanosQuantityGrams(orderUnit);
+  }
   if (!unitSizeGrams && p.formattedName) {
     unitSizeGrams = parseHanosQuantityGrams(p.formattedName);
   }
 
   // Determine base unit (grams vs ml)
-  const combined = (unitStr + ' ' + (p.formattedName || '')).toLowerCase();
-  const isLiquid = combined.includes('liter') || combined.includes(' ml');
+  const isLiquid = contentUnit === 'liter' || contentUnit === 'ml'
+    || (p.formattedName || '').toLowerCase().includes('liter');
 
   // Get category from Hanos categories
   const categories = (p.categories || []).map(c => c.name || c.code || '').filter(Boolean);
 
-  // Log raw product keys for debugging (first time only)
-  console.log(`[Hanos] Product ${p.code}: keys=${Object.keys(p).join(',')}, hoeveelheid="${unitStr}", unitSize=${unitSizeGrams}, price=${price}`);
+  // Alternative units of measure (Kilo / Cheese / Carton etc.)
+  const aums = (p.aums || p.orderableAums || []).map(a => ({
+    unitName: a.unitName || '',
+    conversionFactor: a.conversionFactor || 1,
+    description: a.formattedName || a.description || '',
+  }));
+
+  console.log(`[Hanos] Product ${p.code}: "${p.formattedName}", unit="${orderUnit}", netWeight=${netWeight}g, price=${price}, aums=${aums.length}`);
 
   return {
     code: p.code || '',
     name: p.formattedName || p.name || '',
     supplierName: p.formattedName || '',
-    manufacturer: p.formattedManufacturer || '',
+    manufacturer: p.formattedManufacturer || p.manufacturer || '',
     orderCode: p.code || '',
-    orderUnit: unitStr || '',
+    orderUnit,
     orderUnitSize: unitSizeGrams,
     orderPrice: price,
     priceFormatted,
-    hoeveelheid: unitStr,
     unit: isLiquid ? 'ML' : 'Grams',
     categories,
+    aums,
     imageUrl: p.images && p.images.length ? p.images[0].url : '',
     supplier: 'Hanos',
-    _rawKeys: Object.keys(p), // for debugging
   };
 }
 
