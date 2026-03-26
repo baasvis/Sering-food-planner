@@ -115,6 +115,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Dark mode toggle: manual light/dark switch in top bar (moon/sun icon), saved to localStorage. Light mode is the default. CSS uses `:root.dark` class, not `prefers-color-scheme`.
 - Logistics colour coding with legend, filter bars, section grouping (To cook / Cooked / Frozen)
 - Finance v1: Tebi POS scraper (Playwright browser automation) pulls daily revenue data via Tebi's internal JSON API. Sync worker stores data in PostgreSQL DailyRevenue table. Finance screen shows weekly revenue table (per location per day), monthly summary cards (gross/net revenue, sales, covers), CSS bar chart of daily gross revenue, and week navigation. "Sync from Tebi" button triggers the scraper as a child process.
+- Finance v2 — Product-level revenue breakdown: scraper parses Tebi invoice line items to extract per-product revenue. Classifies each invoice by service period (morning 09–12, lunch 12–14, afternoon 14–18, dinner 18–21, bar 21–06). Data stored in PostgreSQL ProductRevenue table. Finance screen shows horizontal category bar chart, sortable product table (top 50), and filter pills for 5 service periods + 4 locations. API: GET /api/finance/products with optional location, meal, groupBy=category filters. Discovery flag: `--dump-invoices` on scraper to inspect raw Tebi invoice structure.
 
 **File structure:**
 ```
@@ -187,6 +188,7 @@ SETUP_GUIDE.md         — Installation instructions
 | Guest History | location, meal, date, count | guest_history (+ guest_history_meta for deviceMap) |
 | Guests Next Weeks | monday_key, location, day, meal, count | guests_next_weeks |
 | Daily Revenue | date, location, grossRevenue, netRevenue, sales, covers, invoiceCount, syncedAt | daily_revenue |
+| Product Revenue | date, location, meal, productName, productCategory, quantity, grossRevenue, netRevenue, syncedAt | product_revenue |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -241,7 +243,7 @@ The order of everything below is flexible. Build thin slices first, deepen based
 
 **Basic finance tracking** (useful early even in simple form)
 - [x] v1: Daily revenue auto-pulled from Tebi POS via Playwright scraper. Finance screen with weekly revenue table, monthly summary, bar chart. Data stored in PostgreSQL DailyRevenue table.
-- v2: Cost tracking, cost per guest, budget vs actual, product-level revenue breakdown
+- [x] v2 (partial): Product-level revenue breakdown from Tebi invoice line items, with service period classification (morning/lunch/afternoon/dinner/bar) and per-location filtering. Remaining: cost tracking, cost per guest, budget vs actual.
 - v3: Full P&L, supplier analysis, waste tracking, automated reports
 
 **Non-food inventory**
