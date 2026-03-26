@@ -115,7 +115,9 @@ function renderLocationPlan(loc) {
         slotDishes.forEach(dish => {
           const trClass = dish.inTransit ? ' chip-tr-border' : '';
           const servedClass = slotServed ? ' dish-chip-served' : '';
-          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}"><span class="chip-nm">${esc(dish.name)}</span>${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
+          const fromOther = dish.location && dish.location !== loc;
+          const fromTag = fromOther ? `<span class="chip-from">&larr; ${dish.location === 'west' ? 'West' : 'Centraal'}</span>` : '';
+          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}"><span class="chip-nm">${esc(dish.name)}</span>${fromTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
         });
         if (!assigning) {
           html += `<div class="add-slot-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div>`;
@@ -142,9 +144,9 @@ function renderLocationPlan(loc) {
 // ── BATCH POOL (per-type, below each calendar) ─────────
 function getPoolBatches(loc) {
   return S.batches.filter(d => {
+    const locatedHere = d.location === loc;
     const hasSvcHere = (d.services || []).some(s => s.loc === loc);
-    const locatedHere = d.location === loc && (d.services || []).length === 0;
-    return hasSvcHere || locatedHere;
+    return locatedHere || hasSvcHere;
   });
 }
 

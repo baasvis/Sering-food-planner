@@ -723,16 +723,20 @@ function doSplit(isTransport, targetLoc, smartAmounts) {
     }
     d.stock = Math.round((d.stock - amt) * 10) / 10;
     const targetLocName = targetLoc === 'centraal' ? 'centraal' : 'west';
+    const splitName = d.name.replace(/ \(split\)$/, '') + ' (split)';
     const newDish = {
-      id: newId(), name: d.name, type: d.type, storage, location: splitLocation, inTransit: splitInTransit, stock: amt,
+      id: newId(), name: splitName, type: d.type, storage, location: splitLocation, inTransit: splitInTransit, stock: amt,
       serving: d.serving || 280, recipeSheetId: d.recipeSheetId,
       recipeVolume: d.recipeVolume,
       recipeIngredients: d.recipeIngredients ? [...d.recipeIngredients] : undefined,
       allergens: [...(d.allergens || [])], extraAllergens: [...(d.extraAllergens || [])],
       orderFor: false, parentId: d.id, cookDate: d.cookDate,
-      services: isTransport ? ((d.services || []).filter(s => s.loc === targetLocName)) : []
+      services: (d.services || []).filter(s => s.loc === splitLocation)
     };
-    if (isTransport) d.services = (d.services || []).filter(s => s.loc !== targetLocName);
+    // Remove services that moved to the new batch
+    if (splitLocation !== (d.location || 'west')) {
+      d.services = (d.services || []).filter(s => s.loc !== splitLocation);
+    }
     S.batches.push(newDish);
   });
   if (errors.length) { alert('Cannot split: ' + errors.join(', ')); return; }

@@ -51,6 +51,8 @@
   .chip-main{background:var(--blue-bg);color:var(--blue);}
   .chip-dessert{background:var(--purple-bg);color:var(--purple);}
   .chip-tr{background:var(--purple-bg);color:var(--purple);}
+  .chip-from{font-size:9px;color:var(--text3);font-weight:400;white-space:nowrap;flex-shrink:0;opacity:.7;}
+  .chip-cross-loc{border-left:2px dashed var(--text3);}
   .chip-nm{overflow:hidden;text-overflow:ellipsis;flex:1;word-break:break-word;}
   .chip-x{cursor:pointer;opacity:.5;flex-shrink:0;font-size:11px;line-height:1.4;}.chip-x:hover{opacity:1;}
   .dish-chip-served{opacity:.55;text-decoration:line-through;}
