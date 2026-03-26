@@ -114,6 +114,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Mobile responsive layout (card-based dishes on phone, bottom-sheet modals, fixed bottom navigation bar with icons, compact sticky header)
 - Dark mode toggle: manual light/dark switch in top bar (moon/sun icon), saved to localStorage. Light mode is the default. CSS uses `:root.dark` class, not `prefers-color-scheme`.
 - Logistics colour coding with legend, filter bars, section grouping (To cook / Cooked / Frozen)
+- Finance v1: Tebi POS scraper (Playwright browser automation) pulls daily revenue data via Tebi's internal JSON API. Sync worker stores data in PostgreSQL DailyRevenue table. Finance screen shows weekly revenue table (per location per day), monthly summary cards (gross/net revenue, sales, covers), CSS bar chart of daily gross revenue, and week navigation. "Sync from Tebi" button triggers the scraper as a child process.
 
 **File structure:**
 ```
@@ -130,6 +131,7 @@ routes/
   inventory.js         — Standard inventory + prep checklist + activity log
   feedback.js          — User feedback
   hanos.js             — Hanos OCC v2 API client (OAuth, cart, add-to-cart) + Express routes
+  finance.js           — Finance revenue endpoints (GET revenue, POST sync, GET sync-status)
   health.js            — Health check endpoint
 public/
   index.html           — HTML shell + login screen (~75 lines)
@@ -148,6 +150,7 @@ public/
     recipes.js         — Recipe index screen
     orders.js          — Order overview (3-tab: Combined Order / Standard Inventory / Dish Ingredients)
     ingredient-db.js   — Ingredient database editor + supplier import
+    finance.js         — Finance screen (revenue dashboard, sync, week nav)
     feedback.js        — Feedback button and form
     feedback-admin.js  — Feedback admin screen (view, filter, export)
     tutorial.js        — Interactive guided tutorial system
@@ -158,6 +161,8 @@ seeds/
   ingredients.json     — Master ingredient database (~2,100 items, seed for first deploy)
   standard-inventory.json  — Default weekly base order (~140 items)
 scripts/
+  tebi-scraper.js          — Playwright scraper: logs into Tebi POS, captures auth, fetches revenue/sales via internal API
+  tebi-sync-worker.js      — Sync worker: runs scraper + upserts results to PostgreSQL DailyRevenue table
   migrate-ingredients.js   — One-time ingredient migration utility
   import-standard-inventory.js — One-time standard inventory import
 .env                   — Local environment variables (gitignored)
@@ -181,6 +186,7 @@ SETUP_GUIDE.md         — Installation instructions
 | Standard Inventory | id, name, amount, unit | data/standard-inventory.json (server-side) |
 | Guest History | location, meal, date, count | guest_history (+ guest_history_meta for deviceMap) |
 | Guests Next Weeks | monday_key, location, day, meal, count | guests_next_weeks |
+| Daily Revenue | date, location, grossRevenue, netRevenue, sales, covers, invoiceCount, syncedAt | daily_revenue |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -234,10 +240,9 @@ The order of everything below is flexible. Build thin slices first, deepen based
 - v3: Teaching built in (tasks double as training materials)
 
 **Basic finance tracking** (useful early even in simple form)
-- v1: Daily revenue input per location per service. One simple graph showing the week.
-- v2: Cost tracking, cost per guest, budget vs actual
+- [x] v1: Daily revenue auto-pulled from Tebi POS via Playwright scraper. Finance screen with weekly revenue table, monthly summary, bar chart. Data stored in PostgreSQL DailyRevenue table.
+- v2: Cost tracking, cost per guest, budget vs actual, product-level revenue breakdown
 - v3: Full P&L, supplier analysis, waste tracking, automated reports
-- ⚠️ Full finance module (v2+) triggers the PostgreSQL migration
 
 **Non-food inventory**
 - v1: A list with par levels. "We have 3 rolls of cling film, minimum is 10, need to order."
