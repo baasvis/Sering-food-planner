@@ -3,10 +3,6 @@
 // State
 let orderInventory = {};        // in-stock amounts for dish ingredients (keyed by name lowercase)
 let combinedOrderStock = {};   // in-stock amounts for combined order tab (grams, keyed by name lowercase)
-let standardInventory = { west: [], centraal: [] };  // per-location weekly base order
-let siLoaded = false;
-let siLoadCalled = false;
-let siSaveTimeout = null;
 let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'batches' | 'ingredientDb'
 let currentOrdersLoc = '';  // set on first render from S.currentLoc
 let siSearchQuery = '';
@@ -16,7 +12,8 @@ let combinedIncludeDishes = true; // toggle: include dish ingredients in combine
 
 // ── Shared helpers ────────────────────────────────────────
 
-function toGrams(amount, unit) {
+// Convert to base units: grams for weight, ml for volume, raw count for pieces
+function toBaseUnit(amount, unit) {
   const u = (unit || '').toLowerCase().replace(/'/g, '');
   if (u === 'kilos' || u === 'kilo' || u === 'kg') return amount * 1000;
   if (u === 'liters' || u === 'liter' || u === 'litres' || u === 'l') return amount * 1000;
@@ -28,12 +25,25 @@ function normalizeSupplier(s) {
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
 
-function formatGrams(g) {
-  if (g >= 1000) {
-    const kg = Math.round(g / 100) / 10;
-    return { amount: kg % 1 === 0 ? kg : kg, unit: 'kg' };
+// Format a base-unit amount with the right suffix (g/kg, ml/L, or pcs)
+function formatAmount(val, baseUnit) {
+  const u = (baseUnit || 'g').toLowerCase();
+  if (u === 'ml' || u === 'liters' || u === 'l') {
+    if (val >= 1000) {
+      const l = Math.round(val / 100) / 10;
+      return { amount: l, unit: 'L' };
+    }
+    return { amount: Math.round(val), unit: 'ml' };
   }
-  return { amount: Math.round(g), unit: 'g' };
+  if (u === 'pieces' || u === 'pcs' || u === 'amount') {
+    return { amount: Math.round(val), unit: 'pcs' };
+  }
+  // Default: weight (g/kg)
+  if (val >= 1000) {
+    const kg = Math.round(val / 100) / 10;
+    return { amount: kg, unit: 'kg' };
+  }
+  return { amount: Math.round(val), unit: 'g' };
 }
 
 function lookupIngredient(name) {
@@ -88,68 +98,40 @@ function renderStorageBadge(db, loc) {
   return `<span class="stock-badge" style="cursor:pointer;font-size:10px;background:${color}22;color:${color};border:1px solid ${color}44;" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to edit">${esc(label)}</span>`;
 }
 
-function calcOrderUnits(amountGrams, dbEntry) {
-  if (!dbEntry || !dbEntry.orderAmount || dbEntry.orderAmount <= 0) return null;
-  const unitGrams = dbEntry.unitRecalc || dbEntry.orderAmount;
-  const units = Math.ceil(amountGrams / unitGrams);
-  return { units, perUnit: dbEntry.orderAmount, unitType: dbEntry.actualUnit || dbEntry.unit || 'g' };
+function calcOrderUnits(amountBase, dbEntry) {
+  if (!dbEntry || !dbEntry.orderUnitSize || dbEntry.orderUnitSize <= 0) return null;
+  const units = Math.ceil(amountBase / dbEntry.orderUnitSize);
+  return { units, perUnit: dbEntry.orderUnitSize, unitType: dbEntry.unit || 'g' };
 }
 
-// ── Standard Inventory API ────────────────────────────────
+// ── Standard Inventory (now reads from ingredient targetStock) ──
 
-async function loadStandardInventory() {
-  try {
-    const [west, centraal] = await Promise.all([
-      apiGet('/api/standard-inventory?location=west'),
-      apiGet('/api/standard-inventory?location=centraal'),
-    ]);
-    standardInventory.west = Array.isArray(west) ? west : [];
-    standardInventory.centraal = Array.isArray(centraal) ? centraal : [];
-  } catch (e) {
-    standardInventory = { west: [], centraal: [] };
-  }
-  siLoaded = true;
+// Get ingredients that have targetStock set for a location
+function getStandardInventoryItems(loc) {
+  return S.ingredientDb.filter(ing => {
+    const ts = ing.targetStock;
+    return ts && ts[loc] && ts[loc] > 0;
+  });
 }
-
-async function saveStandardInventory(loc) {
-  loc = loc || currentOrdersLoc || 'west';
-  try {
-    await apiPost('/api/standard-inventory', { location: loc, items: standardInventory[loc] || [] });
-  } catch (e) {
-    toastError('Failed to save standard inventory');
-  }
-}
-
-function debouncedSaveSI() {
-  clearTimeout(siSaveTimeout);
-  const loc = currentOrdersLoc || 'west';
-  siSaveTimeout = setTimeout(() => saveStandardInventory(loc), 800);
-}
-
-// ── Standard Inventory actions ────────────────────────────
 
 function updateSiSearch(val) {
   siSearchQuery = val;
-  // re-render only the suggestions part to avoid losing input focus
   const sugContainer = document.getElementById('si-suggestions');
   if (!sugContainer) return;
   const query = val.toLowerCase().trim();
   const loc = currentOrdersLoc || 'west';
-  const addedNames = new Set((standardInventory[loc] || []).map(i => i.name.toLowerCase().trim()));
+  const addedIds = new Set(getStandardInventoryItems(loc).map(i => i.id));
   const suggestions = query.length >= 2
     ? S.ingredientDb.filter(i => i.name.toLowerCase().includes(query) || (i.orderCode && i.orderCode.toLowerCase().includes(query))).slice(0, 8)
     : [];
   let html = suggestions.map(ing => {
-    const isAdded = addedNames.has(ing.name.toLowerCase().trim());
-    const nameAttr = esc(ing.name);
-    const unitAttr = esc(ing.unit || 'g');
-    return `<div class="si-suggestion${isAdded ? ' si-suggestion-added' : ''}" ${!isAdded ? `onclick="addToStandardInventory('${nameAttr}', '${unitAttr}')"` : ''}>
+    const isAdded = addedIds.has(ing.id);
+    return `<div class="si-suggestion${isAdded ? ' si-suggestion-added' : ''}" ${!isAdded ? `onclick="addToStandardInventory('${esc(ing.id)}')"` : ''}>
       <span class="si-sug-name">${esc(ing.name)}</span>
-      <span class="si-sug-meta">${ing.source ? esc(ing.source) + ' · ' : ''}${ing.orderCode ? esc(ing.orderCode) + ' · ' : ''}${ing.unit || 'g'}</span>
-      ${isAdded ? '<span style="color:var(--green);font-size:11px;font-weight:600;">✓ added</span>' : ''}
+      <span class="si-sug-meta">${ing.supplier ? esc(ing.supplier) + ' · ' : ''}${ing.orderCode ? esc(ing.orderCode) + ' · ' : ''}${ing.unit || 'g'}</span>
+      ${isAdded ? '<span style="color:var(--green);font-size:11px;font-weight:600;">\u2713 added</span>' : ''}
     </div>`;
   }).join('');
-
   sugContainer.innerHTML = html;
   sugContainer.style.display = html ? 'block' : 'none';
 }
@@ -164,44 +146,64 @@ function hideSiSuggestions() {
   }, 200);
 }
 
-function addToStandardInventory(name, unit) {
+async function addToStandardInventory(ingredientId) {
   const loc = currentOrdersLoc || 'west';
-  const list = standardInventory[loc] || [];
-  const exists = list.find(i => i.name.toLowerCase().trim() === name.toLowerCase().trim());
-  if (exists) return;
-  list.push({ id: newId(), name, amount: 0, unit: 'units' });
-  standardInventory[loc] = list;
+  const ing = S.ingredientDb.find(i => i.id === ingredientId);
+  if (!ing) return;
+  // Set a default target of 0 (user will edit)
+  if (!ing.targetStock) ing.targetStock = {};
+  ing.targetStock[loc] = 1; // placeholder — user edits the real target
   siSearchQuery = '';
-  saveStandardInventory(loc);
+  try {
+    await apiPost('/api/ingredients/target-stock', { ingredientId, location: loc, amount: 1 });
+  } catch (e) { toast('Failed to add: ' + e.message, true); }
   renderOrders();
 }
 
-function removeSiItem(idx) {
+async function removeSiItem(ingredientId) {
   const loc = currentOrdersLoc || 'west';
-  const list = standardInventory[loc] || [];
-  list.splice(idx, 1);
-  standardInventory[loc] = list;
-  saveStandardInventory(loc);
+  const ing = S.ingredientDb.find(i => i.id === ingredientId);
+  if (ing && ing.targetStock) delete ing.targetStock[loc];
+  try {
+    await apiPost('/api/ingredients/target-stock', { ingredientId, location: loc, amount: null });
+  } catch (e) { toast('Failed to remove: ' + e.message, true); }
   renderOrders();
 }
 
-function updateSiAmount(idx, val, isOrderUnits) {
+let siTargetTimeout = null;
+function updateSiTarget(ingredientId, val) {
   const loc = currentOrdersLoc || 'west';
-  const list = standardInventory[loc] || [];
-  if (list[idx]) {
-    list[idx].amount = parseFloat(val) || 0;
-    if (isOrderUnits) list[idx].unit = 'units'; // migrate legacy items on edit
-    debouncedSaveSI();
-  }
+  const ing = S.ingredientDb.find(i => i.id === ingredientId);
+  if (!ing) return;
+  if (!ing.targetStock) ing.targetStock = {};
+  // Input is in order units — convert to base units for storage
+  const orderUnits = parseFloat(val) || 0;
+  const baseAmount = ing.orderUnitSize > 0 ? orderUnits * ing.orderUnitSize : orderUnits;
+  ing.targetStock[loc] = baseAmount;
+  clearTimeout(siTargetTimeout);
+  siTargetTimeout = setTimeout(async () => {
+    try {
+      await apiPost('/api/ingredients/target-stock', { ingredientId, location: loc, amount: baseAmount });
+    } catch (e) { toast('Failed to save target: ' + e.message, true); }
+  }, 800);
 }
 
-function updateSiUnit(idx, val) {
+let siStockTimeout = null;
+function updateSiStock(ingredientId, val) {
   const loc = currentOrdersLoc || 'west';
-  const list = standardInventory[loc] || [];
-  if (list[idx]) {
-    list[idx].unit = val;
-    debouncedSaveSI();
-  }
+  const ing = S.ingredientDb.find(i => i.id === ingredientId);
+  if (!ing) return;
+  if (!ing.stock) ing.stock = {};
+  // Input is in order units — convert to base units for storage
+  const orderUnits = parseFloat(val) || 0;
+  const baseAmount = ing.orderUnitSize > 0 ? orderUnits * ing.orderUnitSize : orderUnits;
+  ing.stock[loc] = { amount: baseAmount, date: new Date().toISOString().slice(0, 10) };
+  clearTimeout(siStockTimeout);
+  siStockTimeout = setTimeout(async () => {
+    try {
+      await apiPost('/api/ingredients/stock', { ingredientId, location: loc, amount: baseAmount });
+    } catch (e) { toast('Failed to save stock: ' + e.message, true); }
+  }, 800);
 }
 
 // ── Tab switching ─────────────────────────────────────────
@@ -222,14 +224,6 @@ function renderOrders() {
   if (!ingredientDbLoaded) {
     document.getElementById('screen-orders').innerHTML = '<div class="empty">Loading ingredient database...</div>';
     setTimeout(renderOrders, 500);
-    return;
-  }
-  if (!siLoaded) {
-    if (!siLoadCalled) {
-      siLoadCalled = true;
-      loadStandardInventory().then(renderOrders);
-    }
-    document.getElementById('screen-orders').innerHTML = '<div class="empty">Loading...</div>';
     return;
   }
 
@@ -262,48 +256,43 @@ function renderOrders() {
 
 function renderStandardInventoryTab() {
   const curLoc = currentOrdersLoc || 'west';
-  const siItems = standardInventory[curLoc] || [];
+  const siItems = getStandardInventoryItems(curLoc);
 
-  // Build enriched list — amount is in order units (e.g. 6x bags)
-  // Legacy items have unit=Grams/Kilos — auto-convert to order units
-  const ingList = siItems.map((item, idx) => {
-    const db = lookupIngredient(item.name);
-    const unitGrams = db ? (db.unitRecalc || db.orderAmount || 0) : 0;
-    const isLegacy = item.unit && item.unit !== 'units' && item.unit.toLowerCase() !== 'units';
-    let orderUnits;
-    let amtGrams;
-    if (isLegacy && unitGrams > 0) {
-      // Convert legacy raw amount to order units
-      amtGrams = toGrams(item.amount || 0, item.unit);
-      orderUnits = Math.ceil(amtGrams / unitGrams);
-    } else {
-      orderUnits = item.amount || 0;
-      amtGrams = orderUnits * unitGrams;
-    }
+  // Build enriched list with stock, target, deficit, and order calculations
+  // Stock and target are stored in base units (g/ml/pcs) but displayed in order units when possible
+  const ingList = siItems.map(ing => {
+    const targetBase = ing.targetStock[curLoc] || 0;
+    const stockBase = (ing.stock && ing.stock[curLoc]) ? (ing.stock[curLoc].amount || 0) : 0;
+    const deficit = Math.max(0, targetBase - stockBase);
+    const orderCalc = deficit > 0 ? calcOrderUnits(deficit, ing) : null;
+    const hasOrderUnit = ing.orderUnitSize > 0;
+    // Convert to order units for display
+    const stockUnits = hasOrderUnit ? Math.round(stockBase / ing.orderUnitSize * 10) / 10 : stockBase;
+    const targetUnits = hasOrderUnit ? Math.round(targetBase / ing.orderUnitSize * 10) / 10 : targetBase;
     return {
-      ...item,
-      idx,
-      db,
-      orderUnits,
-      unitGrams,
-      amountInGrams: amtGrams,
-      supplier: normalizeSupplier((db && db.source) || ''),
-      orderCode: db ? db.orderCode : '',
+      ...ing,
+      targetBase,
+      stockBase,
+      stockUnits,
+      targetUnits,
+      hasOrderUnit,
+      deficit,
+      orderCalc,
     };
-  });
+  }).sort((a, b) => a.name.localeCompare(b.name));
 
-  // Calculate total value from order units × price
+  // Calculate total estimated order cost
   let totalValue = 0;
   ingList.forEach(ing => {
-    if (ing.db && ing.db.orderPrice && ing.orderUnits > 0) {
-      totalValue += ing.orderUnits * ing.db.orderPrice;
+    if (ing.orderCalc && ing.orderPrice) {
+      totalValue += ing.orderCalc.units * ing.orderPrice;
     }
   });
 
-  // Group by storage category (same as combined tab)
+  // Group by storage category
   const byStorage = {};
   ingList.forEach(ing => {
-    const cat = getStorageCategory(ing.db, curLoc) || 'Unsorted';
+    const cat = getStorageCategory(ing, curLoc) || 'Unsorted';
     if (!byStorage[cat]) byStorage[cat] = [];
     byStorage[cat].push(ing);
   });
@@ -312,13 +301,13 @@ function renderStandardInventoryTab() {
 
   let itemsHtml = '';
   if (siItems.length === 0) {
-    itemsHtml = '<div class="empty">No items yet. Search above to add ingredients from the database.</div>';
+    itemsHtml = '<div class="empty">No items yet. Search above to add ingredients to the standard inventory.</div>';
   } else {
     storageOrder.forEach(storageCat => {
       const items = byStorage[storageCat];
       const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
-
       const catColor = getStorageColor(storageCat, curLoc);
+
       itemsHtml += `<div class="storage-group" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
           <span class="storage-group-dot" style="background:${catColor};"></span>
@@ -329,44 +318,51 @@ function renderStandardInventoryTab() {
         <div style="overflow-x:auto;"><table class="ing-table">
         <thead><tr>
           <th>Ingredient</th>
-          <th>Category</th>
           <th>Storage</th>
           <th>Order code</th>
           <th>Unit / Price</th>
-          <th>Order units / week</th>
-          <th>Total weight</th>
+          <th>In stock</th>
+          <th>Target</th>
+          <th>To order</th>
           <th></th>
         </tr></thead><tbody>`;
 
       items.forEach(ing => {
-        const db = ing.db;
         const isUrl = ing.orderCode && (ing.orderCode.startsWith('http') || ing.orderCode.startsWith('www'));
         let codeDisplay;
-        if (!db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
-        else if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">\u2014</span>';
+        if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">\u2014</span>';
         else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
         else codeDisplay = `<span class="order-code">${esc(ing.orderCode)}</span>`;
 
-        const orderUnitLabel = db && db.orderUnit ? esc(db.orderUnit) : '';
-        const unitPrice = db ? (orderUnitLabel || 'unit') + (db.orderPrice ? ' \u00B7 \u20AC' + Number(db.orderPrice).toFixed(2) : '') : '';
+        const orderUnitLabel = ing.orderUnit ? esc(ing.orderUnit) : '';
+        const unitPrice = (orderUnitLabel || 'unit') + (ing.orderPrice ? ' \u00B7 \u20AC' + Number(ing.orderPrice).toFixed(2) : '');
 
-        // Total weight from order units
-        const totalWeightDisplay = ing.amountInGrams > 0
-          ? `<span class="order-units">${formatGrams(ing.amountInGrams).amount} ${formatGrams(ing.amountInGrams).unit}</span>`
-          : (ing.orderUnits > 0 && !ing.unitGrams ? '<span style="color:var(--text2);font-size:10px;">no weight/unit</span>' : '<span style="color:var(--text2);font-size:11px;">\u2014</span>');
+        // Display in order units when possible, otherwise in base units
+        const unitSuffix = ing.hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, ing.unit); return f.unit; })();
+        const stockColor = ing.stockBase >= ing.targetBase ? 'var(--green)' : ing.stockBase > 0 ? 'var(--orange, #e67e22)' : 'var(--red)';
+
+        const deficitDisplay = ing.deficit > 0
+          ? (ing.orderCalc
+            ? `<span class="to-order-positive">${ing.orderCalc.units}x ${unitSuffix}</span>`
+            : (() => { const f = formatAmount(ing.deficit, ing.unit); return `<span class="to-order-positive">${f.amount} ${f.unit}</span>`; })())
+          : '<span class="to-order-zero">\u2713 full</span>';
 
         itemsHtml += `<tr>
           <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}</td>
-          <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
-          <td>${renderStorageBadge(db)}</td>
+          <td>${renderStorageBadge(ing)}</td>
           <td>${codeDisplay}</td>
           <td style="font-size:12px;">${unitPrice}</td>
           <td style="white-space:nowrap;">
-            <input class="order-stock-input" type="number" min="0" step="1" value="${ing.orderUnits > 0 ? ing.orderUnits : ''}" placeholder="0" style="width:55px;" oninput="updateSiAmount(${ing.idx}, this.value, true)" />
-            <span class="order-units" style="margin-left:2px;">x ${orderUnitLabel || 'units'}</span>
+            <input class="order-stock-input" type="number" min="0" step="0.1" value="${ing.stockUnits || ''}" placeholder="0" style="width:55px;" oninput="updateSiStock('${esc(ing.id)}', this.value)" />
+            <span class="order-units" style="margin-left:2px;">x ${unitSuffix}</span>
           </td>
-          <td>${totalWeightDisplay}</td>
-          <td><button class="btn btn-danger btn-sm" onclick="removeSiItem(${ing.idx})">Remove</button></td>
+          <td style="white-space:nowrap;">
+            <input class="order-stock-input" type="number" min="0" step="1" value="${ing.targetUnits > 0 ? ing.targetUnits : ''}" placeholder="0" style="width:55px;" oninput="updateSiTarget('${esc(ing.id)}', this.value)" />
+            <span class="order-units" style="margin-left:2px;">x ${unitSuffix}</span>
+          </td>
+          <td>${deficitDisplay}</td>
+          <td></td>
+          <td><button class="btn btn-danger btn-sm" onclick="removeSiItem('${esc(ing.id)}')">Remove</button></td>
         </tr>`;
       });
 
@@ -377,10 +373,10 @@ function renderStandardInventoryTab() {
   return `
     <div>
       <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
-        <span>Standard Inventory &mdash; ${esc(curLoc === 'west' ? 'Sering West' : 'Sering Centraal')}</span>
-        ${totalValue > 0 ? `<span style="font-size:13px;font-weight:600;">Estimated: \u20AC${totalValue.toFixed(2)}</span>` : ''}
+        <span>Set Standard Inventory &mdash; ${esc(curLoc === 'west' ? 'Sering West' : 'Sering Centraal')}</span>
+        ${totalValue > 0 ? `<span style="font-size:13px;font-weight:600;">Estimated order: \u20AC${totalValue.toFixed(2)}</span>` : ''}
       </div>
-      <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">These items are ordered every week. Adjust amounts as needed before generating the combined order.</p>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">Set target stock levels for each ingredient. The order is calculated automatically from the deficit (target \u2212 current stock).</p>
       <div style="position:relative;margin-bottom:16px;">
         <input
           id="si-search-input"
@@ -418,12 +414,12 @@ function renderDishesTab() {
 
   const ingList = Object.values(combined).map(ing => {
     const db = lookupIngredient(ing.name);
-    const amtInGrams = toGrams(ing.amount, ing.unit);
+    const amtInGrams = toBaseUnit(ing.amount, ing.unit);
     return {
       ...ing,
       db,
       amountInGrams: amtInGrams,
-      supplier: normalizeSupplier((db && db.source) || ing.source || ''),
+      supplier: normalizeSupplier((db && db.supplier) || ing.source || ''),
       orderCode: db ? db.orderCode : '',
       orderCalc: db ? calcOrderUnits(amtInGrams, db) : null,
     };
@@ -440,12 +436,14 @@ function renderDishesTab() {
   const storageOrder = [...storageCatOrder.filter(c => byStorage[c]), ...Object.keys(byStorage).filter(c => !storageCatOrder.includes(c))];
 
   const dishesWithSheets = orderedDishes.filter(d => d.recipeSheetId);
+  const hanosAllBatchBtn = isHanosEnabled() && ingList.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulkBatches()" title="Send all batch ingredients to Hanos cart">🛒 Send all to Hanos</button>` : '';
   let html = `<div style="margin-bottom:20px;">
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <span>Ingredient order (${orderedDishes.length} batch${orderedDishes.length !== 1 ? 'es' : ''} flagged)</span>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="font-weight:400;font-size:12px;color:var(--text2);">${orderedDishes.map(d => esc(d.name)).join(' · ')}</span>
         ${dishesWithSheets.length ? `<button class="copy-all-btn" onclick="refreshAllRecipes()">↻ Refresh recipe data</button>` : ''}
+        ${hanosAllBatchBtn}
       </div>
     </div>`;
 
@@ -474,55 +472,70 @@ function renderDishesTab() {
         <div style="overflow-x:auto;"><table class="ing-table">
         <thead><tr>
           <th>Ingredient</th><th>Category</th><th>Storage</th><th>Order code</th>
-          <th>Amount needed</th><th>In stock</th><th>To order</th><th>Order units</th><th>For batches</th>
+          <th>Needed</th><th>In stock</th><th>To order</th><th>For batches</th>
         </tr></thead><tbody>`;
 
       items.forEach(ing => {
         const key = ing.name.toLowerCase().trim();
         const isUrl = ing.orderCode && (ing.orderCode.startsWith('http') || ing.orderCode.startsWith('www'));
-        const dbUnit = ing.unit || (ing.db && ing.db.unit) || 'g';
-        const amtNeeded = Math.round(ing.amount);
+        const amtNeededBase = Math.round(ing.amountInGrams);
+        const db = ing.db;
+        const hasOrderUnit = db && db.orderUnitSize > 0;
+        const orderUnitLabel = db && db.orderUnit ? esc(db.orderUnit) : '';
+        const unitSuffix = hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, db ? db.unit : 'g'); return f.unit; })();
 
         let codeDisplay;
-        if (!ing.db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
+        if (!db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
         else if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">no code</span>';
         else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
         else codeDisplay = `<span class="order-code" title="Click to select">${esc(ing.orderCode)}</span>`;
 
-        const dbStock = getDbStockTotal(ing.db);
+        // Amount needed in order units
+        const neededCalc = hasOrderUnit ? calcOrderUnits(amtNeededBase, db) : null;
+        const neededDisplay = neededCalc
+          ? `<span class="order-amt">${neededCalc.units}x</span> <span class="order-units">${unitSuffix}</span>`
+          : (() => { const f = formatAmount(amtNeededBase, db ? db.unit : 'g'); return `<span class="order-amt">${f.amount}</span> <span class="order-units">${f.unit}</span>`; })();
+
+        // Stock in order units
+        const dbStock = getDbStockTotal(db);
         const hasManualStock = orderInventory[key] !== undefined;
-        const stockVal = hasManualStock ? orderInventory[key] : (dbStock > 0 ? dbStock : '');
+        // orderInventory stores values in order units now
+        const stockInUnits = hasManualStock ? (parseFloat(orderInventory[key]) || 0) : (hasOrderUnit && dbStock > 0 ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock);
+        const stockDisplayVal = hasManualStock ? orderInventory[key] : (dbStock > 0 ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
         const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
-        const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" />${stockLabel}`;
+        const stockInput = `<input class="order-stock-input" type="number" min="0" step="0.1" value="${stockDisplayVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
 
-        const effectiveStock = hasManualStock ? (parseFloat(orderInventory[key]) || 0) : dbStock;
+        // To order: convert stock back to base for calculation
+        const effectiveStockBase = hasManualStock
+          ? (hasOrderUnit ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
+          : dbStock;
         const hasStockValue = hasManualStock || dbStock > 0;
-        const toOrder = Math.max(0, amtNeeded - effectiveStock);
-        const toOrderDisplay = hasStockValue
-          ? (toOrder > 0
-            ? `<span class="to-order-positive">${toOrder.toLocaleString()} ${esc(dbUnit)}</span>`
-            : `<span class="to-order-zero">\u2713 enough</span>`)
-          : `<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>`;
+        const toOrderBase = Math.max(0, amtNeededBase - effectiveStockBase);
+        const toOrderCalc = hasOrderUnit ? calcOrderUnits(toOrderBase, db) : null;
 
-        const orderAmt = hasStockValue ? toOrder : amtNeeded;
-        const orderAmtGrams = toGrams(orderAmt, dbUnit);
-        const orderCalc = ing.db ? calcOrderUnits(orderAmtGrams, ing.db) : null;
-        const hanosBtnBatch = (isHanosEnabled() && ing.orderCode && !isUrl && orderCalc && orderCalc.units > 0)
-          ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
-          : '';
-        const orderUnits = orderCalc && orderCalc.units > 0
-          ? `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>${hanosBtnBatch}`
-          : (orderAmt === 0 ? '<span class="to-order-zero">\u2014</span>' : '<span style="color:var(--text2);font-size:11px;">\u2014</span>');
+        let toOrderDisplay;
+        if (!hasStockValue) {
+          toOrderDisplay = `<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>`;
+        } else if (toOrderBase <= 0) {
+          toOrderDisplay = '<span class="to-order-zero">\u2713 enough</span>';
+        } else if (toOrderCalc) {
+          const hanosBtnBatch = (isHanosEnabled() && ing.orderCode && !isUrl && toOrderCalc.units > 0)
+            ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
+            : '';
+          toOrderDisplay = `<span class="to-order-positive">${toOrderCalc.units}x ${unitSuffix}</span>${hanosBtnBatch}`;
+        } else {
+          const f = formatAmount(toOrderBase, db ? db.unit : 'g');
+          toOrderDisplay = `<span class="to-order-positive">${f.amount} ${f.unit}</span>`;
+        }
 
-        html += `<tr data-stock-key="${esc(key)}" data-needed="${amtNeeded}" data-unit="${esc(dbUnit)}">
+        html += `<tr data-stock-key="${esc(key)}" data-needed="${amtNeededBase}" data-unit="${esc(db ? db.unit : 'g')}">
           <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}</td>
-          <td style="font-size:12px;">${ing.db && ing.db.category ? esc(ing.db.category) : '\u2014'}</td>
-          <td>${renderStorageBadge(ing.db)}</td>
+          <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
+          <td>${renderStorageBadge(db)}</td>
           <td>${codeDisplay}</td>
-          <td><span class="order-amt">${amtNeeded.toLocaleString()}</span> <span class="order-units">${esc(dbUnit)}</span></td>
+          <td>${neededDisplay}</td>
           <td>${stockInput}</td>
           <td class="to-order-cell">${toOrderDisplay}</td>
-          <td>${orderUnits}</td>
           <td style="font-size:11px;color:var(--text2);">${ing.dishes.map(n => esc(n.length > 20 ? n.slice(0,18)+'\u2026' : n)).join(', ')}</td>
         </tr>`;
       });
@@ -564,33 +577,19 @@ function renderCombinedOrderTab() {
   if (combinedIncludeDishes) {
     orderedDishes.forEach(dish => {
       calcIngredientsFromRecipe(dish).forEach(ing => {
-        addToMap(ing.name, toGrams(ing.amount, ing.unit), false, dish.name);
+        addToMap(ing.name, toBaseUnit(ing.amount, ing.unit), false, dish.name);
       });
     });
   }
 
-  // Add standard inventory for current location — convert to grams (handles legacy + new format)
-  const siItems = standardInventory[currentOrdersLoc || 'west'] || [];
-  siItems.forEach(item => {
-    if (!item.amount || item.amount <= 0) return;
-    const db = lookupIngredient(item.name);
-    const canonicalName = db ? db.name : item.name;
-    const unitGrams = db ? (db.unitRecalc || db.orderAmount || 0) : 0;
-    const isLegacy = item.unit && item.unit !== 'units' && item.unit.toLowerCase() !== 'units';
-    let amtGrams;
-    if (isLegacy && unitGrams > 0) {
-      amtGrams = toGrams(item.amount, item.unit); // legacy: amount is raw grams/kg
-    } else if (unitGrams > 0) {
-      amtGrams = item.amount * unitGrams; // new: amount is order units
-    } else {
-      amtGrams = toGrams(item.amount, item.unit); // fallback
-    }
-    // Find an existing key that matches this item
-    const matchingKey = Object.keys(combined).find(k =>
-      k === item.name.toLowerCase().trim() || k === canonicalName.toLowerCase().trim()
-    );
-    const nameToUse = matchingKey ? combined[matchingKey].name : canonicalName;
-    addToMap(nameToUse, amtGrams, true, null);
+  // Add standard inventory items — ingredients with targetStock for current location
+  const curLoc = currentOrdersLoc || 'west';
+  getStandardInventoryItems(curLoc).forEach(ing => {
+    const target = ing.targetStock[curLoc] || 0;
+    const currentStock = (ing.stock && ing.stock[curLoc]) ? (ing.stock[curLoc].amount || 0) : 0;
+    const deficit = Math.max(0, target - currentStock);
+    if (deficit <= 0) return;
+    addToMap(ing.name, deficit, true, null);
   });
 
   if (!Object.keys(combined).length) {
@@ -602,14 +601,13 @@ function renderCombinedOrderTab() {
     return {
       ...ing,
       db,
-      supplier: normalizeSupplier((db && db.source) || ''),
+      supplier: normalizeSupplier((db && db.supplier) || ''),
       orderCode: db ? db.orderCode : '',
       orderCalc: db ? calcOrderUnits(ing.totalGrams, db) : null,
     };
   });
 
   // Group by storage category (current building) instead of supplier
-  const curLoc = currentOrdersLoc || 'west';
   const byStorage = {};
   ingList.forEach(ing => {
     const cat = getStorageCategory(ing.db, curLoc) || 'Unsorted';
@@ -643,9 +641,13 @@ function renderCombinedOrderTab() {
     </div>`;
   }
 
+  const hanosAllCombinedBtn = isHanosEnabled() && allItems.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk()" title="Send entire combined order to Hanos cart">🛒 Send all to Hanos</button>` : '';
   html += `<div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <span>Combined Order &mdash; ${esc(curLoc === 'west' ? 'Sering West' : 'Sering Centraal')}</span>
-      <span style="font-size:13px;font-weight:600;">${totalValue > 0 ? 'Estimated: \u20AC' + totalValue.toFixed(2) : ''}</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:13px;font-weight:600;">${totalValue > 0 ? 'Estimated: \u20AC' + totalValue.toFixed(2) : ''}</span>
+        ${hanosAllCombinedBtn}
+      </div>
     </div>
     <div class="order-toggle-bar">
       <label class="order-toggle${combinedIncludeDishes ? ' on' : ''}" onclick="combinedIncludeDishes=!combinedIncludeDishes;renderOrders();">
@@ -677,86 +679,99 @@ function renderCombinedOrderTab() {
         <th>Storage</th>
         <th>Order code</th>
         <th>Unit / Price</th>
-        <th style="cursor:pointer;" title="Click a row to see breakdown">Total needed</th>
+        <th style="cursor:pointer;" title="Click a row to see breakdown">Needed</th>
         <th>In stock</th>
         <th>To order</th>
-        <th>Order units</th>
       </tr></thead><tbody>`;
 
     items.forEach(ing => {
       const key = ing.name.toLowerCase().trim();
-      const fmt = formatGrams(ing.totalGrams);
+      const db = ing.db;
+      const hasOrderUnit = db && db.orderUnitSize > 0;
+      const orderUnitLabel = db && db.orderUnit ? esc(db.orderUnit) : '';
+      const unitSuffix = hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, db ? db.unit : 'g'); return f.unit; })();
       const isUrl = ing.orderCode && (ing.orderCode.startsWith('http') || ing.orderCode.startsWith('www'));
 
       let codeDisplay;
-      if (!ing.db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
+      if (!db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
       else if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">no code</span>';
       else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
       else codeDisplay = `<span class="order-code">${esc(ing.orderCode)}</span>`;
 
-      const unitPrice = ing.db ? (ing.db.orderUnit ? esc(ing.db.orderUnit) : '') + (ing.db.orderPrice ? ' \u00B7 \u20AC' + Number(ing.db.orderPrice).toFixed(2) : '') : '';
+      const unitPrice = db ? (db.orderUnit ? esc(db.orderUnit) : '') + (db.orderPrice ? ' \u00B7 \u20AC' + Number(db.orderPrice).toFixed(2) : '') : '';
 
-      // Stock
-      const dbStock = getDbStockTotal(ing.db);
-      const hasManualStock = combinedOrderStock[key] !== undefined;
-      const stockVal = hasManualStock ? combinedOrderStock[key] : (dbStock > 0 ? dbStock : '');
-      const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
-      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockVal}" placeholder="0" oninput="updateCombinedOrderStock('${esc(key)}',this.value)" />${stockLabel}`;
+      // Needed in order units
+      const neededCalc = hasOrderUnit ? calcOrderUnits(ing.totalGrams, db) : null;
+      const neededDisplay = neededCalc
+        ? `<span class="order-amt">${neededCalc.units}x</span> <span class="order-units">${unitSuffix}</span>`
+        : (() => { const f = formatAmount(ing.totalGrams, db ? db.unit : 'g'); return `<span class="order-amt">${f.amount}</span> <span class="order-units">${f.unit}</span>`; })();
 
-      const effectiveStock = hasManualStock ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
-      const hasStockValue = hasManualStock || dbStock > 0;
-      const toOrderGrams = Math.max(0, ing.totalGrams - effectiveStock);
-      const toOrderDisplay = hasStockValue
-        ? (toOrderGrams > 0
-          ? `<span class="to-order-positive">${formatGrams(toOrderGrams).amount} ${formatGrams(toOrderGrams).unit}</span>`
-          : `<span class="to-order-zero">\u2713 enough</span>`)
-        : `<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>`;
-
-      const orderAmtGrams = hasStockValue ? toOrderGrams : ing.totalGrams;
-      const orderCalc = ing.db ? calcOrderUnits(orderAmtGrams, ing.db) : null;
-      const hanosBtn = (isHanosEnabled() && ing.orderCode && !isUrl && orderCalc && orderCalc.units > 0)
-        ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
-        : '';
-      // Show "g/piece" input for stuk items with no weight
-      const isStukNoWeight = ing.db && ing.db.orderCode && (!ing.db.orderAmount || ing.db.orderAmount <= 0);
-      let orderUnitsDisplay;
-      if (orderCalc && orderCalc.units > 0) {
-        orderUnitsDisplay = `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>${hanosBtn}`;
-      } else if (isStukNoWeight && orderAmtGrams > 0) {
-        orderUnitsDisplay = `<input class="order-stock-input gpstuk-input" type="number" min="1" step="1" placeholder="g/piece" title="Fill in grams per piece to calculate order units" onchange="saveGramsPerPiece('${esc(ing.db.id)}','${esc(key)}',this.value)" style="width:75px;" />`;
-      } else if (orderAmtGrams === 0) {
-        orderUnitsDisplay = '<span class="to-order-zero">\u2014</span>';
-      } else {
-        orderUnitsDisplay = '<span style="color:var(--text2);font-size:11px;">\u2014</span>';
-      }
-
-      // Breakdown (shown on click)
+      // Breakdown (shown on click) — in order units when possible
       const parts = [];
       if (ing.standardGrams > 0) {
-        const f = formatGrams(ing.standardGrams);
-        parts.push(`<span class="combined-part combined-standard">${f.amount}${f.unit} standard</span>`);
+        const sc = hasOrderUnit ? calcOrderUnits(ing.standardGrams, db) : null;
+        parts.push(sc
+          ? `<span class="combined-part combined-standard">${sc.units}x ${unitSuffix} standard</span>`
+          : (() => { const f = formatAmount(ing.standardGrams, db ? db.unit : 'g'); return `<span class="combined-part combined-standard">${f.amount}${f.unit} standard</span>`; })());
       }
       if (ing.dishGrams > 0) {
-        const f = formatGrams(ing.dishGrams);
-        parts.push(`<span class="combined-part combined-dishes">${f.amount}${f.unit} ${esc(ing.dishes.join(', '))}</span>`);
+        const dc = hasOrderUnit ? calcOrderUnits(ing.dishGrams, db) : null;
+        parts.push(dc
+          ? `<span class="combined-part combined-dishes">${dc.units}x ${unitSuffix} ${esc(ing.dishes.join(', '))}</span>`
+          : (() => { const f = formatAmount(ing.dishGrams, db ? db.unit : 'g'); return `<span class="combined-part combined-dishes">${f.amount}${f.unit} ${esc(ing.dishes.join(', '))}</span>`; })());
       }
       const breakdownHtml = parts.length ? `<div class="breakdown-detail" style="display:none;font-size:11px;margin-top:2px;">${parts.join(' + ')}</div>` : '';
 
-      const priceAlertIcon = (ing.db && ing.db.priceAlert) ? ' <span style="color:var(--red);font-size:11px;" title="Price increased">\u25B2</span>' : '';
+      // Stock in order units
+      const dbStock = getDbStockTotal(db);
+      const hasManualStock = combinedOrderStock[key] !== undefined;
+      const stockDisplayVal = hasManualStock ? combinedOrderStock[key] : (dbStock > 0 ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
+      const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
+      const stockInput = `<input class="order-stock-input" type="number" min="0" step="0.1" value="${stockDisplayVal}" placeholder="0" oninput="updateCombinedOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
+
+      // To order
+      const effectiveStockBase = hasManualStock
+        ? (hasOrderUnit ? (parseFloat(combinedOrderStock[key]) || 0) * db.orderUnitSize : (parseFloat(combinedOrderStock[key]) || 0))
+        : dbStock;
+      const hasStockValue = hasManualStock || dbStock > 0;
+      const toOrderBase = Math.max(0, ing.totalGrams - effectiveStockBase);
+      const toOrderCalc = hasOrderUnit ? calcOrderUnits(toOrderBase, db) : null;
+
+      let toOrderDisplay;
+      if (!hasStockValue) {
+        toOrderDisplay = `<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>`;
+      } else if (toOrderBase <= 0) {
+        toOrderDisplay = '<span class="to-order-zero">\u2713 enough</span>';
+      } else if (toOrderCalc) {
+        const hanosBtn = (isHanosEnabled() && ing.orderCode && !isUrl && toOrderCalc.units > 0)
+          ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
+          : '';
+        toOrderDisplay = `<span class="to-order-positive">${toOrderCalc.units}x ${unitSuffix}</span>${hanosBtn}`;
+      } else {
+        const f = formatAmount(toOrderBase, db ? db.unit : 'g');
+        toOrderDisplay = `<span class="to-order-positive">${f.amount} ${f.unit}</span>`;
+      }
+
+      // g/piece input for items without orderUnitSize
+      const isStukNoWeight = db && db.orderCode && (!db.orderUnitSize || db.orderUnitSize <= 0);
+      if (isStukNoWeight && ing.totalGrams > 0 && toOrderBase > 0) {
+        toOrderDisplay += ` <input class="order-stock-input gpstuk-input" type="number" min="1" step="1" placeholder="g/piece" title="Fill in grams per piece to calculate order units" onchange="saveGramsPerPiece('${esc(db.id)}','${esc(key)}',this.value)" style="width:65px;" />`;
+      }
+
+      const priceAlertIcon = (db && db.priceAlert) ? ' <span style="color:var(--red);font-size:11px;" title="Price increased">\u25B2</span>' : '';
 
       html += `<tr data-combined-key="${esc(key)}" data-needed="${ing.totalGrams}" data-dbname="${esc(ing.name)}">
         <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}${priceAlertIcon}</td>
-        <td style="font-size:12px;">${ing.db && ing.db.category ? esc(ing.db.category) : '\u2014'}</td>
-        <td>${renderStorageBadge(ing.db)}</td>
+        <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
+        <td>${renderStorageBadge(db)}</td>
         <td>${codeDisplay}</td>
         <td style="font-size:12px;">${unitPrice}</td>
         <td style="cursor:pointer;" onclick="this.querySelector('.breakdown-detail')&&(this.querySelector('.breakdown-detail').style.display=this.querySelector('.breakdown-detail').style.display==='none'?'block':'none')">
-          <span class="order-amt">${fmt.amount}</span> <span class="order-units">${fmt.unit}</span>
+          ${neededDisplay}
           ${breakdownHtml}
         </td>
         <td>${stockInput}</td>
         <td class="to-order-cell">${toOrderDisplay}</td>
-        <td class="order-units-cell">${orderUnitsDisplay}</td>
       </tr>`;
     });
 
@@ -774,7 +789,7 @@ function copyOrderCodes(supplier) {
   S.batches.filter(d => d.orderFor).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
-      if (db && db.orderCode && !db.orderCode.startsWith('http') && (db.source || '').toLowerCase().includes(supplier.toLowerCase())) {
+      if (db && db.orderCode && !db.orderCode.startsWith('http') && (db.supplier || '').toLowerCase().includes(supplier.toLowerCase())) {
         if (!items.includes(db.orderCode)) items.push(db.orderCode);
       }
     });
@@ -801,11 +816,10 @@ function copyDishOrderCodes(storageCat) {
 function copySiOrderCodes(storageCat) {
   const curLoc = currentOrdersLoc || 'west';
   const items = new Set();
-  (standardInventory[curLoc] || []).forEach(item => {
-    const db = lookupIngredient(item.name);
-    if (db && db.orderCode && !db.orderCode.startsWith('http')) {
-      const cat = getStorageCategory(db, curLoc) || 'Unsorted';
-      if (cat === storageCat) items.add(db.orderCode);
+  getStandardInventoryItems(curLoc).forEach(ing => {
+    if (ing.orderCode && !ing.orderCode.startsWith('http')) {
+      const cat = getStorageCategory(ing, curLoc) || 'Unsorted';
+      if (cat === storageCat) items.add(ing.orderCode);
     }
   });
   const arr = [...items];
@@ -817,15 +831,14 @@ function copyCombinedOrderCodes(supplier) {
   S.batches.filter(d => d.orderFor).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
-      if (db && db.orderCode && !db.orderCode.startsWith('http') && normalizeSupplier(db.source || '').toLowerCase().includes(supplier.toLowerCase())) {
+      if (db && db.orderCode && !db.orderCode.startsWith('http') && normalizeSupplier(db.supplier || '').toLowerCase().includes(supplier.toLowerCase())) {
         items.add(db.orderCode);
       }
     });
   });
-  (standardInventory[currentOrdersLoc || 'west'] || []).forEach(item => {
-    const db = lookupIngredient(item.name);
-    if (db && db.orderCode && !db.orderCode.startsWith('http') && normalizeSupplier(db.source || '').toLowerCase().includes(supplier.toLowerCase())) {
-      items.add(db.orderCode);
+  getStandardInventoryItems(currentOrdersLoc || 'west').forEach(ing => {
+    if (ing.orderCode && !ing.orderCode.startsWith('http') && normalizeSupplier(ing.supplier || '').toLowerCase().includes(supplier.toLowerCase())) {
+      items.add(ing.orderCode);
     }
   });
   const arr = [...items];
@@ -868,14 +881,16 @@ function collectHanosItems(storageCat) {
     const db = dbName ? lookupIngredient(dbName) : null;
     if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
 
-    // Calculate order units for this row
-    const neededGrams = parseFloat(row.dataset.needed) || 0;
+    // Calculate order units for this row — stock values are in order units, convert to base
+    const neededBase = parseFloat(row.dataset.needed) || 0;
     const dbStock = getDbStockTotal(db);
     const hasManual = combinedOrderStock[key] !== undefined;
-    const effectiveStock = hasManual ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
+    const effectiveStockBase = hasManual
+      ? (db.orderUnitSize > 0 ? (parseFloat(combinedOrderStock[key]) || 0) * db.orderUnitSize : (parseFloat(combinedOrderStock[key]) || 0))
+      : dbStock;
     const hasStockValue = hasManual || dbStock > 0;
-    const toOrderGrams = hasStockValue ? Math.max(0, neededGrams - effectiveStock) : neededGrams;
-    const calc = calcOrderUnits(toOrderGrams, db);
+    const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
+    const calc = calcOrderUnits(toOrderBase, db);
     if (!calc || calc.units <= 0) return;
 
     items.push({
@@ -895,18 +910,21 @@ async function hanosAddSingle(orderCode, name) {
   const db = lookupIngredient(name);
   if (!db) return;
 
-  // Calculate quantity from the DOM row
+  // Calculate quantity from the DOM row — stock is in order units, convert to base
   const key = name.toLowerCase().trim();
-  const row = document.querySelector(`[data-combined-key="${key}"]`);
+  const row = document.querySelector(`[data-combined-key="${key}"]`) || document.querySelector(`[data-stock-key="${key}"]`);
   let quantity = 1;
   if (row) {
-    const neededGrams = parseFloat(row.dataset.needed) || 0;
+    const neededBase = parseFloat(row.dataset.needed) || 0;
     const dbStock = getDbStockTotal(db);
-    const hasManual = combinedOrderStock[key] !== undefined;
-    const effectiveStock = hasManual ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
+    const stockObj = row.dataset.combinedKey ? combinedOrderStock : orderInventory;
+    const hasManual = stockObj[key] !== undefined;
+    const effectiveStockBase = hasManual
+      ? (db.orderUnitSize > 0 ? (parseFloat(stockObj[key]) || 0) * db.orderUnitSize : (parseFloat(stockObj[key]) || 0))
+      : dbStock;
     const hasStockValue = hasManual || dbStock > 0;
-    const toOrderGrams = hasStockValue ? Math.max(0, neededGrams - effectiveStock) : neededGrams;
-    const calc = calcOrderUnits(toOrderGrams, db);
+    const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
+    const calc = calcOrderUnits(toOrderBase, db);
     if (calc && calc.units > 0) quantity = calc.units;
   }
 
@@ -947,15 +965,15 @@ function collectHanosBatchItems(storageCat) {
     const db = key ? lookupIngredient(key) : null;
     if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
 
-    const amtNeeded = parseFloat(row.dataset.needed) || 0;
-    const dbUnit = row.dataset.unit || 'g';
+    const neededBase = parseFloat(row.dataset.needed) || 0;
     const dbStock = getDbStockTotal(db);
     const hasManual = orderInventory[key] !== undefined;
-    const effectiveStock = hasManual ? (parseFloat(orderInventory[key]) || 0) : dbStock;
+    const effectiveStockBase = hasManual
+      ? (db.orderUnitSize > 0 ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
+      : dbStock;
     const hasStockValue = hasManual || dbStock > 0;
-    const toOrder = hasStockValue ? Math.max(0, amtNeeded - effectiveStock) : amtNeeded;
-    const orderAmtGrams = toGrams(toOrder, dbUnit);
-    const calc = calcOrderUnits(orderAmtGrams, db);
+    const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
+    const calc = calcOrderUnits(toOrderBase, db);
     if (!calc || calc.units <= 0) return;
 
     items.push({
@@ -1082,12 +1100,11 @@ async function saveGramsPerPiece(ingredientId, combinedKey, value) {
   if (!db) return;
 
   // Update locally
-  db.orderAmount = grams;
-  db.unitRecalc = grams;
+  db.orderUnitSize = grams;
 
   // Save to server
   try {
-    await apiPost(`/api/ingredients/${ingredientId}`, { ...db, orderAmountGrams: grams });
+    await apiPost(`/api/ingredients/${ingredientId}`, { ...db, orderUnitSize: grams });
     toast(`Saved ${grams}g per piece for ${db.name}`);
     renderOrders();
   } catch (e) {
@@ -1131,78 +1148,55 @@ function persistIngredientStock(ingredientName, amount) {
   }, 600);
 }
 
-function updateCombinedOrderStock(key, val) {
+// Shared inline stock update — input is in order units, convert to base for storage
+function _updateStockInline(storageObj, key, val, rowSelector, neededAttr) {
   if (val === '' || val === null) {
-    delete combinedOrderStock[key];
+    delete storageObj[key];
   } else {
-    combinedOrderStock[key] = parseFloat(val) || 0;
+    storageObj[key] = parseFloat(val) || 0;
   }
 
-  // Persist to DB
   const db = lookupIngredient(key);
-  if (db) persistIngredientStock(db.name, val);
+  // Persist to DB in base units
+  if (db) {
+    const baseAmount = (db.orderUnitSize > 0) ? (parseFloat(val) || 0) * db.orderUnitSize : (parseFloat(val) || 0);
+    persistIngredientStock(db.name, baseAmount);
+  }
 
-  const row = document.querySelector(`[data-combined-key="${key}"]`);
+  const row = document.querySelector(rowSelector);
   if (!row) return;
-  const neededGrams = parseFloat(row.dataset.needed) || 0;
-  const inStockGrams = parseFloat(val) || 0;
-  const toOrderGrams = Math.max(0, neededGrams - inStockGrams);
+  const neededBase = parseFloat(row.dataset[neededAttr]) || 0;
+  const stockUnits = parseFloat(val) || 0;
+  const stockBase = (db && db.orderUnitSize > 0) ? stockUnits * db.orderUnitSize : stockUnits;
+  const toOrderBase = Math.max(0, neededBase - stockBase);
+  const hasOrderUnit = db && db.orderUnitSize > 0;
+  const orderUnitLabel = db && db.orderUnit ? db.orderUnit : '';
+  const unitSuffix = hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, db ? db.unit : 'g'); return f.unit; })();
 
   const toOrderEl = row.querySelector('.to-order-cell');
   if (toOrderEl) {
     if (val === '' || val === null || val === undefined) {
       toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>';
-    } else if (toOrderGrams > 0) {
-      const f = formatGrams(toOrderGrams);
-      toOrderEl.innerHTML = `<span class="to-order-positive">${f.amount} ${esc(f.unit)}</span>`;
-    } else {
+    } else if (toOrderBase <= 0) {
       toOrderEl.innerHTML = '<span class="to-order-zero">\u2713 enough</span>';
-    }
-  }
-
-  const orderUnitsEl = row.querySelector('.order-units-cell');
-  if (orderUnitsEl) {
-    const dbName = row.dataset.dbname || '';
-    const dbLookup = dbName ? lookupIngredient(dbName) : null;
-    const orderAmt = (val === '' || val === null || val === undefined) ? neededGrams : toOrderGrams;
-    const orderCalc = dbLookup ? calcOrderUnits(orderAmt, dbLookup) : null;
-    if (orderCalc && orderCalc.units > 0) {
-      orderUnitsEl.innerHTML = `<span class="order-amt">${orderCalc.units}x</span> <span class="order-units">(${orderCalc.perUnit} ${esc(orderCalc.unitType)})</span>`;
-    } else if (orderAmt === 0) {
-      orderUnitsEl.innerHTML = '<span class="to-order-zero">\u2014</span>';
     } else {
-      orderUnitsEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">\u2014</span>';
+      const calc = hasOrderUnit ? calcOrderUnits(toOrderBase, db) : null;
+      if (calc) {
+        toOrderEl.innerHTML = `<span class="to-order-positive">${calc.units}x ${esc(unitSuffix)}</span>`;
+      } else {
+        const f = formatAmount(toOrderBase, db ? db.unit : 'g');
+        toOrderEl.innerHTML = `<span class="to-order-positive">${f.amount} ${esc(f.unit)}</span>`;
+      }
     }
   }
 }
 
+function updateCombinedOrderStock(key, val) {
+  _updateStockInline(combinedOrderStock, key, val, `[data-combined-key="${key}"]`, 'needed');
+}
+
 function updateOrderStock(key, val) {
-  if (val === '' || val === null) {
-    delete orderInventory[key];
-  } else {
-    orderInventory[key] = parseFloat(val) || 0;
-  }
-
-  // Persist to DB
-  const db = lookupIngredient(key);
-  if (db) persistIngredientStock(db.name, val);
-
-  const row = document.querySelector(`[data-stock-key="${key}"]`);
-  if (!row) return;
-  const needed = parseFloat(row.dataset.needed) || 0;
-  const inStock = parseFloat(val) || 0;
-  const toOrder = Math.max(0, needed - inStock);
-  const toOrderEl = row.querySelector('.to-order-cell');
-  const dbUnit = row.dataset.unit || 'g';
-  if (toOrderEl) {
-    if (val === '' || val === null || val === undefined) {
-      toOrderEl.innerHTML = '<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>';
-    } else if (toOrder > 0) {
-      toOrderEl.innerHTML = `<span class="to-order-positive">${toOrder.toLocaleString()} ${esc(dbUnit)}</span>`;
-    } else {
-      toOrderEl.innerHTML = '<span class="to-order-zero">\u2713 enough</span>';
-    }
-  }
+  _updateStockInline(orderInventory, key, val, `[data-stock-key="${key}"]`, 'needed');
 }
 
 async function refreshAllRecipes() {

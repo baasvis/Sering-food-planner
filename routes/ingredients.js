@@ -29,19 +29,19 @@ router.get('/', async (req, res) => {
       supplierName: ing.supplierName,
       types: ing.types || [],
       category: ing.category,
+      measureMode: ing.measureMode || 'weight',
       unit: ing.unit,
-      source: ing.supplier,
+      supplier: ing.supplier,
       orderCode: ing.orderCode,
       orderUnit: ing.orderUnit,
-      orderUnitStandard: ing.orderUnitStandard,
       orderPrice: ing.orderPrice || '',
-      orderAmount: ing.orderAmountGrams,
-      unitRecalc: ing.orderAmountGrams,
+      orderUnitSize: ing.orderUnitSize || 0,
       priceLevel: ing.priceLevel || '',
-      pricePer100g: ing.pricePer100g || 0,
+      pricePer100: ing.pricePer100 || 0,
       priceAlert: ing.priceAlert || false,
       storageLocations: ing.storageLocations || {},
       stock: ing.stock || {},
+      targetStock: ing.targetStock || {},
       allergens: ing.allergens,
       notes: ing.notes,
       active: ing.active,
@@ -71,35 +71,59 @@ router.post('/', async (req, res) => {
     await prisma.$transaction([
       prisma.ingredient.deleteMany(),
       prisma.ingredient.createMany({
-        data: ingredients.map(ing => ({
-          id: ing.id,
-          name: ing.name || '',
-          supplierName: ing.supplierName || '',
-          types: ing.types || [],
-          category: ing.category || '',
-          unit: ing.unit || 'Grams',
-          supplier: ing.supplier || '',
-          orderCode: ing.orderCode || '',
-          orderUnit: ing.orderUnit || '',
-          orderUnitStandard: ing.orderUnitStandard || '',
-          orderPrice: ing.orderPrice != null ? parseFloat(ing.orderPrice) || null : null,
-          orderAmountGrams: parseFloat(ing.orderAmountGrams) || 0,
-          priceLevel: ing.priceLevel || '',
-          pricePer100g: parseFloat(ing.pricePer100g) || 0,
-          priceHistory: ing.priceHistory || [],
-          priceAlert: !!ing.priceAlert,
-          storageLocations: ing.storageLocations || {},
-          stock: ing.stock || {},
-          nutrition: ing.nutrition || {},
-          allergens: ing.allergens || '',
-          notes: ing.notes || '',
-          active: ing.active !== false,
-        })),
+        data: ingredients.map(ing => {
+          const orderPrice = ing.orderPrice != null ? parseFloat(ing.orderPrice) || null : null;
+          const orderUnitSize = parseFloat(ing.orderUnitSize) || 0;
+          return {
+            id: ing.id,
+            name: ing.name || '',
+            supplierName: ing.supplierName || '',
+            types: ing.types || [],
+            category: ing.category || '',
+            measureMode: ing.measureMode || 'weight',
+            unit: ing.unit || 'Grams',
+            supplier: ing.supplier || '',
+            orderCode: ing.orderCode || '',
+            orderUnit: ing.orderUnit || '',
+            orderPrice,
+            orderUnitSize,
+            priceLevel: ing.priceLevel || '',
+            pricePer100: (orderPrice && orderUnitSize > 0) ? Math.round((orderPrice / orderUnitSize) * 10000) / 100 : 0,
+            priceHistory: ing.priceHistory || [],
+            priceAlert: !!ing.priceAlert,
+            storageLocations: ing.storageLocations || {},
+            stock: ing.stock || {},
+            targetStock: ing.targetStock || {},
+            nutrition: ing.nutrition || {},
+            allergens: ing.allergens || '',
+            notes: ing.notes || '',
+            active: ing.active !== false,
+          };
+        }),
       }),
     ]);
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients`);
     res.json({ ok: true, count: ingredients.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update target stock for a single ingredient at one location
+// NOTE: specific routes like /target-stock MUST come before /:id
+router.post('/target-stock', async (req, res) => {
+  const { ingredientId, location, amount } = req.body;
+  if (!ingredientId || !location) return res.status(400).json({ error: 'ingredientId and location required' });
+  try {
+    const ing = await prisma.ingredient.findUnique({ where: { id: ingredientId } });
+    if (!ing) return res.status(404).json({ error: 'Ingredient not found' });
+    const targetStock = ing.targetStock || {};
+    if (amount === null || amount === undefined || amount === '' || parseFloat(amount) <= 0) {
+      delete targetStock[location]; // Remove from standard inventory
+    } else {
+      targetStock[location] = parseFloat(amount);
+    }
+    await prisma.ingredient.update({ where: { id: ingredientId }, data: { targetStock } });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -143,24 +167,27 @@ router.post('/:id', async (req, res) => {
   const ingredient = req.body;
   if (!ingredient || !ingredient.name) return res.status(400).json({ error: 'name required' });
   try {
+    const orderPrice = ingredient.orderPrice != null ? parseFloat(ingredient.orderPrice) || null : null;
+    const orderUnitSize = parseFloat(ingredient.orderUnitSize) || 0;
     const data = {
       name: ingredient.name || '',
       supplierName: ingredient.supplierName || '',
       types: ingredient.types || [],
       category: ingredient.category || '',
+      measureMode: ingredient.measureMode || 'weight',
       unit: ingredient.unit || 'Grams',
       supplier: ingredient.supplier || '',
       orderCode: ingredient.orderCode || '',
       orderUnit: ingredient.orderUnit || '',
-      orderUnitStandard: ingredient.orderUnitStandard || '',
-      orderPrice: ingredient.orderPrice != null ? parseFloat(ingredient.orderPrice) || null : null,
-      orderAmountGrams: parseFloat(ingredient.orderAmountGrams) || 0,
+      orderPrice,
+      orderUnitSize,
       priceLevel: ingredient.priceLevel || '',
-      pricePer100g: parseFloat(ingredient.pricePer100g) || 0,
+      pricePer100: (orderPrice && orderUnitSize > 0) ? Math.round((orderPrice / orderUnitSize) * 10000) / 100 : 0,
       priceHistory: ingredient.priceHistory || [],
       priceAlert: !!ingredient.priceAlert,
       storageLocations: ingredient.storageLocations || {},
       stock: ingredient.stock || {},
+      targetStock: ingredient.targetStock || {},
       nutrition: ingredient.nutrition || {},
       allergens: ingredient.allergens || '',
       notes: ingredient.notes || '',

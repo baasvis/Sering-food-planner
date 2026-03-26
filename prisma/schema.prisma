@@ -90,19 +90,20 @@ model Ingredient {
   supplierName      String   @default("") @map("supplier_name")
   types             Json     @default("[]")
   category          String   @default("")
+  measureMode       String   @default("weight") @map("measure_mode") // "weight" (g/ml) or "count" (pieces)
   unit              String   @default("Grams")
   supplier          String   @default("")
   orderCode         String   @default("") @map("order_code")
   orderUnit         String   @default("") @map("order_unit")
-  orderUnitStandard String   @default("") @map("order_unit_standard")
   orderPrice        Float?   @map("order_price")
-  orderAmountGrams  Float    @default(0) @map("order_amount_grams")
+  orderUnitSize     Float    @default(0) @map("order_unit_size") // base units (g/ml/pcs) per order package
   priceLevel        String   @default("") @map("price_level")
-  pricePer100g      Float    @default(0) @map("price_per_100g")
+  pricePer100       Float    @default(0) @map("price_per_100") // price per 100 base units
   priceHistory      Json     @default("[]") @map("price_history")
   priceAlert        Boolean  @default(false) @map("price_alert")
   storageLocations  Json     @default("{}") @map("storage_locations")
   stock             Json     @default("{}")
+  targetStock       Json     @default("{}") @map("target_stock") // per-location target: {west: 10000, centraal: 5000}
   nutrition         Json     @default("{}")
   allergens         String   @default("")
   notes             String   @default("")

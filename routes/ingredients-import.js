@@ -115,10 +115,9 @@ router.post('/upload-supplier', upload.single('file'), (req, res) => {
         orderCode: String(r[codeIdx] || ''),
         price: r[priceIdx] != null ? parseFloat(r[priceIdx]) : null,
         orderUnit: r[qtyIdx] || '',
-        orderUnitStandard: r[stdQtyIdx] || '',
         category: r[catIdx] || '',
         subcategory: r[subCatIdx] || '',
-        orderAmountGrams: parseHanosQuantityGrams(r[qtyIdx] || ''),
+        orderUnitSize: parseHanosQuantityGrams(r[qtyIdx] || ''),
         recentOrders: Math.round(recentOrders * 10) / 10,
         priceHistory,
         nutrition: Object.keys(nutrition).length ? nutrition : null,
@@ -228,7 +227,7 @@ router.post('/migrate', upload.fields([
         const price = r[priceIdx] != null ? parseFloat(r[priceIdx]) : null;
         const hanosCat = r[catIdx] || '';
         const mapped = mapHanosCategory(hanosCat);
-        const orderAmountGrams = parseHanosQuantityGrams(r[qtyIdx] || '');
+        const orderUnitSize = parseHanosQuantityGrams(r[qtyIdx] || '');
 
         const priceHistory = [];
         monthCols.forEach(mc => {
@@ -259,8 +258,8 @@ router.post('/migrate', upload.fields([
         if (old) matchedCount++;
         else hanosOnlyCount++;
 
-        const pricePer100g = (price && orderAmountGrams > 0)
-          ? Math.round((price / orderAmountGrams) * 10000) / 100
+        const pricePer100 = (price && orderUnitSize > 0)
+          ? Math.round((price / orderUnitSize) * 10000) / 100
           : 0;
 
         merged.push({
@@ -269,19 +268,20 @@ router.post('/migrate', upload.fields([
           supplierName: title,
           types: mapped.types,
           category: mapped.category,
+          measureMode: 'weight',
           unit: old ? old.unit : 'Grams',
           supplier: 'Hanos',
           orderCode: code,
           orderUnit: r[qtyIdx] || '',
-          orderUnitStandard: r[stdQtyIdx] || '',
           orderPrice: price,
-          orderAmountGrams,
+          orderUnitSize,
           priceLevel: '',
-          pricePer100g,
+          pricePer100,
           priceHistory,
           priceAlert: false,
           storageLocations: old && old.storageLocation ? { west: old.storageLocation } : {},
           stock: {},
+          targetStock: {},
           nutrition: Object.keys(nutrition).length ? nutrition : {},
           allergens: old ? old.allergens : '',
           notes: old ? old.notes : '',
