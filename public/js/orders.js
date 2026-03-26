@@ -1300,11 +1300,14 @@ function getIngredientsForArea(areaName) {
   const combinedByKey = {};
   combinedData.forEach(c => { combinedByKey[c.name.toLowerCase().trim()] = c; });
 
-  // Get ALL ingredients that have a storage location in this area
+  // Get ingredients that are needed (standard inventory or batch) and stored in this area
   return S.ingredientDb.filter(ing => {
     if (!ing.storageLocations) return false;
     const sl = ing.storageLocations[loc];
-    return sl && sl.category === areaName;
+    if (!sl || sl.category !== areaName) return false;
+    // Only include if this item is in the combined order (has demand)
+    const key = ing.name.toLowerCase().trim();
+    return !!combinedByKey[key];
   }).map(ing => {
     const key = ing.name.toLowerCase().trim();
     const combined = combinedByKey[key];
@@ -1405,13 +1408,13 @@ function renderStocktakeArea() {
     </div>`;
 
   if (!items.length) {
-    html += `<div class="empty">No ingredients stored in this area.</div>`;
+    html += `<div class="empty">No items needed from this area.</div>`;
   } else {
     // Column headers + legend
-    html += `<div style="display:flex;align-items:center;gap:6px;padding:4px;margin-bottom:8px;font-size:11px;color:var(--text2);border-bottom:1px solid var(--border);">
+    html += `<div class="stocktake-header" style="display:flex;align-items:center;padding:4px;margin-bottom:8px;font-size:11px;color:var(--text2);border-bottom:1px solid var(--border);">
       <div style="flex:1;">Item &nbsp; <span style="color:var(--green);">●</span> standard &nbsp; <span style="color:var(--purple, #7c3aed);">●</span> batches</div>
-      <div style="min-width:85px;text-align:center;">In stock</div>
-      <div style="min-width:60px;text-align:right;">To order</div>
+      <div style="width:120px;text-align:center;">In stock</div>
+      <div style="width:90px;text-align:right;">To order</div>
     </div>`;
 
     Object.keys(bySpot).forEach(spot => {
@@ -1439,16 +1442,16 @@ function renderStocktakeArea() {
         // Pre-fill with existing stocktake value or current stock
         const prefill = stocktakeValues[ing.id] !== undefined ? stocktakeValues[ing.id] : ing.stockUnits;
 
-        html += `<div class="stocktake-row" style="display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--border);">
+        html += `<div class="stocktake-row" style="display:flex;align-items:center;padding:6px 4px;border-bottom:1px solid var(--border);">
           <div style="flex:1;min-width:0;">
             <div style="font-weight:500;">${esc(ing.name)}</div>
             ${breakdownLines}
           </div>
-          <div style="display:flex;align-items:center;gap:2px;min-width:85px;">
+          <div style="width:120px;display:flex;align-items:center;justify-content:center;gap:2px;">
             <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill || ''}" placeholder="0" style="width:50px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="stocktakeValues['${esc(ing.id)}']=this.value===''?undefined:parseFloat(this.value)||0;updateStocktakeToOrder(this)" />
-            <span class="order-units" style="font-size:10px;">${esc(unitSuffix)}</span>
+            <span class="order-units" style="font-size:10px;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(unitSuffix)}</span>
           </div>
-          <div class="stocktake-to-order" style="min-width:60px;text-align:right;font-size:12px;" data-needed-base="${ing.neededBase}" data-order-unit-size="${ing.orderUnitSize || 0}" data-unit="${esc(ing.unit || 'g')}" data-order-unit="${esc(ing.orderUnit || '')}">
+          <div class="stocktake-to-order" style="width:90px;text-align:right;font-size:12px;" data-needed-base="${ing.neededBase}" data-order-unit-size="${ing.orderUnitSize || 0}" data-unit="${esc(ing.unit || 'g')}" data-order-unit="${esc(ing.orderUnit || '')}">
             ${_calcStocktakeToOrder(ing, prefill)}
           </div>
         </div>`;
