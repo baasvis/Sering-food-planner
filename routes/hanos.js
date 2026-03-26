@@ -397,19 +397,40 @@ router.get('/search', async (req, res) => {
 function formatProduct(p) {
   const { parseHanosQuantityGrams } = require('../lib/hanos-parser');
 
-  // Extract price from the product
-  const price = p.price ? p.price.value : null;
+  // Extract price — try multiple locations
+  const price = p.price ? p.price.value : (p.pricePerUnit ? p.pricePerUnit.value : null);
   const priceFormatted = p.price ? p.price.formattedValue : '';
 
-  // Extract unit info from formattedHoeveelheid or categories
-  const hoeveelheid = p.formattedHoeveelheid || p.hoeveelheid || '';
-  const unitSizeGrams = parseHanosQuantityGrams(hoeveelheid);
+  // Extract unit info — try many possible field names from SAP OCC v2
+  const hoeveelheid = p.formattedHoeveelheid || p.hoeveelheid
+    || p.contentUnit || p.salesUnit || p.unit || '';
+
+  // Also try to get quantity from AUM (alternative units of measure) data
+  const aums = p.aumDataList || p.aums || [];
+  let aumUnit = '';
+  if (aums.length && !hoeveelheid) {
+    const firstAum = aums[0];
+    aumUnit = firstAum.formattedName || firstAum.description || firstAum.unitName || '';
+  }
+
+  const unitStr = hoeveelheid || aumUnit || '';
+  let unitSizeGrams = parseHanosQuantityGrams(unitStr);
+
+  // If no hoeveelheid found, try to extract from formattedName
+  // e.g. "Winterpeen kist 10 kilogram" → "kist 10 kilogram"
+  if (!unitSizeGrams && p.formattedName) {
+    unitSizeGrams = parseHanosQuantityGrams(p.formattedName);
+  }
 
   // Determine base unit (grams vs ml)
-  const isLiquid = hoeveelheid.toLowerCase().includes('liter') || hoeveelheid.toLowerCase().includes('ml');
+  const combined = (unitStr + ' ' + (p.formattedName || '')).toLowerCase();
+  const isLiquid = combined.includes('liter') || combined.includes(' ml');
 
   // Get category from Hanos categories
   const categories = (p.categories || []).map(c => c.name || c.code || '').filter(Boolean);
+
+  // Log raw product keys for debugging (first time only)
+  console.log(`[Hanos] Product ${p.code}: keys=${Object.keys(p).join(',')}, hoeveelheid="${unitStr}", unitSize=${unitSizeGrams}, price=${price}`);
 
   return {
     code: p.code || '',
@@ -417,15 +438,16 @@ function formatProduct(p) {
     supplierName: p.formattedName || '',
     manufacturer: p.formattedManufacturer || '',
     orderCode: p.code || '',
-    orderUnit: hoeveelheid || '',
+    orderUnit: unitStr || '',
     orderUnitSize: unitSizeGrams,
     orderPrice: price,
     priceFormatted,
-    hoeveelheid,
+    hoeveelheid: unitStr,
     unit: isLiquid ? 'ML' : 'Grams',
     categories,
     imageUrl: p.images && p.images.length ? p.images[0].url : '',
     supplier: 'Hanos',
+    _rawKeys: Object.keys(p), // for debugging
   };
 }
 
