@@ -676,11 +676,12 @@ function renderCombinedOrderTab() {
         ${hanosAllCombinedBtn}
       </div>
     </div>
-    <div class="order-toggle-bar">
+    <div class="order-toggle-bar" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
       <label class="order-toggle${combinedIncludeDishes ? ' on' : ''}" onclick="combinedIncludeDishes=!combinedIncludeDishes;renderOrders();">
         <span class="tbox${combinedIncludeDishes ? ' on' : ''}"><span class="tknob"></span></span>
         Include batch ingredients
       </label>
+      <button class="btn btn-sm" style="background:var(--blue);color:white;" onclick="startStocktake()">📋 Do stocktake</button>
     </div>`;
 
   storageOrder.forEach(storageCat => {
@@ -1244,5 +1245,304 @@ async function refreshAllRecipes() {
   scheduleSave();
   renderOrders();
   toast(ok + ' recipe(s) refreshed');
+}
+
+// ── Stocktake Mode ────────────────────────────────────────
+
+let stocktakeActive = false;
+let stocktakeArea = null;       // currently displayed storage area name
+let stocktakeValues = {};       // { ingredientId: orderUnitsValue } — accumulated across areas
+let stocktakeSavedAreas = [];   // area names that have been saved already
+
+/** Build combined order data (shared between render and stocktake) */
+function buildCombinedOrderData() {
+  const combined = {};
+  const orderedDishes = S.batches.filter(d => d.orderFor);
+  const curLoc = currentOrdersLoc || 'west';
+
+  function addToMap(name, amtGrams, isStandard, dishName) {
+    const key = name.toLowerCase().trim();
+    if (!combined[key]) combined[key] = { name, totalGrams: 0, standardGrams: 0, dishGrams: 0, dishes: [] };
+    combined[key].totalGrams += amtGrams;
+    if (isStandard) combined[key].standardGrams += amtGrams;
+    else if (dishName) {
+      combined[key].dishGrams += amtGrams;
+      if (!combined[key].dishes.includes(dishName)) combined[key].dishes.push(dishName);
+    }
+  }
+
+  if (combinedIncludeDishes) {
+    orderedDishes.forEach(dish => {
+      calcIngredientsFromRecipe(dish).forEach(ing => {
+        addToMap(ing.name, toBaseUnit(ing.amount, ing.unit), false, dish.name);
+      });
+    });
+  }
+
+  getStandardInventoryItems(curLoc).forEach(ing => {
+    const target = ing.targetStock[curLoc] || 0;
+    const currentStock = (ing.stock && ing.stock[curLoc]) ? (ing.stock[curLoc].amount || 0) : 0;
+    const deficit = Math.max(0, target - currentStock);
+    if (deficit <= 0) return;
+    addToMap(ing.name, deficit, true, null);
+  });
+
+  return Object.values(combined).map(ing => {
+    const db = lookupIngredient(ing.name);
+    return { ...ing, db };
+  });
+}
+
+/** Get all ingredients for a given storage area at the current location */
+function getIngredientsForArea(areaName) {
+  const loc = currentOrdersLoc || 'west';
+  const combinedData = buildCombinedOrderData();
+  const combinedByKey = {};
+  combinedData.forEach(c => { combinedByKey[c.name.toLowerCase().trim()] = c; });
+
+  // Get ALL ingredients that have a storage location in this area
+  return S.ingredientDb.filter(ing => {
+    if (!ing.storageLocations) return false;
+    const sl = ing.storageLocations[loc];
+    return sl && sl.category === areaName;
+  }).map(ing => {
+    const key = ing.name.toLowerCase().trim();
+    const combined = combinedByKey[key];
+    const hasOrderUnit = ing.orderUnitSize > 0;
+    const stockBase = (ing.stock && ing.stock[loc]) ? (ing.stock[loc].amount || 0) : 0;
+    const stockUnits = hasOrderUnit ? Math.round(stockBase / ing.orderUnitSize * 10) / 10 : stockBase;
+    const neededBase = combined ? combined.totalGrams : 0;
+    const neededCalc = hasOrderUnit && neededBase > 0 ? calcOrderUnits(neededBase, ing) : null;
+    const spot = (ing.storageLocations[loc] && ing.storageLocations[loc].location) || '';
+    return {
+      ...ing,
+      spot,
+      stockBase,
+      stockUnits,
+      neededBase,
+      neededCalc,
+      hasOrderUnit,
+    };
+  }).sort((a, b) => {
+    // Sort by spot first, then name
+    if (a.spot !== b.spot) return a.spot.localeCompare(b.spot);
+    return a.name.localeCompare(b.name);
+  });
+}
+
+/** Start stocktake — show area picker */
+function startStocktake() {
+  stocktakeActive = true;
+  stocktakeArea = null;
+  stocktakeValues = {};
+  stocktakeSavedAreas = [];
+  renderStocktakeAreaPicker();
+}
+
+function renderStocktakeAreaPicker() {
+  const loc = currentOrdersLoc || 'west';
+  const areas = getStorageConfigForLoc(loc);
+  const container = document.getElementById('screen-orders');
+
+  let html = `<div style="padding:20px;max-width:600px;margin:0 auto;">
+    <h2 style="margin:0 0 8px;">📋 Stocktake</h2>
+    <p style="color:var(--text2);margin:0 0 20px;">${esc(loc === 'west' ? 'Sering West' : 'Sering Centraal')} — Select a storage area to count</p>
+    <div style="display:grid;gap:12px;">`;
+
+  areas.forEach(area => {
+    const items = getIngredientsForArea(area.name);
+    const isSaved = stocktakeSavedAreas.includes(area.name);
+    const statusIcon = isSaved ? '✅' : '';
+    html += `<button class="btn" style="display:flex;align-items:center;gap:12px;padding:16px 20px;font-size:16px;border-left:5px solid ${area.color || '#999'};text-align:left;background:${isSaved ? 'var(--bg2)' : 'var(--bg1)'};" onclick="enterStocktakeArea('${esc(area.name)}')">
+      <span style="flex:1;">
+        <span style="font-weight:600;">${statusIcon} ${esc(area.name)}</span>
+        <span style="font-size:13px;color:var(--text2);margin-left:8px;">${items.length} items</span>
+      </span>
+      <span style="font-size:20px;">→</span>
+    </button>`;
+  });
+
+  html += `</div>
+    <div style="margin-top:24px;display:flex;gap:12px;">
+      <button class="btn btn-sm" onclick="exitStocktake()">← Back to orders</button>
+      ${stocktakeSavedAreas.length ? `<button class="btn btn-sm" style="background:var(--green);color:white;" onclick="exitStocktake()">Done</button>` : ''}
+    </div>
+  </div>`;
+
+  container.innerHTML = html;
+}
+
+function enterStocktakeArea(areaName) {
+  stocktakeArea = areaName;
+  renderStocktakeArea();
+}
+
+function renderStocktakeArea() {
+  const loc = currentOrdersLoc || 'west';
+  const items = getIngredientsForArea(stocktakeArea);
+  const areaConfig = getStorageConfigForLoc(loc).find(a => a.name === stocktakeArea);
+  const areaColor = areaConfig ? areaConfig.color : '#999';
+  const container = document.getElementById('screen-orders');
+
+  // Group by spot
+  const bySpot = {};
+  items.forEach(ing => {
+    const spot = ing.spot || 'No spot assigned';
+    if (!bySpot[spot]) bySpot[spot] = [];
+    bySpot[spot].push(ing);
+  });
+
+  let html = `<div style="padding:16px;max-width:700px;margin:0 auto;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;border-left:5px solid ${areaColor};padding-left:12px;">
+      <div>
+        <h2 style="margin:0;font-size:20px;">📋 ${esc(stocktakeArea)}</h2>
+        <p style="color:var(--text2);margin:2px 0 0;font-size:13px;">${esc(loc === 'west' ? 'Sering West' : 'Sering Centraal')} — ${items.length} items</p>
+      </div>
+    </div>`;
+
+  if (!items.length) {
+    html += `<div class="empty">No ingredients stored in this area.</div>`;
+  } else {
+    Object.keys(bySpot).forEach(spot => {
+      const spotItems = bySpot[spot];
+      html += `<div style="margin-bottom:20px;">
+        <div style="font-weight:600;font-size:14px;padding:6px 0;border-bottom:2px solid ${areaColor};margin-bottom:8px;color:var(--text1);">📍 ${esc(spot)}</div>
+        <div style="display:grid;gap:2px;">`;
+
+      spotItems.forEach(ing => {
+        const orderUnitLabel = ing.orderUnit || '';
+        const unitSuffix = ing.hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, ing.unit); return f.unit; })();
+        const neededDisplay = ing.neededCalc
+          ? `${ing.neededCalc.units}x ${esc(unitSuffix)}`
+          : (ing.neededBase > 0 ? (() => { const f = formatAmount(ing.neededBase, ing.unit); return `${f.amount} ${f.unit}`; })() : '<span style="color:var(--text2);">—</span>');
+
+        // Pre-fill with existing stocktake value or current stock
+        const prefill = stocktakeValues[ing.id] !== undefined ? stocktakeValues[ing.id] : ing.stockUnits;
+
+        html += `<div class="stocktake-row" style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border);">
+          <div>
+            <span style="font-weight:500;">${esc(ing.name)}</span>
+          </div>
+          <div style="text-align:right;font-size:12px;color:var(--text2);min-width:80px;">
+            <div>Need: ${neededDisplay}</div>
+          </div>
+          <div style="min-width:90px;display:flex;align-items:center;gap:3px;">
+            <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill || ''}" placeholder="0" style="width:55px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="stocktakeValues['${esc(ing.id)}']=this.value===''?undefined:parseFloat(this.value)||0;updateStocktakeToOrder(this)" />
+            <span class="order-units" style="font-size:11px;">${esc(unitSuffix)}</span>
+          </div>
+          <div class="stocktake-to-order" style="min-width:70px;text-align:right;font-size:12px;" data-needed-base="${ing.neededBase}" data-order-unit-size="${ing.orderUnitSize || 0}" data-unit="${esc(ing.unit || 'g')}" data-order-unit="${esc(ing.orderUnit || '')}">
+            ${_calcStocktakeToOrder(ing, prefill)}
+          </div>
+        </div>`;
+      });
+
+      html += `</div></div>`;
+    });
+  }
+
+  html += `<div style="position:sticky;bottom:0;background:var(--bg1);padding:16px 0;border-top:2px solid var(--border);display:flex;gap:12px;flex-wrap:wrap;">
+    <button class="btn" style="background:var(--green);color:white;flex:1;padding:12px;font-size:15px;" onclick="saveStocktakeArea(true)">Save & next area →</button>
+    <button class="btn" style="background:var(--orange, #e67e22);color:white;flex:1;padding:12px;font-size:15px;" onclick="saveStocktakeArea(false)">Save & stop stocktake</button>
+  </div>
+  </div>`;
+
+  container.innerHTML = html;
+  // Focus first empty input
+  const firstEmpty = container.querySelector('.stocktake-input[value=""]');
+  if (firstEmpty) firstEmpty.focus();
+}
+
+function _calcStocktakeToOrder(ing, stockUnitsVal) {
+  const stockUnits = parseFloat(stockUnitsVal) || 0;
+  const stockBase = ing.hasOrderUnit ? stockUnits * ing.orderUnitSize : stockUnits;
+  const toOrderBase = Math.max(0, ing.neededBase - stockBase);
+  if (ing.neededBase <= 0) return '<span style="color:var(--text2);">—</span>';
+  if (toOrderBase <= 0) return '<span class="to-order-zero">\u2713</span>';
+  const unitSuffix = ing.hasOrderUnit ? (ing.orderUnit || 'units') : (() => { const f = formatAmount(0, ing.unit); return f.unit; })();
+  if (ing.hasOrderUnit) {
+    const calc = calcOrderUnits(toOrderBase, ing);
+    return calc ? `<span class="to-order-positive">${calc.units}x ${esc(unitSuffix)}</span>` : `<span class="to-order-positive">${esc(unitSuffix)}</span>`;
+  }
+  const f = formatAmount(toOrderBase, ing.unit);
+  return `<span class="to-order-positive">${f.amount} ${f.unit}</span>`;
+}
+
+function updateStocktakeToOrder(input) {
+  const row = input.closest('.stocktake-row');
+  const toOrderCell = row.querySelector('.stocktake-to-order');
+  if (!toOrderCell) return;
+  const neededBase = parseFloat(toOrderCell.dataset.neededBase) || 0;
+  const orderUnitSize = parseFloat(toOrderCell.dataset.orderUnitSize) || 0;
+  const unit = toOrderCell.dataset.unit || 'g';
+  const orderUnit = toOrderCell.dataset.orderUnit || '';
+  const hasOrderUnit = orderUnitSize > 0;
+  const stockUnits = parseFloat(input.value) || 0;
+  const stockBase = hasOrderUnit ? stockUnits * orderUnitSize : stockUnits;
+  const toOrderBase = Math.max(0, neededBase - stockBase);
+  const unitSuffix = hasOrderUnit ? (orderUnit || 'units') : (() => { const f = formatAmount(0, unit); return f.unit; })();
+
+  if (neededBase <= 0) { toOrderCell.innerHTML = '<span style="color:var(--text2);">—</span>'; return; }
+  if (toOrderBase <= 0) { toOrderCell.innerHTML = '<span class="to-order-zero">\u2713</span>'; return; }
+  if (hasOrderUnit) {
+    const calc = calcOrderUnits(toOrderBase, { orderUnitSize, unit, orderUnit });
+    toOrderCell.innerHTML = calc ? `<span class="to-order-positive">${calc.units}x ${esc(unitSuffix)}</span>` : '';
+  } else {
+    const f = formatAmount(toOrderBase, unit);
+    toOrderCell.innerHTML = `<span class="to-order-positive">${f.amount} ${f.unit}</span>`;
+  }
+}
+
+/** Save stocktake for current area — persist stock to DB */
+async function saveStocktakeArea(goToNext) {
+  const loc = currentOrdersLoc || 'west';
+  const items = getIngredientsForArea(stocktakeArea);
+  let saved = 0;
+
+  // Batch save all items that have stocktake values
+  const updates = [];
+  items.forEach(ing => {
+    const val = stocktakeValues[ing.id];
+    if (val === undefined) return; // not touched — skip
+    const baseAmount = ing.orderUnitSize > 0 ? val * ing.orderUnitSize : val;
+    // Update local state
+    if (!ing.stock) ing.stock = {};
+    ing.stock[loc] = { amount: baseAmount, date: new Date().toISOString().slice(0, 10) };
+    updates.push({ ingredientId: ing.id, location: loc, amount: baseAmount });
+    saved++;
+  });
+
+  if (updates.length) {
+    try {
+      await apiPost('/api/ingredients/stock/bulk', updates);
+    } catch (e) {
+      toast('Failed to save stock: ' + e.message, true);
+      return;
+    }
+    // Also update ingredientDb in memory
+    updates.forEach(u => {
+      const dbIng = S.ingredientDb.find(i => i.id === u.ingredientId);
+      if (dbIng) {
+        if (!dbIng.stock) dbIng.stock = {};
+        dbIng.stock[u.location] = { amount: u.amount, date: new Date().toISOString().slice(0, 10) };
+      }
+    });
+  }
+
+  stocktakeSavedAreas.push(stocktakeArea);
+  toast(`${esc(stocktakeArea)}: ${saved} items saved`);
+
+  if (goToNext) {
+    renderStocktakeAreaPicker();
+  } else {
+    exitStocktake();
+  }
+}
+
+function exitStocktake() {
+  stocktakeActive = false;
+  stocktakeArea = null;
+  stocktakeValues = {};
+  stocktakeSavedAreas = [];
+  renderOrders();
 }
 
