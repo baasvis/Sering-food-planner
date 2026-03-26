@@ -126,14 +126,32 @@ router.post('/sync', (req, res) => {
 
   syncProcess.on('close', (code) => {
     console.log(`[finance] Sync finished with code ${code}`);
+    clearTimeout(syncTimeout);
     if (code === 0) {
       lastSyncAt = new Date().toISOString();
       lastSyncError = null;
     } else {
-      lastSyncError = `Sync failed (exit code ${code})`;
+      lastSyncError = `Sync failed (exit code ${code}). ${output.slice(-500)}`;
     }
     syncProcess = null;
   });
+
+  syncProcess.on('error', (err) => {
+    console.error(`[finance] Sync process error: ${err.message}`);
+    clearTimeout(syncTimeout);
+    lastSyncError = `Sync process error: ${err.message}`;
+    syncProcess = null;
+  });
+
+  // Kill sync after 5 minutes to prevent it from hanging forever
+  const syncTimeout = setTimeout(() => {
+    if (syncProcess) {
+      console.error('[finance] Sync timed out after 5 minutes, killing process');
+      lastSyncError = 'Sync timed out after 5 minutes';
+      syncProcess.kill();
+      syncProcess = null;
+    }
+  }, 5 * 60 * 1000);
 
   res.json({ status: 'syncing', startDate: start, endDate: end });
 });
