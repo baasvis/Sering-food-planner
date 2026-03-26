@@ -115,8 +115,10 @@ router.get('/recipe', async (req, res) => {
       const rawAmt = parseFloat(String(row[2]).replace(',','.'));
       if (!rawAmt || rawAmt <= 0) return;
       if (row[0].length > 80) return;
-      const afterCooking = row[3] ? parseFloat(String(row[3]).replace(',','.')) : null;
-      const amount = (afterCooking && afterCooking > 0) ? afterCooking : rawAmt;
+      // Use raw amount for ordering — that's how much you need to buy.
+      // After-cooking amount represents what ends up in the dish after loss,
+      // but purchasing must account for the full raw quantity.
+      const amount = rawAmt;
       const unit = (unitRows[i] && unitRows[i][0]) || 'Grams';
       ingredients.push({
         name: row[0],

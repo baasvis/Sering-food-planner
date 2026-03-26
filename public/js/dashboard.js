@@ -9,8 +9,8 @@ function showScreen(name) {
   document.querySelectorAll('.nav-btn, .bnav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.screen === name);
   });
-  // Only rebuild planner data when actually viewing planner or dashboard
-  if (name === 'planner' || name === 'dashboard') rebuildPlanner();
+  // Rebuild planner data when viewing planner, dashboard, or orders (peer splitting needs it)
+  if (name === 'planner' || name === 'dashboard' || name === 'orders') rebuildPlanner();
   if (name === 'dashboard') renderDashboard();
   if (name === 'guests') renderGuests();
   if (name === 'planner') renderWeekPlan();
