@@ -8,25 +8,25 @@ datasource db {
 }
 
 model Batch {
-  id                String    @id
+  id                String   @id
   name              String
-  type              String    // 'Soup', 'Main course', 'Dessert'
-  stock             Float     @default(0)
-  serving           Int       @default(280)
-  storage           String    @default("Gastro")
-  location          String    @default("west")
-  inTransit         Boolean   @default(false) @map("in_transit")
+  type              String
+  stock             Float    @default(0)
+  serving           Int      @default(280)
+  storage           String   @default("Gastro")
+  location          String   @default("west")
+  inTransit         Boolean  @default(false) @map("in_transit")
   allergens         String[]
-  extraAllergens    String[]  @map("extra_allergens")
-  orderFor          Boolean   @default(false) @map("order_for")
-  cookDate          String?   @map("cook_date")
-  recipeSheetId     String?   @map("recipe_sheet_id")
-  recipeVolume      Float?    @map("recipe_volume")
-  recipeIngredients Json?     @map("recipe_ingredients")
-  parentId          String?   @map("parent_id")
-  note              String    @default("")
-  services          Json      @default("[]")
-  createdAt         String    @map("created_at")
+  extraAllergens    String[] @map("extra_allergens")
+  orderFor          Boolean  @default(false) @map("order_for")
+  cookDate          String?  @map("cook_date")
+  recipeSheetId     String?  @map("recipe_sheet_id")
+  recipeVolume      Float?   @map("recipe_volume")
+  recipeIngredients Json?    @map("recipe_ingredients")
+  parentId          String?  @map("parent_id")
+  note              String   @default("")
+  services          Json     @default("[]")
+  createdAt         String   @map("created_at")
 
   @@map("batches")
 }
@@ -85,29 +85,32 @@ model TransportItem {
 }
 
 model Ingredient {
-  id                String   @id
-  name              String   @default("")
-  supplierName      String   @default("") @map("supplier_name")
-  types             Json     @default("[]")
-  category          String   @default("")
-  measureMode       String   @default("weight") @map("measure_mode") // "weight" (g/ml) or "count" (pieces)
-  unit              String   @default("Grams")
-  supplier          String   @default("")
-  orderCode         String   @default("") @map("order_code")
-  orderUnit         String   @default("") @map("order_unit")
-  orderPrice        Float?   @map("order_price")
-  orderUnitSize     Float    @default(0) @map("order_unit_size") // base units (g/ml/pcs) per order package
-  priceLevel        String   @default("") @map("price_level")
-  pricePer100       Float    @default(0) @map("price_per_100") // price per 100 base units
-  priceHistory      Json     @default("[]") @map("price_history")
-  priceAlert        Boolean  @default(false) @map("price_alert")
-  storageLocations  Json     @default("{}") @map("storage_locations")
-  stock             Json     @default("{}")
-  targetStock       Json     @default("{}") @map("target_stock") // per-location target: {west: 10000, centraal: 5000}
-  nutrition         Json     @default("{}")
-  allergens         String   @default("")
-  notes             String   @default("")
-  active            Boolean  @default(true)
+  id                  String  @id
+  name                String  @default("")
+  supplierName        String  @default("") @map("supplier_name")
+  category            String  @default("")
+  unit                String  @default("Grams")
+  supplier            String  @default("")
+  orderCode           String  @default("") @map("order_code")
+  orderUnit           String  @default("") @map("order_unit")
+  orderPrice          Float?  @map("order_price")
+  orderUnitSize       Float   @default(0) @map("order_unit_size")
+  allergens           String  @default("")
+  notes               String  @default("")
+  active              Boolean @default(true)
+  nutrition           Json    @default("{}")
+  priceAlert          Boolean @default(false) @map("price_alert")
+  priceHistory        Json    @default("[]") @map("price_history")
+  priceLevel          String  @default("") @map("price_level")
+  pricePer100         Float   @default(0) @map("price_per_100")
+  stock               Json    @default("{}")
+  storageLocations    Json    @default("{}") @map("storage_locations")
+  types               Json    @default("[]")
+  measureMode         String  @default("weight") @map("measure_mode")
+  targetStock         Json    @default("{}") @map("target_stock")
+  orderUnitStandard   String  @default("") @map("order_unit_standard")
+  orderAmountGrams    Float   @default(0) @map("order_amount_grams")
+  pricePer100g        Float   @default(0) @map("price_per_100g")
 
   @@map("ingredients")
 }
@@ -156,11 +159,11 @@ model Log {
 model Feedback {
   id        Int    @id @default(autoincrement())
   timestamp String
-  user      String  @default("anonymous")
-  type      String  @default("general")
-  screen    String  @default("")
+  user      String @default("anonymous")
+  type      String @default("general")
+  screen    String @default("")
   text      String
-  userAgent String  @default("") @map("user_agent")
+  userAgent String @default("") @map("user_agent")
 
   @@map("feedback")
 }
