@@ -1409,8 +1409,7 @@ function renderStocktakeArea() {
   } else {
     // Column headers + legend
     html += `<div style="display:flex;align-items:center;gap:6px;padding:4px;margin-bottom:8px;font-size:11px;color:var(--text2);border-bottom:1px solid var(--border);">
-      <div style="flex:1;">Item</div>
-      <div style="min-width:65px;text-align:right;">Need <span style="color:var(--green);">■</span>std <span style="color:var(--purple, #7c3aed);">■</span>batch</div>
+      <div style="flex:1;">Item &nbsp; <span style="color:var(--green);">●</span> standard &nbsp; <span style="color:var(--purple, #7c3aed);">●</span> batches</div>
       <div style="min-width:85px;text-align:center;">In stock</div>
       <div style="min-width:60px;text-align:right;">To order</div>
     </div>`;
@@ -1424,28 +1423,27 @@ function renderStocktakeArea() {
         const orderUnitLabel = ing.orderUnit || '';
         const unitSuffix = ing.hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, ing.unit); return f.unit; })();
 
-        // Needed breakdown: standard (green) + batch (purple)
-        let neededParts = [];
+        // Breakdown lines under the name
+        let breakdownLines = '';
         if (ing.standardBase > 0) {
           const sc = ing.hasOrderUnit ? calcOrderUnits(ing.standardBase, ing) : null;
-          const label = sc ? `${sc.units}x` : (() => { const f = formatAmount(ing.standardBase, ing.unit); return f.amount; })();
-          neededParts.push(`<span style="color:var(--green);font-weight:600;" title="Standard inventory">${label}</span>`);
+          const label = sc ? `${sc.units}x ${esc(unitSuffix)}` : (() => { const f = formatAmount(ing.standardBase, ing.unit); return `${f.amount} ${f.unit}`; })();
+          breakdownLines += `<div style="font-size:11px;color:var(--green);font-weight:500;">● ${label} standard</div>`;
         }
         if (ing.dishBase > 0) {
           const dc = ing.hasOrderUnit ? calcOrderUnits(ing.dishBase, ing) : null;
-          const label = dc ? `${dc.units}x` : (() => { const f = formatAmount(ing.dishBase, ing.unit); return f.amount; })();
-          neededParts.push(`<span style="color:var(--purple, #7c3aed);font-weight:600;" title="Batch ingredients">${label}</span>`);
+          const label = dc ? `${dc.units}x ${esc(unitSuffix)}` : (() => { const f = formatAmount(ing.dishBase, ing.unit); return `${f.amount} ${f.unit}`; })();
+          breakdownLines += `<div style="font-size:11px;color:var(--purple, #7c3aed);font-weight:500;">● ${label} batches</div>`;
         }
-        const neededDisplay = neededParts.length
-          ? neededParts.join(`<span style="color:var(--text2);margin:0 2px;">+</span>`) + ` <span style="font-size:10px;color:var(--text2);">${esc(unitSuffix)}</span>`
-          : '<span style="color:var(--text2);">—</span>';
 
         // Pre-fill with existing stocktake value or current stock
         const prefill = stocktakeValues[ing.id] !== undefined ? stocktakeValues[ing.id] : ing.stockUnits;
 
         html += `<div class="stocktake-row" style="display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--border);">
-          <div style="flex:1;min-width:0;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(ing.name)}</div>
-          <div style="font-size:12px;min-width:65px;text-align:right;">${neededDisplay}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:500;">${esc(ing.name)}</div>
+            ${breakdownLines}
+          </div>
           <div style="display:flex;align-items:center;gap:2px;min-width:85px;">
             <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill || ''}" placeholder="0" style="width:50px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="stocktakeValues['${esc(ing.id)}']=this.value===''?undefined:parseFloat(this.value)||0;updateStocktakeToOrder(this)" />
             <span class="order-units" style="font-size:10px;">${esc(unitSuffix)}</span>
