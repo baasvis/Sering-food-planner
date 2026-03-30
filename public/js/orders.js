@@ -9,6 +9,9 @@ let siSearchQuery = '';
 let hanosStatus = { configured: false, west: false, centraal: false };
 let hanosStatusChecked = false;
 let combinedIncludeDishes = true; // toggle: include dish ingredients in combined order
+let batchIngredientToggles = {}; // { batchId: true/false } for Batch Ingredients tab
+let batchIngredientTogglesInitialized = false; // reset when location changes
+const BATCH_COLORS = ['#2563eb', '#7c3aed', '#059669', '#d97706', '#dc2626', '#0891b2', '#c026d3', '#4f46e5'];
 
 // ── Shared helpers ────────────────────────────────────────
 
@@ -242,6 +245,7 @@ function switchOrdersTab(tab) {
 
 function switchOrdersLoc(loc) {
   currentOrdersLoc = loc;
+  batchIngredientTogglesInitialized = false; // reset toggles for new location
   renderOrders();
 }
 
@@ -424,17 +428,112 @@ function renderStandardInventoryTab() {
 
 // ── Dishes tab ────────────────────────────────────────────
 
-function renderDishesTab() {
-  const orderedDishes = S.batches.filter(d => d.orderFor);
-  const combined = {};
+/** Toggle a batch on/off in the Batch Ingredients tab, re-render just the ingredient table */
+function toggleBatchIngredient(batchId) {
+  batchIngredientToggles[batchId] = !batchIngredientToggles[batchId];
+  // Re-render the ingredient table portion only
+  const container = document.getElementById('batch-ingredients-table');
+  if (container) container.innerHTML = renderBatchIngredientTable();
+}
 
-  orderedDishes.forEach(dish => {
+/** Toggle all batches on or off */
+function toggleAllBatchIngredients(on) {
+  const curLoc = currentOrdersLoc || 'west';
+  const eligible = S.batches.filter(b => b.location === curLoc && b.recipeSheetId && b.recipeIngredients);
+  eligible.forEach(b => { batchIngredientToggles[b.id] = on; });
+  const container = document.getElementById('batch-ingredients-table');
+  if (container) container.innerHTML = renderBatchIngredientTable();
+  // Also update toggle button visuals
+  document.querySelectorAll('.batch-toggle-switch').forEach(el => {
+    el.classList.toggle('on', on);
+  });
+}
+
+function renderDishesTab() {
+  const curLoc = currentOrdersLoc || 'west';
+
+  // All batches at this location with recipe data
+  const eligible = S.batches.filter(b => b.location === curLoc && b.recipeSheetId && b.recipeIngredients);
+
+  // Initialize toggles: orderFor batches default ON, others OFF
+  if (!batchIngredientTogglesInitialized) {
+    batchIngredientToggles = {};
+    eligible.forEach(b => { batchIngredientToggles[b.id] = !!b.orderFor; });
+    batchIngredientTogglesInitialized = true;
+  }
+
+  // Assign colors to batches (stable order by id)
+  const batchColorMap = {};
+  eligible.forEach((b, i) => { batchColorMap[b.id] = BATCH_COLORS[i % BATCH_COLORS.length]; });
+
+  // ── Batch toggle list ──
+  const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
+  const dishesWithSheets = eligible.filter(d => d.recipeSheetId);
+  let html = `<div style="margin-bottom:16px;">
+    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <span>Batches at ${curLoc === 'west' ? 'Sering West' : 'Sering Centraal'} (${onCount}/${eligible.length} selected)</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        ${dishesWithSheets.length ? `<button class="copy-all-btn" onclick="refreshAllRecipes()">↻ Refresh recipe data</button>` : ''}
+        <button class="copy-all-btn" onclick="toggleAllBatchIngredients(true)">All on</button>
+        <button class="copy-all-btn" onclick="toggleAllBatchIngredients(false)">All off</button>
+      </div>
+    </div>`;
+
+  if (!eligible.length) {
+    html += `<div class="empty">No batches with recipe data at this location.</div>`;
+  } else {
+    html += `<div class="batch-toggle-list">`;
+    eligible.forEach(b => {
+      const isOn = !!batchIngredientToggles[b.id];
+      const color = batchColorMap[b.id];
+      const typeBadge = b.type ? `<span class="batch-type-pill" style="background:${color}20;color:${color};border:1px solid ${color}40;">${esc(b.type)}</span>` : '';
+      const cookLabel = b.cookDate ? b.cookDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, (_, y, m, d) => `${parseInt(d)}/${parseInt(m)}`) : '';
+      const cookBadge = cookLabel ? `<span style="font-size:11px;color:${b.stock > 0 ? 'var(--green)' : 'var(--blue)'};font-weight:500;">${cookLabel}</span>` : '';
+      html += `<div class="batch-toggle-row${isOn ? ' on' : ''}" onclick="toggleBatchIngredient('${esc(b.id)}')">
+        <span class="batch-toggle-dot" style="background:${color};"></span>
+        <span class="batch-toggle-name">${esc(b.name)}</span>
+        ${typeBadge}
+        ${cookBadge}
+        <span class="batch-toggle-switch${isOn ? ' on' : ''}" data-batch-id="${esc(b.id)}"></span>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // ── Ingredient table (rendered separately so toggles can update it) ──
+  html += `<div id="batch-ingredients-table">${renderBatchIngredientTable()}</div>`;
+  html += `</div>`;
+
+  if (ingredientDbError || S.ingredientDb.length === 0) {
+    html += `<div style="font-size:11px;color:var(--text2);margin-top:12px;padding:8px;border-top:1px solid var(--border);">
+      ${ingredientDbError ? `<span style="color:var(--red);">Ingredient DB error: ${esc(ingredientDbError)}</span>` : ''}
+      ${S.ingredientDb.length === 0 && !ingredientDbError ? 'Ingredient database is empty. <button class="btn btn-sm" onclick="loadIngredientDb().then(renderOrders)">Retry</button>' : ''}
+    </div>`;
+  }
+
+  return html;
+}
+
+/** Render just the ingredient aggregation table for toggled-on batches */
+function renderBatchIngredientTable() {
+  const curLoc = currentOrdersLoc || 'west';
+  const eligible = S.batches.filter(b => b.location === curLoc && b.recipeSheetId && b.recipeIngredients);
+
+  // Assign colors (same stable order as toggle list)
+  const batchColorMap = {};
+  eligible.forEach((b, i) => { batchColorMap[b.id] = BATCH_COLORS[i % BATCH_COLORS.length]; });
+
+  const activeBatches = eligible.filter(b => batchIngredientToggles[b.id]);
+
+  // Aggregate ingredients with per-batch breakdown
+  const combined = {};
+  activeBatches.forEach(dish => {
     const ings = calcIngredientsFromRecipe(dish);
     ings.forEach(ing => {
       const key = ing.name.toLowerCase().trim();
-      if (!combined[key]) combined[key] = { name: ing.name, amount: 0, unit: ing.unit, source: ing.source, dishes: [] };
+      if (!combined[key]) combined[key] = { name: ing.name, amount: 0, unit: ing.unit, source: ing.source, perBatch: [] };
       combined[key].amount += ing.amount;
-      if (!combined[key].dishes.includes(dish.name)) combined[key].dishes.push(dish.name);
+      combined[key].perBatch.push({ batchId: dish.id, batchName: dish.name, amount: ing.amount, unit: ing.unit });
       if (!combined[key].source && ing.source) combined[key].source = ing.source;
     });
   });
@@ -452,7 +551,15 @@ function renderDishesTab() {
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
 
-  const curLoc = currentOrdersLoc || 'west';
+  if (!activeBatches.length) {
+    return `<div class="empty" style="margin-top:12px;">Toggle batches above to see their ingredient requirements.</div>`;
+  }
+
+  if (!ingList.length) {
+    return `<div class="empty" style="margin-top:12px;">Selected batches have no recipe ingredients.</div>`;
+  }
+
+  // Group by storage category
   const byStorage = {};
   ingList.forEach(ing => {
     const cat = getStorageCategory(ing.db, curLoc) || 'Unsorted';
@@ -462,122 +569,112 @@ function renderDishesTab() {
   const storageCatOrder = Object.keys(STORAGE_CATEGORIES);
   const storageOrder = [...storageCatOrder.filter(c => byStorage[c]), ...Object.keys(byStorage).filter(c => !storageCatOrder.includes(c))];
 
-  const dishesWithSheets = orderedDishes.filter(d => d.recipeSheetId);
   const hanosAllBatchBtn = isHanosEnabled() && ingList.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulkBatches()" title="Send all batch ingredients to Hanos cart">🛒 Send all to Hanos</button>` : '';
-  let html = `<div style="margin-bottom:20px;">
-    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <span>Ingredient order (${orderedDishes.length} batch${orderedDishes.length !== 1 ? 'es' : ''} flagged)</span>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span style="font-weight:400;font-size:12px;color:var(--text2);">${orderedDishes.map(d => esc(d.name)).join(' · ')}</span>
-        ${dishesWithSheets.length ? `<button class="copy-all-btn" onclick="refreshAllRecipes()">↻ Refresh recipe data</button>` : ''}
-        ${hanosAllBatchBtn}
+  let html = `<div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+    <span style="font-weight:600;font-size:14px;">Ingredients (${ingList.length} items from ${activeBatches.length} batch${activeBatches.length !== 1 ? 'es' : ''})</span>
+    ${hanosAllBatchBtn}
+  </div>`;
+
+  storageOrder.forEach(storageCat => {
+    const items = byStorage[storageCat];
+    const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
+    const catColor = getStorageColor(storageCat, curLoc);
+    const hanosItemsForCat = isHanosEnabled() ? items.filter(i => i.orderCode && !i.orderCode.startsWith('http')) : [];
+    const hanosBatchBtn = hanosItemsForCat.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulkBatches('${esc(storageCat)}')" title="Add all items to Hanos cart">🛒 Send to Hanos</button>` : '';
+
+    html += `<div class="storage-group" data-storage-cat="${esc(storageCat)}" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+        <span class="storage-group-dot" style="background:${catColor};"></span>
+        <span style="font-weight:600;font-size:14px;">${esc(storageCat)}</span>
+        <span style="font-size:12px;color:var(--text2);">(${items.length} item${items.length !== 1 ? 's' : ''})</span>
+        ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyDishOrderCodes('${esc(storageCat)}')">Copy all codes</button>` : ''}
+        ${hanosBatchBtn}
       </div>
-    </div>`;
+      <div style="overflow-x:auto;"><table class="ing-table">
+      <thead><tr>
+        <th>Ingredient</th><th>Category</th><th>Storage</th><th>Order code</th>
+        <th>Needed</th><th>In stock</th><th>To order</th><th>Breakdown</th>
+      </tr></thead><tbody>`;
 
-  if (!ingList.length) {
-    if (orderedDishes.length === 0) {
-      html += `<div class="empty">No batches flagged for order. In the Week plan, toggle the order flag on batches you want to include.</div>`;
-    } else {
-      html += `<div class="empty">Batches are flagged but have no recipe data. Make sure they have a linked recipe sheet with ingredients.</div>`;
-    }
-  } else {
-    storageOrder.forEach(storageCat => {
-      const items = byStorage[storageCat];
-      const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
-      const catColor = getStorageColor(storageCat, curLoc);
-      const hanosItemsForCat = isHanosEnabled() ? items.filter(i => i.orderCode && !i.orderCode.startsWith('http')) : [];
-      const hanosBatchBtn = hanosItemsForCat.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulkBatches('${esc(storageCat)}')" title="Add all items to Hanos cart">🛒 Send to Hanos</button>` : '';
+    items.forEach(ing => {
+      const key = ing.name.toLowerCase().trim();
+      const isUrl = ing.orderCode && (ing.orderCode.startsWith('http') || ing.orderCode.startsWith('www'));
+      const amtNeededBase = Math.round(ing.amountInGrams);
+      const db = ing.db;
+      const hasOrderUnit = db && db.orderUnitSize > 0;
+      const orderUnitLabel = db && db.orderUnit ? esc(db.orderUnit) : '';
+      const unitSuffix = hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, db ? db.unit : 'g'); return f.unit; })();
 
-      html += `<div class="storage-group" data-storage-cat="${esc(storageCat)}" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-          <span class="storage-group-dot" style="background:${catColor};"></span>
-          <span style="font-weight:600;font-size:14px;">${esc(storageCat)}</span>
-          <span style="font-size:12px;color:var(--text2);">(${items.length} item${items.length !== 1 ? 's' : ''})</span>
-          ${codesForCopy.length ? `<button class="copy-all-btn" onclick="copyDishOrderCodes('${esc(storageCat)}')">Copy all codes</button>` : ''}
-          ${hanosBatchBtn}
-        </div>
-        <div style="overflow-x:auto;"><table class="ing-table">
-        <thead><tr>
-          <th>Ingredient</th><th>Category</th><th>Storage</th><th>Order code</th>
-          <th>Needed</th><th>In stock</th><th>To order</th><th>For batches</th>
-        </tr></thead><tbody>`;
+      let codeDisplay;
+      if (!db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
+      else if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">no code</span>';
+      else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
+      else codeDisplay = `<span class="order-code" title="Click to select">${esc(ing.orderCode)}</span>`;
 
-      items.forEach(ing => {
-        const key = ing.name.toLowerCase().trim();
-        const isUrl = ing.orderCode && (ing.orderCode.startsWith('http') || ing.orderCode.startsWith('www'));
-        const amtNeededBase = Math.round(ing.amountInGrams);
-        const db = ing.db;
-        const hasOrderUnit = db && db.orderUnitSize > 0;
-        const orderUnitLabel = db && db.orderUnit ? esc(db.orderUnit) : '';
-        const unitSuffix = hasOrderUnit ? (orderUnitLabel || 'units') : (() => { const f = formatAmount(0, db ? db.unit : 'g'); return f.unit; })();
+      const neededCalc = hasOrderUnit ? calcOrderUnits(amtNeededBase, db) : null;
+      const neededDisplay = neededCalc
+        ? `<span class="order-amt">${neededCalc.units}x</span> <span class="order-units">${unitSuffix}</span>`
+        : (() => { const f = formatAmount(amtNeededBase, db ? db.unit : 'g'); return `<span class="order-amt">${f.amount}</span> <span class="order-units">${f.unit}</span>`; })();
 
-        let codeDisplay;
-        if (!db) codeDisplay = '<span style="color:var(--red);font-size:10px;opacity:.7;">not in DB</span>';
-        else if (!ing.orderCode) codeDisplay = '<span style="color:var(--text2);font-size:11px;">no code</span>';
-        else if (isUrl) codeDisplay = `<a href="${esc(ing.orderCode.startsWith('http') ? ing.orderCode : 'https://'+ing.orderCode)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);">Order link \u2197</a>`;
-        else codeDisplay = `<span class="order-code" title="Click to select">${esc(ing.orderCode)}</span>`;
+      const dbStock = getDbStockTotal(db);
+      const hasManualStock = orderInventory[key] !== undefined;
+      const stockDisplayVal = hasManualStock ? orderInventory[key] : (dbStock > 0 ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
+      const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
+      const stockInput = `<input class="order-stock-input" type="number" min="0" step="0.1" value="${stockDisplayVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
 
-        // Amount needed in order units
-        const neededCalc = hasOrderUnit ? calcOrderUnits(amtNeededBase, db) : null;
-        const neededDisplay = neededCalc
-          ? `<span class="order-amt">${neededCalc.units}x</span> <span class="order-units">${unitSuffix}</span>`
-          : (() => { const f = formatAmount(amtNeededBase, db ? db.unit : 'g'); return `<span class="order-amt">${f.amount}</span> <span class="order-units">${f.unit}</span>`; })();
+      const effectiveStockBase = hasManualStock
+        ? (hasOrderUnit ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
+        : dbStock;
+      const hasStockValue = hasManualStock || dbStock > 0;
+      const toOrderBase = Math.max(0, amtNeededBase - effectiveStockBase);
+      const toOrderCalc = hasOrderUnit ? calcOrderUnits(toOrderBase, db) : null;
 
-        // Stock in order units
-        const dbStock = getDbStockTotal(db);
-        const hasManualStock = orderInventory[key] !== undefined;
-        // orderInventory stores values in order units now
-        const stockInUnits = hasManualStock ? (parseFloat(orderInventory[key]) || 0) : (hasOrderUnit && dbStock > 0 ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock);
-        const stockDisplayVal = hasManualStock ? orderInventory[key] : (dbStock > 0 ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
-        const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
-        const stockInput = `<input class="order-stock-input" type="number" min="0" step="0.1" value="${stockDisplayVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
+      let toOrderDisplay;
+      if (!hasStockValue) {
+        toOrderDisplay = `<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>`;
+      } else if (toOrderBase <= 0) {
+        toOrderDisplay = '<span class="to-order-zero">\u2713 enough</span>';
+      } else if (toOrderCalc) {
+        const hanosBtnBatch = (isHanosEnabled() && ing.orderCode && !isUrl && toOrderCalc.units > 0)
+          ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
+          : '';
+        toOrderDisplay = `<span class="to-order-positive">${toOrderCalc.units}x ${unitSuffix}</span>${hanosBtnBatch}`;
+      } else {
+        const f = formatAmount(toOrderBase, db ? db.unit : 'g');
+        toOrderDisplay = `<span class="to-order-positive">${f.amount} ${f.unit}</span>`;
+      }
 
-        // To order: convert stock back to base for calculation
-        const effectiveStockBase = hasManualStock
-          ? (hasOrderUnit ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
-          : dbStock;
-        const hasStockValue = hasManualStock || dbStock > 0;
-        const toOrderBase = Math.max(0, amtNeededBase - effectiveStockBase);
-        const toOrderCalc = hasOrderUnit ? calcOrderUnits(toOrderBase, db) : null;
-
-        let toOrderDisplay;
-        if (!hasStockValue) {
-          toOrderDisplay = `<span style="color:var(--text2);font-size:11px;">enter stock \u2192</span>`;
-        } else if (toOrderBase <= 0) {
-          toOrderDisplay = '<span class="to-order-zero">\u2713 enough</span>';
-        } else if (toOrderCalc) {
-          const hanosBtnBatch = (isHanosEnabled() && ing.orderCode && !isUrl && toOrderCalc.units > 0)
-            ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
-            : '';
-          toOrderDisplay = `<span class="to-order-positive">${toOrderCalc.units}x ${unitSuffix}</span>${hanosBtnBatch}`;
+      // Per-batch colored breakdown
+      let breakdownHtml = '';
+      ing.perBatch.forEach(pb => {
+        const color = batchColorMap[pb.batchId] || 'var(--text2)';
+        const pbBase = toBaseUnit(pb.amount, pb.unit);
+        let label;
+        if (hasOrderUnit) {
+          const calc = calcOrderUnits(pbBase, db);
+          label = calc ? `${calc.units}x ${unitSuffix}` : `${pb.amount} ${pb.unit}`;
         } else {
-          const f = formatAmount(toOrderBase, db ? db.unit : 'g');
-          toOrderDisplay = `<span class="to-order-positive">${f.amount} ${f.unit}</span>`;
+          const f = formatAmount(pbBase, db ? db.unit : 'g');
+          label = `${f.amount} ${f.unit}`;
         }
-
-        html += `<tr data-stock-key="${esc(key)}" data-needed="${amtNeededBase}" data-unit="${esc(db ? db.unit : 'g')}">
-          <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}</td>
-          <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
-          <td>${renderStorageBadge(db)}</td>
-          <td>${codeDisplay}</td>
-          <td>${neededDisplay}</td>
-          <td>${stockInput}</td>
-          <td class="to-order-cell">${toOrderDisplay}</td>
-          <td style="font-size:11px;color:var(--text2);">${ing.dishes.map(n => esc(n.length > 20 ? n.slice(0,18)+'\u2026' : n)).join(', ')}</td>
-        </tr>`;
+        const shortName = pb.batchName.length > 18 ? pb.batchName.slice(0, 16) + '\u2026' : pb.batchName;
+        breakdownHtml += `<span class="batch-breakdown-label" style="--batch-color:${color};">● ${label} ${esc(shortName)}</span> `;
       });
 
-      html += `</tbody></table></div></div>`;
+      html += `<tr data-stock-key="${esc(key)}" data-needed="${amtNeededBase}" data-unit="${esc(db ? db.unit : 'g')}">
+        <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}</td>
+        <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
+        <td>${renderStorageBadge(db)}</td>
+        <td>${codeDisplay}</td>
+        <td>${neededDisplay}</td>
+        <td>${stockInput}</td>
+        <td class="to-order-cell">${toOrderDisplay}</td>
+        <td class="batch-breakdown-cell">${breakdownHtml}</td>
+      </tr>`;
     });
-  }
-  html += `</div>`;
 
-  if (ingredientDbError || S.ingredientDb.length === 0) {
-    html += `<div style="font-size:11px;color:var(--text2);margin-top:12px;padding:8px;border-top:1px solid var(--border);">
-      ${ingredientDbError ? `<span style="color:var(--red);">Ingredient DB error: ${esc(ingredientDbError)}</span>` : ''}
-      ${S.ingredientDb.length === 0 && !ingredientDbError ? 'Ingredient database is empty. <button class="btn btn-sm" onclick="loadIngredientDb().then(renderOrders)">Retry</button>' : ''}
-    </div>`;
-  }
+    html += `</tbody></table></div></div>`;
+  });
 
   return html;
 }
@@ -1440,8 +1537,9 @@ function renderStocktakeArea() {
           breakdownLines += `<div style="font-size:11px;color:var(--purple, #7c3aed);font-weight:500;">● ${label} batches</div>`;
         }
 
-        // Pre-fill with existing stocktake value or current stock
-        const prefill = stocktakeValues[ing.id] !== undefined ? stocktakeValues[ing.id] : ing.stockUnits;
+        // Pre-fill only from in-session stocktake values (not DB stock).
+        // Empty = "not counted" (skipped on save). 0 = "counted, nothing on stock".
+        const prefill = stocktakeValues[ing.id] !== undefined ? stocktakeValues[ing.id] : '';
 
         html += `<div class="stocktake-row" style="display:flex;align-items:center;padding:6px 4px;border-bottom:1px solid var(--border);">
           <div style="flex:1;min-width:0;">
@@ -1449,7 +1547,7 @@ function renderStocktakeArea() {
             ${breakdownLines}
           </div>
           <div style="width:55px;text-align:center;flex-shrink:0;">
-            <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill || ''}" placeholder="0" style="width:50px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="stocktakeValues['${esc(ing.id)}']=this.value===''?undefined:parseFloat(this.value)||0;updateStocktakeToOrder(this)" />
+            <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill !== '' ? prefill : ''}" placeholder="\u2014" style="width:50px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="stocktakeValues['${esc(ing.id)}']=this.value===''?undefined:parseFloat(this.value);updateStocktakeToOrder(this)" />
           </div>
           <div style="width:65px;font-size:10px;color:var(--text2);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(unitSuffix)}</div>
           <div class="stocktake-to-order" style="width:90px;text-align:right;font-size:12px;" data-needed-base="${ing.neededBase}" data-order-unit-size="${ing.orderUnitSize || 0}" data-unit="${esc(ing.unit || 'g')}" data-order-unit="${esc(ing.orderUnit || '')}">
@@ -1475,6 +1573,10 @@ function renderStocktakeArea() {
 }
 
 function _calcStocktakeToOrder(ing, stockUnitsVal) {
+  // Empty/undefined = not counted → show dash
+  if (stockUnitsVal === '' || stockUnitsVal === undefined || stockUnitsVal === null) {
+    return '<span style="color:var(--text2);font-style:italic;">not counted</span>';
+  }
   const stockUnits = parseFloat(stockUnitsVal) || 0;
   const stockBase = ing.hasOrderUnit ? stockUnits * ing.orderUnitSize : stockUnits;
   const toOrderBase = Math.max(0, ing.neededBase - stockBase);
@@ -1493,6 +1595,11 @@ function updateStocktakeToOrder(input) {
   const row = input.closest('.stocktake-row');
   const toOrderCell = row.querySelector('.stocktake-to-order');
   if (!toOrderCell) return;
+  // Empty input = not counted
+  if (input.value === '') {
+    toOrderCell.innerHTML = '<span style="color:var(--text2);font-style:italic;">not counted</span>';
+    return;
+  }
   const neededBase = parseFloat(toOrderCell.dataset.neededBase) || 0;
   const orderUnitSize = parseFloat(toOrderCell.dataset.orderUnitSize) || 0;
   const unit = toOrderCell.dataset.unit || 'g';

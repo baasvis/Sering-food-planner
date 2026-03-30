@@ -101,12 +101,12 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Order overview with 4-tab layout: Combined Order (default), Standard Inventory, Batch Ingredients, Ingredient Database
   - All tabs display amounts in order units (e.g. "5x Bak 1 kilogram") when ingredient has orderUnitSize, falling back to formatted metric (kg/L) otherwise. Stock inputs use order units with labels.
   - Standard Inventory: cooks build a weekly base order (persistent, per-location PostgreSQL JSON), searchable from ingredient DB, target stock in order units
-  - Batch Ingredients: per-batch ingredient aggregation from recipe sheets, in-stock input, to-order calculation
+  - Batch Ingredients: toggle list of batches at current location (with recipe data), on/off per batch, colored per-batch breakdown in ingredient table. "All on/off" buttons. Defaults: orderFor batches start on.
   - Combined Order: merges standard + batch ingredients, sums overlapping items, grouped by storage category per location, breakdown on click
   - Hanos add-to-cart integration: top-level "Send all to Hanos" button + per-storage-group + per-row cart buttons. Confirmation modal lists items before sending. Uses Hanos OCC v2 API (OAuth login, cart management). Per-location credentials: HANOS_USER_WEST/HANOS_PASS_WEST and HANOS_USER_CENTRAAL/HANOS_PASS_CENTRAAL. Buttons only show for locations with configured credentials.
   - Hanos product lookup: paste an order code or Hanos URL in the ingredient edit modal to auto-fill order code, unit, price, unit size, and supplier name. Uses GET /api/hanos/product/:code (OCC v2 product detail) + GET /api/hanos/search (catalog search).
   - Clicking any ingredient name opens full edit modal (all fields: name, supplier, types, category, unit, order code/unit/price/size, storage locations, allergens, notes, stock, nutrition)
-  - Stocktake mode: "Do stocktake" button on Combined Order opens dedicated flow — area picker → per-area page with items grouped by spot → stock inputs with live to-order calculation → "Save & next area" or "Save & stop". Persists via /api/ingredients/stock/bulk.
+  - Stocktake mode: "Do stocktake" button on Combined Order opens dedicated flow — area picker → per-area page with items grouped by spot → stock inputs with live to-order calculation → "Save & next area" or "Save & stop". Persists via /api/ingredients/stock/bulk. Inputs start empty ("not counted", skipped on save); entering 0 means "counted, nothing on stock" and is saved.
 - Ingredient database (PostgreSQL via Prisma) with supplier codes, units, prices, storage locations, stock tracking
 - Feedback system (floating purple button, structured form with 4 types, stores to PostgreSQL)
 - Feedback admin screen: view all submitted feedback, filter by type, "Copy for Claude" button exports feedback as structured text for pasting into Claude Code chat

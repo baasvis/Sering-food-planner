@@ -145,7 +145,12 @@ const TUTORIALS = {
     {
       selector: '.order-tab-btn',
       title: 'Combined order',
-      body: "The combined view merges everything into one clean list — that's what you copy and send to your supplier.",
+      body: "The combined view merges everything into one clean list — that's what you copy and send to your supplier. Hit 'Do stocktake' to walk through storage areas and count stock. Empty fields mean 'not counted', entering 0 means 'counted but nothing there'.",
+    },
+    {
+      selector: '.batch-toggle-list',
+      title: 'Batch ingredients',
+      body: "Toggle batches on or off to see what ingredients they need. Only batches at the current location with recipe data appear here. The coloured dots in the breakdown column show how much each batch contributes.",
     },
     {
       selector: '.ing-table',

@@ -88,3 +88,20 @@
   .stocktake-row:hover{background:var(--bg2);}
   .stocktake-input{border:2px solid var(--border2) !important;border-radius:var(--radius);font-weight:600;}
   .stocktake-input:focus{border-color:var(--blue) !important;outline:none;}
+
+  /* ── Batch toggle list (Batch Ingredients tab) ── */
+  .batch-toggle-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;padding:8px 0;}
+  .batch-toggle-row{display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border2);border-radius:var(--radius);cursor:pointer;font-size:13px;transition:all .15s;background:var(--bg);user-select:none;}
+  .batch-toggle-row:hover{border-color:var(--text3);}
+  .batch-toggle-row.on{background:var(--bg2);border-color:var(--text3);}
+  .batch-toggle-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+  .batch-toggle-name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;}
+  .batch-type-pill{font-size:10px;padding:1px 6px;border-radius:10px;font-weight:500;white-space:nowrap;}
+  .batch-toggle-switch{width:32px;height:18px;border-radius:9px;background:var(--border2);position:relative;flex-shrink:0;transition:background .15s;}
+  .batch-toggle-switch::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:white;transition:transform .15s;box-shadow:0 1px 3px rgba(0,0,0,.2);}
+  .batch-toggle-switch.on{background:var(--green);}
+  .batch-toggle-switch.on::after{transform:translateX(14px);}
+
+  /* ── Batch breakdown labels ── */
+  .batch-breakdown-cell{font-size:11px;line-height:1.6;}
+  .batch-breakdown-label{color:var(--batch-color, var(--text2));font-weight:500;white-space:nowrap;}
