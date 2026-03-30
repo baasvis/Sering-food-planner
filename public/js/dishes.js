@@ -183,6 +183,10 @@ function renderBatchTile(d) {
 
 // ── BATCH TILE (compact/expand) ──────────────────────────
 function toggleBatchExpand(id) {
+  // Don't toggle during drag — the click fires after dragstart and
+  // rerenderCurrentView() would destroy the DOM element being dragged,
+  // silently canceling the browser's native drag operation.
+  if (S.draggingBatchId) return;
   if (S.expandedBatches.has(id)) S.expandedBatches.delete(id);
   else S.expandedBatches.add(id);
   rerenderCurrentView();
@@ -513,6 +517,7 @@ function batchCookLabel(d) {
 
 // Inline date picker triggered from tile cook label
 function tileEditCookDate(id) {
+  if (S.draggingBatchId) return;
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   // Create a temporary hidden date input, trigger it
@@ -634,7 +639,7 @@ function confirmCooked(id) {
 }
 
 function setFilter(group, val) { S.filters[group] = val; S.selected.clear(); rerenderCurrentView(); }
-function toggleSelect(id) { if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id); rerenderCurrentView(); }
+function toggleSelect(id) { if (S.draggingBatchId) return; if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id); rerenderCurrentView(); }
 
 function calcRequiredForLoc(dish, loc) {
   let total = 0;
