@@ -182,6 +182,7 @@ tsconfig.json          — Frontend TypeScript config
 tsconfig.server.json   — Backend TypeScript config (CommonJS output to dist/server/)
 vite.config.ts         — Vite config (root: public/, proxy /api to :3000)
 .env                   — Local environment variables (gitignored)
+Procfile               — Railway start command (prisma migrate + node dist/server/server.js)
 CLAUDE.md              — Claude Code project instructions
 DESIGN.md              — This document
 SETUP_GUIDE.md         — Installation instructions
