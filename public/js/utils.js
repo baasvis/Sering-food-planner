@@ -155,7 +155,7 @@ async function loadData() {
     loadGuestsNextWeeks();
     hideDataError();
   } catch (e) {
-    console.warn('Could not load from server, using defaults');
+    console.warn('Could not load from server, using defaults', e);
     showDataError('Could not load data: ' + e.message);
   }
 }
@@ -291,6 +291,101 @@ function toastError(msg) {
   t.textContent = msg;
   t.className = 'toast error show';
   setTimeout(() => t.className = 'toast', 4000);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LIVE SYNC (Server-Sent Events)
+// ═══════════════════════════════════════════════════════════════════
+
+let _eventSource = null;
+
+function connectLiveSync() {
+  if (_eventSource) return; // already connected
+  _eventSource = new EventSource('/api/events');
+
+  _eventSource.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'connected') {
+        console.log('Live sync connected (client', msg.clientId + ')');
+        return;
+      }
+      if (msg.type === 'patch') {
+        applyRemotePatch(msg);
+      }
+    } catch (e) {
+      console.warn('Live sync: bad message', e);
+    }
+  };
+
+  _eventSource.onerror = () => {
+    // EventSource auto-reconnects — just log it
+    console.warn('Live sync: connection lost, reconnecting...');
+  };
+}
+
+function disconnectLiveSync() {
+  if (_eventSource) {
+    _eventSource.close();
+    _eventSource = null;
+  }
+}
+
+// Merge a patch from another user into local state
+function applyRemotePatch(msg) {
+  const { user, batches, deletedBatches, guests,
+          caterings, deletedCaterings,
+          transportItems, deletedTransportItems } = msg;
+
+  let changed = false;
+
+  // Merge batches
+  if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
+    const batchMap = new Map(S.batches.map(b => [b.id, b]));
+    if (deletedBatches) deletedBatches.forEach(id => batchMap.delete(id));
+    if (batches) batches.forEach(b => batchMap.set(b.id, b));
+    S.batches = [...batchMap.values()];
+    changed = true;
+  }
+
+  // Merge guests
+  if (guests) {
+    for (const loc of ['west', 'centraal']) {
+      if (!guests[loc]) continue;
+      if (!S.guests[loc]) S.guests[loc] = {};
+      for (const day of Object.keys(guests[loc])) {
+        S.guests[loc][day] = guests[loc][day];
+      }
+    }
+    changed = true;
+  }
+
+  // Merge caterings
+  if ((caterings && caterings.length) || (deletedCaterings && deletedCaterings.length)) {
+    const catMap = new Map(S.caterings.map(c => [c.id, c]));
+    if (deletedCaterings) deletedCaterings.forEach(id => catMap.delete(id));
+    if (caterings) caterings.forEach(c => catMap.set(c.id, c));
+    S.caterings = [...catMap.values()];
+    changed = true;
+  }
+
+  // Merge transport items
+  if ((transportItems && transportItems.length) || (deletedTransportItems && deletedTransportItems.length)) {
+    const trMap = new Map(S.transportItems.map(t => [t.id, t]));
+    if (deletedTransportItems) deletedTransportItems.forEach(id => trMap.delete(id));
+    if (transportItems) transportItems.forEach(t => trMap.set(t.id, t));
+    S.transportItems = [...trMap.values()];
+    changed = true;
+  }
+
+  if (changed) {
+    // Update snapshot so our next save won't re-send these changes
+    takeSnapshot();
+    // Re-render current view
+    rebuildPlanner();
+    rerenderCurrentView();
+    toast(`${user || 'Someone'} made changes — updated live`);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -26,6 +26,7 @@ app.use('/api',                   require('./routes/inventory'));
 app.use('/api/feedback',          require('./routes/feedback'));
 app.use('/api/hanos',             require('./routes/hanos'));
 app.use('/api/finance',           require('./routes/finance'));
+app.use('/api/events',            require('./routes/events'));
 app.use('/api/health',            require('./routes/health'));
 
 // ── Global error handler ──

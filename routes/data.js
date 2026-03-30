@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateBatches, validateGuests, withWriteLock, dbWriteBatches, dbWriteGuests, dbWriteCaterings, dbWriteTransportItems } = require('../lib/db');
+const { broadcast } = require('./events');
 
 router.get('/', async (req, res) => {
   try { res.json(await dbReadAll()); }
@@ -100,6 +101,14 @@ router.post('/patch', async (req, res) => {
     const concurrent = checkConcurrent(user);
     dbAppendLog(user.email, user.name, 'patch',
       `B:${(batches||[]).length}u/${(deletedBatches||[]).length}d G:${guests?'y':'n'} C:${(caterings||[]).length}/${(deletedCaterings||[]).length}d T:${(transportItems||[]).length}/${(deletedTransportItems||[]).length}d`);
+
+    // Broadcast the patch to all other connected clients
+    broadcast(user.email, 'patch', {
+      user: user.name,
+      batches, deletedBatches, guests,
+      caterings, deletedCaterings,
+      transportItems, deletedTransportItems,
+    });
 
     const result = { ok: true, savedAt: new Date().toISOString() };
     if (concurrent) result.concurrent = concurrent;

@@ -25,6 +25,7 @@ routes/
   guests.js            — Guest history + next-weeks predictions
   inventory.js         — Standard inventory (per-location) + storage config + prep checklist + activity log
   feedback.js          — User feedback
+  events.js            — SSE live sync: client registry, broadcast to other users on save
   health.js            — Health check endpoint
 public/
   index.html           — Shell HTML + login screen (nav generated from NAV_SCREENS)
@@ -41,7 +42,7 @@ public/
   js/
     state.js           — Constants (DAYS, MEALS, etc.) + NAV_SCREENS + storage config helpers + global state object S
     auth.js            — Google Sign-In, sessions
-    utils.js           — API helpers (apiGet/apiPost), save system, toast, prep checklist
+    utils.js           — API helpers (apiGet/apiPost), save system, toast, prep checklist, SSE live sync client
     core.js            — rebuildPlanner, calcRequired, diffStr, badges, isServicePast
     dashboard.js       — showScreen(), Dashboard screen
     predictions.js     — Guest prediction from POS CSV data
@@ -98,6 +99,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - `STORAGE_CATEGORIES` is dynamically rebuilt from `S.storageConfig` via `rebuildStorageCategories(loc)`
 - Standard inventory: `GET/POST /api/standard-inventory?location=west|centraal` — per-location weekly base order
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
+- Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.js sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders.
 
 ## Running
 ```bash

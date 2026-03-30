@@ -116,6 +116,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Logistics colour coding with legend, filter bars, section grouping (To cook / Cooked / Frozen)
 - Finance v1: Tebi POS scraper (Playwright browser automation) pulls daily revenue data via Tebi's internal JSON API. Sync worker stores data in PostgreSQL DailyRevenue table. Finance screen shows weekly revenue table (per location per day), monthly summary cards (gross/net revenue, sales, covers), CSS bar chart of daily gross revenue, and week navigation. "Sync from Tebi" button triggers the scraper as a child process.
 - Finance v2 — Product-level revenue breakdown: scraper parses Tebi invoice line items to extract per-product revenue. Classifies each invoice by service period (morning 09–12, lunch 12–14, afternoon 14–18, dinner 18–21, bar 21–06). Data stored in PostgreSQL ProductRevenue table. Finance screen shows horizontal category bar chart, sortable product table (top 50), and filter pills for 5 service periods + 4 locations. API: GET /api/finance/products with optional location, meal, groupBy=category filters. Discovery flag: `--dump-invoices` on scraper to inspect raw Tebi invoice structure.
+- Live sync via Server-Sent Events (SSE): when any user saves changes, all other connected users receive the patch instantly and their UI updates automatically. Uses native browser EventSource (auto-reconnects on connection loss). Server broadcasts patches to all clients except the sender (matched by email). No polling, no WebSocket library needed.
 
 **File structure:**
 ```
@@ -132,6 +133,7 @@ routes/
   inventory.js         — Standard inventory + prep checklist + activity log
   feedback.js          — User feedback
   hanos.js             — Hanos OCC v2 API client (OAuth, cart, add-to-cart) + Express routes
+  events.js            — SSE live sync: client registry, broadcast patches to other users
   finance.js           — Finance revenue endpoints (GET revenue, POST sync, GET sync-status)
   health.js            — Health check endpoint
 public/

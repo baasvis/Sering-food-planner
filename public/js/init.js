@@ -95,6 +95,8 @@ async function initApp() {
   await loadData();
   rebuildPlanner();
   renderDashboard();
+  // Start live sync so other users' changes appear instantly
+  connectLiveSync();
   // Auto-refresh every 60s so the UI updates when a service deadline passes (13:45 / 20:15)
   // Only rebuild planner data silently; re-render only non-dashboard views to avoid flash
   setInterval(() => {

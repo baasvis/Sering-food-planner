@@ -44,6 +44,7 @@ async function devLogin() {
 }
 
 async function doLogout() {
+  disconnectLiveSync();
   await fetch('/api/auth/logout', { method: 'POST' });
   S.user = null;
   document.getElementById('app-shell').classList.remove('active');
