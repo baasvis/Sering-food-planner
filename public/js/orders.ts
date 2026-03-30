@@ -442,6 +442,24 @@ export function renderStandardInventoryTab() {
 
 // ── Dishes tab ────────────────────────────────────────────
 
+/** Initialise batchIngredientToggles from localStorage (or fall back to orderFor) — idempotent */
+function ensureBatchTogglesInitialized(loc: string) {
+  if (batchIngredientTogglesInitialized) return;
+  const eligible = S.batches.filter(b => b.location === loc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
+  let saved: Record<string, boolean> = {};
+  try { saved = JSON.parse(localStorage.getItem(`batchIngredientToggles_${loc}`) || '{}'); } catch {}
+  batchIngredientToggles = {};
+  eligible.forEach(b => {
+    batchIngredientToggles[b.id] = b.id in saved ? saved[b.id] : !!b.orderFor;
+  });
+  batchIngredientTogglesInitialized = true;
+}
+
+/** Persist current toggle state to localStorage for the given location */
+function saveBatchIngredientToggles(loc: string) {
+  try { localStorage.setItem(`batchIngredientToggles_${loc}`, JSON.stringify(batchIngredientToggles)); } catch {}
+}
+
 /** Toggle a batch on/off in the Batch Ingredients tab */
 export function toggleBatchIngredient(batchId: any) {
   batchIngredientToggles[batchId] = !batchIngredientToggles[batchId];
@@ -461,9 +479,16 @@ export function toggleBatchIngredient(batchId: any) {
   if (header && header.textContent.includes('selected')) {
     header.textContent = `Batches at ${curLoc === 'west' ? 'Sering West' : 'Sering Centraal'} (${onCount}/${eligible.length} selected)`;
   }
+  saveBatchIngredientToggles(curLoc);
   // Re-render ingredient table
   const container = document.getElementById('batch-ingredients-table');
   if (container) container.innerHTML = renderBatchIngredientTable();
+}
+
+/** Toggle the "Include batch ingredients" switch on Combined Order */
+export function toggleCombinedIncludeDishes() {
+  combinedIncludeDishes = !combinedIncludeDishes;
+  renderOrders();
 }
 
 /** Toggle all batches on or off */
@@ -471,6 +496,7 @@ export function toggleAllBatchIngredients(on: any) {
   const curLoc = currentOrdersLoc || 'west';
   const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
   eligible.forEach(b => { batchIngredientToggles[b.id] = on; });
+  saveBatchIngredientToggles(curLoc);
   const container = document.getElementById('batch-ingredients-table');
   if (container) container.innerHTML = renderBatchIngredientTable();
   // Update toggle row + switch visuals
@@ -493,12 +519,8 @@ export function renderDishesTab() {
   // Uncooked batches at this location with recipe data
   const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
 
-  // Initialize toggles: orderFor batches default ON, others OFF
-  if (!batchIngredientTogglesInitialized) {
-    batchIngredientToggles = {};
-    eligible.forEach(b => { batchIngredientToggles[b.id] = !!b.orderFor; });
-    batchIngredientTogglesInitialized = true;
-  }
+  // Initialize toggles from localStorage (or fall back to orderFor for new batches)
+  ensureBatchTogglesInitialized(curLoc);
 
   // Assign colors to batches (stable order by id)
   const batchColorMap = {};
@@ -720,8 +742,14 @@ export function renderBatchIngredientTable() {
 // ── Combined Order tab ────────────────────────────────────
 
 export function renderCombinedOrderTab() {
+  const curLoc = currentOrdersLoc || 'west';
   const combined = {};
-  const orderedDishes = S.batches.filter(d => d.orderFor);
+
+  // Use the same per-batch toggles as the Batch Ingredients tab (initialized from localStorage)
+  ensureBatchTogglesInitialized(curLoc);
+  const orderedDishes = S.batches.filter(d =>
+    d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]
+  );
 
   function addToMap(name: any, amtGrams: any, isStandard: any, dishName: any) {
     const key = name.toLowerCase().trim();
@@ -745,7 +773,6 @@ export function renderCombinedOrderTab() {
   }
 
   // Add standard inventory items — ingredients with targetStock for current location
-  const curLoc = currentOrdersLoc || 'west';
   getStandardInventoryItems(curLoc).forEach(ing => {
     const target = ing.targetStock[curLoc] || 0;
     const currentStock = (ing.stock && ing.stock[curLoc]) ? (ing.stock[curLoc].amount || 0) : 0;
@@ -812,7 +839,7 @@ export function renderCombinedOrderTab() {
       </div>
     </div>
     <div class="order-toggle-bar" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-      <label class="order-toggle${combinedIncludeDishes ? ' on' : ''}" onclick="combinedIncludeDishes=!combinedIncludeDishes;renderOrders();">
+      <label class="order-toggle${combinedIncludeDishes ? ' on' : ''}" onclick="toggleCombinedIncludeDishes()">
         <span class="tbox${combinedIncludeDishes ? ' on' : ''}"><span class="tknob"></span></span>
         Include batch ingredients
       </label>
@@ -948,8 +975,10 @@ export function renderCombinedOrderTab() {
 // ── Copy helpers ──────────────────────────────────────────
 
 export function copyOrderCodes(supplier: any) {
+  const curLoc = currentOrdersLoc || 'west';
+  ensureBatchTogglesInitialized(curLoc);
   const items = [];
-  S.batches.filter(d => d.orderFor).forEach(dish => {
+  S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
       if (db && db.orderCode && !db.orderCode.startsWith('http') && (db.supplier || '').toLowerCase().includes(supplier.toLowerCase())) {
@@ -962,8 +991,9 @@ export function copyOrderCodes(supplier: any) {
 
 export function copyDishOrderCodes(storageCat: any) {
   const curLoc = currentOrdersLoc || 'west';
+  ensureBatchTogglesInitialized(curLoc);
   const items = new Set();
-  S.batches.filter(d => d.orderFor).forEach(dish => {
+  S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
       if (db && db.orderCode && !db.orderCode.startsWith('http')) {
@@ -990,8 +1020,10 @@ export function copySiOrderCodes(storageCat: any) {
 }
 
 export function copyCombinedOrderCodes(supplier: any) {
+  const curLoc = currentOrdersLoc || 'west';
+  ensureBatchTogglesInitialized(curLoc);
   const items = new Set();
-  S.batches.filter(d => d.orderFor).forEach(dish => {
+  S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
       if (db && db.orderCode && !db.orderCode.startsWith('http') && normalizeSupplier(db.supplier || '').toLowerCase().includes(supplier.toLowerCase())) {
@@ -1363,7 +1395,9 @@ export function updateOrderStock(key: any, val: any) {
 }
 
 export async function refreshAllRecipes() {
-  const dishes = S.batches.filter(d => d.orderFor && d.recipeSheetId);
+  const curLoc = currentOrdersLoc || 'west';
+  ensureBatchTogglesInitialized(curLoc);
+  const dishes = S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id] && d.recipeSheetId);
   if (!dishes.length) { toast('No batches with recipe sheets to refresh'); return; }
   toast('Refreshing ' + dishes.length + ' recipe(s)...');
   let ok = 0;
@@ -1392,8 +1426,13 @@ export let stocktakeSavedAreas = [];   // area names that have been saved alread
 /** Build combined order data (shared between render and stocktake) */
 export function buildCombinedOrderData() {
   const combined = {};
-  const orderedDishes = S.batches.filter(d => d.orderFor);
   const curLoc = currentOrdersLoc || 'west';
+
+  // Use the same per-batch toggles as the Batch Ingredients tab
+  ensureBatchTogglesInitialized(curLoc);
+  const orderedDishes = S.batches.filter(d =>
+    d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]
+  );
 
   function addToMap(name: any, amtGrams: any, isStandard: any, dishName: any) {
     const key = name.toLowerCase().trim();
