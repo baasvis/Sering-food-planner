@@ -428,10 +428,26 @@ function renderStandardInventoryTab() {
 
 // ── Dishes tab ────────────────────────────────────────────
 
-/** Toggle a batch on/off in the Batch Ingredients tab, re-render just the ingredient table */
+/** Toggle a batch on/off in the Batch Ingredients tab */
 function toggleBatchIngredient(batchId) {
   batchIngredientToggles[batchId] = !batchIngredientToggles[batchId];
-  // Re-render the ingredient table portion only
+  const isOn = !!batchIngredientToggles[batchId];
+  // Update toggle row visual
+  const row = document.querySelector(`.batch-toggle-row[data-batch-id="${batchId}"]`);
+  if (row) {
+    row.classList.toggle('on', isOn);
+    const sw = row.querySelector('.batch-toggle-switch');
+    if (sw) sw.classList.toggle('on', isOn);
+  }
+  // Update header count
+  const curLoc = currentOrdersLoc || 'west';
+  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
+  const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
+  const header = document.querySelector('.section-title span');
+  if (header && header.textContent.includes('selected')) {
+    header.textContent = `Batches at ${curLoc === 'west' ? 'Sering West' : 'Sering Centraal'} (${onCount}/${eligible.length} selected)`;
+  }
+  // Re-render ingredient table
   const container = document.getElementById('batch-ingredients-table');
   if (container) container.innerHTML = renderBatchIngredientTable();
 }
@@ -439,21 +455,29 @@ function toggleBatchIngredient(batchId) {
 /** Toggle all batches on or off */
 function toggleAllBatchIngredients(on) {
   const curLoc = currentOrdersLoc || 'west';
-  const eligible = S.batches.filter(b => b.location === curLoc && b.recipeSheetId && b.recipeIngredients);
+  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
   eligible.forEach(b => { batchIngredientToggles[b.id] = on; });
   const container = document.getElementById('batch-ingredients-table');
   if (container) container.innerHTML = renderBatchIngredientTable();
-  // Also update toggle button visuals
-  document.querySelectorAll('.batch-toggle-switch').forEach(el => {
+  // Update toggle row + switch visuals
+  document.querySelectorAll('.batch-toggle-row').forEach(el => {
     el.classList.toggle('on', on);
+    const sw = el.querySelector('.batch-toggle-switch');
+    if (sw) sw.classList.toggle('on', on);
   });
+  // Update header count
+  const onCount = on ? eligible.length : 0;
+  const header = document.querySelector('.section-title span');
+  if (header && header.textContent.includes('selected')) {
+    header.textContent = `Batches at ${curLoc === 'west' ? 'Sering West' : 'Sering Centraal'} (${onCount}/${eligible.length} selected)`;
+  }
 }
 
 function renderDishesTab() {
   const curLoc = currentOrdersLoc || 'west';
 
-  // All batches at this location with recipe data
-  const eligible = S.batches.filter(b => b.location === curLoc && b.recipeSheetId && b.recipeIngredients);
+  // Uncooked batches at this location with recipe data
+  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
 
   // Initialize toggles: orderFor batches default ON, others OFF
   if (!batchIngredientTogglesInitialized) {
@@ -489,7 +513,7 @@ function renderDishesTab() {
       const typeBadge = b.type ? `<span class="batch-type-pill" style="background:${color}20;color:${color};border:1px solid ${color}40;">${esc(b.type)}</span>` : '';
       const cookLabel = b.cookDate ? b.cookDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, (_, y, m, d) => `${parseInt(d)}/${parseInt(m)}`) : '';
       const cookBadge = cookLabel ? `<span style="font-size:11px;color:${b.stock > 0 ? 'var(--green)' : 'var(--blue)'};font-weight:500;">${cookLabel}</span>` : '';
-      html += `<div class="batch-toggle-row${isOn ? ' on' : ''}" onclick="toggleBatchIngredient('${esc(b.id)}')">
+      html += `<div class="batch-toggle-row${isOn ? ' on' : ''}" data-batch-id="${esc(b.id)}" onclick="toggleBatchIngredient('${esc(b.id)}')">
         <span class="batch-toggle-dot" style="background:${color};"></span>
         <span class="batch-toggle-name">${esc(b.name)}</span>
         ${typeBadge}
@@ -517,7 +541,7 @@ function renderDishesTab() {
 /** Render just the ingredient aggregation table for toggled-on batches */
 function renderBatchIngredientTable() {
   const curLoc = currentOrdersLoc || 'west';
-  const eligible = S.batches.filter(b => b.location === curLoc && b.recipeSheetId && b.recipeIngredients);
+  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
 
   // Assign colors (same stable order as toggle list)
   const batchColorMap = {};
