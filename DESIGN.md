@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-03-24*
+*Last updated: 2026-03-30*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -187,23 +187,23 @@ DESIGN.md              — This document
 SETUP_GUIDE.md         — Installation instructions
 ```
 
-**Data model** (stored in Google Sheets):
+**Data model** (stored in PostgreSQL via Prisma):
 
-| Entity | Key Fields | Sheet Tab |
+| Entity | Key Fields | Prisma Model / Table |
 |--------|-----------|-----------|
-| Dish | id, name, type, stock, serving, storage, logistics, allergens, cookDate, cookConfirmed, recipeSheetId, recipeVolume, recipeIngredients | dishes |
-| Service | id, dish_id, location, day (0-6), meal (lunch/dinner) | services |
-| Guests | location, day, lunch count, dinner count | guests |
-| Recipe Index | id, name, type, recipeSheetId, allergens, costPerServing, structure, seasonality, ratings, timesServed | recipe_index |
-| Catering | id, name, date, guestCount, deliveryMode, dishes (JSON), logisticsNotes | caterings |
-| Transport Item | id, text | transport_items |
-| Feedback | timestamp, user, type, screen, text, userAgent | feedback |
-| Ingredient DB | name, unit, source, costPer100, orderType, orderCode, orderAmount, allergens, storageLocation | separate sheet |
-| Standard Inventory | id, name, amount, unit | data/standard-inventory.json (server-side) |
-| Guest History | location, meal, date, count | guest_history (+ guest_history_meta for deviceMap) |
-| Guests Next Weeks | monday_key, location, day, meal, count | guests_next_weeks |
-| Daily Revenue | date, location, grossRevenue, netRevenue, sales, covers, invoiceCount, syncedAt | daily_revenue |
-| Product Revenue | date, location, meal, productName, productCategory, quantity, grossRevenue, netRevenue, syncedAt | product_revenue |
+| Batch | id, name, type, stock, serving, storage, logistics, allergens, cookDate, cookConfirmed, recipeSheetId, recipeVolume, recipeIngredients, services (JSON), location, inTransit, note | Batch |
+| Guests | location, day, lunch count, dinner count | AppState (JSON) |
+| Recipe Index | id, name, type, recipeSheetId, allergens, costPerServing, structure, seasonality, ratings, timesServed | RecipeIndex |
+| Catering | id, name, date, guestCount, deliveryMode, dishes (JSON), logisticsNotes | AppState (JSON) |
+| Transport Item | id, text | AppState (JSON) |
+| Feedback | timestamp, user, type, screen, text, userAgent | Feedback |
+| Ingredient | name, unit, types, category, orderCode, orderUnit, orderUnitSize, orderPrice, storageLocations, stock, nutrition, priceHistory | Ingredient |
+| Standard Inventory | location, items (JSON) | StandardInventory |
+| Storage Config | location, config (JSON) | StorageConfig |
+| Guest History | location, meal, date, count | GuestHistory (+ GuestHistoryMeta) |
+| Guests Next Weeks | mondayKey, location, day, meal, count | GuestsNextWeeks |
+| Daily Revenue | date, location, grossRevenue, netRevenue, sales, covers, invoiceCount, syncedAt | DailyRevenue |
+| Product Revenue | date, location, meal, productName, productCategory, quantity, grossRevenue, netRevenue, syncedAt | ProductRevenue |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -394,16 +394,16 @@ All chosen for: (1) Claude compatibility, (2) stability, (3) readability by non-
 ### Tutorial Maintenance Rule
 **Every time a new feature is added or an existing feature is modified, the in-app tutorial steps for that page must be updated to match.**
 
-The tutorials live in `public/js/tutorial.js`, organised by screen name (`dashboard`, `guests`, `planner`, `recipes`, `orders`). Each step is a plain object with a `selector`, `title`, and `body`. When you add a new section to a page, add a corresponding step. When you rename or restructure something, update the step that references it. The tutorials are the first thing a new cook reads — keeping them accurate is as important as keeping the code working.
+The tutorials live in `public/js/tutorial.ts`, organised by screen name (`dashboard`, `guests`, `planner`, `recipes`, `orders`). Each step is a plain object with a `selector`, `title`, and `body`. When you add a new section to a page, add a corresponding step. When you rename or restructure something, update the step that references it. The tutorials are the first thing a new cook reads — keeping them accurate is as important as keeping the code working.
 
 ---
 
 ## 7. Data Ownership & Security
 
 - **All code**: Owned by De Sering, on GitHub
-- **All data**: Owned by De Sering, on Google Sheets (now) → PostgreSQL on Railway (Phase 3+)
+- **All data**: Owned by De Sering, in PostgreSQL on Railway
 - **No vendor lock-in**: Standard technologies, exportable data, no proprietary formats
-- **Backups**: Railway automated PostgreSQL backups + Google Sheets version history
+- **Backups**: Railway automated PostgreSQL backups
 - **GDPR**: Privacy notice for staff data. Minimal collection. Deletion on request. EU hosting option.
 - **Auth**: Google Sign-In + allowed email list. Session-based. No passwords stored.
 - **Fault isolation**: Modules load independently. One breaking doesn't crash the others.
