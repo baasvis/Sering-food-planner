@@ -114,33 +114,6 @@ async function initApp() {
 
   const hasSession = await checkSession();
   if (!hasSession) {
-    try {
-      const health = await (await fetch('/api/health')).json();
-      if (!health.authConfigured) {
-        // Dev mode: show dev login button, hide Google button
-        document.getElementById('dev-login-btn').style.display = 'inline-block';
-        document.querySelector('.g_id_signin').style.display = 'none';
-      } else {
-        // Initialize Google Sign-In with the client ID from server
-        const waitForGoogle = () => {
-          if (window.google && google.accounts) {
-            google.accounts.id.initialize({
-              client_id: health.googleClientId,
-              callback: handleGoogleLogin,
-            });
-            google.accounts.id.renderButton(
-              document.querySelector('.g_id_signin'),
-              { theme: 'outline', size: 'large', text: 'sign_in_with', shape: 'rectangular', width: 300 }
-            );
-          } else {
-            setTimeout(waitForGoogle, 100);
-          }
-        };
-        waitForGoogle();
-      }
-    } catch (e) {
-      document.getElementById('dev-login-btn').style.display = 'inline-block';
-      document.querySelector('.g_id_signin').style.display = 'none';
-    }
+    initGoogleSignIn();
   }
 })();

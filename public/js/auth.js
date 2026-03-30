@@ -48,6 +48,48 @@ async function doLogout() {
   S.user = null;
   document.getElementById('app-shell').classList.remove('active');
   document.getElementById('login-screen').style.display = 'flex';
+  // Ensure Google Sign-In button is rendered (may not have been set up
+  // if session was valid on page load but expired mid-use)
+  initGoogleSignIn();
+}
+
+// Initialize (or re-initialize) the Google Sign-In button on the login screen
+function initGoogleSignIn() {
+  if (window._googleSignInReady) return; // already set up
+  (async () => {
+    try {
+      const health = await (await fetch('/api/health')).json();
+      if (!health.authConfigured) {
+        document.getElementById('dev-login-btn').style.display = 'inline-block';
+        document.querySelector('.g_id_signin').style.display = 'none';
+        return;
+      }
+      let attempts = 0;
+      const waitForGoogle = () => {
+        if (window.google && google.accounts) {
+          google.accounts.id.initialize({
+            client_id: health.googleClientId,
+            callback: handleGoogleLogin,
+          });
+          google.accounts.id.renderButton(
+            document.querySelector('.g_id_signin'),
+            { theme: 'outline', size: 'large', text: 'sign_in_with', shape: 'rectangular', width: 300 }
+          );
+          window._googleSignInReady = true;
+        } else if (attempts++ < 50) {
+          setTimeout(waitForGoogle, 100);
+        } else {
+          const errEl = document.getElementById('login-error');
+          errEl.innerHTML = 'Google Sign-In could not load. Check your internet connection or ad blocker. <button onclick="location.reload()" style="margin-left:8px;cursor:pointer;">Retry</button>';
+          errEl.style.display = 'block';
+        }
+      };
+      waitForGoogle();
+    } catch (e) {
+      document.getElementById('dev-login-btn').style.display = 'inline-block';
+      document.querySelector('.g_id_signin').style.display = 'none';
+    }
+  })();
 }
 
 async function checkSession() {
