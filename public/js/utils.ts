@@ -1,0 +1,430 @@
+// UUID GENERATION
+// ═══════════════════════════════════════════════════════════════════
+
+import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
+import { doLogout } from './auth';
+import { rebuildPlanner } from './core';
+import { predictGuests } from './predictions';
+
+export function newId() {
+  return crypto.randomUUID();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// API + SAVE SYSTEM
+// ═══════════════════════════════════════════════════════════════════
+
+export async function apiGet(path: any) {
+  const r = await fetch(path);
+  if (r.status === 401) { doLogout(); throw new Error('Session expired'); }
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || 'Request failed'); }
+  return r.json();
+}
+
+export async function apiPost(path: any, body: any) {
+  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  if (r.status === 401) { doLogout(); throw new Error('Session expired'); }
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || 'Save failed'); }
+  return r.json();
+}
+
+// Save state management
+let saveTimer: any = null;
+export let saveState: any = 'saved'; // 'saved' | 'unsaved' | 'saving' | 'error'
+let retryCount = 0;
+const MAX_RETRIES = 3;
+
+export function setSaveState(state: any, msg?: any) {
+  saveState = state;
+  const dot = document.getElementById('save-dot');
+  const text = document.getElementById('save-text');
+  if (!dot || !text) return;
+  dot.className = 'save-dot ' + state;
+  text.textContent = msg || ({saved:'Saved',unsaved:'Unsaved',saving:'Saving...',error:'Save failed'} as any)[state];
+}
+
+// ── Snapshot diffing for patch saves ──
+let _lastSaved: any = { batches: new Map(), guests: '', caterings: new Map(), transportItems: new Map() };
+
+export function takeSnapshot() {
+  _lastSaved = {
+    batches: new Map(S.batches.map((d: any) => [d.id, JSON.stringify(d)])),
+    guests: JSON.stringify(S.guests),
+    caterings: new Map(S.caterings.map((c: any) => [c.id, JSON.stringify(c)])),
+    transportItems: new Map(S.transportItems.map((t: any) => [t.id, JSON.stringify(t)])),
+  };
+}
+
+export function computePatch() {
+  const patch: any = { batches: [], deletedBatches: [], guests: null,
+                  caterings: [], deletedCaterings: [],
+                  transportItems: [], deletedTransportItems: [] };
+
+  // Batches
+  const curBatchIds = new Set(S.batches.map((d: any) => d.id));
+  for (const d of S.batches) {
+    const prev = _lastSaved.batches.get(d.id);
+    if (!prev || prev !== JSON.stringify(d)) patch.batches.push(d);
+  }
+  for (const [id] of _lastSaved.batches) {
+    if (!curBatchIds.has(id)) patch.deletedBatches.push(id);
+  }
+
+  // Guests (small fixed structure — send full if changed)
+  if (JSON.stringify(S.guests) !== _lastSaved.guests) patch.guests = S.guests;
+
+  // Caterings
+  const curCatIds = new Set(S.caterings.map((c: any) => c.id));
+  for (const c of S.caterings) {
+    const prev = _lastSaved.caterings.get(c.id);
+    if (!prev || prev !== JSON.stringify(c)) patch.caterings.push(c);
+  }
+  for (const [id] of _lastSaved.caterings) {
+    if (!curCatIds.has(id)) patch.deletedCaterings.push(id);
+  }
+
+  // Transport items
+  const curTrIds = new Set(S.transportItems.map((t: any) => t.id));
+  for (const t of S.transportItems) {
+    const prev = _lastSaved.transportItems.get(t.id);
+    if (!prev || prev !== JSON.stringify(t)) patch.transportItems.push(t);
+  }
+  for (const [id] of _lastSaved.transportItems) {
+    if (!curTrIds.has(id)) patch.deletedTransportItems.push(id);
+  }
+
+  return patch;
+}
+
+export function patchIsEmpty(p: any) {
+  return p.batches.length === 0 && p.deletedBatches.length === 0 &&
+         p.guests === null &&
+         p.caterings.length === 0 && p.deletedCaterings.length === 0 &&
+         p.transportItems.length === 0 && p.deletedTransportItems.length === 0;
+}
+
+export function scheduleSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  setSaveState('unsaved');
+  // Debounce: wait 1.5s after last change before saving
+  saveTimer = setTimeout(doSave, 1500);
+}
+
+export async function doSave() {
+  if (saveState === 'saving') return;
+  const patch = computePatch();
+  if (patchIsEmpty(patch)) { setSaveState('saved'); return; }
+  setSaveState('saving');
+  try {
+    const result = await apiPost('/api/data/patch', patch);
+    takeSnapshot();
+    setSaveState('saved', 'Saved');
+    retryCount = 0;
+    if (result && result.concurrent) {
+      const c = result.concurrent;
+      toast(`${c.recentUser} saved ${c.agoSeconds < 60 ? c.agoSeconds + 's' : Math.round(c.agoSeconds/60) + 'min'} ago — consider reloading`);
+    }
+  } catch (e: any) {
+    retryCount++;
+    if (retryCount <= MAX_RETRIES) {
+      setSaveState('error', `Retry ${retryCount}/${MAX_RETRIES}...`);
+      setTimeout(doSave, 2000 * retryCount);
+    } else {
+      setSaveState('error', 'Save failed — check connection');
+      toastError('Could not save changes. Check your internet connection and try again.');
+      retryCount = 0;
+    }
+  }
+}
+
+// Explicit save (for manual retry)
+export function retrySave() {
+  retryCount = 0;
+  doSave();
+}
+
+export async function loadData() {
+  try {
+    const data = await apiGet('/api/data');
+    if (data.guests) S.guests = data.guests;
+    if (data.recipeIndex) S.recipeIndex = data.recipeIndex;
+    if (data.batches) S.batches = data.batches;
+    if (data.caterings) S.caterings = data.caterings;
+    if (data.transportItems) S.transportItems = data.transportItems;
+    takeSnapshot();
+    rebuildPlanner();
+    // Load ingredient DB + storage config in background (for order overview)
+    loadIngredientDb();
+    loadStorageConfig();
+    // Load guest history + next weeks in background (for Guests tab)
+    loadGuestHistory();
+    loadGuestsNextWeeks();
+    hideDataError();
+  } catch (e: any) {
+    console.warn('Could not load from server, using defaults', e);
+    showDataError('Could not load data: ' + e.message);
+  }
+}
+
+// ── Persistent error banner (stays visible until data loads) ──
+export function showDataError(msg: any) {
+  let banner = document.getElementById('data-error-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'data-error-banner';
+    banner.className = 'data-error-banner';
+    const content = document.querySelector('.content');
+    if (content) content.prepend(banner);
+  }
+  banner.innerHTML = `<span>${(window as any).esc ? (window as any).esc(msg) : msg}</span><button onclick="retryLoad()">Retry</button>`;
+  banner.style.display = '';
+}
+
+export function hideDataError() {
+  const banner = document.getElementById('data-error-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+export async function retryLoad() {
+  const banner = document.getElementById('data-error-banner');
+  if (banner) banner.querySelector('span')!.textContent = 'Retrying...';
+  await loadData();
+  rebuildPlanner();
+  (window as any).rerenderCurrentView?.();
+}
+
+export let ingredientDbLoaded = false;
+export let ingredientDbError = '';
+export async function loadIngredientDb() {
+  try {
+    const result = await apiGet('/api/ingredients');
+    // Handle error-as-data response
+    if (result && result.error) {
+      console.error('Ingredient DB API error:', result.error);
+      S.ingredientDb = [];
+      ingredientDbError = result.error;
+    } else if (Array.isArray(result)) {
+      S.ingredientDb = result;
+      (window as any)._ingredientCategoryCache = null; // invalidate choppable lookup cache
+      ingredientDbError = '';
+      console.log('Ingredient DB loaded:', S.ingredientDb.length, 'items');
+      if (S.ingredientDb.length > 0) console.log('Sample:', S.ingredientDb[0].name, '| code:', S.ingredientDb[0].orderCode);
+    } else {
+      console.error('Ingredient DB unexpected response:', result);
+      S.ingredientDb = [];
+      ingredientDbError = 'Unexpected response format';
+    }
+    ingredientDbLoaded = true;
+  } catch (e: any) {
+    console.error('Failed to load ingredient DB:', e);
+    S.ingredientDb = [];
+    ingredientDbLoaded = true;
+    ingredientDbError = e.message || 'Unknown error';
+  }
+}
+
+export async function loadStorageConfig() {
+  try {
+    const cfg = await apiGet('/api/storage-config');
+    if (cfg && typeof cfg === 'object' && (cfg.west || cfg.centraal)) {
+      S.storageConfig = cfg;
+    } else {
+      // Initialize with defaults for both locations
+      S.storageConfig = { west: DEFAULT_STORAGE_CONFIG, centraal: DEFAULT_STORAGE_CONFIG.map((a: any) => ({...a})) };
+    }
+  } catch (e: any) {
+    S.storageConfig = { west: DEFAULT_STORAGE_CONFIG, centraal: DEFAULT_STORAGE_CONFIG.map((a: any) => ({...a})) };
+  }
+  rebuildStorageCategories(S.currentLoc || 'west');
+}
+
+export async function saveStorageConfig() {
+  try {
+    await apiPost('/api/storage-config', S.storageConfig);
+  } catch (e: any) {
+    toastError('Failed to save storage config');
+  }
+}
+
+export async function loadGuestHistory() {
+  try {
+    const data = await apiGet('/api/guest-history');
+    S.guestHistory = data;
+    if (data && (data.west || data.centraal)) {
+      S.predictions = predictGuests(data);
+    }
+    if (data && data.flowDistribution) {
+      S.guestFlowDistribution = data.flowDistribution;
+    }
+  } catch (e: any) {
+    console.warn('Could not load guest history:', e.message);
+  }
+}
+
+export async function loadGuestsNextWeeks() {
+  try {
+    const data = await apiGet('/api/guests-next-weeks');
+    if (data && typeof data === 'object') S.guestsNextWeeks = data;
+  } catch (e: any) {
+    console.warn('Could not load next weeks data:', e.message);
+  }
+}
+
+let _nextWeeksSaveTimer: any = null;
+export function scheduleNextWeeksSave() {
+  if (_nextWeeksSaveTimer) clearTimeout(_nextWeeksSaveTimer);
+  setSaveState('unsaved');
+  _nextWeeksSaveTimer = setTimeout(async () => {
+    setSaveState('saving');
+    try {
+      await apiPost('/api/guests-next-weeks', S.guestsNextWeeks);
+      setSaveState('saved', 'Saved');
+    } catch (e: any) {
+      setSaveState('error', 'Save failed');
+    }
+  }, 1500);
+}
+
+export function toast(msg: any) {
+  const t = document.getElementById('toast')!;
+  t.textContent = msg;
+  t.className = 'toast show';
+  setTimeout(() => t.className = 'toast', 2200);
+}
+
+export function toastError(msg: any) {
+  const t = document.getElementById('toast')!;
+  t.textContent = msg;
+  t.className = 'toast error show';
+  setTimeout(() => t.className = 'toast', 4000);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LIVE SYNC (Server-Sent Events)
+// ═══════════════════════════════════════════════════════════════════
+
+let _eventSource: any = null;
+
+export function connectLiveSync() {
+  if (_eventSource) return; // already connected
+  _eventSource = new EventSource('/api/events');
+
+  _eventSource.onmessage = (event: any) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'connected') {
+        console.log('Live sync connected (client', msg.clientId + ')');
+        return;
+      }
+      if (msg.type === 'patch') {
+        applyRemotePatch(msg);
+      }
+    } catch (e: any) {
+      console.warn('Live sync: bad message', e);
+    }
+  };
+
+  _eventSource.onerror = () => {
+    // EventSource auto-reconnects — just log it
+    console.warn('Live sync: connection lost, reconnecting...');
+  };
+}
+
+export function disconnectLiveSync() {
+  if (_eventSource) {
+    _eventSource.close();
+    _eventSource = null;
+  }
+}
+
+// Merge a patch from another user into local state
+export function applyRemotePatch(msg: any) {
+  const { user, batches, deletedBatches, guests,
+          caterings, deletedCaterings,
+          transportItems, deletedTransportItems } = msg;
+
+  let changed = false;
+
+  // Merge batches
+  if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
+    const batchMap = new Map(S.batches.map((b: any) => [b.id, b]));
+    if (deletedBatches) deletedBatches.forEach((id: any) => batchMap.delete(id));
+    if (batches) batches.forEach((b: any) => batchMap.set(b.id, b));
+    S.batches = [...batchMap.values()];
+    changed = true;
+  }
+
+  // Merge guests
+  if (guests) {
+    for (const loc of ['west', 'centraal']) {
+      if (!guests[loc]) continue;
+      if (!S.guests[loc]) S.guests[loc] = {};
+      for (const day of Object.keys(guests[loc])) {
+        S.guests[loc][day] = guests[loc][day];
+      }
+    }
+    changed = true;
+  }
+
+  // Merge caterings
+  if ((caterings && caterings.length) || (deletedCaterings && deletedCaterings.length)) {
+    const catMap = new Map(S.caterings.map((c: any) => [c.id, c]));
+    if (deletedCaterings) deletedCaterings.forEach((id: any) => catMap.delete(id));
+    if (caterings) caterings.forEach((c: any) => catMap.set(c.id, c));
+    S.caterings = [...catMap.values()];
+    changed = true;
+  }
+
+  // Merge transport items
+  if ((transportItems && transportItems.length) || (deletedTransportItems && deletedTransportItems.length)) {
+    const trMap = new Map(S.transportItems.map((t: any) => [t.id, t]));
+    if (deletedTransportItems) deletedTransportItems.forEach((id: any) => trMap.delete(id));
+    if (transportItems) transportItems.forEach((t: any) => trMap.set(t.id, t));
+    S.transportItems = [...trMap.values()];
+    changed = true;
+  }
+
+  if (changed) {
+    // Update snapshot so our next save won't re-send these changes
+    takeSnapshot();
+    // Re-render current view
+    rebuildPlanner();
+    (window as any).rerenderCurrentView?.();
+    toast(`${user || 'Someone'} made changes — updated live`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PREP CHECKLIST API
+// ═══════════════════════════════════════════════════════════════════
+
+export function todayIso() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+export async function loadPrepChecklist(loc: any) {
+  try {
+    const data = await apiGet(`/api/prep-checklist?loc=${loc}&date=${todayIso()}`);
+    S.prepChecklist[loc] = new Set(Array.isArray(data) ? data : []);
+  } catch (e: any) {
+    S.prepChecklist[loc] = new Set();
+  }
+}
+
+let _prepSaveTimer: any = null;
+export function schedulePrepSave(loc: any) {
+  if (_prepSaveTimer) clearTimeout(_prepSaveTimer);
+  _prepSaveTimer = setTimeout(async () => {
+    try {
+      await apiPost('/api/prep-checklist', {
+        loc,
+        date: todayIso(),
+        checked: [...(S.prepChecklist[loc] || new Set())],
+      });
+    } catch (e: any) {
+      console.warn('Could not save prep checklist:', e.message);
+    }
+  }, 600);
+}
+
+// ═══════════════════════════════════════════════════════════════════

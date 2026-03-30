@@ -1,0 +1,412 @@
+// CORE LOGIC
+// ═══════════════════════════════════════════════════════════════════
+
+import { S, DAYS, MEALS, STORAGE } from './state';
+// utils functions accessed via window to avoid circular deps
+const scheduleSave = () => (window as any).scheduleSave?.();
+const apiPost = (path: any, body: any) => (window as any).apiPost?.(path, body);
+const toast = (msg: any) => (window as any).toast?.(msg);
+// init functions accessed via window to avoid circular deps
+const esc = (str: any) => (window as any).esc?.(str) || '';
+const showModal = (content: any) => (window as any).showModal?.(content);
+const closeModal = () => (window as any).closeModal?.();
+
+export function isBatchCooked(d: any) {
+  return (d.stock || 0) > 0;
+}
+
+export function locationBadge(d: any) {
+  if (d.location === 'centraal') {
+    return `<span class="badge b-centraal">Sering Centraal</span>`;
+  }
+  return `<span class="badge b-west">Sering West</span>`;
+}
+
+// Amsterdam time helper (shared — also used by planner.js inventory)
+export function getAmsterdamNow() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+}
+
+// Convert a date string ("2026-03-23") to a day name ("Mon", "Tue", etc.)
+export function dateToDayName(dateStr: any) {
+  const d = new Date(dateStr + 'T12:00:00'); // noon to avoid timezone edge cases
+  return DAYS[(d.getDay() + 6) % 7];
+}
+
+// Convert a JS Date object to ISO date string "2026-03-23"
+export function dateToIso(d: any) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// Check if a service is past / "served".
+// Services store date as ISO string (e.g., "2026-03-23").
+// A service is served when:
+// - Its date is before today, OR
+// - Its date is today AND (clock past deadline OR inventory done after urgent)
+export function isServicePast(svc: any) {
+  const now = getAmsterdamNow();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const svcDate = new Date(svc.date + 'T12:00:00');
+  const svcDay = new Date(svcDate.getFullYear(), svcDate.getMonth(), svcDate.getDate());
+  if (svcDay < today) return true;       // past date
+  if (svcDay > today) return false;      // future date
+  // Today — check time and inventory state
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const lk = svc.loc === 'west' ? 'west' : 'centraal';
+  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const inv = S.inventoryDone[lk] || {};
+  if (svc.meal === 'lunch') {
+    const deadline = 13 * 60 + 45;     // 13:45
+    const urgentFrom = deadline - 60;   // 12:45
+    return mins >= deadline || (inv.lunch === todayStr && mins >= urgentFrom);
+  }
+  if (svc.meal === 'dinner') {
+    const deadline = 20 * 60 + 15;     // 20:15
+    const urgentFrom = deadline - 60;   // 19:15
+    return mins >= deadline || (inv.dinner === todayStr && mins >= urgentFrom);
+  }
+  return false;
+}
+
+export function rebuildPlanner() {
+  S.planner = {};
+  S.batches.forEach((d: any) => {
+    (d.services || []).forEach((svc: any) => {
+      const k = `${svc.loc}-${svc.date}-${svc.meal}`;
+      if (!S.planner[k]) S.planner[k] = [];
+      if (!S.planner[k].find((x: any) => x.id === d.id)) S.planner[k].push(d);
+    });
+  });
+}
+
+export function renderDishListSplit(dishes: any) {
+  const cooked = sortByCookDate(dishes.filter((d: any) => isBatchCooked(d)));
+  const uncooked = sortByCookDate(dishes.filter((d: any) => !isBatchCooked(d)));
+  let html = '';
+  if (uncooked.length > 0) {
+    html += `<div class="cook-group-hdr uncooked-hdr">To cook (${uncooked.length})</div>`;
+    uncooked.forEach((d: any) => { html += (window as any).renderBatchTile(d); });
+  }
+  if (cooked.length > 0) {
+    html += `<div class="cook-group-hdr cooked-hdr">Cooked (${cooked.length})</div>`;
+    cooked.forEach((d: any) => { html += (window as any).renderBatchTile(d); });
+  }
+  return html;
+}
+
+export function sortByCookDate(dishes: any) {
+  return [...dishes].sort((a: any, b: any) => {
+    const da = a.cookDate ? strToDate(a.cookDate) : null;
+    const db = b.cookDate ? strToDate(b.cookDate) : null;
+    // No date goes to bottom
+    if (!da && !db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    return da - db;
+  });
+}
+
+// Get guest count for a location, date string, and meal
+export function getGuests(loc: any, dateStr: any, meal: any) {
+  const lk = loc === 'west' ? 'west' : 'centraal';
+  const dn = dateToDayName(dateStr);
+
+  // Determine if dateStr falls in the current week
+  const d = new Date(dateStr + 'T12:00:00');
+  const dow = d.getDay();
+  const mon = new Date(d);
+  mon.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
+  const mk = dateToIso(mon);
+
+  const today = getToday();
+  const todayDow = today.getDay();
+  const curMon = new Date(today);
+  curMon.setDate(today.getDate() + (todayDow === 0 ? -6 : 1 - todayDow));
+  const curMk = dateToIso(curMon);
+
+  // Current week: use S.guests (user-edited base counts)
+  if (mk === curMk) {
+    return ((S.guests[lk] || {})[dn] || {})[meal] || 0;
+  }
+
+  // Future/past weeks: use guestsNextWeeks predictions
+  const weekData = S.guestsNextWeeks[mk];
+  if (weekData && weekData[lk] && weekData[lk][dn] && weekData[lk][dn][meal] !== undefined) {
+    return weekData[lk][dn][meal];
+  }
+
+  // Final fallback to base counts
+  return ((S.guests[lk] || {})[dn] || {})[meal] || 0;
+}
+
+export function calcRequired(dish: any) {
+  let total = 0;
+  (dish.services || []).forEach((svc: any) => {
+    if (isServicePast(svc)) return; // Skip served services — no longer pulling stock
+    const g = getGuests(svc.loc, svc.date, svc.meal);
+    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
+    const peers = (S.planner[k] || []).filter((d: any) => d.type === dish.type);
+    const count = Math.max(peers.length, 1);
+    total += (g / count) * ((dish.serving || 280) / 1000);
+  });
+  // Add catering requirements (split by same-type peers)
+  (S.caterings || []).forEach((c: any) => {
+    const cd = (c.dishes || []).find((cd: any) => cd.dishId === dish.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter((d: any) => d.type === dish.type).length;
+      total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000);
+    }
+  });
+  return Math.round(total * 10) / 10;
+}
+
+export function calcRequiredBreakdown(dish: any) {
+  const lines: any[] = [];
+  (dish.services || []).forEach((svc: any) => {
+    const loc = svc.loc === 'west' ? 'Sering West' : 'Sering Centraal';
+    const meal = svc.meal.charAt(0).toUpperCase() + svc.meal.slice(1);
+    const dayName = dateToDayName(svc.date);
+    // Past services show as "served" instead of contributing liters
+    if (isServicePast(svc)) {
+      lines.push(`\u2713 ${dayName} ${meal} ${loc} (served)`);
+      return;
+    }
+    const g = getGuests(svc.loc, svc.date, svc.meal);
+    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
+    const peers = (S.planner[k] || []).filter((d: any) => d.type === dish.type);
+    const count = Math.max(peers.length, 1);
+    const liters = Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
+    if (liters > 0) {
+      lines.push(`${liters}L \u2014 ${dayName} ${meal} ${loc}`);
+    }
+  });
+  (S.caterings || []).forEach((c: any) => {
+    const cd = (c.dishes || []).find((cd: any) => cd.dishId === dish.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter((d: any) => d.type === dish.type).length;
+      const liters = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000) * 10) / 10;
+      if (liters > 0) lines.push(`${liters}L \u2014 ${c.name} (${c.guestCount} guests${peers > 1 ? ', 1/' + peers + ' split' : ''})`);
+    }
+  });
+  return lines;
+}
+
+export function calcTotalGuests(dish: any) {
+  let g = 0;
+  (dish.services || []).forEach((svc: any) => {
+    if (isServicePast(svc)) return; // Skip served services
+    const total = getGuests(svc.loc, svc.date, svc.meal);
+    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
+    const peers = (S.planner[k] || []).filter((d: any) => d.type === dish.type);
+    g += total / Math.max(peers.length, 1);
+  });
+  // Add catering guests (split by same-type peers)
+  (S.caterings || []).forEach((c: any) => {
+    const cd = (c.dishes || []).find((cd: any) => cd.dishId === dish.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter((d: any) => d.type === dish.type).length;
+      g += (c.guestCount || 0) / Math.max(peers, 1);
+    }
+  });
+  return Math.round(g);
+}
+
+export function calcIngredientsFromRecipe(dish: any) {
+  if (!dish.recipeIngredients || !dish.recipeVolume) return [];
+  const totalGuests = calcTotalGuests(dish);
+  if (totalGuests === 0) return [];
+  // recipeVolume is in liters (e.g. 10.78), serving is in ml (e.g. 240)
+  // Convert recipe volume to ml to match serving size units
+  const recipeVolumeMl = dish.recipeVolume * 1000;
+  const guestsPerRecipe = recipeVolumeMl / (dish.serving || 280);
+  const mult = totalGuests / guestsPerRecipe;
+  return dish.recipeIngredients.map((ing: any) => ({
+    name: ing.name,
+    amount: Math.round(ing.amount * mult),
+    unit: ing.unit || 'g',
+    source: ing.source || '',
+  }));
+}
+
+export function diffStr(d: any) {
+  const req = calcRequired(d);
+  const diff = Math.round((d.stock - req) * 10) / 10;
+  return { diff, str: (diff >= 0 ? '+' : '') + diff + 'L', cls: diff < 0 ? 'stock-miss' : diff < 5 ? 'stock-low' : 'stock-ok' };
+}
+
+export function storageBadge(s: any) {
+  const m: any = { Gastro:'b-gastro', Frozen:'b-frozen', 'Vac-packed':'b-vacpack' };
+  return `<span class="badge ${m[s] || 'b-gastro'}">${s}</span>`;
+}
+export function storageBadgeClass(s: any) {
+  const m: any = { Gastro:'b-gastro', Frozen:'b-frozen', 'Vac-packed':'b-vacpack' };
+  return 'badge ' + (m[s] || 'b-gastro');
+}
+export function cycleStorage(id: any) {
+  const d = S.batches.find((x: any) => x.id === id);
+  if (!d) return;
+  const idx = STORAGE.indexOf(d.storage || 'Gastro');
+  d.storage = STORAGE[(idx + 1) % STORAGE.length];
+  scheduleSave();
+  (window as any).rerenderCurrentView?.();
+}
+export function logisticsBadge(d: any) {
+  const loc = d.location || 'west';
+  const label = loc === 'centraal' ? 'Sering Centraal' : 'Sering West';
+  if (d.inTransit) {
+    const cls = loc === 'centraal' ? 'b-twc' : 'b-tww';
+    return `<span class="badge ${cls}">&rarr; ${label}</span>`;
+  }
+  return `<span class="badge ${loc === 'centraal' ? 'b-centraal' : 'b-west'}">${label}</span>`;
+}
+export function logisticsBadgeClass(d: any) {
+  const loc = d.location || 'west';
+  if (d.inTransit) return 'badge ' + (loc === 'centraal' ? 'b-twc' : 'b-tww');
+  return 'badge ' + (loc === 'centraal' ? 'b-centraal' : 'b-west');
+}
+export function logisticsShort(d: any) {
+  const loc = d.location || 'west';
+  const label = loc === 'centraal' ? 'Sering Centraal' : 'Sering West';
+  if (d.inTransit) return '\u2192 ' + label;
+  return label;
+}
+export function cycleLocation(id: any) {
+  const d = S.batches.find((x: any) => x.id === id);
+  if (!d) return;
+  if (d.location === 'west') d.location = 'centraal';
+  else d.location = 'west';
+  d.inTransit = false;
+  rebuildPlanner();
+  scheduleSave();
+  (window as any).rerenderCurrentView?.();
+}
+
+// ── SERVED / ARCHIVE ─────────────────────────────────────
+export function openServedDialog(id: any) {
+  const d = S.batches.find((x: any) => x.id === id);
+  if (!d) return;
+  showModal(`<h3>Mark "${esc(d.name)}" as served</h3>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">This will remove it from the menu planner. Optionally rate it first:</p>
+    <div class="fr"><label>Skill required (1-5)</label>
+      <div class="rating-row" id="rate-skill">${ratingButtons('skill',0)}</div>
+    </div>
+    <div class="fr"><label>Speed of prep (1-5)</label>
+      <div class="rating-row" id="rate-speed">${ratingButtons('speed',0)}</div>
+    </div>
+    <div class="fr"><label>Banger rating (1-5)</label>
+      <div class="rating-row" id="rate-banger">${ratingButtons('banger',0)}</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="archiveDish('${d.id}',false)">Skip rating</button>
+      <button class="btn btn-primary" onclick="archiveDish('${d.id}',true)">Save &amp; archive</button>
+    </div>`);
+}
+
+export let pendingRatings: any = { skill:0, speed:0, banger:0 };
+
+export function ratingButtons(key: any, val: any) {
+  pendingRatings[key] = val;
+  return [1,2,3,4,5].map(n =>
+    `<button class="rating-btn${n <= val ? ' on' : ''}" onclick="setRating('${key}',${n})">${n}</button>`
+  ).join('');
+}
+
+export function setRating(key: any, val: any) {
+  pendingRatings[key] = val;
+  document.getElementById('rate-'+key)!.innerHTML = ratingButtons(key, val);
+}
+
+export function archiveDish(id: any, withRating: any) {
+  const d = S.batches.find((x: any) => x.id === id);
+  if (!d) return;
+  const rating = withRating ? { ...pendingRatings } : null;
+  // Store in archive (in state for now)
+  if (!S.archive) S.archive = [];
+  S.archive.push({
+    id: d.id,
+    name: d.name,
+    recipeSheetId: d.recipeSheetId || null,
+    type: d.type,
+    cookedDate: d.cookDate || null,
+    archivedDate: dateToStr(getToday()),
+    rating,
+  });
+  // Update recipe index with running average of ratings
+  if (rating && d.recipeSheetId) {
+    const ri = S.recipeIndex.find((r: any) => r.recipeSheetId === d.recipeSheetId);
+    if (ri) {
+      const n = ri.timesServed || 0;
+      const newN = n + 1;
+      ri.avgSkill = ((ri.avgSkill || 0) * n + (rating.skill || 0)) / newN;
+      ri.avgSpeed = ((ri.avgSpeed || 0) * n + (rating.speed || 0)) / newN;
+      ri.avgBanger = ((ri.avgBanger || 0) * n + (rating.banger || 0)) / newN;
+      ri.timesServed = newN;
+      // Save updated recipe index entry
+      apiPost('/api/recipe-index', ri).catch((e: any) => console.error('Failed to update recipe ratings:', e));
+    }
+  }
+  // Remove from active dishes
+  S.batches = S.batches.filter((x: any) => x.id !== id);
+  pendingRatings = { skill:0, speed:0, banger:0 };
+  closeModal();
+  rebuildPlanner();
+  (window as any).rerenderCurrentView?.();
+  scheduleSave();
+  toast(esc(d.name) + ' archived');
+}
+export function typeBadge(t: any) {
+  if (t === 'Dessert') return `<span class="badge b-dessert">Dessert</span>`;
+  return `<span class="badge ${t === 'Soup' ? 'b-soup' : 'b-main'}">${t}</span>`;
+}
+export function typeBadgeClass(t: any) {
+  if (t === 'Dessert') return 'badge b-dessert';
+  return 'badge ' + (t === 'Soup' ? 'b-soup' : 'b-main');
+}
+export const TYPES = ['Soup','Main course','Dessert'];
+export function cycleType(id: any) {
+  const d = S.batches.find((x: any) => x.id === id);
+  if (!d) return;
+  const idx = TYPES.indexOf(d.type || 'Soup');
+  d.type = TYPES[(idx + 1) % TYPES.length];
+  scheduleSave();
+  (window as any).rerenderCurrentView?.();
+}
+export function toggleOrder(id: any) {
+  const d = S.batches.find((x: any) => x.id === id);
+  if (!d) return;
+  d.orderFor = !d.orderFor;
+  scheduleSave();
+  (window as any).rerenderCurrentView?.();
+}
+export function chipClass(d: any) {
+  if (d.inTransit) return 'chip-tr';
+  if (d.type === 'Soup') return 'chip-soup';
+  if (d.type === 'Dessert') return 'chip-dessert';
+  return 'chip-main';
+}
+
+// ── Date utilities (defined here to avoid circular deps with dishes.ts) ──
+
+export function getToday() {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+export function dateToStr(d: any) {
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const yyyy = d.getFullYear();
+  return dd+'/'+mm+'/'+yyyy;
+}
+
+export function strToDate(s: any) {
+  if (!s) return null;
+  // handle dd/mm/yyyy
+  const parts = s.split('/');
+  if (parts.length === 3) return new Date(parseInt(parts[2]), parseInt(parts[1])-1, parseInt(parts[0]));
+  // handle yyyy-mm-dd (legacy)
+  return new Date(s);
+}
+
+// ═══════════════════════════════════════════════════════════════════

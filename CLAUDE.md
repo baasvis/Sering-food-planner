@@ -1,34 +1,43 @@
 # CLAUDE.md — Sering Food Planner
 
 ## Stack
-- Node.js/Express server, vanilla JS frontend (no build step, no bundler)
-- All frontend JS files loaded as `<script>` tags — functions are global
-- PostgreSQL database via Prisma ORM, Google Sign-In for auth
-- Google Sheets API used for external recipe sheet reading only (lib/recipe-sheets.js)
-- Hosted on Railway (auto-deploy from main branch, Postgres plugin)
+- **Backend**: Node.js/Express server in TypeScript, compiled to CommonJS for production
+- **Frontend**: TypeScript ES modules bundled by Vite (dev: HMR on :5173, prod: static bundle)
+- **Database**: PostgreSQL via Prisma ORM, Google Sign-In for auth
+- **Google Sheets API**: used for external recipe sheet reading only (lib/recipe-sheets.ts)
+- **Hosting**: Railway (auto-deploy from main branch, Postgres plugin)
 
 ## Project Structure
 ```
-server.js              — Express app entry point, mounts routers, global error handler
+server.ts              — Express entry point (starts listening)
+app.ts                 — Express app, mounts routers, global error handler
+shared/
+  types.ts             — Shared interfaces (Batch, Service, Ingredient, etc.) used by both backend & frontend
+types/
+  express.d.ts         — Express Request augmentation (req.user)
+  globals.d.ts         — DOM type augmentations
+  multer.d.ts          — Multer module declaration
 lib/
-  config.js            — Configuration, env vars
-  db.js                — Prisma client, row transformers, dbReadAll/dbWriteAll, validators
-  recipe-sheets.js     — Google Sheets client (external recipe reading only)
-  hanos-parser.js      — Hanos quantity parser (hoeveelheid → grams)
+  config.ts            — Configuration, env vars
+  db.ts                — Prisma client, row transformers, dbReadAll/dbWriteAll, validators
+  recipe-sheets.ts     — Google Sheets client (external recipe reading only)
+  hanos-parser.ts      — Hanos quantity parser (hoeveelheid → grams)
 routes/
-  auth.js              — Login, logout, session, requireAuth middleware
-  data.js              — GET/POST /api/data + POST /api/data/patch (main planner state)
-  batches.js           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
-  recipes.js           — Recipe index CRUD + single recipe fetch
-  ingredients.js       — Ingredient CRUD + stock management
-  ingredients-import.js — Hanos XLSX upload + CSV migration
-  guests.js            — Guest history + next-weeks predictions
-  inventory.js         — Standard inventory (per-location) + storage config + prep checklist + activity log
-  feedback.js          — User feedback
-  events.js            — SSE live sync: client registry, broadcast to other users on save
-  health.js            — Health check endpoint
+  auth.ts              — Login, logout, session, requireAuth middleware
+  data.ts              — GET/POST /api/data + POST /api/data/patch (main planner state)
+  batches.ts           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
+  recipes.ts           — Recipe index CRUD + single recipe fetch
+  ingredients.ts       — Ingredient CRUD + stock management
+  ingredients-import.ts — Hanos XLSX upload + CSV migration
+  guests.ts            — Guest history + next-weeks predictions
+  inventory.ts         — Standard inventory (per-location) + storage config + prep checklist + activity log
+  feedback.ts          — User feedback
+  events.ts            — SSE live sync: client registry, broadcast to other users on save
+  health.ts            — Health check endpoint
+  hanos.ts             — Hanos OCC v2 API client (OAuth, cart, product lookup)
+  finance.ts           — Finance revenue endpoints
 public/
-  index.html           — Shell HTML + login screen (nav generated from NAV_SCREENS)
+  index.html           — Shell HTML + login screen (single module entry point)
   css/
     base.css           — Variables, resets, layout, shared components, modals
     dashboard.css      — Dashboard cards, prep checklist, team todos
@@ -36,35 +45,54 @@ public/
     planner.css        — Week grid, dish list, slots, inventory, cook workflow
     orders.css         — Order tabs, ingredient tables, ingredient DB styles
     recipes.css        — Recipe index table
+    finance.css        — Finance dashboard styles
     feedback.css       — Feedback FAB and form
     tutorial.css       — Tutorial overlay and tooltips
     mobile.css         — All mobile/responsive overrides, bottom nav
   js/
-    state.js           — Constants (DAYS, MEALS, etc.) + NAV_SCREENS + storage config helpers + global state object S
-    auth.js            — Google Sign-In, sessions
-    utils.js           — API helpers (apiGet/apiPost), save system, toast, prep checklist, SSE live sync client
-    core.js            — rebuildPlanner, calcRequired, diffStr, badges, isServicePast
-    dashboard.js       — showScreen(), Dashboard screen
-    predictions.js     — Guest prediction from POS CSV data
-    guests.js          — Guest count tables
-    planner.js         — Week plan grid + transport + inventory modal
-    dishes.js          — Dish list + cook workflow + CRUD
-    caterings.js       — Catering events
-    recipes.js         — Recipe index/library
-    orders.js          — Order overview (combined, standard inventory, dish ingredients tabs)
-    ingredient-db.js   — Ingredient database editor + supplier import
-    feedback.js        — Feedback form
-    tutorial.js        — Guided tutorial system
-    init.js            — Modal system, esc helper, buildNav(), beforeunload guard, initApp (MUST load last)
+    main.ts            — Entry point: imports all modules, assigns onclick functions to window
+    state.ts           — Constants, NAV_SCREENS, storage config helpers, global state object S
+    auth.ts            — Google Sign-In, sessions
+    utils.ts           — API helpers (apiGet/apiPost), save system, toast, prep checklist, SSE
+    core.ts            — rebuildPlanner, calcRequired, diffStr, badges, isServicePast
+    dashboard.ts       — showScreen(), Dashboard screen
+    predictions.ts     — Guest prediction from POS CSV data
+    guests.ts          — Guest count tables
+    planner.ts         — Week plan grid + transport + inventory modal
+    dishes.ts          — Dish list + cook workflow + CRUD
+    caterings.ts       — Catering events
+    recipes.ts         — Recipe index/library
+    orders.ts          — Order overview (combined, standard inventory, dish ingredients tabs)
+    ingredient-db.ts   — Ingredient database editor + supplier import
+    finance.ts         — Finance screen (revenue dashboard, sync, week nav)
+    feedback.ts        — Feedback form
+    feedback-admin.ts  — Feedback admin screen
+    tutorial.ts        — Guided tutorial system
+    init.ts            — Modal system, esc helper, buildNav(), beforeunload guard, initApp
+test/
+  api.test.ts          — API integration tests (Jest + @swc/jest)
+tsconfig.json          — Frontend TypeScript config (ESNext modules, DOM libs)
+tsconfig.server.json   — Backend TypeScript config (CommonJS output to dist/server/)
+vite.config.ts         — Vite config (root: public/, proxy /api to :3000, @shared alias)
 ```
 
-## Script Load Order
-Scripts must load in the order listed in index.html. Earlier scripts define globals used by later ones.
-Key chain: `state.js` -> `auth.js` -> `utils.js` -> `core.js` -> [feature files] -> `init.js` (last)
+## Build & Dev
+
+```bash
+npm run dev            # Vite on :5173 (frontend HMR) + tsx on :3000 (backend)
+npm run build          # Vite build + tsc backend → dist/
+npm start              # node dist/server/server.js (production)
+npm test               # Jest with @swc/jest (39 API tests)
+npm run typecheck      # tsc --noEmit on backend
+```
+
+Requires `DATABASE_URL` env var pointing to PostgreSQL.
+Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 
 ## Conventions
-- All frontend functions are global (no modules, no import/export)
-- State lives in the global `S` object (defined in state.js)
+- Frontend uses ES module imports/exports, bundled by Vite
+- Functions referenced in inline `onclick=""` handlers are assigned to `window` in `main.ts`
+- State lives in the global `S` object (defined in state.ts)
 - Each screen has a render function: `renderDashboard()`, `renderOrders()`, etc.
 - `rerenderCurrentView()` refreshes the active screen
 - `scheduleSave()` debounces auto-save to PostgreSQL
@@ -72,15 +100,16 @@ Key chain: `state.js` -> `auth.js` -> `utils.js` -> `core.js` -> [feature files]
 - Location keys: "west", "centraal" (in data), "Sering West"/"Sering Centraal" (display)
 - Server writes use `withWriteLock()` to serialize concurrent writes
 - Prisma schema in `prisma/schema.prisma` — run `npx prisma migrate dev` after changes
-- Navigation screens defined in `NAV_SCREENS` array (state.js) — add new screens there, not in HTML
+- Navigation screens defined in `NAV_SCREENS` array (state.ts) — add new screens there, not in HTML
 - CSS split into per-screen files in `public/css/` — add new screen styles to the matching file
+- Shared types in `shared/types.ts` — used by both backend and frontend via `@shared` alias (Vite) or relative import (backend)
 
 ## Search/Filter Input Rule
 When a search or filter input triggers a re-render, **never replace the input's own DOM element**.
 Use the split-container pattern: put results in a separate `<div id="xxx-results">` and only update that.
 - Screen-level: render the search input once in the parent, update only `#results-container.innerHTML`
 - Modal-level: on first open call `showModal()` with full HTML; on subsequent updates check for an existing element (e.g. `document.getElementById('my-list')`) and only replace the list innerHTML
-- See `recipes.js` (`renderRecipeIndex` + `updateRecipeResults`) and `planner.js` (`renderAddModal`) for examples
+- See `recipes.ts` (`renderRecipeIndex` + `updateRecipeResults`) and `planner.ts` (`renderAddModal`) for examples
 
 ## Key Data Flow
 - `GET /api/data` returns `{batches, guests, recipeIndex, caterings, transportItems}`
@@ -94,24 +123,14 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Ingredient stock endpoints: `/api/ingredients/stock`, `/api/ingredients/stock/bulk`
 - Ingredient migration: `POST /api/ingredients/migrate` (accepts oldCsv + hanosCsv, supports `?dryRun=true`)
 - Ingredient DB stores JSON fields: `types`, `storageLocations`, `stock`, `nutrition`, `priceHistory` (Prisma Json type)
-- Ingredient constants in state.js: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `PRICE_LEVELS`
+- Ingredient constants in state.ts: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `PRICE_LEVELS`
 - Storage config: `GET/POST /api/storage-config` — per-location areas with colors, order, and spots (persisted as JSON)
 - `STORAGE_CATEGORIES` is dynamically rebuilt from `S.storageConfig` via `rebuildStorageCategories(loc)`
 - Standard inventory: `GET/POST /api/standard-inventory?location=west|centraal` — per-location weekly base order
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
-- Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.js sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders.
-
-## Running
-```bash
-npm start          # port 3000 by default
-```
-Requires `DATABASE_URL` env var pointing to PostgreSQL.
-Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
+- Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.ts sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders.
 
 ## Don't
-- Don't add a build step or bundler
-- Don't use import/export in frontend files
 - Don't change the Prisma schema without creating a migration (`npx prisma migrate dev`)
 - After any migration, always verify `prisma/schema.prisma` matches the DB: run `npx prisma db pull` then `npx prisma generate`, and ensure all fields use camelCase with `@map("snake_case")`. Commit the updated schema in the same PR.
-- Don't break the script load order in index.html
 - Don't remove withWriteLock from write endpoints

@@ -2,14 +2,17 @@
   "name": "sering-food-planner",
   "version": "2.0.0",
   "description": "De Sering food planning app",
-  "main": "server.js",
+  "main": "dist/server/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "node dist/server/server.js",
+    "dev": "concurrently \"npx vite --config vite.config.ts\" \"npx tsx watch server.ts\"",
+    "dev:server": "npx tsx watch server.ts",
+    "build": "npx vite build --config vite.config.ts && npx tsc -p tsconfig.server.json",
     "postinstall": "prisma generate && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install --with-deps chromium",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "node prisma/seed.js",
-    "test": "jest --forceExit --detectOpenHandles"
+    "test": "jest --forceExit --detectOpenHandles",
+    "typecheck": "npx tsc -p tsconfig.server.json --noEmit"
   },
   "prisma": {
     "seed": "node prisma/seed.js"
@@ -25,11 +28,30 @@
     "prisma": "^6.19.2",
     "xlsx": "^0.18.5"
   },
+  "jest": {
+    "transform": {
+      "^.+\\.ts$": [
+        "@swc/jest"
+      ]
+    },
+    "testMatch": [
+      "**/test/**/*.test.ts"
+    ]
+  },
   "engines": {
     "node": ">=18.0.0"
   },
   "devDependencies": {
+    "@swc/core": "^1.15.21",
+    "@swc/jest": "^0.2.39",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "@types/supertest": "^7.2.0",
+    "concurrently": "^9.2.1",
     "jest": "^30.3.0",
-    "supertest": "^7.2.2"
+    "supertest": "^7.2.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3"
   }
 }

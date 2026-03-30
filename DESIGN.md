@@ -71,7 +71,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 
 ### Food Planner (v1 — live in production)
 - **Repo**: https://github.com/baasvis/Sering-food-planner
-- **Stack**: Node.js/Express, vanilla JS (split into 12 module files), Google Sheets as DB
+- **Stack**: Node.js/Express + TypeScript, frontend TypeScript ES modules bundled by Vite, PostgreSQL via Prisma
 - **Hosting**: Railway (auto-deploy from GitHub)
 - **Auth**: Google Sign-In with allowed email list
 
@@ -120,54 +120,67 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 
 **File structure:**
 ```
-server.js              — Express app entry point, mounts routers (~65 lines)
+server.ts              — Express entry point (starts listening)
+app.ts                 — Express app, mounts routers, global error handler
+shared/
+  types.ts             — Shared interfaces used by both backend & frontend
+types/
+  express.d.ts         — Express Request augmentation (req.user)
+  globals.d.ts         — DOM type augmentations
+  multer.d.ts          — Multer module declaration
 lib/
-  config.js            — Configuration, env vars, file paths
-  sheets.js            — Google Sheets client, row converters, validation, write lock
+  config.ts            — Configuration, env vars
+  db.ts                — Prisma client, row transformers, validators
+  recipe-sheets.ts     — Google Sheets client (external recipe reading only)
+  hanos-parser.ts      — Hanos quantity parser
 routes/
-  auth.js              — Login, logout, session, requireAuth middleware
-  data.js              — GET/POST /api/data (main planner state)
-  recipes.js           — Recipe index CRUD + single recipe fetch
-  ingredients.js       — Ingredient CRUD + Hanos XLSX parser + upload
-  guests.js            — Guest history + next-weeks predictions
-  inventory.js         — Standard inventory + prep checklist + activity log
-  feedback.js          — User feedback
-  hanos.js             — Hanos OCC v2 API client (OAuth, cart, add-to-cart) + Express routes
-  events.js            — SSE live sync: client registry, broadcast patches to other users
-  finance.js           — Finance revenue endpoints (GET revenue, POST sync, GET sync-status)
-  health.js            — Health check endpoint
+  auth.ts              — Login, logout, session, requireAuth middleware
+  data.ts              — GET/POST /api/data + POST /api/data/patch (main planner state)
+  batches.ts           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
+  recipes.ts           — Recipe index CRUD + single recipe fetch
+  ingredients.ts       — Ingredient CRUD + stock management
+  ingredients-import.ts — Hanos XLSX upload + CSV migration
+  guests.ts            — Guest history + next-weeks predictions
+  inventory.ts         — Standard inventory + storage config + prep checklist + activity log
+  feedback.ts          — User feedback
+  hanos.ts             — Hanos OCC v2 API client (OAuth, cart, add-to-cart) + Express routes
+  events.ts            — SSE live sync: client registry, broadcast patches to other users
+  finance.ts           — Finance revenue endpoints (GET revenue, POST sync, GET sync-status)
+  health.ts            — Health check endpoint
 public/
-  index.html           — HTML shell + login screen (~75 lines)
-  style.css            — All CSS styles (~620 lines)
+  index.html           — Shell HTML + login screen (single module entry point)
+  css/                 — Per-screen CSS files (base, dashboard, guests, planner, orders, recipes, finance, feedback, tutorial, mobile)
   js/
-    state.js           — Constants, app state
-    auth.js            — Google Sign-In, sessions
-    utils.js           — API, save system, toast, ingredient DB loading
-    core.js            — Planner rebuild, calculations, badges, served/archive
-    dashboard.js       — Dashboard screen
-    predictions.js     — CSV parsing (Tebi + Lightspeed), categorization, prediction engine, shared day-navigation helpers
-    guests.js          — Guest counts screen, upload UI, predictions display
-    planner.js         — Week plan: sub-tabs, location grids, batch pool, assign mode, transport view, add-dish modal
-    dishes.js          — Dish rows, overview, cook workflow, inline editing
-    caterings.js       — Caterings CRUD, dish picker, auto-calculated requirements
-    recipes.js         — Recipe index screen
-    orders.js          — Order overview (3-tab: Combined Order / Standard Inventory / Dish Ingredients)
-    ingredient-db.js   — Ingredient database editor + supplier import
-    finance.js         — Finance screen (revenue dashboard, sync, week nav)
-    feedback.js        — Feedback button and form
-    feedback-admin.js  — Feedback admin screen (view, filter, export)
-    tutorial.js        — Interactive guided tutorial system
-    init.js            — Modal, HTML escape, app init
-data/
-  standard-inventory.json  — Standard inventory (gitignored, persisted on server)
+    main.ts            — Entry point: imports all modules, assigns onclick functions to window
+    state.ts           — Constants, NAV_SCREENS, storage config helpers, global state object S
+    auth.ts            — Google Sign-In, sessions
+    utils.ts           — API helpers, save system, toast, prep checklist, SSE live sync client
+    core.ts            — Planner rebuild, calculations, badges, served/archive
+    dashboard.ts       — showScreen(), Dashboard screen
+    predictions.ts     — CSV parsing, prediction engine, day-navigation helpers
+    guests.ts          — Guest counts screen, upload UI, predictions display
+    planner.ts         — Week plan: sub-tabs, location grids, batch pool, assign mode, transport view
+    dishes.ts          — Dish list + cook workflow + CRUD
+    caterings.ts       — Caterings CRUD, dish picker, auto-calculated requirements
+    recipes.ts         — Recipe index screen
+    orders.ts          — Order overview (combined, standard inventory, dish ingredients tabs)
+    ingredient-db.ts   — Ingredient database editor + supplier import
+    finance.ts         — Finance screen (revenue dashboard, sync, week nav)
+    feedback.ts        — Feedback button and form
+    feedback-admin.ts  — Feedback admin screen (view, filter, export)
+    tutorial.ts        — Interactive guided tutorial system
+    init.ts            — Modal system, esc helper, buildNav(), beforeunload guard, initApp
 seeds/
   ingredients.json     — Master ingredient database (~2,100 items, seed for first deploy)
   standard-inventory.json  — Default weekly base order (~140 items)
 scripts/
   tebi-scraper.js          — Playwright scraper: logs into Tebi POS, captures auth, fetches revenue/sales via internal API
   tebi-sync-worker.js      — Sync worker: runs scraper + upserts results to PostgreSQL DailyRevenue table
-  migrate-ingredients.js   — One-time ingredient migration utility
-  import-standard-inventory.js — One-time standard inventory import
+test/
+  api.test.ts          — API integration tests (Jest + @swc/jest)
+tsconfig.json          — Frontend TypeScript config
+tsconfig.server.json   — Backend TypeScript config (CommonJS output to dist/server/)
+vite.config.ts         — Vite config (root: public/, proxy /api to :3000)
 .env                   — Local environment variables (gitignored)
 CLAUDE.md              — Claude Code project instructions
 DESIGN.md              — This document
@@ -276,25 +289,17 @@ The order of everything below is flexible. Build thin slices first, deepen based
 
 ## 5. Technical Architecture Evolution
 
-### Current: Simple Monolith (good for many more modules)
+### Current: TypeScript Monolith with Vite
 ```
-Browser ←→ Express Server ←→ Google Sheets (dishes, guests, recipes, ingredient DB, guest history, next-week guests)
-                            ←→ data/ JSON files (standard inventory)
+Browser (Vite-bundled TS) ←→ Express Server (TypeScript) ←→ PostgreSQL (Prisma ORM)
+                                                          ←→ Google Sheets (recipe imports only)
 ```
-- Single Node.js app on Railway
-- Google Sheets as database
-- Vanilla JS frontend, 12+ module files
-- Good for: food planner + drinks + tasks + basic finance + non-food inventory
-
-### When Needed: Database Migration ← triggered by full finance module
-```
-Browser ←→ Express Server ←→ PostgreSQL (primary data)
-                            ←→ Google Sheets (recipe imports, ingredient DB)
-```
-- Add PostgreSQL on Railway when we need real queries, aggregations, audit trails
-- Likely trigger: finance module going beyond simple revenue tracking
-- Migrate operational data; keep Google Sheets for recipe/ingredient imports
-- Stack unchanged: Node.js + Express + vanilla JS
+- Single Node.js/TypeScript app on Railway
+- PostgreSQL via Prisma ORM (migrated from Google Sheets, March 2026)
+- Frontend: TypeScript ES modules bundled by Vite (HMR in dev, static bundle in prod)
+- Backend: TypeScript compiled to CommonJS via tsc
+- Shared type definitions between frontend and backend (`shared/types.ts`)
+- Good for: food planner + drinks + tasks + finance + non-food inventory + more
 
 ### When Needed: User Roles ← triggered by scheduling or multi-location growth
 ```
@@ -305,11 +310,11 @@ Same architecture + role-based access control
 - **Staff**: own schedule, own location's operations, read access to organisation-wide data
 - **Cook/FOH**: operational tools for their role + transparency views
 
-### When Needed: Frontend Framework ← only if vanilla JS becomes a genuine bottleneck
+### When Needed: Frontend Framework ← only if vanilla TS + Vite becomes a genuine bottleneck
 ```
-Browser (React/Next.js) ←→ API Server ←→ PostgreSQL + Google Sheets
+Browser (React/Next.js) ←→ API Server ←→ PostgreSQL
 ```
-- Switch only if vanilla JS genuinely becomes a bottleneck (15+ complex screens with shared state)
+- Switch only if vanilla TS genuinely becomes a bottleneck (15+ complex screens with shared state)
 - Next.js — Claude knows it best, huge ecosystem
 - Gradual migration: one screen at a time
 - Same API server underneath
@@ -367,20 +372,21 @@ All chosen for: (1) Claude compatibility, (2) stability, (3) readability by non-
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
-| Frontend | Vanilla JS → React/Next.js when needed | No build step now. Claude knows it perfectly. Migrate later if complexity demands. |
-| Backend | Node.js + Express | Most common web server. Massive ecosystem. Claude's strongest language. |
-| Database | Google Sheets → PostgreSQL | Sheets now (simple, good enough). Postgres when we need real queries (Phase 3). |
+| Language | TypeScript (full stack) | Type safety across frontend + backend. Shared interfaces. Catches bugs at compile time. |
+| Frontend | TypeScript ES modules + Vite | Vite bundles & provides HMR in dev, static bundle in prod. React/Next.js if complexity demands later. |
+| Backend | Node.js + Express + TypeScript | Most common web server. tsx for dev, tsc for prod build. |
+| Database | PostgreSQL via Prisma ORM | Real queries, migrations, type-safe client. Google Sheets for recipe imports only. |
 | Hosting | Railway | One-click deploy + database. Affordable. EU servers available. |
 | Auth | Google Sign-In | Everyone has Google. Zero password management. |
 | Version control | GitHub | Industry standard. |
-| Language | JavaScript → TypeScript later | One language front + back. TypeScript adds safety when codebase grows. |
+| Testing | Jest + @swc/jest | Fast TypeScript test transpilation. API integration tests. |
 
 ### Code Standards
 - English for all code, comments, variable names
 - UI text in English (team uses English internally)
-- File names match purpose: drinks.js, scheduling.js, finance.js
-- Each screen/module in its own JS file
-- Shared utilities in utils.js and core.js
+- File names match purpose: drinks.ts, scheduling.ts, finance.ts
+- Each screen/module in its own TS file with explicit imports/exports
+- Shared utilities in utils.ts and core.ts, shared types in shared/types.ts
 - Server routes grouped by module
 - Commit messages explain what AND why
 - Lots of inline comments explaining business logic
