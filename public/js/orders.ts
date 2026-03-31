@@ -1624,7 +1624,7 @@ export function renderStocktakeArea() {
             ${breakdownLines}
           </div>
           <div style="width:55px;text-align:center;flex-shrink:0;">
-            <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill !== '' ? prefill : ''}" placeholder="\u2014" style="width:50px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="stocktakeValues['${esc(ing.id)}']=this.value===''?undefined:parseFloat(this.value);updateStocktakeToOrder(this)" />
+            <input class="order-stock-input stocktake-input" type="number" min="0" step="0.5" value="${prefill !== '' ? prefill : ''}" placeholder="\u2014" style="width:50px;font-size:15px;text-align:center;" data-ing-id="${esc(ing.id)}" oninput="updateStocktakeToOrder(this)" />
           </div>
           <div style="width:65px;font-size:10px;color:var(--text2);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(unitSuffix)}</div>
           <div class="stocktake-to-order" style="width:90px;text-align:right;font-size:12px;" data-needed-base="${ing.neededBase}" data-order-unit-size="${ing.orderUnitSize || 0}" data-unit="${esc(ing.unit || 'g')}" data-order-unit="${esc(ing.orderUnit || '')}">
@@ -1672,6 +1672,9 @@ export function updateStocktakeToOrder(input: any) {
   const row = input.closest('.stocktake-row');
   const toOrderCell = row.querySelector('.stocktake-to-order');
   if (!toOrderCell) return;
+  // Record value into module-level stocktakeValues (inline oninput can't access module scope)
+  const ingId = input.dataset.ingId;
+  if (ingId) stocktakeValues[ingId] = input.value === '' ? undefined : parseFloat(input.value);
   // Empty input = not counted
   if (input.value === '') {
     toOrderCell.innerHTML = '<span style="color:var(--text2);font-style:italic;">not counted</span>';
