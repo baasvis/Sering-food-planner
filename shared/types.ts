@@ -2,20 +2,61 @@
 // SHARED TYPES — used by both backend and frontend
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── String literal unions ──
+
+export type Location = 'west' | 'centraal';
+export type Meal = 'lunch' | 'dinner';
+export type DishType = 'Soup' | 'Main course' | 'Dessert';
+export type StorageType = 'Gastro' | 'Frozen' | 'Vac-packed';
+export type SaveState = 'saved' | 'unsaved' | 'saving' | 'error';
+
+// ── Recipe ingredients (from Google Sheets import) ──
+
+export interface RecipeIngredient {
+  name: string;
+  amount: number;
+  unit: string;
+  source?: string;
+  cost?: number;
+}
+
+// ── Catering dish reference ──
+
+export interface CateringDish {
+  dishId: string;
+  name: string;
+  type: DishType | string;
+}
+
+// ── Storage config (per-location) ──
+
+export interface StorageArea {
+  name: string;
+  color: string;
+  spots: string[];
+  order?: number;
+}
+
+export interface StorageConfig {
+  [location: string]: StorageArea[];
+}
+
+// ── Core data types ──
+
 export interface Service {
-  loc: 'west' | 'centraal';
+  loc: Location;
   date: string;        // "YYYY-MM-DD"
-  meal: 'lunch' | 'dinner';
+  meal: Meal;
 }
 
 export interface Batch {
   id: string;
   name: string;
-  type: 'Soup' | 'Main course' | 'Dessert';
+  type: DishType;
   stock: number;
   serving: number;
-  storage: 'Gastro' | 'Frozen' | 'Vac-packed';
-  location: 'west' | 'centraal';
+  storage: StorageType;
+  location: Location;
   inTransit: boolean;
   allergens: string[];
   extraAllergens: string[];
@@ -23,7 +64,7 @@ export interface Batch {
   cookDate: string | null;
   recipeSheetId: string | null;
   recipeVolume: number | null;
-  recipeIngredients: unknown;
+  recipeIngredients: RecipeIngredient[] | null;
   parentId: string | null;
   note: string;
   services: Service[];
@@ -47,7 +88,7 @@ export interface Catering {
   date: string | null;
   guestCount: number;
   deliveryMode: string;
-  dishes: unknown[];
+  dishes: CateringDish[];
   logisticsNotes: string;
   createdAt?: string;
 }
@@ -69,12 +110,24 @@ export interface RecipeEntry {
   servingTemp: string;
   servingSize: number;
   recipeVolume: number | null;
-  recipeIngredients: unknown;
+  recipeIngredients: RecipeIngredient[] | null;
   createdAt: string;
   avgSkill: number;
   avgSpeed: number;
   avgBanger: number;
   timesServed: number;
+}
+
+// ── Ingredient stock: location → amount (number) ──
+
+export interface LocationStock {
+  [location: string]: number;
+}
+
+// ── Ingredient storage locations: location → area name ──
+
+export interface StorageLocationMap {
+  [location: string]: string;
 }
 
 export interface Ingredient {
@@ -93,9 +146,9 @@ export interface Ingredient {
   priceLevel: string;
   pricePer100: number;
   priceAlert: boolean;
-  storageLocations: Record<string, unknown>;
-  stock: Record<string, unknown>;
-  targetStock: Record<string, unknown>;
+  storageLocations: StorageLocationMap;
+  stock: LocationStock;
+  targetStock: LocationStock;
   allergens: string;
   notes: string;
   active: boolean;
@@ -112,7 +165,15 @@ export interface AppUser {
   picture: string | null;
 }
 
-// API shapes
+// ── Ratings (for served dialog) ──
+
+export interface BatchRatings {
+  skill: number;
+  speed: number;
+  banger: number;
+}
+
+// ── API shapes ──
 
 export interface DataResponse {
   batches: Batch[];
@@ -130,4 +191,13 @@ export interface PatchRequest {
   deletedCaterings?: string[];
   transportItems?: TransportItem[];
   deletedTransportItems?: string[];
+}
+
+// ── Snapshot (for patch diffing) ──
+
+export interface SaveSnapshot {
+  batches: Map<string, string>;
+  guests: string;
+  caterings: Map<string, string>;
+  transportItems: Map<string, string>;
 }

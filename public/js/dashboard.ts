@@ -472,7 +472,7 @@ export function loadDayTodos() {
     S.heatChecked   = new Set(data.heat   || []);
     S.cookChecked   = new Set(data.cook   || []);
     S.customTodos   = data.custom || [];
-  } catch (e: any) {
+  } catch (e: unknown) {
     S.heatChecked = new Set();
     S.cookChecked = new Set();
     S.customTodos = [];

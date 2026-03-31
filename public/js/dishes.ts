@@ -838,7 +838,7 @@ export async function saveNewDish() {
       if (recipe.recipeVolume) newDish.recipeVolume = recipe.recipeVolume;
       if (recipe.ingredients) newDish.recipeIngredients = recipe.ingredients;
       toast('Recipe data loaded from Google Sheet');
-    } catch (e: any) { toastError('Could not fetch recipe: ' + e.message); }
+    } catch (e: unknown) { toastError('Could not fetch recipe: ' + (e instanceof Error ? e.message : 'Unknown error')); }
   }
   S.batches.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
@@ -947,7 +947,7 @@ export async function refreshRecipe(id: any) {
     scheduleSave();
     closeModal(); openEditDish(id);
     toast('Recipe refreshed from Google Sheet');
-  } catch (e: any) { toastError('Could not fetch recipe: ' + e.message); }
+  } catch (e: unknown) { toastError('Could not fetch recipe: ' + (e instanceof Error ? e.message : 'Unknown error')); }
 }
 
 export function saveEditDish(id: any) {

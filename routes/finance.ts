@@ -5,10 +5,10 @@
 import express, { Request, Response } from 'express';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/db';
+import type { Prisma } from '@prisma/client';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // In-memory sync state
 let syncProcess: ChildProcess | null = null;
@@ -47,9 +47,9 @@ router.get('/products', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'start and end query params required (YYYY-MM-DD)' });
   }
 
-  const where: any = { date: { gte: start as string, lte: end as string } };
-  if (location) where.location = location;
-  if (meal) where.meal = meal;
+  const where: Prisma.ProductRevenueWhereInput = { date: { gte: start as string, lte: end as string } };
+  if (location) where.location = location as string;
+  if (meal) where.meal = meal as string;
 
   const rows = await prisma.productRevenue.findMany({
     where,
@@ -57,7 +57,8 @@ router.get('/products', async (req: Request, res: Response) => {
   });
 
   if (groupBy === 'category') {
-    const categories: Record<string, any> = {};
+    interface CategoryAgg { productCategory: string; quantity: number; grossRevenue: number; netRevenue: number; products: number }
+    const categories: Record<string, CategoryAgg> = {};
     for (const row of rows) {
       const cat = row.productCategory || 'Other';
       if (!categories[cat]) {
@@ -69,12 +70,12 @@ router.get('/products', async (req: Request, res: Response) => {
       categories[cat].products += 1;
     }
     const result = Object.values(categories)
-      .map((c: any) => ({
+      .map((c) => ({
         ...c,
         grossRevenue: Math.round(c.grossRevenue * 100) / 100,
         netRevenue: Math.round(c.netRevenue * 100) / 100,
       }))
-      .sort((a: any, b: any) => b.grossRevenue - a.grossRevenue);
+      .sort((a, b) => b.grossRevenue - a.grossRevenue);
     return res.json(result);
   }
 

@@ -2,11 +2,12 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, PatchRequest, SaveSnapshot, SaveState, Location } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
 
-export function newId() {
+export function newId(): string {
   return crypto.randomUUID();
 }
 
@@ -14,14 +15,14 @@ export function newId() {
 // API + SAVE SYSTEM
 // ═══════════════════════════════════════════════════════════════════
 
-export async function apiGet(path: any) {
+export async function apiGet(path: string): Promise<any> {
   const r = await fetch(path);
   if (r.status === 401) { doLogout(); throw new Error('Session expired'); }
   if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || 'Request failed'); }
   return r.json();
 }
 
-export async function apiPost(path: any, body: any) {
+export async function apiPost(path: string, body: unknown): Promise<any> {
   const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
   if (r.status === 401) { doLogout(); throw new Error('Session expired'); }
   if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || 'Save failed'); }
@@ -29,88 +30,100 @@ export async function apiPost(path: any, body: any) {
 }
 
 // Save state management
-let saveTimer: any = null;
-export let saveState: any = 'saved'; // 'saved' | 'unsaved' | 'saving' | 'error'
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+export let saveState: SaveState = 'saved';
 let retryCount = 0;
 const MAX_RETRIES = 3;
 
-export function setSaveState(state: any, msg?: any) {
+const SAVE_STATE_LABELS: Record<SaveState, string> = {
+  saved: 'Saved',
+  unsaved: 'Unsaved',
+  saving: 'Saving...',
+  error: 'Save failed',
+};
+
+export function setSaveState(state: SaveState, msg?: string): void {
   saveState = state;
   const dot = document.getElementById('save-dot');
   const text = document.getElementById('save-text');
   if (!dot || !text) return;
   dot.className = 'save-dot ' + state;
-  text.textContent = msg || ({saved:'Saved',unsaved:'Unsaved',saving:'Saving...',error:'Save failed'} as any)[state];
+  text.textContent = msg || SAVE_STATE_LABELS[state];
 }
 
 // ── Snapshot diffing for patch saves ──
-let _lastSaved: any = { batches: new Map(), guests: '', caterings: new Map(), transportItems: new Map() };
+let _lastSaved: SaveSnapshot = { batches: new Map(), guests: '', caterings: new Map(), transportItems: new Map() };
 
-export function takeSnapshot() {
+export function takeSnapshot(): void {
   _lastSaved = {
-    batches: new Map(S.batches.map((d: any) => [d.id, JSON.stringify(d)])),
+    batches: new Map(S.batches.map((d: Batch) => [d.id, JSON.stringify(d)])),
     guests: JSON.stringify(S.guests),
-    caterings: new Map(S.caterings.map((c: any) => [c.id, JSON.stringify(c)])),
-    transportItems: new Map(S.transportItems.map((t: any) => [t.id, JSON.stringify(t)])),
+    caterings: new Map(S.caterings.map((c: Catering) => [c.id, JSON.stringify(c)])),
+    transportItems: new Map(S.transportItems.map((t: TransportItem) => [t.id, JSON.stringify(t)])),
   };
 }
 
-export function computePatch() {
-  const patch: any = { batches: [], deletedBatches: [], guests: null,
-                  caterings: [], deletedCaterings: [],
-                  transportItems: [], deletedTransportItems: [] };
+export function computePatch(): PatchRequest {
+  const patch: Required<PatchRequest> = {
+    batches: [], deletedBatches: [], guests: null,
+    caterings: [], deletedCaterings: [],
+    transportItems: [], deletedTransportItems: [],
+  };
 
   // Batches
-  const curBatchIds = new Set(S.batches.map((d: any) => d.id));
+  const curBatchIds = new Set(S.batches.map((d: Batch) => d.id));
   for (const d of S.batches) {
     const prev = _lastSaved.batches.get(d.id);
-    if (!prev || prev !== JSON.stringify(d)) patch.batches.push(d);
+    if (!prev || prev !== JSON.stringify(d)) patch.batches!.push(d);
   }
   for (const [id] of _lastSaved.batches) {
-    if (!curBatchIds.has(id)) patch.deletedBatches.push(id);
+    if (!curBatchIds.has(id)) patch.deletedBatches!.push(id);
   }
 
   // Guests (small fixed structure — send full if changed)
   if (JSON.stringify(S.guests) !== _lastSaved.guests) patch.guests = S.guests;
 
   // Caterings
-  const curCatIds = new Set(S.caterings.map((c: any) => c.id));
+  const curCatIds = new Set(S.caterings.map((c: Catering) => c.id));
   for (const c of S.caterings) {
     const prev = _lastSaved.caterings.get(c.id);
-    if (!prev || prev !== JSON.stringify(c)) patch.caterings.push(c);
+    if (!prev || prev !== JSON.stringify(c)) patch.caterings!.push(c);
   }
   for (const [id] of _lastSaved.caterings) {
-    if (!curCatIds.has(id)) patch.deletedCaterings.push(id);
+    if (!curCatIds.has(id)) patch.deletedCaterings!.push(id);
   }
 
   // Transport items
-  const curTrIds = new Set(S.transportItems.map((t: any) => t.id));
+  const curTrIds = new Set(S.transportItems.map((t: TransportItem) => t.id));
   for (const t of S.transportItems) {
     const prev = _lastSaved.transportItems.get(t.id);
-    if (!prev || prev !== JSON.stringify(t)) patch.transportItems.push(t);
+    if (!prev || prev !== JSON.stringify(t)) patch.transportItems!.push(t);
   }
   for (const [id] of _lastSaved.transportItems) {
-    if (!curTrIds.has(id)) patch.deletedTransportItems.push(id);
+    if (!curTrIds.has(id)) patch.deletedTransportItems!.push(id);
   }
 
   return patch;
 }
 
-export function patchIsEmpty(p: any) {
-  return p.batches.length === 0 && p.deletedBatches.length === 0 &&
+export function patchIsEmpty(p: PatchRequest): boolean {
+  return (!p.batches || p.batches.length === 0) &&
+         (!p.deletedBatches || p.deletedBatches.length === 0) &&
          p.guests === null &&
-         p.caterings.length === 0 && p.deletedCaterings.length === 0 &&
-         p.transportItems.length === 0 && p.deletedTransportItems.length === 0;
+         (!p.caterings || p.caterings.length === 0) &&
+         (!p.deletedCaterings || p.deletedCaterings.length === 0) &&
+         (!p.transportItems || p.transportItems.length === 0) &&
+         (!p.deletedTransportItems || p.deletedTransportItems.length === 0);
 }
 
-export function scheduleSave() {
+export function scheduleSave(): void {
   if (saveTimer) clearTimeout(saveTimer);
   setSaveState('unsaved');
   // Debounce: wait 1.5s after last change before saving
   saveTimer = setTimeout(doSave, 1500);
 }
 
-export async function doSave() {
+export async function doSave(): Promise<void> {
   if (saveState === 'saving') return;
   const patch = computePatch();
   if (patchIsEmpty(patch)) { setSaveState('saved'); return; }
@@ -124,7 +137,7 @@ export async function doSave() {
       const c = result.concurrent;
       toast(`${c.recentUser} saved ${c.agoSeconds < 60 ? c.agoSeconds + 's' : Math.round(c.agoSeconds/60) + 'min'} ago — consider reloading`);
     }
-  } catch (e: any) {
+  } catch (_e: unknown) {
     retryCount++;
     if (retryCount <= MAX_RETRIES) {
       setSaveState('error', `Retry ${retryCount}/${MAX_RETRIES}...`);
@@ -138,12 +151,12 @@ export async function doSave() {
 }
 
 // Explicit save (for manual retry)
-export function retrySave() {
+export function retrySave(): void {
   retryCount = 0;
   doSave();
 }
 
-export async function loadData() {
+export async function loadData(): Promise<void> {
   try {
     const data = await apiGet('/api/data');
     if (data.guests) S.guests = data.guests;
@@ -160,14 +173,15 @@ export async function loadData() {
     loadGuestHistory();
     loadGuestsNextWeeks();
     hideDataError();
-  } catch (e: any) {
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Unknown error';
     console.warn('Could not load from server, using defaults', e);
-    showDataError('Could not load data: ' + e.message);
+    showDataError('Could not load data: ' + message);
   }
 }
 
 // ── Persistent error banner (stays visible until data loads) ──
-export function showDataError(msg: any) {
+export function showDataError(msg: string): void {
   let banner = document.getElementById('data-error-banner');
   if (!banner) {
     banner = document.createElement('div');
@@ -180,14 +194,17 @@ export function showDataError(msg: any) {
   banner.style.display = '';
 }
 
-export function hideDataError() {
+export function hideDataError(): void {
   const banner = document.getElementById('data-error-banner');
   if (banner) banner.style.display = 'none';
 }
 
-export async function retryLoad() {
+export async function retryLoad(): Promise<void> {
   const banner = document.getElementById('data-error-banner');
-  if (banner) banner.querySelector('span')!.textContent = 'Retrying...';
+  if (banner) {
+    const span = banner.querySelector('span');
+    if (span) span.textContent = 'Retrying...';
+  }
   await loadData();
   rebuildPlanner();
   (window as any).rerenderCurrentView?.();
@@ -195,7 +212,7 @@ export async function retryLoad() {
 
 export let ingredientDbLoaded = false;
 export let ingredientDbError = '';
-export async function loadIngredientDb() {
+export async function loadIngredientDb(): Promise<void> {
   try {
     const result = await apiGet('/api/ingredients');
     // Handle error-as-data response
@@ -215,38 +232,38 @@ export async function loadIngredientDb() {
       ingredientDbError = 'Unexpected response format';
     }
     ingredientDbLoaded = true;
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error('Failed to load ingredient DB:', e);
     S.ingredientDb = [];
     ingredientDbLoaded = true;
-    ingredientDbError = e.message || 'Unknown error';
+    ingredientDbError = e instanceof Error ? e.message : 'Unknown error';
   }
 }
 
-export async function loadStorageConfig() {
+export async function loadStorageConfig(): Promise<void> {
   try {
     const cfg = await apiGet('/api/storage-config');
     if (cfg && typeof cfg === 'object' && (cfg.west || cfg.centraal)) {
       S.storageConfig = cfg;
     } else {
       // Initialize with defaults for both locations
-      S.storageConfig = { west: DEFAULT_STORAGE_CONFIG, centraal: DEFAULT_STORAGE_CONFIG.map((a: any) => ({...a})) };
+      S.storageConfig = { west: DEFAULT_STORAGE_CONFIG, centraal: DEFAULT_STORAGE_CONFIG.map((a: StorageArea) => ({...a})) };
     }
-  } catch (e: any) {
-    S.storageConfig = { west: DEFAULT_STORAGE_CONFIG, centraal: DEFAULT_STORAGE_CONFIG.map((a: any) => ({...a})) };
+  } catch (_e: unknown) {
+    S.storageConfig = { west: DEFAULT_STORAGE_CONFIG, centraal: DEFAULT_STORAGE_CONFIG.map((a: StorageArea) => ({...a})) };
   }
   rebuildStorageCategories(S.currentLoc || 'west');
 }
 
-export async function saveStorageConfig() {
+export async function saveStorageConfig(): Promise<void> {
   try {
     await apiPost('/api/storage-config', S.storageConfig);
-  } catch (e: any) {
+  } catch (_e: unknown) {
     toastError('Failed to save storage config');
   }
 }
 
-export async function loadGuestHistory() {
+export async function loadGuestHistory(): Promise<void> {
   try {
     const data = await apiGet('/api/guest-history');
     S.guestHistory = data;
@@ -256,22 +273,24 @@ export async function loadGuestHistory() {
     if (data && data.flowDistribution) {
       S.guestFlowDistribution = data.flowDistribution;
     }
-  } catch (e: any) {
-    console.warn('Could not load guest history:', e.message);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Unknown error';
+    console.warn('Could not load guest history:', message);
   }
 }
 
-export async function loadGuestsNextWeeks() {
+export async function loadGuestsNextWeeks(): Promise<void> {
   try {
     const data = await apiGet('/api/guests-next-weeks');
     if (data && typeof data === 'object') S.guestsNextWeeks = data;
-  } catch (e: any) {
-    console.warn('Could not load next weeks data:', e.message);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Unknown error';
+    console.warn('Could not load next weeks data:', message);
   }
 }
 
-let _nextWeeksSaveTimer: any = null;
-export function scheduleNextWeeksSave() {
+let _nextWeeksSaveTimer: ReturnType<typeof setTimeout> | null = null;
+export function scheduleNextWeeksSave(): void {
   if (_nextWeeksSaveTimer) clearTimeout(_nextWeeksSaveTimer);
   setSaveState('unsaved');
   _nextWeeksSaveTimer = setTimeout(async () => {
@@ -279,21 +298,23 @@ export function scheduleNextWeeksSave() {
     try {
       await apiPost('/api/guests-next-weeks', S.guestsNextWeeks);
       setSaveState('saved', 'Saved');
-    } catch (e: any) {
+    } catch (_e: unknown) {
       setSaveState('error', 'Save failed');
     }
   }, 1500);
 }
 
-export function toast(msg: any) {
-  const t = document.getElementById('toast')!;
+export function toast(msg: string): void {
+  const t = document.getElementById('toast');
+  if (!t) return;
   t.textContent = msg;
   t.className = 'toast show';
   setTimeout(() => t.className = 'toast', 2200);
 }
 
-export function toastError(msg: any) {
-  const t = document.getElementById('toast')!;
+export function toastError(msg: string): void {
+  const t = document.getElementById('toast');
+  if (!t) return;
   t.textContent = msg;
   t.className = 'toast error show';
   setTimeout(() => t.className = 'toast', 4000);
@@ -303,13 +324,13 @@ export function toastError(msg: any) {
 // LIVE SYNC (Server-Sent Events)
 // ═══════════════════════════════════════════════════════════════════
 
-let _eventSource: any = null;
+let _eventSource: EventSource | null = null;
 
-export function connectLiveSync() {
+export function connectLiveSync(): void {
   if (_eventSource) return; // already connected
   _eventSource = new EventSource('/api/events');
 
-  _eventSource.onmessage = (event: any) => {
+  _eventSource.onmessage = (event: MessageEvent) => {
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === 'connected') {
@@ -319,8 +340,8 @@ export function connectLiveSync() {
       if (msg.type === 'patch') {
         applyRemotePatch(msg);
       }
-    } catch (e: any) {
-      console.warn('Live sync: bad message', e);
+    } catch (_e: unknown) {
+      console.warn('Live sync: bad message', _e);
     }
   };
 
@@ -330,15 +351,27 @@ export function connectLiveSync() {
   };
 }
 
-export function disconnectLiveSync() {
+export function disconnectLiveSync(): void {
   if (_eventSource) {
     _eventSource.close();
     _eventSource = null;
   }
 }
 
+// Remote patch message shape (from SSE)
+interface RemotePatchMessage {
+  user?: string;
+  batches?: Batch[];
+  deletedBatches?: string[];
+  guests?: GuestsData;
+  caterings?: Catering[];
+  deletedCaterings?: string[];
+  transportItems?: TransportItem[];
+  deletedTransportItems?: string[];
+}
+
 // Merge a patch from another user into local state
-export function applyRemotePatch(msg: any) {
+export function applyRemotePatch(msg: RemotePatchMessage): void {
   const { user, batches, deletedBatches, guests,
           caterings, deletedCaterings,
           transportItems, deletedTransportItems } = msg;
@@ -347,9 +380,9 @@ export function applyRemotePatch(msg: any) {
 
   // Merge batches
   if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
-    const batchMap = new Map(S.batches.map((b: any) => [b.id, b]));
-    if (deletedBatches) deletedBatches.forEach((id: any) => batchMap.delete(id));
-    if (batches) batches.forEach((b: any) => batchMap.set(b.id, b));
+    const batchMap = new Map(S.batches.map((b: Batch) => [b.id, b]));
+    if (deletedBatches) deletedBatches.forEach((id: string) => batchMap.delete(id));
+    if (batches) batches.forEach((b: Batch) => batchMap.set(b.id, b));
     S.batches = [...batchMap.values()];
     changed = true;
   }
@@ -368,18 +401,18 @@ export function applyRemotePatch(msg: any) {
 
   // Merge caterings
   if ((caterings && caterings.length) || (deletedCaterings && deletedCaterings.length)) {
-    const catMap = new Map(S.caterings.map((c: any) => [c.id, c]));
-    if (deletedCaterings) deletedCaterings.forEach((id: any) => catMap.delete(id));
-    if (caterings) caterings.forEach((c: any) => catMap.set(c.id, c));
+    const catMap = new Map(S.caterings.map((c: Catering) => [c.id, c]));
+    if (deletedCaterings) deletedCaterings.forEach((id: string) => catMap.delete(id));
+    if (caterings) caterings.forEach((c: Catering) => catMap.set(c.id, c));
     S.caterings = [...catMap.values()];
     changed = true;
   }
 
   // Merge transport items
   if ((transportItems && transportItems.length) || (deletedTransportItems && deletedTransportItems.length)) {
-    const trMap = new Map(S.transportItems.map((t: any) => [t.id, t]));
-    if (deletedTransportItems) deletedTransportItems.forEach((id: any) => trMap.delete(id));
-    if (transportItems) transportItems.forEach((t: any) => trMap.set(t.id, t));
+    const trMap = new Map(S.transportItems.map((t: TransportItem) => [t.id, t]));
+    if (deletedTransportItems) deletedTransportItems.forEach((id: string) => trMap.delete(id));
+    if (transportItems) transportItems.forEach((t: TransportItem) => trMap.set(t.id, t));
     S.transportItems = [...trMap.values()];
     changed = true;
   }
@@ -398,21 +431,21 @@ export function applyRemotePatch(msg: any) {
 // PREP CHECKLIST API
 // ═══════════════════════════════════════════════════════════════════
 
-export function todayIso() {
+export function todayIso(): string {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
-export async function loadPrepChecklist(loc: any) {
+export async function loadPrepChecklist(loc: string): Promise<void> {
   try {
     const data = await apiGet(`/api/prep-checklist?loc=${loc}&date=${todayIso()}`);
     S.prepChecklist[loc] = new Set(Array.isArray(data) ? data : []);
-  } catch (e: any) {
+  } catch (_e: unknown) {
     S.prepChecklist[loc] = new Set();
   }
 }
 
-let _prepSaveTimer: any = null;
-export function schedulePrepSave(loc: any) {
+let _prepSaveTimer: ReturnType<typeof setTimeout> | null = null;
+export function schedulePrepSave(loc: string): void {
   if (_prepSaveTimer) clearTimeout(_prepSaveTimer);
   _prepSaveTimer = setTimeout(async () => {
     try {
@@ -421,8 +454,9 @@ export function schedulePrepSave(loc: any) {
         date: todayIso(),
         checked: [...(S.prepChecklist[loc] || new Set())],
       });
-    } catch (e: any) {
-      console.warn('Could not save prep checklist:', e.message);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      console.warn('Could not save prep checklist:', message);
     }
   }, 600);
 }

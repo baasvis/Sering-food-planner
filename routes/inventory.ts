@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { prisma } from '../lib/db';
+import { errMsg } from '../lib/config';
 
 const router = express.Router();
 
@@ -10,9 +11,9 @@ router.get('/standard-inventory', async (req: Request, res: Response) => {
     const location = (req.query.location as string) || 'west';
     const items = await prisma.standardInventory.findMany({ where: { location } });
     res.json(items);
-  } catch (e: any) {
-    console.error('standard-inventory read error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('standard-inventory read error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -27,8 +28,8 @@ router.post('/standard-inventory', async (req: Request, res: Response) => {
       }),
     ]);
     res.json({ ok: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -38,8 +39,8 @@ router.get('/storage-config', async (_req: Request, res: Response) => {
   try {
     const row = await prisma.storageConfig.findUnique({ where: { id: 'default' } });
     res.json(row ? row.config : {});
-  } catch (e: any) {
-    console.error('storage-config read error:', e.message);
+  } catch (e: unknown) {
+    console.error('storage-config read error:', errMsg(e));
     res.json({});
   }
 });
@@ -54,8 +55,8 @@ router.post('/storage-config', async (req: Request, res: Response) => {
       update: { config },
     });
     res.json({ ok: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -69,9 +70,9 @@ router.get('/prep-checklist', async (req: Request, res: Response) => {
       where: { loc_date: { loc, date } },
     });
     res.json(entry ? entry.checked : []);
-  } catch (e: any) {
-    console.error('prep-checklist read error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('prep-checklist read error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -90,8 +91,8 @@ router.post('/prep-checklist', async (req: Request, res: Response) => {
       where: { updatedAt: { lt: cutoff } },
     });
     res.json({ ok: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -110,9 +111,9 @@ router.get('/log', async (_req: Request, res: Response) => {
       action: r.action,
       details: r.details,
     })));
-  } catch (e: any) {
-    console.error('log read error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('log read error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 

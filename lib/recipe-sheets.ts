@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { google } from 'googleapis';
-import { CONFIG } from './config';
+import { CONFIG, errMsg } from './config';
 
 export function getSheetsClient() {
   try {
@@ -14,8 +14,8 @@ export function getSheetsClient() {
       scopes: ['https://www.googleapis.com/auth/spreadsheets'],
     });
     return google.sheets({ version: 'v4', auth });
-  } catch (e: any) {
-    console.error('Could not create Sheets client:', e.message);
+  } catch (e: unknown) {
+    console.error('Could not create Sheets client:', errMsg(e));
     return null;
   }
 }

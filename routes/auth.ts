@@ -5,7 +5,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
-import { CONFIG, cookieOpts } from '../lib/config';
+import { CONFIG, cookieOpts, errMsg } from '../lib/config';
 import type { AppUser } from '../shared/types';
 
 const router = express.Router();
@@ -63,8 +63,8 @@ router.post('/google', async (req: Request, res: Response) => {
     sessions.set(sessionId, user);
     res.cookie('session', sessionId, cookieOpts());
     return res.json({ ok: true, user: { email: user.email, name: user.name, picture: user.picture } });
-  } catch (e: any) {
-    console.error('Auth error:', e.message);
+  } catch (e: unknown) {
+    console.error('Auth error:', errMsg(e));
     return res.status(401).json({ error: 'Invalid token' });
   }
 });

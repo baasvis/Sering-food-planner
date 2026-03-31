@@ -1,12 +1,13 @@
 import express, { Request, Response } from 'express';
 import { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateBatches, validateGuests, withWriteLock, dbWriteBatches, dbWriteGuests, dbWriteCaterings, dbWriteTransportItems } from '../lib/db';
 import { broadcast } from './events';
+import { errMsg } from '../lib/config';
 
 const router = express.Router();
 
 router.get('/', async (_req: Request, res: Response) => {
   try { res.json(await dbReadAll()); }
-  catch (e: any) { res.status(500).json({ error: e.message }); }
+  catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 router.post('/', async (req: Request, res: Response) => {
@@ -27,7 +28,7 @@ router.post('/', async (req: Request, res: Response) => {
     dbAppendLog(user.email, user.name, 'save', `${batches.length} batches`);
 
     res.json({ ok: true, savedAt: new Date().toISOString() });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 // ── Concurrent save detection ──
@@ -115,8 +116,8 @@ router.post('/patch', async (req: Request, res: Response) => {
     const result: any = { ok: true, savedAt: new Date().toISOString() };
     if (concurrent) result.concurrent = concurrent;
     res.json(result);
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 

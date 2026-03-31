@@ -50,9 +50,9 @@ app.use('/api/health',            healthRouter);
 
 // ── Global error handler ──
 
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Unhandled error:', err.message);
-  res.status(err.status || 500).json({ error: err.message });
+  res.status((err as any).status || 500).json({ error: err.message });
 });
 
 export default app;

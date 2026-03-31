@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { prisma } from '../lib/db';
+import { errMsg } from '../lib/config';
 
 const router = express.Router();
 
@@ -49,9 +50,9 @@ router.get('/guest-history', async (_req: Request, res: Response) => {
       prisma.guestHistoryMeta.findMany(),
     ]);
     res.json(guestHistoryToJson(histRows, metaRows));
-  } catch (e: any) {
-    console.error('guest-history read error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('guest-history read error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -144,9 +145,9 @@ router.post('/guest-history', async (req: Request, res: Response) => {
       }
     });
     res.json({ ok: true });
-  } catch (e: any) {
-    console.error('guest-history write error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('guest-history write error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -154,9 +155,9 @@ router.get('/guests-next-weeks', async (_req: Request, res: Response) => {
   try {
     const rows = await prisma.guestsNextWeeks.findMany();
     res.json(guestsNextWeeksToJson(rows));
-  } catch (e: any) {
-    console.error('guests-next-weeks read error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('guests-next-weeks read error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -183,9 +184,9 @@ router.post('/guests-next-weeks', async (req: Request, res: Response) => {
       prisma.guestsNextWeeks.createMany({ data: rows }),
     ]);
     res.json({ ok: true });
-  } catch (e: any) {
-    console.error('guests-next-weeks write error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('guests-next-weeks write error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 

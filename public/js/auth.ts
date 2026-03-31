@@ -27,7 +27,7 @@ async function loginWithToken(idToken: any) {
     }
     S.user = data.user;
     showApp();
-  } catch (e: any) {
+  } catch (e: unknown) {
     const errEl = document.getElementById('login-error')!;
     errEl.textContent = 'Could not connect to server';
     errEl.style.display = 'block';
@@ -45,7 +45,7 @@ export async function devLogin() {
     const data = await res.json();
     S.user = data.user;
     showApp();
-  } catch (e: any) { alert('Could not connect to server'); }
+  } catch (e: unknown) { alert('Could not connect to server'); }
 }
 
 export async function doLogout() {
@@ -97,7 +97,7 @@ export function initGoogleSignIn() {
         }
       };
       waitForGoogle();
-    } catch (e: any) {
+    } catch (e: unknown) {
       document.getElementById('dev-login-btn')!.style.display = 'inline-block';
       document.querySelector('.g_id_signin')!.setAttribute('style', 'display:none');
     }
@@ -113,7 +113,7 @@ export async function checkSession() {
       showApp();
       return true;
     }
-  } catch (e: any) {}
+  } catch (e: unknown) {}
   return false;
 }
 

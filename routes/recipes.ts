@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { prisma, dbAppendLog } from '../lib/db';
 import { getSheetsClient } from '../lib/recipe-sheets';
+import { errMsg } from '../lib/config';
 
 const router = express.Router();
 
@@ -26,7 +27,7 @@ router.get('/recipe-index', async (_req: Request, res: Response) => {
       avgBanger: r.avgBanger,
       timesServed: r.timesServed,
     })));
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 router.post('/recipe-index', async (req: Request, res: Response) => {
@@ -75,7 +76,7 @@ router.post('/recipe-index', async (req: Request, res: Response) => {
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'recipe-index', `saved "${recipe.name}"`);
     res.json({ ok: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 router.delete('/recipe-index/:id', async (req: Request, res: Response) => {
@@ -83,7 +84,7 @@ router.delete('/recipe-index/:id', async (req: Request, res: Response) => {
   try {
     await prisma.recipeIndex.delete({ where: { id } });
     res.json({ ok: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 // External recipe reading — still uses Google Sheets API
@@ -131,7 +132,7 @@ router.get('/recipe', async (req: Request, res: Response) => {
       });
     });
     res.json({ dishName, serving, allergens, servingTemp, structure, dishType, recipeVolume: recipeVol, seasonality, costPerServing, ingredients });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 export default router;

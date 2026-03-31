@@ -5,7 +5,7 @@
 try { require('dotenv').config(); } catch (_e) { /* dotenv optional in production */ }
 
 import fs from 'fs';
-import { CONFIG, INGREDIENTS_SEED, STD_INV_SEED } from './lib/config';
+import { CONFIG, INGREDIENTS_SEED, STD_INV_SEED, errMsg } from './lib/config';
 import { prisma } from './lib/db';
 import app from './app';
 
@@ -29,8 +29,8 @@ async function seedIfNeeded() {
         console.log('Seeded', seed.length, 'standard inventory items to Postgres');
       }
     }
-  } catch (e: any) {
-    console.error('Seed failed:', e.message);
+  } catch (e: unknown) {
+    console.error('Seed failed:', errMsg(e));
   }
 }
 

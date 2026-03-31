@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-03-30*
+*Last updated: 2026-03-31*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -117,19 +117,20 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Finance v1: Tebi POS scraper (Playwright browser automation) pulls daily revenue data via Tebi's internal JSON API. Sync worker stores data in PostgreSQL DailyRevenue table. Finance screen shows weekly revenue table (per location per day), monthly summary cards (gross/net revenue, sales, covers), CSS bar chart of daily gross revenue, and week navigation. "Sync from Tebi" button triggers the scraper as a child process.
 - Finance v2 — Product-level revenue breakdown: scraper parses Tebi invoice line items to extract per-product revenue. Classifies each invoice by service period (morning 09–12, lunch 12–14, afternoon 14–18, dinner 18–21, bar 21–06). Data stored in PostgreSQL ProductRevenue table. Finance screen shows horizontal category bar chart, sortable product table (top 50), and filter pills for 5 service periods + 4 locations. API: GET /api/finance/products with optional location, meal, groupBy=category filters. Discovery flag: `--dump-invoices` on scraper to inspect raw Tebi invoice structure.
 - Live sync via Server-Sent Events (SSE): when any user saves changes, all other connected users receive the patch instantly and their UI updates automatically. Uses native browser EventSource (auto-reconnects on connection loss). Server broadcasts patches to all clients except the sender (matched by email). No polling, no WebSocket library needed.
+- TypeScript strict typing (refactored 2026-03-31): all `any` types replaced with proper interfaces and string literal unions. Domain types (`Location`, `Meal`, `DishType`, `StorageType`) enforce valid values at compile time. Global state object `S` typed as `AppState`. All catch blocks use `catch (e: unknown)` with `errMsg()` helper. Prisma JSON boundary uses explicit casts. Single shared Prisma client instance.
 
 **File structure:**
 ```
 server.ts              — Express entry point (starts listening)
 app.ts                 — Express app, mounts routers, global error handler
 shared/
-  types.ts             — Shared interfaces used by both backend & frontend
+  types.ts             — Shared interfaces + string literal union types (Location, Meal, DishType, etc.) used by both backend & frontend
 types/
   express.d.ts         — Express Request augmentation (req.user)
-  globals.d.ts         — DOM type augmentations
+  globals.d.ts         — Window index signature for onclick handlers
   multer.d.ts          — Multer module declaration
 lib/
-  config.ts            — Configuration, env vars
+  config.ts            — Configuration, env vars, errMsg() helper
   db.ts                — Prisma client, row transformers, validators
   recipe-sheets.ts     — Google Sheets client (external recipe reading only)
   hanos-parser.ts      — Hanos quantity parser

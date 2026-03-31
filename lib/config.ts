@@ -13,6 +13,11 @@ export const CONFIG = {
   ALLOWED_EMAILS: (process.env.ALLOWED_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean),
 };
 
+// Extract error message safely from unknown caught values
+export function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : 'Unknown error';
+}
+
 // Cookie options: secure when behind HTTPS (production), lax otherwise (dev)
 export function cookieOpts() {
   return {

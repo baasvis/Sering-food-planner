@@ -256,8 +256,8 @@ export async function fetchAndAddRecipe() {
     closeModal();
     renderRecipeIndex();
     toast(esc(newRecipe.name) + ' added to recipe index');
-  } catch (e: any) {
-    toastError('Could not fetch recipe: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Could not fetch recipe: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -321,7 +321,7 @@ export async function bulkAddRecipes() {
       await apiPost('/api/recipe-index', newRecipe);
       S.recipeIndex.push(newRecipe);
       ok++;
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('Failed to import', sheetId, e);
       fail++;
     }
@@ -370,7 +370,7 @@ export async function saveEditRecipe(id: any) {
     closeModal();
     renderRecipeIndex();
     toast('Recipe updated');
-  } catch (e: any) { toastError('Could not save: ' + e.message); }
+  } catch (e: unknown) { toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error')); }
 }
 
 export async function deleteRecipeIndex(id: any) {
@@ -383,7 +383,7 @@ export async function deleteRecipeIndex(id: any) {
     S.recipeIndex = S.recipeIndex.filter(x => x.id !== id);
     renderRecipeIndex();
     toast('Recipe removed from index');
-  } catch (e: any) { toastError('Could not delete: ' + e.message); }
+  } catch (e: unknown) { toastError('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error')); }
 }
 
 // Add a dish to the menu planner from a recipe in the index

@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import express, { Request, Response } from 'express';
 import { prisma, validateBatch, withWriteLock, dbAppendLog, toBatchRow } from '../lib/db';
+import { errMsg } from '../lib/config';
+import type { Batch } from '../shared/types';
 
 const router = express.Router();
 
@@ -9,11 +11,11 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     const rows = await prisma.batch.findMany();
     const batches = rows.map(b => ({
-      ...toBatchRow(b),
+      ...toBatchRow(b as unknown as Batch),
       services: Array.isArray(b.services) ? b.services : [],
     }));
     res.json(batches);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 // GET /api/batches/:id — get single batch
@@ -22,10 +24,10 @@ router.get('/:id', async (req: Request, res: Response) => {
     const b = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
     if (!b) return res.status(404).json({ error: 'Batch not found' });
     res.json({
-      ...toBatchRow(b),
+      ...toBatchRow(b as unknown as Batch),
       services: Array.isArray(b.services) ? b.services : [],
     });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 // POST /api/batches — create batch
@@ -40,25 +42,25 @@ router.post('/', async (req: Request, res: Response) => {
     if (!b.location) b.location = 'west';
     if (!b.services) b.services = [];
 
-    const err = validateBatch(b);
+    const err = validateBatch(b as Batch);
     if (err) return res.status(400).json({ error: err });
 
     const created = await withWriteLock(async () => {
       const existing = await prisma.batch.findUnique({ where: { id: b.id } });
       if (existing) throw new Error(`Batch "${b.id}" already exists`);
-      return prisma.batch.create({ data: toBatchRow(b) });
+      return prisma.batch.create({ data: toBatchRow(b as Batch) });
     });
 
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'batch-create', `${b.name} (${b.id})`);
 
     res.status(201).json({
-      ...toBatchRow(created),
+      ...toBatchRow(created as unknown as Batch),
       services: Array.isArray(created.services) ? created.services : [],
     });
-  } catch (e: any) {
-    if (e.message.includes('already exists')) return res.status(409).json({ error: e.message });
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    if (errMsg(e).includes('already exists')) return res.status(409).json({ error: errMsg(e) });
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -73,16 +75,16 @@ router.patch('/:id', async (req: Request, res: Response) => {
       if (!existing) throw new Error('not found');
 
       const merged = {
-        ...toBatchRow(existing),
+        ...toBatchRow(existing as unknown as Batch),
         services: Array.isArray(existing.services) ? existing.services : [],
         ...updates,
       };
-      const err = validateBatch(merged);
+      const err = validateBatch(merged as Batch);
       if (err) throw new Error(err);
 
       return prisma.batch.update({
         where: { id: req.params.id as string },
-        data: toBatchRow(merged),
+        data: toBatchRow(merged as Batch),
       });
     });
 
@@ -90,13 +92,13 @@ router.patch('/:id', async (req: Request, res: Response) => {
     dbAppendLog(user.email, user.name, 'batch-update', `${updated.name} (${req.params.id as string})`);
 
     res.json({
-      ...toBatchRow(updated),
+      ...toBatchRow(updated as unknown as Batch),
       services: Array.isArray(updated.services) ? updated.services : [],
     });
-  } catch (e: any) {
-    if (e.message === 'not found') return res.status(404).json({ error: 'Batch not found' });
-    if (e.message.startsWith('invalid') || e.message.startsWith('missing')) return res.status(400).json({ error: e.message });
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    if (errMsg(e) === 'not found') return res.status(404).json({ error: 'Batch not found' });
+    if (errMsg(e).startsWith('invalid') || errMsg(e).startsWith('missing')) return res.status(400).json({ error: errMsg(e) });
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -114,10 +116,10 @@ router.delete('/:id', async (req: Request, res: Response) => {
     dbAppendLog(user.email, user.name, 'batch-delete', req.params.id as string);
 
     res.json({ ok: true });
-  } catch (e: any) {
-    if (e.message === 'not found') return res.status(404).json({ error: 'Batch not found' });
-    if (e.message.includes('stock > 0')) return res.status(400).json({ error: e.message });
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    if (errMsg(e) === 'not found') return res.status(404).json({ error: 'Batch not found' });
+    if (errMsg(e).includes('stock > 0')) return res.status(400).json({ error: errMsg(e) });
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 

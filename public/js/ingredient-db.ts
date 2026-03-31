@@ -39,7 +39,7 @@ export async function loadIngredientDbFull() {
   try {
     ingredientDbFull = await apiGet('/api/ingredients/full');
     ingredientDbFullLoaded = true;
-  } catch (e: any) {
+  } catch (e: unknown) {
     ingredientDbFull = [];
     ingredientDbFullLoaded = true;
     console.error('Failed to load ingredient DB:', e);
@@ -482,7 +482,7 @@ export async function saveInlineCategory(ingId: any, value: any) {
     loadIngredientDb();
     renderOrders();
     toast('Category updated');
-  } catch (e: any) {
+  } catch (e: unknown) {
     toastError('Save failed');
   }
 }
@@ -574,8 +574,8 @@ export async function saveIngredientEdit(id: any) {
     loadIngredientDb();
     renderOrders();
     toast('Ingredient saved');
-  } catch (e: any) {
-    toastError('Save failed: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -586,7 +586,7 @@ export async function toggleIngredientActive(id: any) {
   try {
     await apiPost('/api/ingredients/' + id, ing);
     renderOrders();
-  } catch (e: any) {
+  } catch (e: unknown) {
     ing.active = !ing.active;
     toastError('Save failed');
   }
@@ -602,8 +602,8 @@ export async function deleteIngredient(id: any, name: any) {
     loadIngredientDb();
     renderOrders();
     toast('Ingredient deleted');
-  } catch (e: any) {
-    toastError('Delete failed: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Delete failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -844,8 +844,8 @@ export async function saveIngredientFromModal(id: any) {
     loadIngredientDb();
     renderOrders();
     toast('Ingredient updated');
-  } catch (e: any) {
-    toastError('Save failed: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -905,8 +905,8 @@ export async function hanosLookupProduct() {
       (sizeStr ? ` ${esc(sizeStr)}` : '') +
       (priceStr ? ` — ${esc(priceStr)}` : '');
 
-  } catch (e: any) {
-    status.innerHTML = `<span style="color:var(--red);">Lookup failed: ${esc(e.message)}</span>`;
+  } catch (e: unknown) {
+    status.innerHTML = `<span style="color:var(--red);">Lookup failed: ${esc(e instanceof Error ? e.message : 'Unknown error')}</span>`;
   }
 }
 
@@ -1095,8 +1095,8 @@ export async function saveNewIngredient(id: any) {
     closeModal();
     renderOrders();
     toast('Ingredient added');
-  } catch (e: any) {
-    toastError('Save failed: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -1182,7 +1182,7 @@ export async function saveStorageFromPopover(ingredientId: any) {
     try {
       await apiPost('/api/ingredients/' + ingredientId, ingFull);
       toast('Storage location saved');
-    } catch (e: any) {
+    } catch (e: unknown) {
       toastError('Save failed');
     }
   }
@@ -1209,8 +1209,8 @@ export async function handleSupplierUpload(file: any) {
     supplierUploadData = await r.json();
     toast(supplierUploadData.length + ' products parsed from file');
     renderOrders();
-  } catch (e: any) {
-    toastError('Upload failed: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Upload failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -1289,8 +1289,8 @@ export async function applySupplierUpdate() {
     supplierUploadData = null;
     renderOrders();
     toast(updated + ' ingredients updated with supplier data');
-  } catch (e: any) {
-    toastError('Save failed: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -1494,8 +1494,9 @@ export async function runMigration(dryRun: any) {
       loadIngredientDb();
       toast('Migration complete: ' + result.total + ' ingredients');
     }
-  } catch (e: any) {
-    status.innerHTML = `<span style="color:var(--red);">Error: ${esc(e.message)}</span>`;
-    toastError('Migration failed: ' + e.message);
+  } catch (e: unknown) {
+    const errMsg = e instanceof Error ? e.message : 'Unknown error';
+    status.innerHTML = `<span style="color:var(--red);">Error: ${esc(errMsg)}</span>`;
+    toastError('Migration failed: ' + errMsg);
   }
 }

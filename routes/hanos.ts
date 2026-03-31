@@ -5,6 +5,7 @@
 import express, { Request, Response } from 'express';
 import crypto from 'crypto';
 import { parseHanosQuantityGrams } from '../lib/hanos-parser';
+import { errMsg } from '../lib/config';
 
 const router = express.Router();
 
@@ -282,21 +283,21 @@ router.post('/add-to-cart', async (req: Request, res: Response) => {
           name: product.formattedName || '',
           quantity: entry.formattedQuantity || quantity,
         });
-      } catch (e: any) {
-        console.error(`[Hanos] Failed to add ${orderCode}:`, e.message);
-        results.push({ orderCode, success: false, error: e.message });
+      } catch (e: unknown) {
+        console.error(`[Hanos] Failed to add ${orderCode}:`, errMsg(e));
+        results.push({ orderCode, success: false, error: errMsg(e) });
       }
     }
 
     const ok = results.filter(r => r.success).length;
     const failed = results.filter(r => !r.success).length;
     res.json({ ok, failed, total: results.length, results });
-  } catch (e: any) {
-    console.error('[Hanos] add-to-cart error:', e.message);
+  } catch (e: unknown) {
+    console.error('[Hanos] add-to-cart error:', errMsg(e));
     const loc = (req.body.location || 'west').toLowerCase();
     delete _clients[loc];
     delete _clientTimes[loc];
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -333,9 +334,9 @@ router.get('/product/:code', async (req: Request, res: Response) => {
 
     const product = await resp.json();
     res.json(formatProduct(product));
-  } catch (e: any) {
-    console.error('[Hanos] product lookup error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('[Hanos] product lookup error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -360,9 +361,9 @@ router.get('/search', async (req: Request, res: Response) => {
     const data = await resp.json() as any;
     const products = (data.products || []).map(formatProduct);
     res.json({ results: products, total: data.pagination ? data.pagination.totalResults : products.length });
-  } catch (e: any) {
-    console.error('[Hanos] search error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('[Hanos] search error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -450,12 +451,12 @@ router.get('/cart', async (req: Request, res: Response) => {
       total: (cart.totalPrice || {}).formattedValue || '?',
       entries,
     });
-  } catch (e: any) {
-    console.error('[Hanos] cart error:', e.message);
+  } catch (e: unknown) {
+    console.error('[Hanos] cart error:', errMsg(e));
     const loc = ((req.query.location as string) || 'west').toLowerCase();
     delete _clients[loc];
     delete _clientTimes[loc];
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 

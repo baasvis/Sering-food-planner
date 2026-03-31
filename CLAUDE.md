@@ -92,7 +92,7 @@ Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 ## Conventions
 - Frontend uses ES module imports/exports, bundled by Vite
 - Functions referenced in inline `onclick=""` handlers are assigned to `window` in `main.ts`
-- State lives in the global `S` object (defined in state.ts)
+- State lives in the global `S` object (typed as `AppState` in state.ts)
 - Each screen has a render function: `renderDashboard()`, `renderOrders()`, etc.
 - `rerenderCurrentView()` refreshes the active screen
 - `scheduleSave()` debounces auto-save to PostgreSQL
@@ -103,6 +103,16 @@ Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 - Navigation screens defined in `NAV_SCREENS` array (state.ts) — add new screens there, not in HTML
 - CSS split into per-screen files in `public/css/` — add new screen styles to the matching file
 - Shared types in `shared/types.ts` — used by both backend and frontend via `@shared` alias (Vite) or relative import (backend)
+
+## TypeScript Patterns
+- **Never use `any`** — use proper types, `unknown` for catch blocks, or specific interfaces
+- **Catch blocks**: always `catch (e: unknown)` — use `errMsg(e)` from `lib/config.ts` on the backend, or `e instanceof Error ? e.message : 'Unknown error'` on the frontend
+- **Domain constants**: use string literal union types from `shared/types.ts` (`Location`, `Meal`, `DishType`, `StorageType`) — not plain `string`
+- **Prisma ↔ TypeScript boundary**: when writing JSON fields to Prisma, cast with `as unknown as Prisma.InputJsonValue`; when reading, cast back with `as unknown as Batch` or map fields explicitly with `as Batch['type']`
+- **Global state**: `S` is typed as `AppState` (defined in state.ts) — add new fields to the `AppState` interface, not with ad-hoc properties
+- **DOM access**: no catch-all `any` on HTMLElement — use proper casts like `(el as HTMLInputElement).value`
+- **Window functions**: the `Window` index signature `[key: string]: any` is kept only for the `onclick` handler pattern in `main.ts` — don't rely on it for new code
+- **Single Prisma client**: always import `prisma` from `lib/db.ts` — never create separate `new PrismaClient()` instances
 
 ## Search/Filter Input Rule
 When a search or filter input triggers a re-render, **never replace the input's own DOM element**.

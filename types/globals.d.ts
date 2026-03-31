@@ -1,46 +1,18 @@
-// Migration-only type augmentation — allows common DOM properties on HTMLElement
-// Remove this when proper typing is added
-
-interface HTMLElement {
-  value: any;
-  checked: any;
-  src: any;
-  href: any;
-  files: any;
-  selectedIndex: any;
-  options: any;
-  type: any;
-  name: any;
-  min: any;
-  max: any;
-  step: any;
-  placeholder: any;
-  readOnly: any;
-  disabled: any;
-  selected: any;
-  multiple: any;
-  accept: any;
-  required: any;
-  width: any;
-  height: any;
-  naturalWidth: any;
-  naturalHeight: any;
-  complete: any;
-  selectionStart: any;
-  selectionEnd: any;
-  setSelectionRange: any;
-  select: any;
-  focus: any;
-}
-
-interface Element {
-  value: any;
-  dataset: DOMStringMap;
-  src: any;
-  href: any;
-  checked: any;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// DOM type augmentations for elements accessed via getElementById
+// ─────────────────────────────────────────────────────────────────────────────
+// Instead of the migration-era catch-all `[key: string]: any`, we use proper
+// type narrowing: getElementById returns HTMLElement | null, and callers
+// should cast to the specific element type (HTMLInputElement, etc.) or use
+// the `as` assertion at the call site.
+//
+// For window: we declare an index signature so that Object.assign(window, {...})
+// works for onclick="" handlers. This is intentional — the app uses inline
+// onclick handlers that reference window-level functions.
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface Window {
+  // Allow dynamic function assignment for onclick="" handlers via Object.assign
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 }

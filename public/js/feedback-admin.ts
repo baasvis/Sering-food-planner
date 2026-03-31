@@ -19,8 +19,8 @@ export async function renderFeedbackAdmin() {
   // Fetch feedback from API
   try {
     feedbackData = await apiGet('/api/feedback');
-  } catch (e: any) {
-    el.innerHTML = `<div class="section-card" style="padding:24px;color:var(--red);">Could not load feedback: ${esc(e.message)}</div>`;
+  } catch (e: unknown) {
+    el.innerHTML = `<div class="section-card" style="padding:24px;color:var(--red);">Could not load feedback: ${esc(e instanceof Error ? e.message : 'Unknown error')}</div>`;
     return;
   }
 

@@ -1,23 +1,31 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-export const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-export const MEALS=['lunch','dinner'];
-export const STORAGE=['Gastro','Frozen','Vac-packed'];
-export const LOCATIONS=['west','centraal'];
-export const ALLERGENS=['Gluten','Soy','Nuts','Peanuts','Sesame','Celery','Mustard','Sulphites','Lupin','Onion','Garlic','Paprika'];
+import type { Batch, Catering, TransportItem, RecipeEntry, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings } from '@shared/types';
+
+export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
+export const MEALS: Meal[] = ['lunch','dinner'];
+export const STORAGE: StorageType[] = ['Gastro','Frozen','Vac-packed'];
+export const LOCATIONS: Location[] = ['west','centraal'];
+export const ALLERGENS = ['Gluten','Soy','Nuts','Peanuts','Sesame','Celery','Mustard','Sulphites','Lupin','Onion','Garlic','Paprika'] as const;
 
 // Ingredient database constants
-export const INGREDIENT_TYPES=['Food','Drinks','Kitchen Equipment','Cleaning','FOH Supplies','FOH Equipment','Office'];
-export const INGREDIENT_CATEGORIES: any={
+export const INGREDIENT_TYPES = ['Food','Drinks','Kitchen Equipment','Cleaning','FOH Supplies','FOH Equipment','Office'] as const;
+
+export const INGREDIENT_CATEGORIES: Record<string, string[]> = {
   'Food':['Vegetables & Fruit','Grains & Starches','Legumes & Proteins','Dairy & Alternatives','Oils & Fats','Herbs & Spices','Sauces & Condiments','Canned & Preserved','Baking & Dessert','Snacks','Seaweed & Specialty'],
   'Drinks':['Coffee & Tea','Juices & Soft Drinks','Beer','Wine','Spirits & Liqueurs','Drink Ingredients'],
   'Non-food':['Cleaning & Hygiene','Disposables & Packaging','Tableware & FOH','Kitchen Equipment','Office & Admin','Clothing & Textiles'],
 };
-export const INGREDIENT_TYPE_TO_GROUP: any={'Food':'Food','Drinks':'Drinks','Kitchen Equipment':'Non-food','Cleaning':'Non-food','FOH Supplies':'Non-food','FOH Equipment':'Non-food','Office':'Non-food'};
-export const ALL_CATEGORIES=[...INGREDIENT_CATEGORIES['Food'],...INGREDIENT_CATEGORIES['Drinks'],...INGREDIENT_CATEGORIES['Non-food']];
-export const PRICE_LEVELS=['cheap','medium','expensive'];
+
+export const INGREDIENT_TYPE_TO_GROUP: Record<string, string> = {
+  'Food':'Food','Drinks':'Drinks','Kitchen Equipment':'Non-food','Cleaning':'Non-food','FOH Supplies':'Non-food','FOH Equipment':'Non-food','Office':'Non-food',
+};
+
+export const ALL_CATEGORIES: string[] = [...INGREDIENT_CATEGORIES['Food'],...INGREDIENT_CATEGORIES['Drinks'],...INGREDIENT_CATEGORIES['Non-food']];
+export const PRICE_LEVELS = ['cheap','medium','expensive'] as const;
+
 // Default storage config — will be replaced by backend config when loaded
-export const DEFAULT_STORAGE_CONFIG = [
+export const DEFAULT_STORAGE_CONFIG: StorageArea[] = [
   { name: 'Walk-in', color: '#4CAF50', spots: ['Shelf 1', 'Shelf 2', 'Shelf 3'] },
   { name: 'Dry storage', color: '#FF9800', spots: ['Shelf 1', 'Shelf 2', 'The cart'] },
   { name: 'Freezer', color: '#2196F3', spots: ['Shelf 1', 'Shelf 2', 'Drawer 1'] },
@@ -26,31 +34,38 @@ export const DEFAULT_STORAGE_CONFIG = [
 ];
 
 // Mutable — rebuilt from storageConfig when loaded
-export let STORAGE_CATEGORIES: any = {};
-export function rebuildStorageCategories(loc: any) {
+export let STORAGE_CATEGORIES: Record<string, string[]> = {};
+export function rebuildStorageCategories(loc: Location | string): void {
   const arr = getStorageConfigForLoc(loc);
-  const obj: any = {};
-  arr.forEach((a: any) => { obj[a.name] = a.spots || []; });
+  const obj: Record<string, string[]> = {};
+  arr.forEach((a: StorageArea) => { obj[a.name] = a.spots || []; });
   STORAGE_CATEGORIES = obj;
 }
-export function getStorageConfigForLoc(loc: any) {
+export function getStorageConfigForLoc(loc: Location | string): StorageArea[] {
   loc = loc || 'west';
   const cfg = S.storageConfig || {};
   return cfg[loc] || cfg.west || DEFAULT_STORAGE_CONFIG;
 }
-export function getStorageColor(categoryName: any, loc: any) {
+export function getStorageColor(categoryName: string, loc: Location | string): string {
   const arr = getStorageConfigForLoc(loc);
-  const entry = arr.find((a: any) => a.name === categoryName);
+  const entry = arr.find((a: StorageArea) => a.name === categoryName);
   return entry ? entry.color : '#999';
 }
 
-export const ACCOMPANIMENTS=[
+export const ACCOMPANIMENTS = [
   { name:'Rice', gramsPerGuest:80 },
   { name:'Pasta', gramsPerGuest:80 },
-];
+] as const;
 
 // Single source of truth for navigation screens
-export const NAV_SCREENS = [
+export interface NavScreen {
+  id: string;
+  topLabel: string;
+  bottomLabel: string;
+  icon: string;
+}
+
+export const NAV_SCREENS: NavScreen[] = [
   { id: 'dashboard', topLabel: 'Dashboard', bottomLabel: 'Home',
     icon: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>' },
   { id: 'guests', topLabel: 'Guests', bottomLabel: 'Guests',
@@ -70,7 +85,61 @@ export const NAV_SCREENS = [
 // ═══════════════════════════════════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════════════════════════════════
-export let S: any = {
+
+export interface InventoryDone {
+  lunch: string | null;
+  dinner: string | null;
+}
+
+export interface CustomTodo {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+export interface AppState {
+  currentLoc: Location;
+  plannerSubTab: string;
+  filters: { loc: string; storage: string; inTransit: string };
+  selected: Set<string>;
+  orderToggles: { batches: boolean; standard: boolean };
+  caterings: Catering[];
+  transportItems: TransportItem[];
+  collapsedTypes: Record<string, boolean>;
+  inventoryDone: Record<Location, InventoryDone>;
+  guests: GuestsData;
+  batches: Batch[];
+  expandedBatches: Set<string>;
+  assigningBatchId: string | null;
+  draggingBatchId: string | null;
+  showAllBatches: boolean;
+  recipeIndex: RecipeEntry[];
+  ingredientDb: Ingredient[];
+  planner: Record<string, Batch[]>;
+  user: AppUser | null;
+  dashboardLoc: Location;
+  dashVegMode: string;
+  dashVegModeTomorrow: string;
+  prepChecklist: Record<string, Set<string>>;
+  heatChecked: Set<string>;
+  cookChecked: Set<string>;
+  customTodos: CustomTodo[];
+  teamTodosOpen: boolean;
+  guestHistory: Record<string, unknown> | null;
+  predictions: Record<string, unknown> | null;
+  guestFlowDistribution: Record<string, unknown> | null;
+  guestsNextWeeks: Record<string, Record<string, Record<string, Record<string, number>>>>;
+  storageConfig: StorageConfig | null;
+  financeData: Record<string, unknown>[];
+  financeProducts: Record<string, unknown>[];
+  financeSyncing: boolean;
+  financeWeekOffset: number;
+  financeProductMeal: string;
+  financeProductLoc: string;
+  archive?: Array<Record<string, unknown>>;
+}
+
+export let S: AppState = {
   currentLoc:'west',
   plannerSubTab:'west',
   filters:{loc:'all',storage:'all',inTransit:'all'},
@@ -91,27 +160,27 @@ export let S: any = {
   showAllBatches: false,
   recipeIndex:[],
   ingredientDb:[],
-  planner:{} as any,
-  user:null as any,
+  planner:{},
+  user:null,
   dashboardLoc:'west',
   dashVegMode:'combined',
   dashVegModeTomorrow:'combined',
-  prepChecklist: {} as any, // keyed by loc, value is Set of checked ingredient keys
-  heatChecked: new Set(),   // dish IDs ticked off in Heat Up
-  cookChecked: new Set(),   // dish IDs ticked off in Cook
-  customTodos: [] as any[],          // [{id, text, done}] freeform team todos
-  teamTodosOpen: false,     // floating panel expanded state
-  guestHistory:null as any,
-  predictions:null as any,
-  guestFlowDistribution:null as any,
-  guestsNextWeeks:{} as any,
-  storageConfig: null as any, // loaded from /api/storage-config
-  financeData: [] as any[],
-  financeProducts: [] as any[],
+  prepChecklist: {},
+  heatChecked: new Set(),
+  cookChecked: new Set(),
+  customTodos: [],
+  teamTodosOpen: false,
+  guestHistory:null,
+  predictions:null,
+  guestFlowDistribution:null,
+  guestsNextWeeks:{},
+  storageConfig: null,
+  financeData: [],
+  financeProducts: [],
   financeSyncing: false,
   financeWeekOffset: 0,
-  financeProductMeal: 'all', // 'all', 'morning', 'lunch', 'afternoon', 'dinner', 'bar'
-  financeProductLoc: 'all', // 'all', 'west', 'centraal', 'testtafel'
+  financeProductMeal: 'all',
+  financeProductLoc: 'all',
 };
 
 // ═══════════════════════════════════════════════════════════════════

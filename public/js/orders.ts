@@ -173,7 +173,7 @@ export async function addToStandardInventory(ingredientId: any) {
   siSearchQuery = '';
   try {
     await apiPost('/api/ingredients/target-stock', { ingredientId, location: loc, amount: 1 });
-  } catch (e: any) { toastError('Failed to add: ' + e.message); }
+  } catch (e: unknown) { toastError('Failed to add: ' + (e instanceof Error ? e.message : 'Unknown error')); }
   renderOrders();
 }
 
@@ -183,7 +183,7 @@ export async function removeSiItem(ingredientId: any) {
   if (ing && ing.targetStock) delete ing.targetStock[loc];
   try {
     await apiPost('/api/ingredients/target-stock', { ingredientId, location: loc, amount: null });
-  } catch (e: any) { toastError('Failed to remove: ' + e.message); }
+  } catch (e: unknown) { toastError('Failed to remove: ' + (e instanceof Error ? e.message : 'Unknown error')); }
   renderOrders();
 }
 
@@ -202,7 +202,7 @@ export function updateSiTarget(ingredientId: any, val: any) {
   siTargetTimeout = setTimeout(async () => {
     try {
       await apiPost('/api/ingredients/target-stock', { ingredientId, location: loc, amount: baseAmount });
-    } catch (e: any) { toastError('Failed to save target: ' + e.message); }
+    } catch (e: unknown) { toastError('Failed to save target: ' + (e instanceof Error ? e.message : 'Unknown error')); }
   }, 800);
 }
 
@@ -221,7 +221,7 @@ export function updateSiStock(ingredientId: any, val: any) {
   siStockTimeout = setTimeout(async () => {
     try {
       await apiPost('/api/ingredients/stock', { ingredientId, location: loc, amount: baseAmount });
-    } catch (e: any) { toastError('Failed to save stock: ' + e.message); }
+    } catch (e: unknown) { toastError('Failed to save stock: ' + (e instanceof Error ? e.message : 'Unknown error')); }
   }, 800);
 }
 
@@ -1050,7 +1050,7 @@ export async function checkHanosStatus() {
     hanosStatus = await apiGet('/api/hanos/status');
     // Re-render if status changed (first load with credentials configured)
     if (!prev && hanosStatus.configured) renderOrders();
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error('Hanos status check failed:', e);
     hanosStatus = { configured: false, west: false, centraal: false };
   }
@@ -1132,8 +1132,8 @@ export async function hanosAddSingle(orderCode: any, name: any) {
       const err = resp.results && resp.results[0] ? resp.results[0].error : 'Unknown error';
       toastError(`Failed: ${err}`);
     }
-  } catch (e: any) {
-    toastError('Hanos error: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Hanos error: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -1279,9 +1279,9 @@ export async function hanosExecuteFromModal(source: any, storageCat: any) {
         console.warn('Hanos bulk results:', resp.results);
       }
     }, 400);
-  } catch (e: any) {
+  } catch (e: unknown) {
     closeModal();
-    toastError('Hanos error: ' + e.message);
+    toastError('Hanos error: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -1302,8 +1302,8 @@ export async function saveGramsPerPiece(ingredientId: any, combinedKey: any, val
     await apiPost(`/api/ingredients/${ingredientId}`, { ...db, orderUnitSize: grams });
     toast(`Saved ${grams}g per piece for ${db.name}`);
     renderOrders();
-  } catch (e: any) {
-    toastError('Failed to save: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -1409,7 +1409,7 @@ export async function refreshAllRecipes() {
       if (recipe.serving) d.serving = recipe.serving;
       if (recipe.ingredients) d.recipeIngredients = recipe.ingredients;
       ok++;
-    } catch (e: any) { console.error('Failed to refresh ' + d.name, e); }
+    } catch (e: unknown) { console.error('Failed to refresh ' + d.name, e); }
   }
   scheduleSave();
   renderOrders();
@@ -1720,8 +1720,8 @@ export async function saveStocktakeArea(goToNext: any) {
   if (updates.length) {
     try {
       await apiPost('/api/ingredients/stock/bulk', updates);
-    } catch (e: any) {
-      toastError('Failed to save stock: ' + e.message);
+    } catch (e: unknown) {
+      toastError('Failed to save stock: ' + (e instanceof Error ? e.message : 'Unknown error'));
       return;
     }
     // Also update ingredientDb in memory

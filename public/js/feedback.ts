@@ -87,8 +87,8 @@ export async function submitFeedback(screen: any) {
     await apiPost('/api/feedback', feedback);
     closeModal();
     toast('Thanks for the feedback!');
-  } catch (e: any) {
-    toastError('Could not send feedback: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Could not send feedback: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 

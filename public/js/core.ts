@@ -2,20 +2,22 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DAYS, MEALS, STORAGE } from './state';
-// utils functions accessed via window to avoid circular deps
-const scheduleSave = () => (window as any).scheduleSave?.();
-const apiPost = (path: any, body: any) => (window as any).apiPost?.(path, body);
-const toast = (msg: any) => (window as any).toast?.(msg);
-// init functions accessed via window to avoid circular deps
-const esc = (str: any) => (window as any).esc?.(str) || '';
-const showModal = (content: any) => (window as any).showModal?.(content);
-const closeModal = () => (window as any).closeModal?.();
+import type { Batch, Service, Catering, CateringDish, RecipeEntry, RecipeIngredient, Location, Meal, DishType, StorageType, BatchRatings } from '@shared/types';
 
-export function isBatchCooked(d: any) {
+// utils functions accessed via window to avoid circular deps
+const scheduleSave = (): void => (window as any).scheduleSave?.();
+const apiPost = (path: string, body: unknown): Promise<unknown> => (window as any).apiPost?.(path, body);
+const toast = (msg: string): void => (window as any).toast?.(msg);
+// init functions accessed via window to avoid circular deps
+const esc = (str: string): string => (window as any).esc?.(str) || '';
+const showModal = (content: string): void => (window as any).showModal?.(content);
+const closeModal = (): void => (window as any).closeModal?.();
+
+export function isBatchCooked(d: Batch): boolean {
   return (d.stock || 0) > 0;
 }
 
-export function locationBadge(d: any) {
+export function locationBadge(d: Batch): string {
   if (d.location === 'centraal') {
     return `<span class="badge b-centraal">Sering Centraal</span>`;
   }
@@ -23,18 +25,18 @@ export function locationBadge(d: any) {
 }
 
 // Amsterdam time helper (shared — also used by planner.js inventory)
-export function getAmsterdamNow() {
+export function getAmsterdamNow(): Date {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
 }
 
 // Convert a date string ("2026-03-23") to a day name ("Mon", "Tue", etc.)
-export function dateToDayName(dateStr: any) {
+export function dateToDayName(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00'); // noon to avoid timezone edge cases
   return DAYS[(d.getDay() + 6) % 7];
 }
 
 // Convert a JS Date object to ISO date string "2026-03-23"
-export function dateToIso(d: any) {
+export function dateToIso(d: Date): string {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
@@ -43,7 +45,7 @@ export function dateToIso(d: any) {
 // A service is served when:
 // - Its date is before today, OR
 // - Its date is today AND (clock past deadline OR inventory done after urgent)
-export function isServicePast(svc: any) {
+export function isServicePast(svc: Service): boolean {
   const now = getAmsterdamNow();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const svcDate = new Date(svc.date + 'T12:00:00');
@@ -52,7 +54,7 @@ export function isServicePast(svc: any) {
   if (svcDay > today) return false;      // future date
   // Today — check time and inventory state
   const mins = now.getHours() * 60 + now.getMinutes();
-  const lk = svc.loc === 'west' ? 'west' : 'centraal';
+  const lk: Location = svc.loc === 'west' ? 'west' : 'centraal';
   const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
   const inv = S.inventoryDone[lk] || {};
   if (svc.meal === 'lunch') {
@@ -68,46 +70,46 @@ export function isServicePast(svc: any) {
   return false;
 }
 
-export function rebuildPlanner() {
+export function rebuildPlanner(): void {
   S.planner = {};
-  S.batches.forEach((d: any) => {
-    (d.services || []).forEach((svc: any) => {
+  S.batches.forEach((d: Batch) => {
+    (d.services || []).forEach((svc: Service) => {
       const k = `${svc.loc}-${svc.date}-${svc.meal}`;
       if (!S.planner[k]) S.planner[k] = [];
-      if (!S.planner[k].find((x: any) => x.id === d.id)) S.planner[k].push(d);
+      if (!S.planner[k].find((x: Batch) => x.id === d.id)) S.planner[k].push(d);
     });
   });
 }
 
-export function renderDishListSplit(dishes: any) {
-  const cooked = sortByCookDate(dishes.filter((d: any) => isBatchCooked(d)));
-  const uncooked = sortByCookDate(dishes.filter((d: any) => !isBatchCooked(d)));
+export function renderDishListSplit(dishes: Batch[]): string {
+  const cooked = sortByCookDate(dishes.filter((d: Batch) => isBatchCooked(d)));
+  const uncooked = sortByCookDate(dishes.filter((d: Batch) => !isBatchCooked(d)));
   let html = '';
   if (uncooked.length > 0) {
     html += `<div class="cook-group-hdr uncooked-hdr">To cook (${uncooked.length})</div>`;
-    uncooked.forEach((d: any) => { html += (window as any).renderBatchTile(d); });
+    uncooked.forEach((d: Batch) => { html += (window as any).renderBatchTile(d); });
   }
   if (cooked.length > 0) {
     html += `<div class="cook-group-hdr cooked-hdr">Cooked (${cooked.length})</div>`;
-    cooked.forEach((d: any) => { html += (window as any).renderBatchTile(d); });
+    cooked.forEach((d: Batch) => { html += (window as any).renderBatchTile(d); });
   }
   return html;
 }
 
-export function sortByCookDate(dishes: any) {
-  return [...dishes].sort((a: any, b: any) => {
+export function sortByCookDate(dishes: Batch[]): Batch[] {
+  return [...dishes].sort((a: Batch, b: Batch) => {
     const da = a.cookDate ? strToDate(a.cookDate) : null;
     const db = b.cookDate ? strToDate(b.cookDate) : null;
     // No date goes to bottom
     if (!da && !db) return 0;
     if (!da) return 1;
     if (!db) return -1;
-    return da - db;
+    return da.getTime() - db.getTime();
   });
 }
 
 // Get guest count for a location, date string, and meal
-export function getGuests(loc: any, dateStr: any, meal: any) {
+export function getGuests(loc: string, dateStr: string, meal: Meal | string): number {
   const lk = loc === 'west' ? 'west' : 'centraal';
   const dn = dateToDayName(dateStr);
 
@@ -126,7 +128,7 @@ export function getGuests(loc: any, dateStr: any, meal: any) {
 
   // Current week: use S.guests (user-edited base counts)
   if (mk === curMk) {
-    return ((S.guests[lk] || {})[dn] || {})[meal] || 0;
+    return ((S.guests[lk] || {})[dn] || {} as any)[meal] || 0;
   }
 
   // Future/past weeks: use guestsNextWeeks predictions
@@ -136,33 +138,37 @@ export function getGuests(loc: any, dateStr: any, meal: any) {
   }
 
   // Final fallback to base counts
-  return ((S.guests[lk] || {})[dn] || {})[meal] || 0;
+  return ((S.guests[lk] || {})[dn] || {} as any)[meal] || 0;
 }
 
-export function calcRequired(dish: any) {
+export function calcRequired(dish: Batch): number {
   let total = 0;
-  (dish.services || []).forEach((svc: any) => {
+  (dish.services || []).forEach((svc: Service) => {
     if (isServicePast(svc)) return; // Skip served services — no longer pulling stock
     const g = getGuests(svc.loc, svc.date, svc.meal);
     const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter((d: any) => d.type === dish.type);
+    const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
     const count = Math.max(peers.length, 1);
     total += (g / count) * ((dish.serving || 280) / 1000);
   });
   // Add catering requirements (split by same-type peers)
-  (S.caterings || []).forEach((c: any) => {
-    const cd = (c.dishes || []).find((cd: any) => cd.dishId === dish.id);
+  (S.caterings || []).forEach((c: Catering) => {
+    const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
     if (cd) {
-      const peers = (c.dishes || []).filter((d: any) => d.type === dish.type).length;
+      const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
       total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000);
     }
   });
   return Math.round(total * 10) / 10;
 }
 
-export function calcRequiredBreakdown(dish: any) {
-  const lines: any[] = [];
-  (dish.services || []).forEach((svc: any) => {
+export interface BreakdownLine {
+  text: string;
+}
+
+export function calcRequiredBreakdown(dish: Batch): string[] {
+  const lines: string[] = [];
+  (dish.services || []).forEach((svc: Service) => {
     const loc = svc.loc === 'west' ? 'Sering West' : 'Sering Centraal';
     const meal = svc.meal.charAt(0).toUpperCase() + svc.meal.slice(1);
     const dayName = dateToDayName(svc.date);
@@ -173,17 +179,17 @@ export function calcRequiredBreakdown(dish: any) {
     }
     const g = getGuests(svc.loc, svc.date, svc.meal);
     const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter((d: any) => d.type === dish.type);
+    const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
     const count = Math.max(peers.length, 1);
     const liters = Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
     if (liters > 0) {
       lines.push(`${liters}L \u2014 ${dayName} ${meal} ${loc}`);
     }
   });
-  (S.caterings || []).forEach((c: any) => {
-    const cd = (c.dishes || []).find((cd: any) => cd.dishId === dish.id);
+  (S.caterings || []).forEach((c: Catering) => {
+    const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
     if (cd) {
-      const peers = (c.dishes || []).filter((d: any) => d.type === dish.type).length;
+      const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
       const liters = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000) * 10) / 10;
       if (liters > 0) lines.push(`${liters}L \u2014 ${c.name} (${c.guestCount} guests${peers > 1 ? ', 1/' + peers + ' split' : ''})`);
     }
@@ -191,27 +197,27 @@ export function calcRequiredBreakdown(dish: any) {
   return lines;
 }
 
-export function calcTotalGuests(dish: any) {
+export function calcTotalGuests(dish: Batch): number {
   let g = 0;
-  (dish.services || []).forEach((svc: any) => {
+  (dish.services || []).forEach((svc: Service) => {
     if (isServicePast(svc)) return; // Skip served services
     const total = getGuests(svc.loc, svc.date, svc.meal);
     const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter((d: any) => d.type === dish.type);
+    const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
     g += total / Math.max(peers.length, 1);
   });
   // Add catering guests (split by same-type peers)
-  (S.caterings || []).forEach((c: any) => {
-    const cd = (c.dishes || []).find((cd: any) => cd.dishId === dish.id);
+  (S.caterings || []).forEach((c: Catering) => {
+    const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
     if (cd) {
-      const peers = (c.dishes || []).filter((d: any) => d.type === dish.type).length;
+      const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
       g += (c.guestCount || 0) / Math.max(peers, 1);
     }
   });
   return Math.round(g);
 }
 
-export function calcIngredientsFromRecipe(dish: any) {
+export function calcIngredientsFromRecipe(dish: Batch): Array<{ name: string; amount: number; unit: string; source: string }> {
   if (!dish.recipeIngredients || !dish.recipeVolume) return [];
   const totalGuests = calcTotalGuests(dish);
   if (totalGuests === 0) return [];
@@ -220,7 +226,7 @@ export function calcIngredientsFromRecipe(dish: any) {
   const recipeVolumeMl = dish.recipeVolume * 1000;
   const guestsPerRecipe = recipeVolumeMl / (dish.serving || 280);
   const mult = totalGuests / guestsPerRecipe;
-  return dish.recipeIngredients.map((ing: any) => ({
+  return dish.recipeIngredients.map((ing: RecipeIngredient) => ({
     name: ing.name,
     amount: Math.round(ing.amount * mult),
     unit: ing.unit || 'g',
@@ -228,29 +234,29 @@ export function calcIngredientsFromRecipe(dish: any) {
   }));
 }
 
-export function diffStr(d: any) {
+export function diffStr(d: Batch): { diff: number; str: string; cls: string } {
   const req = calcRequired(d);
   const diff = Math.round((d.stock - req) * 10) / 10;
   return { diff, str: (diff >= 0 ? '+' : '') + diff + 'L', cls: diff < 0 ? 'stock-miss' : diff < 5 ? 'stock-low' : 'stock-ok' };
 }
 
-export function storageBadge(s: any) {
-  const m: any = { Gastro:'b-gastro', Frozen:'b-frozen', 'Vac-packed':'b-vacpack' };
-  return `<span class="badge ${m[s] || 'b-gastro'}">${s}</span>`;
+const STORAGE_BADGE_MAP: Record<string, string> = { Gastro:'b-gastro', Frozen:'b-frozen', 'Vac-packed':'b-vacpack' };
+
+export function storageBadge(s: StorageType | string): string {
+  return `<span class="badge ${STORAGE_BADGE_MAP[s] || 'b-gastro'}">${s}</span>`;
 }
-export function storageBadgeClass(s: any) {
-  const m: any = { Gastro:'b-gastro', Frozen:'b-frozen', 'Vac-packed':'b-vacpack' };
-  return 'badge ' + (m[s] || 'b-gastro');
+export function storageBadgeClass(s: StorageType | string): string {
+  return 'badge ' + (STORAGE_BADGE_MAP[s] || 'b-gastro');
 }
-export function cycleStorage(id: any) {
-  const d = S.batches.find((x: any) => x.id === id);
+export function cycleStorage(id: string): void {
+  const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
   const idx = STORAGE.indexOf(d.storage || 'Gastro');
   d.storage = STORAGE[(idx + 1) % STORAGE.length];
   scheduleSave();
   (window as any).rerenderCurrentView?.();
 }
-export function logisticsBadge(d: any) {
+export function logisticsBadge(d: Batch): string {
   const loc = d.location || 'west';
   const label = loc === 'centraal' ? 'Sering Centraal' : 'Sering West';
   if (d.inTransit) {
@@ -259,19 +265,19 @@ export function logisticsBadge(d: any) {
   }
   return `<span class="badge ${loc === 'centraal' ? 'b-centraal' : 'b-west'}">${label}</span>`;
 }
-export function logisticsBadgeClass(d: any) {
+export function logisticsBadgeClass(d: Batch): string {
   const loc = d.location || 'west';
   if (d.inTransit) return 'badge ' + (loc === 'centraal' ? 'b-twc' : 'b-tww');
   return 'badge ' + (loc === 'centraal' ? 'b-centraal' : 'b-west');
 }
-export function logisticsShort(d: any) {
+export function logisticsShort(d: Batch): string {
   const loc = d.location || 'west';
   const label = loc === 'centraal' ? 'Sering Centraal' : 'Sering West';
   if (d.inTransit) return '\u2192 ' + label;
   return label;
 }
-export function cycleLocation(id: any) {
-  const d = S.batches.find((x: any) => x.id === id);
+export function cycleLocation(id: string): void {
+  const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
   if (d.location === 'west') d.location = 'centraal';
   else d.location = 'west';
@@ -282,8 +288,8 @@ export function cycleLocation(id: any) {
 }
 
 // ── SERVED / ARCHIVE ─────────────────────────────────────
-export function openServedDialog(id: any) {
-  const d = S.batches.find((x: any) => x.id === id);
+export function openServedDialog(id: string): void {
+  const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
   showModal(`<h3>Mark "${esc(d.name)}" as served</h3>
     <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">This will remove it from the menu planner. Optionally rate it first:</p>
@@ -303,22 +309,23 @@ export function openServedDialog(id: any) {
     </div>`);
 }
 
-export let pendingRatings: any = { skill:0, speed:0, banger:0 };
+export let pendingRatings: BatchRatings = { skill:0, speed:0, banger:0 };
 
-export function ratingButtons(key: any, val: any) {
+export function ratingButtons(key: keyof BatchRatings, val: number): string {
   pendingRatings[key] = val;
   return [1,2,3,4,5].map(n =>
     `<button class="rating-btn${n <= val ? ' on' : ''}" onclick="setRating('${key}',${n})">${n}</button>`
   ).join('');
 }
 
-export function setRating(key: any, val: any) {
+export function setRating(key: keyof BatchRatings, val: number): void {
   pendingRatings[key] = val;
-  document.getElementById('rate-'+key)!.innerHTML = ratingButtons(key, val);
+  const el = document.getElementById('rate-'+key);
+  if (el) el.innerHTML = ratingButtons(key, val);
 }
 
-export function archiveDish(id: any, withRating: any) {
-  const d = S.batches.find((x: any) => x.id === id);
+export function archiveDish(id: string, withRating: boolean): void {
+  const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
   const rating = withRating ? { ...pendingRatings } : null;
   // Store in archive (in state for now)
@@ -334,7 +341,7 @@ export function archiveDish(id: any, withRating: any) {
   });
   // Update recipe index with running average of ratings
   if (rating && d.recipeSheetId) {
-    const ri = S.recipeIndex.find((r: any) => r.recipeSheetId === d.recipeSheetId);
+    const ri = S.recipeIndex.find((r: RecipeEntry) => r.recipeSheetId === d.recipeSheetId);
     if (ri) {
       const n = ri.timesServed || 0;
       const newN = n + 1;
@@ -343,11 +350,11 @@ export function archiveDish(id: any, withRating: any) {
       ri.avgBanger = ((ri.avgBanger || 0) * n + (rating.banger || 0)) / newN;
       ri.timesServed = newN;
       // Save updated recipe index entry
-      apiPost('/api/recipe-index', ri).catch((e: any) => console.error('Failed to update recipe ratings:', e));
+      apiPost('/api/recipe-index', ri).catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
     }
   }
   // Remove from active dishes
-  S.batches = S.batches.filter((x: any) => x.id !== id);
+  S.batches = S.batches.filter((x: Batch) => x.id !== id);
   pendingRatings = { skill:0, speed:0, banger:0 };
   closeModal();
   rebuildPlanner();
@@ -355,31 +362,31 @@ export function archiveDish(id: any, withRating: any) {
   scheduleSave();
   toast(esc(d.name) + ' archived');
 }
-export function typeBadge(t: any) {
+export function typeBadge(t: DishType | string): string {
   if (t === 'Dessert') return `<span class="badge b-dessert">Dessert</span>`;
   return `<span class="badge ${t === 'Soup' ? 'b-soup' : 'b-main'}">${t}</span>`;
 }
-export function typeBadgeClass(t: any) {
+export function typeBadgeClass(t: DishType | string): string {
   if (t === 'Dessert') return 'badge b-dessert';
   return 'badge ' + (t === 'Soup' ? 'b-soup' : 'b-main');
 }
-export const TYPES = ['Soup','Main course','Dessert'];
-export function cycleType(id: any) {
-  const d = S.batches.find((x: any) => x.id === id);
+export const TYPES: DishType[] = ['Soup','Main course','Dessert'];
+export function cycleType(id: string): void {
+  const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
   const idx = TYPES.indexOf(d.type || 'Soup');
   d.type = TYPES[(idx + 1) % TYPES.length];
   scheduleSave();
   (window as any).rerenderCurrentView?.();
 }
-export function toggleOrder(id: any) {
-  const d = S.batches.find((x: any) => x.id === id);
+export function toggleOrder(id: string): void {
+  const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
   d.orderFor = !d.orderFor;
   scheduleSave();
   (window as any).rerenderCurrentView?.();
 }
-export function chipClass(d: any) {
+export function chipClass(d: Batch): string {
   if (d.inTransit) return 'chip-tr';
   if (d.type === 'Soup') return 'chip-soup';
   if (d.type === 'Dessert') return 'chip-dessert';
@@ -388,19 +395,19 @@ export function chipClass(d: any) {
 
 // ── Date utilities (defined here to avoid circular deps with dishes.ts) ──
 
-export function getToday() {
+export function getToday(): Date {
   const d = new Date();
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
-export function dateToStr(d: any) {
+export function dateToStr(d: Date): string {
   const dd = String(d.getDate()).padStart(2,'0');
   const mm = String(d.getMonth()+1).padStart(2,'0');
   const yyyy = d.getFullYear();
   return dd+'/'+mm+'/'+yyyy;
 }
 
-export function strToDate(s: any) {
+export function strToDate(s: string): Date | null {
   if (!s) return null;
   // handle dd/mm/yyyy
   const parts = s.split('/');

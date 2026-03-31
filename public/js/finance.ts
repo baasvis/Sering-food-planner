@@ -68,7 +68,7 @@ export async function loadFinanceData() {
 
   try {
     S.financeData = await apiGet(`/api/finance/revenue?start=${start}&end=${end}`);
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error('Failed to load finance data:', e);
     S.financeData = [];
   }
@@ -88,7 +88,7 @@ export async function loadFinanceProducts() {
 
   try {
     S.financeProducts = await apiGet(url);
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error('Failed to load product data:', e);
     S.financeProducts = [];
   }
@@ -99,7 +99,7 @@ export async function checkSyncStatus() {
     const status = await apiGet('/api/finance/sync-status');
     S.financeSyncing = status.syncing;
     return status;
-  } catch (e: any) {
+  } catch (e: unknown) {
     return { syncing: false };
   }
 }
@@ -137,9 +137,9 @@ export async function triggerSync() {
       }
     }, 3000);
 
-  } catch (e: any) {
+  } catch (e: unknown) {
     S.financeSyncing = false;
-    toastError('Sync failed: ' + e.message);
+    toastError('Sync failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
     renderFinance();
   }
 }
@@ -451,8 +451,8 @@ export async function cancelSync() {
     S.financeSyncing = false;
     renderFinance();
     toast('Sync cancelled');
-  } catch (e: any) {
-    toastError('Cancel failed: ' + e.message);
+  } catch (e: unknown) {
+    toastError('Cancel failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 

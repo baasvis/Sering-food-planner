@@ -254,7 +254,7 @@ export async function handleFiles(fileList: any) {
   }));
 
   try { await Promise.all(readPromises); }
-  catch (e: any) { toastError('Error reading files: ' + e.message); return; }
+  catch (e: unknown) { toastError('Error reading files: ' + (e instanceof Error ? e.message : 'Unknown error')); return; }
 
   const existingDeviceMap = (S.guestHistory && S.guestHistory.deviceMap) || {};
   const result = categorizeUploadedFiles(fileContents, existingDeviceMap);
@@ -281,7 +281,7 @@ export async function saveUploadedHistory() {
     _pendingUpload = null;
     toast('History saved — predictions updated');
     renderGuests();
-  } catch (e: any) { toastError('Failed to save: ' + e.message); }
+  } catch (e: unknown) { toastError('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error')); }
 }
 
 // ── Apply Predictions ─────────────────────────────────────

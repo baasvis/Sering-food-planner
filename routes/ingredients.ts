@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import fs from 'fs';
-import { INGREDIENTS_SEED } from '../lib/config';
+import { INGREDIENTS_SEED, errMsg } from '../lib/config';
 import { prisma, dbAppendLog } from '../lib/db';
 import ingredientsImportRouter from './ingredients-import';
 
@@ -14,8 +14,8 @@ export async function loadIngredients() {
   try {
     const rows = await prisma.ingredient.findMany();
     if (rows.length > 0) return rows;
-  } catch (e: any) {
-    console.error('DB ingredient load error:', e.message);
+  } catch (e: unknown) {
+    console.error('DB ingredient load error:', errMsg(e));
   }
   if (fs.existsSync(INGREDIENTS_SEED)) {
     return JSON.parse(fs.readFileSync(INGREDIENTS_SEED, 'utf8'));
@@ -49,9 +49,9 @@ router.get('/', async (_req: Request, res: Response) => {
       notes: ing.notes,
       active: ing.active,
     })));
-  } catch (e: any) {
-    console.error('Ingredient DB error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('Ingredient DB error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -60,9 +60,9 @@ router.get('/full', async (_req: Request, res: Response) => {
   try {
     const ingredients = await loadIngredients();
     res.json(ingredients);
-  } catch (e: any) {
-    console.error('Ingredient DB error:', e.message);
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    console.error('Ingredient DB error:', errMsg(e));
+    res.status(500).json({ error: errMsg(e) });
   }
 });
 
@@ -108,7 +108,7 @@ router.post('/', async (req: Request, res: Response) => {
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients`);
     res.json({ ok: true, count: ingredients.length });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 // Update target stock for a single ingredient at one location
@@ -126,7 +126,7 @@ router.post('/target-stock', async (req: Request, res: Response) => {
     }
     await prisma.ingredient.update({ where: { id: ingredientId }, data: { targetStock } });
     res.json({ ok: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 // Update stock for a single ingredient at one location
@@ -140,7 +140,7 @@ router.post('/stock', async (req: Request, res: Response) => {
     stock[location] = { amount: parseFloat(amount) || 0, date: new Date().toISOString().slice(0, 10) };
     await prisma.ingredient.update({ where: { id: ingredientId }, data: { stock } });
     res.json({ ok: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 // Bulk stock update (for stocktake)
@@ -160,7 +160,7 @@ router.post('/stock/bulk', async (req: Request, res: Response) => {
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'stock-update', `bulk stock update: ${updates.length} items`);
     res.json({ ok: true, updated: updates.length });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 // Save single ingredient (create or update) — must be after specific routes
@@ -202,7 +202,7 @@ router.post('/:id', async (req: Request, res: Response) => {
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'ingredient', `saved "${ingredient.name}"`);
     res.json({ ok: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 // Delete ingredient
@@ -210,7 +210,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
   try {
     await prisma.ingredient.delete({ where: { id: req.params.id as string } });
     res.json({ ok: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
 });
 
 export default router;

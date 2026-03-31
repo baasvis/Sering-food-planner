@@ -2,10 +2,13 @@
 // POSTGRESQL DATA LAYER (PRISMA)
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { PrismaClient } from '@prisma/client';
-import type { Batch, GuestsData, Catering, TransportItem, DataResponse } from '../shared/types';
+import { PrismaClient, Prisma } from '@prisma/client';
+import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeEntry } from '../shared/types';
 
 export const prisma = new PrismaClient();
+
+// Prisma interactive transaction client type
+type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
 
 // ── Validation ──
 
@@ -15,7 +18,7 @@ const VALID_LOCATIONS = ['west', 'centraal'];
 const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const VALID_MEALS = ['lunch', 'dinner'];
 
-export function validateBatches(batches: any[]): string | null {
+export function validateBatches(batches: Batch[]): string | null {
   if (!Array.isArray(batches)) return 'batches must be an array';
   if (batches.length > 500) return 'Too many batches (max 500)';
   const ids = new Set<string>();
@@ -42,7 +45,7 @@ export function validateBatches(batches: any[]): string | null {
   return null;
 }
 
-export function validateBatch(b: any): string | null {
+export function validateBatch(b: Batch): string | null {
   if (!b.id || typeof b.id !== 'string') return 'missing or invalid id';
   if (!b.name || typeof b.name !== 'string' || b.name.length > 200) return 'invalid name';
   if (!VALID_TYPES.includes(b.type)) return `invalid type "${b.type}"`;
@@ -61,7 +64,7 @@ export function validateBatch(b: any): string | null {
   return null;
 }
 
-export function validateGuests(guests: any): string | null {
+export function validateGuests(guests: GuestsData): string | null {
   if (!guests || typeof guests !== 'object') return 'guests must be an object';
   for (const loc of VALID_LOCATIONS) {
     if (!guests[loc]) return `guests.${loc} missing`;
@@ -90,7 +93,7 @@ export function getDefaultGuests(): GuestsData {
 
 // ── Row transformers (frontend shape ↔ Prisma shape) ──
 
-export function toBatchRow(b: any) {
+export function toBatchRow(b: Batch) {
   return {
     id: b.id,
     name: b.name,
@@ -106,51 +109,52 @@ export function toBatchRow(b: any) {
     cookDate: b.cookDate || null,
     recipeSheetId: b.recipeSheetId || null,
     recipeVolume: b.recipeVolume || null,
-    recipeIngredients: b.recipeIngredients || undefined,
+    // Prisma Json fields need cast: our typed arrays lack the index signature Prisma expects
+    recipeIngredients: (b.recipeIngredients || undefined) as Prisma.InputJsonValue | undefined,
     parentId: b.parentId || null,
     note: b.note || '',
-    services: b.services || [],
+    services: (b.services || []) as unknown as Prisma.InputJsonValue,
     createdAt: b.createdAt || new Date().toISOString(),
   };
 }
 
-function toGuestRows(guests: GuestsData) {
+function toGuestRows(guests: GuestsData): Array<{ location: string; day: string; lunch: number; dinner: number }> {
   const rows: Array<{ location: string; day: string; lunch: number; dinner: number }> = [];
   for (const [loc, days] of Object.entries(guests)) {
     for (const [day, meals] of Object.entries(days)) {
-      rows.push({ location: loc, day, lunch: (meals as any).lunch || 0, dinner: (meals as any).dinner || 0 });
+      rows.push({ location: loc, day, lunch: meals.lunch || 0, dinner: meals.dinner || 0 });
     }
   }
   return rows;
 }
 
-function toCateringRow(c: any) {
+function toCateringRow(c: Catering) {
   return {
     id: c.id,
     name: c.name || '',
     date: c.date || null,
     guestCount: c.guestCount || 0,
     deliveryMode: c.deliveryMode || 'pickup',
-    dishes: c.dishes || [],
+    dishes: (c.dishes || []) as unknown as Prisma.InputJsonValue,
     logisticsNotes: c.logisticsNotes || '',
     createdAt: c.createdAt || new Date().toISOString(),
   };
 }
 
-function toTransportRow(t: any) {
+function toTransportRow(t: TransportItem) {
   return { id: t.id, text: t.text };
 }
 
 // ── Shared write logic ──
 
-async function writeBatches(tx: any, batches: any[]) {
+async function writeBatches(tx: TxClient, batches: Batch[]): Promise<void> {
   await tx.batch.deleteMany();
   if (batches.length > 0) {
     await tx.batch.createMany({ data: batches.map(toBatchRow) });
   }
 }
 
-async function writeGuests(tx: any, guests: GuestsData) {
+async function writeGuests(tx: TxClient, guests: GuestsData): Promise<void> {
   await tx.guest.deleteMany();
   const guestData = toGuestRows(guests);
   if (guestData.length > 0) {
@@ -158,14 +162,14 @@ async function writeGuests(tx: any, guests: GuestsData) {
   }
 }
 
-async function writeCaterings(tx: any, caterings: any[]) {
+async function writeCaterings(tx: TxClient, caterings: Catering[]): Promise<void> {
   await tx.catering.deleteMany();
   if (caterings && caterings.length > 0) {
     await tx.catering.createMany({ data: caterings.map(toCateringRow) });
   }
 }
 
-async function writeTransport(tx: any, items: any[]) {
+async function writeTransport(tx: TxClient, items: TransportItem[]): Promise<void> {
   await tx.transportItem.deleteMany();
   if (items && items.length > 0) {
     await tx.transportItem.createMany({ data: items.map(toTransportRow) });
@@ -184,9 +188,26 @@ export async function dbReadAll(): Promise<DataResponse> {
       prisma.transportItem.findMany(),
     ]);
 
-    const batches = batchRows.map(b => ({
-      ...toBatchRow(b),
-      services: Array.isArray(b.services) ? b.services as any[] : [],
+    const batches: Batch[] = batchRows.map(b => ({
+      id: b.id,
+      name: b.name,
+      type: b.type as Batch['type'],
+      stock: b.stock,
+      serving: b.serving,
+      storage: b.storage as Batch['storage'],
+      location: b.location as Batch['location'],
+      inTransit: b.inTransit,
+      allergens: b.allergens,
+      extraAllergens: b.extraAllergens,
+      orderFor: b.orderFor,
+      cookDate: b.cookDate,
+      recipeSheetId: b.recipeSheetId,
+      recipeVolume: b.recipeVolume,
+      recipeIngredients: (b.recipeIngredients ?? null) as Batch['recipeIngredients'],
+      parentId: b.parentId,
+      note: b.note,
+      services: Array.isArray(b.services) ? (b.services as unknown as Service[]) : [],
+      createdAt: b.createdAt,
     }));
 
     const guests = getDefaultGuests();
@@ -197,7 +218,7 @@ export async function dbReadAll(): Promise<DataResponse> {
       }
     }
 
-    const recipeIndex = recipeRows.map(r => ({
+    const recipeIndex: RecipeEntry[] = recipeRows.map(r => ({
       id: r.id,
       name: r.name,
       type: r.type,
@@ -209,7 +230,7 @@ export async function dbReadAll(): Promise<DataResponse> {
       servingTemp: r.servingTemp,
       servingSize: r.servingSize,
       recipeVolume: r.recipeVolume,
-      recipeIngredients: r.recipeIngredients,
+      recipeIngredients: r.recipeIngredients as RecipeEntry['recipeIngredients'],
       createdAt: r.createdAt,
       avgSkill: r.avgSkill,
       avgSpeed: r.avgSpeed,
@@ -217,26 +238,27 @@ export async function dbReadAll(): Promise<DataResponse> {
       timesServed: r.timesServed,
     }));
 
-    const caterings = cateringRows.map(c => ({
+    const caterings: Catering[] = cateringRows.map(c => ({
       id: c.id,
       name: c.name,
       date: c.date,
       guestCount: c.guestCount,
       deliveryMode: c.deliveryMode,
-      dishes: c.dishes as any[],
+      dishes: (c.dishes ?? []) as unknown as Catering['dishes'],
       logisticsNotes: c.logisticsNotes,
     }));
 
-    const transportItems = transportRows.map(t => ({ id: t.id, text: t.text }));
+    const transportItems: TransportItem[] = transportRows.map(t => ({ id: t.id, text: t.text }));
 
     return { batches, guests, recipeIndex, caterings, transportItems };
-  } catch (e: any) {
-    console.error('dbReadAll error:', e.message);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Unknown error';
+    console.error('dbReadAll error:', message);
     return { batches: [], guests: getDefaultGuests(), recipeIndex: [], caterings: [], transportItems: [] };
   }
 }
 
-export async function dbWriteAll(batches: any[], guests: GuestsData, caterings: any[], transportItems: any[]) {
+export async function dbWriteAll(batches: Batch[], guests: GuestsData, caterings: Catering[], transportItems: TransportItem[]): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await writeBatches(tx, batches);
     await writeGuests(tx, guests);
@@ -258,23 +280,23 @@ export async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
 
 // ── Per-entity write helpers (for patch saves) ──
 
-export async function dbWriteBatches(batches: any[]) {
+export async function dbWriteBatches(batches: Batch[]): Promise<void> {
   await prisma.$transaction(async (tx) => writeBatches(tx, batches));
 }
 
-export async function dbWriteGuests(guests: GuestsData) {
+export async function dbWriteGuests(guests: GuestsData): Promise<void> {
   await prisma.$transaction(async (tx) => writeGuests(tx, guests));
 }
 
-export async function dbWriteCaterings(caterings: any[]) {
+export async function dbWriteCaterings(caterings: Catering[]): Promise<void> {
   await prisma.$transaction(async (tx) => writeCaterings(tx, caterings));
 }
 
-export async function dbWriteTransportItems(items: any[]) {
+export async function dbWriteTransportItems(items: TransportItem[]): Promise<void> {
   await prisma.$transaction(async (tx) => writeTransport(tx, items));
 }
 
-export async function dbAppendLog(userEmail: string, userName: string, action: string, details: string) {
+export async function dbAppendLog(userEmail: string, userName: string, action: string, details: string): Promise<void> {
   try {
     await prisma.log.create({
       data: {
@@ -285,7 +307,8 @@ export async function dbAppendLog(userEmail: string, userName: string, action: s
         details,
       },
     });
-  } catch (e: any) {
-    console.error('Log append error:', e.message);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Unknown error';
+    console.error('Log append error:', message);
   }
 }
