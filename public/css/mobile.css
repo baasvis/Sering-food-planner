@@ -148,6 +148,9 @@
     /* Content padding so it doesn't hide behind bottom nav */
     .content{padding-bottom:72px;}
 
+    /* Stocktake save bar above bottom nav */
+    .stocktake-save-bar{bottom:68px !important;}
+
     /* Move feedback FAB above bottom nav */
     .feedback-fab{bottom:68px !important;}
 

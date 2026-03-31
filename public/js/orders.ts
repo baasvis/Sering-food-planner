@@ -1637,7 +1637,7 @@ export function renderStocktakeArea() {
     });
   }
 
-  html += `<div style="position:sticky;bottom:0;background:var(--bg1);padding:16px 0;border-top:2px solid var(--border);display:flex;gap:12px;flex-wrap:wrap;">
+  html += `<div class="stocktake-save-bar" style="position:sticky;bottom:0;background:var(--bg1);padding:16px 0;border-top:2px solid var(--border);display:flex;gap:12px;flex-wrap:wrap;">
     <button class="btn" style="background:var(--green);color:white;flex:1;padding:12px;font-size:15px;" onclick="saveStocktakeArea(true)">Save & next area →</button>
     <button class="btn" style="background:var(--orange, #e67e22);color:white;flex:1;padding:12px;font-size:15px;" onclick="saveStocktakeArea(false)">Save & stop stocktake</button>
   </div>
