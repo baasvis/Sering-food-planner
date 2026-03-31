@@ -10,13 +10,10 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
 
 // Static files — serve built client in production, public/ in dev
-// In production (Railway), compiled server runs from dist/server/, so __dirname = dist/server/
-// Vite builds client to dist/client/, so we go up one level to dist/, then into client/
+// In production, compiled server runs from dist/server/, so __dirname = dist/server/
+// Vite builds client to dist/client/, one level up: path.join(__dirname, '..', 'client')
 // In dev, tsx runs from project root, so __dirname = project root, public/ is correct
-const isProduction = process.env.NODE_ENV === 'production'
-  || !!process.env.RAILWAY_ENVIRONMENT
-  || !!process.env.RAILWAY_PUBLIC_DOMAIN;
-const clientDir = isProduction
+const clientDir = process.env.NODE_ENV === 'production'
   ? path.join(__dirname, '..', 'client')
   : path.join(__dirname, 'public');
 app.use(express.static(clientDir));

@@ -1,2 +1,2 @@
 [deploy]
-startCommand = "npx prisma migrate deploy && node dist/server/server.js"
+startCommand = "npx prisma migrate deploy && NODE_ENV=production node dist/server/server.js"
