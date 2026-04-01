@@ -19,7 +19,12 @@ export let ingredientDbTypeFilter = 'all'; // 'all' | 'Food' | 'Drinks' | 'Non-f
 export let ingredientDbCatFilter = 'all';  // 'all' | category name
 export let ingredientDbStatusFilter = 'active'; // 'all' | 'active' | 'inactive'
 export let ingredientDbSort = 'name';   // 'name' | 'supplier' | 'category' | 'type'
-export let ingredientDbEditId = null;   // id of ingredient being edited inline
+export let ingredientDbEditId: string | null = null;   // id of ingredient being edited inline
+
+/** Set the edit ID from onclick handlers (module variable, must go through this function) */
+export function setIngredientDbEditId(id: string | null) {
+  ingredientDbEditId = id;
+}
 export let supplierUploadData = null;   // parsed Hanos XLSX data for import
 export let ingredientDbPage = 0;        // current page for pagination
 export const INGREDIENTS_PER_PAGE = 50;
@@ -269,7 +274,7 @@ export function renderIngredientDbTab() {
           <td>${renderInlineStock(ing)}</td>
           <td><span style="cursor:pointer;font-size:16px;" onclick="toggleIngredientActive('${esc(ing.id)}')">${ing.active !== false ? '\u2705' : '\u274C'}</span></td>
           <td>
-            <button class="btn btn-sm" onclick="ingredientDbEditId='${esc(ing.id)}';renderOrders()">Edit</button>
+            <button class="btn btn-sm" onclick="setIngredientDbEditId('${esc(ing.id)}');renderOrders()">Edit</button>
           </td>
         </tr>`;
       }
@@ -455,7 +460,7 @@ export function renderIngredientEditRow(ing: any) {
 
         <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;margin-top:8px;">
           <button class="btn btn-sm btn-danger" onclick="deleteIngredient('${esc(ing.id)}','${esc(ing.name)}')">Delete</button>
-          <button class="btn btn-sm" onclick="ingredientDbEditId=null;renderOrders()">Cancel</button>
+          <button class="btn btn-sm" onclick="setIngredientDbEditId(null);renderOrders()">Cancel</button>
           <button class="btn btn-sm" style="background:var(--green);color:white;" onclick="saveIngredientEdit('${esc(ing.id)}')">Save</button>
         </div>
       </div>
