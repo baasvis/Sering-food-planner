@@ -98,7 +98,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Transport view: "Mark selected as arrived" (changes logistics to destination), custom transport items list (free-text, disappear on delivery)
 - Dish management with inline editing, cook date tracking, stock levels, +/- status pills, sortable columns
 - Recipe index (library) with single + bulk import from Google Sheets, ratings, conditional cost colouring
-- Order overview with 4-tab layout: Combined Order (default), Standard Inventory, Batch Ingredients, Ingredient Database
+- Order overview with 4-tab layout: Combined Order (default), Set Standard Inventory, Batch Ingredients, Ingredient Database
   - All tabs display amounts in order units (e.g. "5x Bak 1 kilogram") when ingredient has orderUnitSize, falling back to formatted metric (kg/L) otherwise. Stock inputs use order units with labels.
   - Standard Inventory: cooks build a weekly base order (persistent, per-location PostgreSQL JSON), searchable from ingredient DB, target stock in order units
   - Batch Ingredients: toggle list of batches at current location (with recipe data), on/off per batch, colored per-batch breakdown in ingredient table. "All on/off" buttons. Toggle state persisted to localStorage per location (batchIngredientToggles_west / _centraal); new batches default to their orderFor value.

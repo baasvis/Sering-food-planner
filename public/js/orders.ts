@@ -258,6 +258,14 @@ export function switchOrdersTab(tab: any) {
 }
 
 export function switchOrdersLoc(loc: any) {
+  // If stocktake is active and user switches location, exit stocktake first
+  // to prevent cross-location contamination (#161)
+  if (stocktakeActive) {
+    stocktakeActive = false;
+    stocktakeArea = null;
+    stocktakeValues = {};
+    stocktakeSavedAreas = [];
+  }
   currentOrdersLoc = loc;
   batchIngredientTogglesInitialized = false; // reset toggles for new location
   renderOrders();
@@ -283,7 +291,7 @@ export function renderOrders() {
 
   const tabBar = `<div class="order-tab-bar">
     <button class="order-tab-btn${currentOrdersTab === 'combined' ? ' active' : ''}" onclick="switchOrdersTab('combined')">🛒 Combined Order</button>
-    <button class="order-tab-btn${currentOrdersTab === 'standard' ? ' active' : ''}" onclick="switchOrdersTab('standard')">📦 Standard Inventory</button>
+    <button class="order-tab-btn${currentOrdersTab === 'standard' ? ' active' : ''}" onclick="switchOrdersTab('standard')">📦 Set Standard Inventory</button>
     <button class="order-tab-btn${currentOrdersTab === 'batches' ? ' active' : ''}" onclick="switchOrdersTab('batches')">🍽️ Batch Ingredients</button>
     <button class="order-tab-btn${currentOrdersTab === 'ingredientDb' ? ' active' : ''}" onclick="switchOrdersTab('ingredientDb')">🗄️ Ingredient Database</button>
   </div>`;
@@ -294,7 +302,25 @@ export function renderOrders() {
   else if (currentOrdersTab === 'ingredientDb') content = renderIngredientDbTab();
   else content = renderCombinedOrderTab();
 
-  document.getElementById('screen-orders').innerHTML = locBar + tabBar + content;
+  const screenEl = document.getElementById('screen-orders');
+  screenEl.innerHTML = locBar + tabBar + content;
+  // UX: prevent scroll-wheel from changing number inputs, Enter moves to next input
+  setupOrderInputUX(screenEl);
+}
+
+/** Prevent mousewheel changing number inputs + Enter-to-next-input on order screens */
+function setupOrderInputUX(container: HTMLElement) {
+  container.querySelectorAll('input.order-stock-input, input.stocktake-input').forEach((input: HTMLInputElement) => {
+    input.addEventListener('wheel', (e: WheelEvent) => { e.preventDefault(); }, { passive: false });
+    input.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const allInputs = Array.from(container.querySelectorAll('input.order-stock-input, input.stocktake-input')) as HTMLInputElement[];
+        const idx = allInputs.indexOf(input);
+        if (idx >= 0 && idx < allInputs.length - 1) allInputs[idx + 1].focus();
+      }
+    });
+  });
 }
 
 // ── Standard Inventory tab ────────────────────────────────
@@ -398,7 +424,7 @@ export function renderStandardInventoryTab() {
           <td>${codeDisplay}</td>
           <td style="font-size:12px;">${unitPrice}</td>
           <td style="white-space:nowrap;">
-            <input class="order-stock-input" type="number" min="0" step="0.1" value="${ing.stockUnits || ''}" placeholder="0" style="width:55px;" oninput="updateSiStock('${esc(ing.id)}', this.value)" />
+            <input class="order-stock-input" type="number" min="0" step="1" value="${ing.stockUnits || ''}" placeholder="0" style="width:55px;" oninput="updateSiStock('${esc(ing.id)}', this.value)" />
             <span class="order-units" style="margin-left:2px;">x ${unitSuffix}</span>
           </td>
           <td style="white-space:nowrap;">
@@ -680,7 +706,7 @@ export function renderBatchIngredientTable() {
       const hasManualStock = orderInventory[key] !== undefined;
       const stockDisplayVal = hasManualStock ? orderInventory[key] : (dbStock > 0 ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
       const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
-      const stockInput = `<input class="order-stock-input" type="number" min="0" step="0.1" value="${stockDisplayVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
+      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockDisplayVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
 
       const effectiveStockBase = hasManualStock
         ? (hasOrderUnit ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
@@ -917,7 +943,7 @@ export function renderCombinedOrderTab() {
       const hasManualStock = combinedOrderStock[key] !== undefined;
       const stockDisplayVal = hasManualStock ? combinedOrderStock[key] : (dbStock > 0 ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
       const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
-      const stockInput = `<input class="order-stock-input" type="number" min="0" step="0.1" value="${stockDisplayVal}" placeholder="0" oninput="updateCombinedOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
+      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockDisplayVal}" placeholder="0" oninput="updateCombinedOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
 
       // To order
       const effectiveStockBase = hasManualStock
@@ -1644,8 +1670,10 @@ export function renderStocktakeArea() {
   </div>`;
 
   container.innerHTML = html;
+  // UX: prevent scroll-wheel + Enter-to-next on stocktake inputs
+  setupOrderInputUX(container);
   // Focus first empty input
-  const firstEmpty = container.querySelector('.stocktake-input[value=""]');
+  const firstEmpty = container.querySelector('.stocktake-input[value=""]') as HTMLInputElement;
   if (firstEmpty) firstEmpty.focus();
 }
 
@@ -1706,6 +1734,15 @@ export async function saveStocktakeArea(goToNext: any) {
   const loc = currentOrdersLoc || 'west';
   const items = getIngredientsForArea(stocktakeArea);
   let saved = 0;
+
+  // Collect values from DOM inputs (don't rely solely on oninput handler — unreliable on mobile)
+  const container = document.getElementById('screen-orders');
+  if (container) {
+    container.querySelectorAll('.stocktake-input').forEach((input: HTMLInputElement) => {
+      const ingId = input.dataset.ingId;
+      if (ingId) stocktakeValues[ingId] = input.value === '' ? undefined : parseFloat(input.value);
+    });
+  }
 
   // Batch save all items that have stocktake values
   const updates = [];

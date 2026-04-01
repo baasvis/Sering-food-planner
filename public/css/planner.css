@@ -41,11 +41,11 @@
   .type-dot.chip-soup{background:var(--green);}
   .type-dot.chip-main{background:var(--blue);}
   .type-dot.chip-dessert{background:var(--purple);}
-  .slot{min-height:44px;border:1px solid var(--border);border-radius:var(--radius);padding:4px;display:flex;flex-direction:column;gap:2px;background:var(--bg);transition:border-color .1s;cursor:pointer;}
+  .slot{min-height:44px;border:1px solid var(--border);border-radius:var(--radius);padding:4px;display:flex;flex-direction:column;gap:2px;background:var(--bg);transition:border-color .1s;cursor:pointer;min-width:0;overflow:hidden;}
   .slot.today{border-color:var(--blue);}
   .slot:hover{border-color:var(--border2);}
   .meal-spacer{height:8px;}
-  .dish-chip{border-radius:5px;padding:3px 6px;font-size:11px;font-weight:500;display:flex;justify-content:space-between;align-items:flex-start;gap:3px;cursor:default;}
+  .dish-chip{border-radius:5px;padding:3px 6px;font-size:11px;font-weight:500;display:flex;justify-content:space-between;align-items:flex-start;gap:3px;cursor:default;min-width:0;overflow:hidden;}
   .chip-tr-border{border-left:2px solid var(--purple);}
   .chip-soup{background:var(--green-bg);color:var(--green);}
   .chip-main{background:var(--blue-bg);color:var(--blue);}
@@ -151,7 +151,7 @@
   .m-stock-row{display:none;}
 
   /* ═══════════ BATCH TILE ═══════════ */
-  .batch-tile{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;}
+  .batch-tile{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;transition:border-color .1s;min-width:0;overflow:hidden;}
   .batch-tile:hover{border-color:var(--border2);}
   .batch-tile.selected{border-color:var(--blue);background:var(--blue-bg);}
   .batch-tile.split-child{margin-left:12px;}
@@ -198,7 +198,7 @@
   .batch-tile.assigning{border-color:var(--blue);background:var(--blue-bg);box-shadow:0 0 0 2px var(--blue);}
 
   /* ═══════════ BATCH POOL ═══════════ */
-  .batch-pool{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);min-width:0;overflow:hidden;}
+  .batch-pool{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);min-width:0;}
   .batch-pool-inline{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);}
   .batch-pool-hdr{font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:8px;}
   .batch-pool-toggle{width:100%;padding:8px 12px;font-size:13px;font-weight:700;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;display:flex;align-items:center;gap:8px;transition:all .12s;margin-bottom:4px;}
@@ -209,7 +209,7 @@
   .batch-assign-btn:hover{background:var(--blue);color:#fff;}
 
   /* Batch tile grid — 3 columns on desktop */
-  .batch-tile-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;min-width:0;}
+  .batch-tile-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;min-width:0;overflow:hidden;}
   .batch-tile-grid .batch-tile.expanded{grid-column:1/-1;}
   @media(max-width:1024px){.batch-tile-grid{grid-template-columns:repeat(2,1fr);}}
   @media(max-width:600px){.batch-tile-grid{grid-template-columns:1fr;}}
