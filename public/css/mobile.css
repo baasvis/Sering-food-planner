@@ -79,7 +79,7 @@
     .order-stock-input{width:55px;font-size:11px;}
 
     /* Modals: slide up from bottom */
-    .modal{width:100%;border-radius:var(--radius-lg) var(--radius-lg) 0 0;margin:auto 0 0 0;max-height:85vh;overflow-y:auto;}
+    .modal{width:100%;border-radius:var(--radius-lg) var(--radius-lg) 0 0;margin:auto 0 0 0;max-height:85vh;overflow-y:auto;padding-bottom:80px;}
     .modal-bg{align-items:flex-end;padding:0;}
 
     /* Feedback button on mobile */

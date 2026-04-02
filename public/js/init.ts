@@ -85,6 +85,32 @@ document.addEventListener('keydown', function(e: any) {
   }
 });
 
+// ── NUMBER INPUT UX ──────────────────────────────────────
+// Prevent scroll wheel from changing number input values (confusing for users)
+document.addEventListener('wheel', function(e: any) {
+  if (document.activeElement && (document.activeElement as HTMLInputElement).type === 'number') {
+    (document.activeElement as HTMLInputElement).blur();
+  }
+}, { passive: true });
+
+// Enter key advances to next input in the same container (order tables, stocktake, etc.)
+document.addEventListener('keydown', function(e: any) {
+  if (e.key !== 'Enter') return;
+  const el = document.activeElement as HTMLInputElement;
+  if (!el || el.tagName !== 'INPUT') return;
+  // Don't interfere with search inputs or modal inputs
+  if (el.type === 'text' && el.closest('.modal')) return;
+  e.preventDefault();
+  // Find all visible inputs in the same scrollable container or screen
+  const container = el.closest('.inv-list, .stocktake-area, .ing-table, .si-table, .screen') || document.body;
+  const inputs = Array.from(container.querySelectorAll('input:not([type=hidden])')) as HTMLInputElement[];
+  const idx = inputs.indexOf(el);
+  if (idx >= 0 && idx < inputs.length - 1) {
+    inputs[idx + 1].focus();
+    inputs[idx + 1].select();
+  }
+});
+
 // ── BEFOREUNLOAD GUARD ────────────────────────────────────
 window.addEventListener('beforeunload', function(e: any) {
   if (saveState !== 'saved') {
