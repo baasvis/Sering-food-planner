@@ -11,6 +11,10 @@ export function newId(): string {
   return crypto.randomUUID();
 }
 
+// Callback for when batches change via SSE (avoids circular import with orders.ts)
+let _onBatchesChanged: (() => void) | null = null;
+export function setOnBatchesChanged(fn: () => void) { _onBatchesChanged = fn; }
+
 // ═══════════════════════════════════════════════════════════════════
 // API + SAVE SYSTEM
 // ═══════════════════════════════════════════════════════════════════
@@ -22,8 +26,8 @@ export async function apiGet(path: string): Promise<any> {
   return r.json();
 }
 
-export async function apiPost(path: string, body: unknown): Promise<any> {
-  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+export async function apiPost(path: string, body: unknown, method: string = 'POST'): Promise<any> {
+  const r = await fetch(path, { method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
   if (r.status === 401) { doLogout(); throw new Error('Session expired'); }
   if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || 'Save failed'); }
   return r.json();
@@ -384,6 +388,8 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     if (deletedBatches) deletedBatches.forEach((id: string) => batchMap.delete(id));
     if (batches) batches.forEach((b: Batch) => batchMap.set(b.id, b));
     S.batches = [...batchMap.values()];
+    // Reset batch ingredient toggles so they re-read from updated orderFor
+    if (_onBatchesChanged) _onBatchesChanged();
     changed = true;
   }
 

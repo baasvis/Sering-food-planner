@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import express, { Request, Response } from 'express';
 import { prisma, validateBatch, withWriteLock, dbAppendLog, toBatchRow } from '../lib/db';
 import { errMsg } from '../lib/config';
+import { broadcast } from './events';
 import type { Batch } from '../shared/types';
 
 const router = express.Router();
@@ -91,10 +92,15 @@ router.patch('/:id', async (req: Request, res: Response) => {
     const user = req.user || { email: 'anonymous', name: 'Anonymous' };
     dbAppendLog(user.email, user.name, 'batch-update', `${updated.name} (${req.params.id as string})`);
 
-    res.json({
+    const batchJson = {
       ...toBatchRow(updated as unknown as Batch),
       services: Array.isArray(updated.services) ? updated.services : [],
-    });
+    };
+
+    // Broadcast the updated batch to other clients (syncs orderFor toggles etc.)
+    broadcast(user.email, 'patch', { batches: [batchJson] });
+
+    res.json(batchJson);
   } catch (e: unknown) {
     if (errMsg(e) === 'not found') return res.status(404).json({ error: 'Batch not found' });
     if (errMsg(e).startsWith('invalid') || errMsg(e).startsWith('missing')) return res.status(400).json({ error: errMsg(e) });

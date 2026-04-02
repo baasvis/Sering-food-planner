@@ -80,6 +80,10 @@
   /* Hanos add-to-cart */
   .hanos-btn{background:none;border:1px solid var(--border2);border-radius:var(--radius);cursor:pointer;font-size:13px;padding:2px 6px;margin-left:4px;vertical-align:middle;line-height:1;transition:all .15s;}
   .hanos-btn:hover{border-color:var(--blue);background:var(--blue-bg);}
+  .hanos-sent{background:color-mix(in srgb, var(--green) 8%, transparent);}
+  .hanos-sent td:first-child::before{content:'✓ ';color:var(--green);font-weight:600;}
+  .hanos-failed{background:color-mix(in srgb, var(--red) 10%, transparent);}
+  .hanos-fail-badge{font-size:10px;color:var(--red);font-weight:600;margin-left:4px;}
   .hanos-bulk-btn{font-size:12px;padding:5px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin-left:4px;font-weight:500;transition:all .15s;}
   .hanos-bulk-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg);}
   .gpstuk-input{border-color:var(--orange, #e67e22) !important;background:var(--orange-bg, #fef3e2) !important;}

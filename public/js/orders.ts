@@ -88,6 +88,13 @@ export function getDbStockTotal(db: any) {
   return total;
 }
 
+/** Check if stock has been explicitly counted (even if amount is 0) */
+export function hasDbStockEntry(db: any) {
+  if (!db || !db.stock) return false;
+  // Stock entries have a `date` field when explicitly counted via stocktake
+  return !!(db.stock.west?.date || db.stock.centraal?.date);
+}
+
 export function formatStorageLoc(s: any) {
   if (!s) return '';
   if (typeof s === 'string') return s; // backward compat
@@ -257,6 +264,11 @@ export function switchOrdersTab(tab: any) {
   renderOrders();
 }
 
+/** Reset batch toggles so they re-read from batch.orderFor on next render (called on SSE patch) */
+export function resetBatchToggles() {
+  batchIngredientTogglesInitialized = false;
+}
+
 export function switchOrdersLoc(loc: any) {
   // If stocktake is active and user switches location, exit stocktake first
   // to prevent cross-location contamination (#161)
@@ -306,6 +318,17 @@ export function renderOrders() {
   screenEl.innerHTML = locBar + tabBar + content;
   // UX: prevent scroll-wheel from changing number inputs, Enter moves to next input
   setupOrderInputUX(screenEl);
+  // Delegated click handler for individual Hanos add-to-cart buttons (avoids esc/quote issues in onclick)
+  setupHanosBtnDelegation(screenEl);
+}
+
+function setupHanosBtnDelegation(container: HTMLElement) {
+  container.addEventListener('click', (e: MouseEvent) => {
+    const btn = (e.target as HTMLElement).closest('.hanos-btn[data-order-code]') as HTMLElement;
+    if (!btn) return;
+    e.preventDefault();
+    hanosAddSingle(btn.dataset.orderCode, btn.dataset.ingName);
+  });
 }
 
 /** Prevent mousewheel changing number inputs + Enter-to-next-input on order screens */
@@ -468,22 +491,28 @@ export function renderStandardInventoryTab() {
 
 // ── Dishes tab ────────────────────────────────────────────
 
-/** Initialise batchIngredientToggles from localStorage (or fall back to orderFor) — idempotent */
+/** Initialise batchIngredientToggles from batch.orderFor (server state) — idempotent */
 function ensureBatchTogglesInitialized(loc: string) {
   if (batchIngredientTogglesInitialized) return;
   const eligible = S.batches.filter(b => b.location === loc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
-  let saved: Record<string, boolean> = {};
-  try { saved = JSON.parse(localStorage.getItem(`batchIngredientToggles_${loc}`) || '{}'); } catch {}
   batchIngredientToggles = {};
   eligible.forEach(b => {
-    batchIngredientToggles[b.id] = b.id in saved ? saved[b.id] : !!b.orderFor;
+    batchIngredientToggles[b.id] = !!b.orderFor;
   });
   batchIngredientTogglesInitialized = true;
 }
 
-/** Persist current toggle state to localStorage for the given location */
-function saveBatchIngredientToggles(loc: string) {
-  try { localStorage.setItem(`batchIngredientToggles_${loc}`, JSON.stringify(batchIngredientToggles)); } catch {}
+/** Persist a single batch's orderFor to the server */
+async function persistBatchOrderFor(batchId: string, orderFor: boolean) {
+  // Update local state immediately
+  const batch = S.batches.find(b => b.id === batchId);
+  if (batch) (batch as any).orderFor = orderFor;
+  // Save to server
+  try {
+    await apiPost(`/api/batches/${batchId}`, { orderFor }, 'PATCH');
+  } catch (e) {
+    console.warn('Failed to save batch orderFor:', e);
+  }
 }
 
 /** Toggle a batch on/off in the Batch Ingredients tab */
@@ -505,7 +534,8 @@ export function toggleBatchIngredient(batchId: any) {
   if (header && header.textContent.includes('selected')) {
     header.textContent = `Batches at ${curLoc === 'west' ? 'Sering West' : 'Sering Centraal'} (${onCount}/${eligible.length} selected)`;
   }
-  saveBatchIngredientToggles(curLoc);
+  // Persist to server (syncs across devices via SSE batch update)
+  persistBatchOrderFor(batchId, isOn);
   // Re-render ingredient table
   const container = document.getElementById('batch-ingredients-table');
   if (container) container.innerHTML = renderBatchIngredientTable();
@@ -521,8 +551,10 @@ export function toggleCombinedIncludeDishes() {
 export function toggleAllBatchIngredients(on: any) {
   const curLoc = currentOrdersLoc || 'west';
   const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
-  eligible.forEach(b => { batchIngredientToggles[b.id] = on; });
-  saveBatchIngredientToggles(curLoc);
+  eligible.forEach(b => {
+    batchIngredientToggles[b.id] = on;
+    persistBatchOrderFor(b.id, !!on);
+  });
   const container = document.getElementById('batch-ingredients-table');
   if (container) container.innerHTML = renderBatchIngredientTable();
   // Update toggle row + switch visuals
@@ -703,15 +735,16 @@ export function renderBatchIngredientTable() {
         : (() => { const f = formatAmount(amtNeededBase, db ? db.unit : 'g'); return `<span class="order-amt">${f.amount}</span> <span class="order-units">${f.unit}</span>`; })();
 
       const dbStock = getDbStockTotal(db);
+      const dbStockExists = hasDbStockEntry(db);
       const hasManualStock = orderInventory[key] !== undefined;
-      const stockDisplayVal = hasManualStock ? orderInventory[key] : (dbStock > 0 ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
-      const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
+      const stockDisplayVal = hasManualStock ? orderInventory[key] : (dbStockExists ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
+      const stockLabel = (!hasManualStock && dbStockExists) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
       const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockDisplayVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
 
       const effectiveStockBase = hasManualStock
         ? (hasOrderUnit ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
         : dbStock;
-      const hasStockValue = hasManualStock || dbStock > 0;
+      const hasStockValue = hasManualStock || dbStockExists;
       const toOrderBase = Math.max(0, amtNeededBase - effectiveStockBase);
       const toOrderCalc = hasOrderUnit ? calcOrderUnits(toOrderBase, db) : null;
 
@@ -722,7 +755,7 @@ export function renderBatchIngredientTable() {
         toOrderDisplay = '<span class="to-order-zero">\u2713 enough</span>';
       } else if (toOrderCalc) {
         const hanosBtnBatch = (isHanosEnabled() && ing.orderCode && !isUrl && toOrderCalc.units > 0)
-          ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
+          ? ` <button class="hanos-btn" data-order-code="${esc(ing.orderCode)}" data-ing-name="${esc(ing.name)}" title="Add to Hanos cart">🛒</button>`
           : '';
         toOrderDisplay = `<span class="to-order-positive">${toOrderCalc.units}x ${unitSuffix}</span>${hanosBtnBatch}`;
       } else {
@@ -841,7 +874,7 @@ export function renderCombinedOrderTab() {
     const hasManual = combinedOrderStock[key] !== undefined;
     const effectiveStock = hasManual ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
     const toOrderGrams = Math.max(0, ing.totalGrams - effectiveStock);
-    const orderAmtGrams = (hasManual || dbStock > 0) ? toOrderGrams : ing.totalGrams;
+    const orderAmtGrams = (hasManual || hasDbStockEntry(ing.db)) ? toOrderGrams : ing.totalGrams;
     const calc = calcOrderUnits(orderAmtGrams, ing.db);
     if (calc && calc.units > 0) totalValue += calc.units * ing.db.orderPrice;
   });
@@ -940,16 +973,17 @@ export function renderCombinedOrderTab() {
 
       // Stock in order units
       const dbStock = getDbStockTotal(db);
+      const dbStockExists = hasDbStockEntry(db);
       const hasManualStock = combinedOrderStock[key] !== undefined;
-      const stockDisplayVal = hasManualStock ? combinedOrderStock[key] : (dbStock > 0 ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
-      const stockLabel = (!hasManualStock && dbStock > 0) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
+      const stockDisplayVal = hasManualStock ? combinedOrderStock[key] : (dbStockExists ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
+      const stockLabel = (!hasManualStock && dbStockExists) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
       const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockDisplayVal}" placeholder="0" oninput="updateCombinedOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
 
       // To order
       const effectiveStockBase = hasManualStock
         ? (hasOrderUnit ? (parseFloat(combinedOrderStock[key]) || 0) * db.orderUnitSize : (parseFloat(combinedOrderStock[key]) || 0))
         : dbStock;
-      const hasStockValue = hasManualStock || dbStock > 0;
+      const hasStockValue = hasManualStock || dbStockExists;
       const toOrderBase = Math.max(0, ing.totalGrams - effectiveStockBase);
       const toOrderCalc = hasOrderUnit ? calcOrderUnits(toOrderBase, db) : null;
 
@@ -960,7 +994,7 @@ export function renderCombinedOrderTab() {
         toOrderDisplay = '<span class="to-order-zero">\u2713 enough</span>';
       } else if (toOrderCalc) {
         const hanosBtn = (isHanosEnabled() && ing.orderCode && !isUrl && toOrderCalc.units > 0)
-          ? ` <button class="hanos-btn" onclick="hanosAddSingle('${esc(ing.orderCode)}','${esc(ing.name)}')" title="Add to Hanos cart">🛒</button>`
+          ? ` <button class="hanos-btn" data-order-code="${esc(ing.orderCode)}" data-ing-name="${esc(ing.name)}" title="Add to Hanos cart">🛒</button>`
           : '';
         toOrderDisplay = `<span class="to-order-positive">${toOrderCalc.units}x ${unitSuffix}</span>${hanosBtn}`;
       } else {
@@ -1109,7 +1143,7 @@ export function collectHanosItems(storageCat: any) {
     const effectiveStockBase = hasManual
       ? (db.orderUnitSize > 0 ? (parseFloat(combinedOrderStock[key]) || 0) * db.orderUnitSize : (parseFloat(combinedOrderStock[key]) || 0))
       : dbStock;
-    const hasStockValue = hasManual || dbStock > 0;
+    const hasStockValue = hasManual || hasDbStockEntry(db);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
     const calc = calcOrderUnits(toOrderBase, db);
     if (!calc || calc.units <= 0) return;
@@ -1143,7 +1177,7 @@ export async function hanosAddSingle(orderCode: any, name: any) {
     const effectiveStockBase = hasManual
       ? (db.orderUnitSize > 0 ? (parseFloat(stockObj[key]) || 0) * db.orderUnitSize : (parseFloat(stockObj[key]) || 0))
       : dbStock;
-    const hasStockValue = hasManual || dbStock > 0;
+    const hasStockValue = hasManual || hasDbStockEntry(db);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
     const calc = calcOrderUnits(toOrderBase, db);
     if (calc && calc.units > 0) quantity = calc.units;
@@ -1154,12 +1188,21 @@ export async function hanosAddSingle(orderCode: any, name: any) {
     const resp = await apiPost('/api/hanos/add-to-cart', { items: [{ orderCode, quantity, unit: 'ST' }], location: currentOrdersLoc || 'west' });
     if (resp.ok > 0) {
       toast(`Added ${quantity}x ${name} to Hanos cart`);
+      if (row) (row as HTMLElement).classList.add('hanos-sent');
     } else {
       const err = resp.results && resp.results[0] ? resp.results[0].error : 'Unknown error';
       toastError(`Failed: ${err}`);
+      if (row) {
+        (row as HTMLElement).classList.add('hanos-failed');
+        const toOrderCell = row.querySelector('.to-order-positive');
+        if (toOrderCell && !row.querySelector('.hanos-fail-badge')) {
+          toOrderCell.insertAdjacentHTML('afterend', ` <span class="hanos-fail-badge" title="${esc(err)}">⚠ failed</span>`);
+        }
+      }
     }
   } catch (e: unknown) {
     toastError('Hanos error: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    if (row) (row as HTMLElement).classList.add('hanos-failed');
   }
 }
 
@@ -1192,7 +1235,7 @@ export function collectHanosBatchItems(storageCat: any) {
     const effectiveStockBase = hasManual
       ? (db.orderUnitSize > 0 ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
       : dbStock;
-    const hasStockValue = hasManual || dbStock > 0;
+    const hasStockValue = hasManual || hasDbStockEntry(db);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
     const calc = calcOrderUnits(toOrderBase, db);
     if (!calc || calc.units <= 0) return;
@@ -1300,14 +1343,45 @@ export async function hanosExecuteFromModal(source: any, storageCat: any) {
       closeModal();
       if (resp.failed === 0) {
         toast(`All ${resp.ok} items added to Hanos cart`);
+        markHanosResults(resp.results, source);
       } else {
         toastError(`${resp.ok} added, ${resp.failed} failed`);
-        console.warn('Hanos bulk results:', resp.results);
+        markHanosResults(resp.results, source);
       }
     }, 400);
   } catch (e: unknown) {
     closeModal();
     toastError('Hanos error: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+/** Mark rows as succeeded/failed after Hanos add-to-cart */
+function markHanosResults(results: any[], source: string) {
+  if (!results || !results.length) return;
+  const dataAttr = source === 'batches' ? 'data-stock-key' : 'data-combined-key';
+  for (const r of results) {
+    // Find the row by order code
+    const rows = document.querySelectorAll(`.ing-table tr[${dataAttr}]`);
+    for (const row of rows) {
+      const dbName = (row as HTMLElement).dataset.dbname || (row as HTMLElement).dataset.stockKey || (row as HTMLElement).dataset.combinedKey || '';
+      const db = lookupIngredient(dbName);
+      if (db && db.orderCode === r.orderCode) {
+        const el = row as HTMLElement;
+        if (r.success) {
+          el.classList.add('hanos-sent');
+          el.classList.remove('hanos-failed');
+        } else {
+          el.classList.add('hanos-failed');
+          el.classList.remove('hanos-sent');
+          // Add failure indicator to the to-order cell
+          const toOrderCell = el.querySelector('.to-order-positive');
+          if (toOrderCell && !el.querySelector('.hanos-fail-badge')) {
+            toOrderCell.insertAdjacentHTML('afterend', ` <span class="hanos-fail-badge" title="${esc(r.error || 'Failed')}">⚠ failed</span>`);
+          }
+        }
+        break;
+      }
+    }
   }
 }
 
