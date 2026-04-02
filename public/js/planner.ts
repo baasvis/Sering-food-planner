@@ -513,8 +513,7 @@ export function renderAddModal(loc: any, date: any, meal: any, existing: any, se
 
   const cookedDishes = allAvail.filter(d => isBatchCooked(d) && d.location === locFilter && !d.inTransit);
   const plannedDishes = sortByCookDate(allAvail.filter(d => !isBatchCooked(d) && (d.services || []).length > 0));
-  const activeDishRecipeIds = new Set(S.batches.map(d => d.recipeSheetId).filter(Boolean));
-  let allRecipes = S.recipeIndex.filter(r => !activeDishRecipeIds.has(r.recipeSheetId));
+  let allRecipes = [...S.recipeIndex];
   if (typeFilter) allRecipes = allRecipes.filter(r => r.type === typeFilter);
 
   // Apply search filter
