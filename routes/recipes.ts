@@ -97,7 +97,7 @@ router.get('/recipe', async (req: Request, res: Response) => {
   if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
   try {
     const response = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: sheetId as string, ranges: ['C1','B3','D3','F3','H3','K2','K4','O3','O4','J6:N40','X6:X40','K6:K40'],
+      spreadsheetId: sheetId as string, ranges: ['C1','B3','D3','F3','H3','K2','K4','O3','O4','J6:N80','X6:X80','K6:K80'],
     });
     const vals = response.data.valueRanges!;
     const dishName    = vals[0].values?.[0]?.[0] || '';
@@ -115,14 +115,18 @@ router.get('/recipe', async (req: Request, res: Response) => {
     const ingredients: Array<{ name: string; amount: number; unit: string; source: string }> = [];
     const seen = new Set<string>();
     ingRows.forEach((row: any[], i: number) => {
-      if (!row[0] || !row[2]) return;
-      const rawAmt = parseFloat(String(row[2]).replace(',','.'));
-      if (!rawAmt || rawAmt <= 0) return;
+      if (!row[0]) return;
+      // Try column L (raw amount) first, fall back to column M (cooked amount)
+      const rawStr = row[2] ? String(row[2]).replace(',','.') : '';
+      const cookedStr = row[3] ? String(row[3]).replace(',','.') : '';
+      const rawAmt = parseFloat(rawStr) || 0;
+      const cookedAmt = parseFloat(cookedStr) || 0;
+      const amount = rawAmt > 0 ? rawAmt : cookedAmt;
+      if (!amount || amount <= 0) return;
       if (row[0].length > 80) return;
       const key = row[0].toLowerCase().trim();
       if (seen.has(key)) return;
       seen.add(key);
-      const amount = rawAmt;
       const unit = (unitRows[i] && unitRows[i][0]) || 'Grams';
       ingredients.push({
         name: row[0],
