@@ -39,6 +39,11 @@ export const TUTORIALS = {
       body: "For each main batch, tap Rice or Pasta. The total kilos to cook will appear below the meal — no guessing or mental maths needed.",
     },
     {
+      selector: '#dash-stock-card',
+      title: "What's in stock",
+      body: "A snapshot of all cooked food on hand at this location. Shows each batch with its type, liters in stock, and whether it's frozen. Handy for arriving at a location and seeing what's available at a glance.",
+    },
+    {
       selector: '#dash-heatup-card',
       title: 'What to heat up',
       body: "These batches are already fully cooked. Your only job here is to reheat them in time for service — no cooking needed.",
