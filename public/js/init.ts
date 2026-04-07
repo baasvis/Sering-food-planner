@@ -1,7 +1,7 @@
 import { S, NAV_SCREENS } from './state';
 import { loadData, connectLiveSync, saveState } from './utils';
 import { rebuildPlanner } from './core';
-import { renderDashboard } from './dashboard';
+import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
 import { checkSession, initGoogleSignIn } from './auth';
 
 // ── THEME ─────────────────────────────────────────────────
@@ -119,6 +119,13 @@ window.addEventListener('beforeunload', function(e: any) {
   }
 });
 
+// ── URL ROUTING ──────────────────────────────────────────
+// Browser back/forward navigates between screens
+window.addEventListener('popstate', () => {
+  const screen = getScreenFromHash();
+  showScreen(screen, false); // false = don't push state again
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════════
@@ -126,7 +133,9 @@ window.addEventListener('beforeunload', function(e: any) {
 export async function initApp() {
   await loadData();
   rebuildPlanner();
-  renderDashboard();
+  // Restore screen from URL hash (e.g. #planner, #orders) or default to dashboard
+  const startScreen = getScreenFromHash();
+  showScreen(startScreen, false);
   // Start live sync so other users' changes appear instantly
   connectLiveSync();
   // Auto-refresh every 60s so the UI updates when a service deadline passes (13:45 / 20:15)

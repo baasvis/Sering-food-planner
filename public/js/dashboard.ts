@@ -20,14 +20,21 @@ const renderWeekPlan = (...args: any[]) => (window as any).renderWeekPlan?.(...a
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
 
-export function showScreen(name: any) {
+export function showScreen(name: any, pushState = true) {
   // Switch active screen
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById('screen-' + name).classList.add('active');
+  document.getElementById('screen-' + name)?.classList.add('active');
   // Sync both navs using data-screen attribute
   document.querySelectorAll('.nav-btn, .bnav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.screen === name);
   });
+  // Update URL hash so refresh/back button works
+  if (pushState) {
+    const hash = name === 'dashboard' ? '' : '#' + name;
+    if (window.location.hash !== hash && !(name === 'dashboard' && !window.location.hash)) {
+      history.pushState({ screen: name }, '', hash || window.location.pathname);
+    }
+  }
   // Rebuild planner data when viewing planner, dashboard, or orders (peer splitting needs it)
   if (name === 'planner' || name === 'dashboard' || name === 'orders') rebuildPlanner();
   if (name === 'dashboard') renderDashboard();
@@ -37,6 +44,13 @@ export function showScreen(name: any) {
   if (name === 'orders') renderOrders();
   if (name === 'finance') renderFinance();
   if (name === 'feedback-admin') renderFeedbackAdmin();
+}
+
+/** Get the screen name from the current URL hash, or 'dashboard' as default */
+export function getScreenFromHash(): string {
+  const hash = window.location.hash.replace('#', '');
+  const validScreens = NAV_SCREENS.map(s => s.id);
+  return validScreens.includes(hash) ? hash : 'dashboard';
 }
 
 // ── DASHBOARD ────────────────────────────────────────────
@@ -675,6 +689,33 @@ export function renderDashboardContent() {
   const checkedSet = S.prepChecklist[loc] || new Set();
   const doneCount  = allPrep.filter(i => checkedSet.has(i.key)).length;
 
+  // ── Stock overview helper — what's in the fridge ──
+  function renderStockOverview(loc: string) {
+    const stockBatches = S.batches
+      .filter(b => b.location === loc && (b.stock || 0) > 0 && !b.inTransit)
+      .sort((a: any, b: any) => {
+        const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+        return (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name);
+      });
+    if (stockBatches.length === 0) {
+      return `<div class="dash-empty">No cooked food in stock — time to cook!</div>`;
+    }
+    const totalL = Math.round(stockBatches.reduce((s: number, b: any) => s + (b.stock || 0), 0) * 10) / 10;
+    const typeColors: Record<string, string> = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
+    let html = `<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${stockBatches.length} batches — ${totalL} L total</div>`;
+    stockBatches.forEach((b: any) => {
+      const col = typeColors[b.type] || 'gray';
+      const storageIcon = b.storage === 'Frozen' ? ' ❄️' : '';
+      const cookInfo = isBatchCooked(b) ? '' : ' <span style="color:var(--amber);font-size:10px;">uncooked</span>';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);">
+        <span class="dash-cook-dot" style="background:var(--${col})"></span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;">${esc(b.name)}${storageIcon}${cookInfo}</span>
+        <span style="font-weight:600;font-size:13px;white-space:nowrap;">${b.stock} L</span>
+      </div>`;
+    });
+    return html;
+  }
+
   // ── Cook dish row helper — tappable checkbox ──
   function cookDishRow(d: any, note: any, checkedSet: any, toggleFn: any, dateStr?: any, meal?: any) {
     const checked = checkedSet && checkedSet.has(d.id);
@@ -721,6 +762,14 @@ export function renderDashboardContent() {
         <span class="dash-card-subtitle">Pick Rice or Pasta for each main — totals appear below each meal</span>
       </div>
       ${menuHtml}
+    </div>
+
+    <!-- 📦 WHAT'S IN STOCK -->
+    <div class="dash-card" id="dash-stock-card">
+      <div class="dash-card-title"><span class="dash-card-icon">📦</span> What's in stock
+        <span class="dash-card-subtitle">Cooked food on hand at this location right now</span>
+      </div>
+      ${renderStockOverview(loc)}
     </div>
 
     <!-- ══ SECTION 2: CHEF TODOS ══ -->
