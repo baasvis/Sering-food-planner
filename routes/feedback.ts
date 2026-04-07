@@ -37,4 +37,23 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
+// PATCH /api/feedback/:id — mark as processed/unprocessed
+router.patch('/:id', async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  const { processed } = req.body;
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+  if (typeof processed !== 'boolean') return res.status(400).json({ error: 'processed must be a boolean' });
+
+  try {
+    const updated = await prisma.feedback.update({
+      where: { id },
+      data: { processed },
+    });
+    res.json(updated);
+  } catch (e: unknown) {
+    console.error('Feedback patch error:', errMsg(e));
+    res.status(500).json({ error: 'Could not update feedback' });
+  }
+});
+
 export default router;

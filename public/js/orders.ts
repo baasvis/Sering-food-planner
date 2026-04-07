@@ -1741,6 +1741,7 @@ export function renderStocktakeArea() {
     <button class="btn" style="background:var(--green);color:white;flex:1;padding:12px;font-size:15px;" onclick="saveStocktakeArea(true)">Save & next area →</button>
     <button class="btn" style="background:var(--orange, #e67e22);color:white;flex:1;padding:12px;font-size:15px;" onclick="saveStocktakeArea(false)">Save & stop stocktake</button>
   </div>
+  <div style="height:80px;"></div>
   </div>`;
 
   container.innerHTML = html;

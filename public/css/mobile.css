@@ -42,7 +42,7 @@
 
     /* Batch tiles: compact for mobile */
     .batch-tile-compact{gap:5px;padding:5px 8px;min-height:32px;}
-    .batch-tile-compact .sel-box{display:none;}
+    .batch-tile-compact .sel-box{width:22px;height:22px;}
     .batch-tile-name{font-size:12px;}
     .batch-tile-stock{font-size:11px;}
     .batch-assign-btn{display:none;}
@@ -53,8 +53,14 @@
     /* Dish list: card layout instead of grid */
     .dish-list-hdr{display:none;}
     .dish-row{display:block;padding:10px 12px;min-width:auto;}
-    .dish-row .sel-box{display:none;}
+    .dish-row .sel-box{width:22px;height:22px;float:right;margin-left:8px;}
     .dish-row .col-cook{border-left:none;padding-left:0;margin-top:6px;}
+
+    /* Split bar: stack controls vertically on mobile */
+    .split-bar{padding:8px 10px;gap:6px;}
+    .split-bar .sbar-title{width:100%;font-size:13px;}
+    .split-bar select,.split-bar input[type=number]{height:36px;font-size:14px;}
+    .split-bar .btn{flex:1;min-width:0;font-size:12px;text-align:center;}
     .dish-row .col-stock,.dish-row .col-diff,.dish-row .col-logistics{display:none;}
     .dish-row .served-btn,.dish-row .order-toggle-btn{display:none;}
     .m-stock-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);}

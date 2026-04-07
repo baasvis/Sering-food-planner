@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "feedback" ADD COLUMN "processed" BOOLEAN NOT NULL DEFAULT false;

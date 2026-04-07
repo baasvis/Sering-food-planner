@@ -18,7 +18,7 @@ import { renderOrders, switchOrdersTab, switchOrdersLoc, renderStandardInventory
 import { renderIngredientDbTab, loadIngredientDbFull, updateIngredientSearch, getFilteredIngredients, renderTypePills, renderPriceLevel, renderInlineStock, saveInlineStock, renderStockBadges, renderIngredientEditRow, showInlineCategoryEdit, saveInlineCategory, updateStorageLocOpts, updateEditCategoryOptions, saveIngredientEdit, toggleIngredientActive, deleteIngredient, openIngredientModal, saveIngredientFromModal, hanosLookupProduct, openAddIngredientModal, saveNewIngredient, openStoragePopover, updatePopStorageLoc, saveStorageFromPopover, handleSupplierUpload, renderSupplierImportPanel, applySupplierUpdate, openStorageLocationsModal, renderStorageModal, ingredientMatchesTypeFilter, getCategoriesForTypeFilter, dropStorageArea, updateStorageColor, addStorageCategory, removeStorageCategory, addStorageSpot, removeStorageSpot, openMigrationModal, runMigration, storageModalLoc, storageModalDragIdx, setIngredientDbEditId } from './ingredient-db';
 import { renderFinance, loadFinanceData, loadFinanceProducts, checkSyncStatus, triggerSync, renderProductBreakdown, setFinanceProductFilter, cancelSync, changeFinanceWeek, getFinanceMonday, fmtDate, fmtDateShort, fmtEuro, fmtEuroFull, SERVICE_PERIODS, FINANCE_LOCATIONS } from './finance';
 import { openFeedback, selectFeedbackType, submitFeedback, showFeedbackFab, feedbackTypes, feedbackSelectedType } from './feedback';
-import { renderFeedbackAdmin, setFeedbackFilter, copyFeedbackForClaude, formatFeedbackDate, feedbackData, feedbackFilter } from './feedback-admin';
+import { renderFeedbackAdmin, setFeedbackFilter, copyFeedbackForClaude, formatFeedbackDate, feedbackData, feedbackFilter, toggleFeedbackItemProcessed, toggleFeedbackProcessed } from './feedback-admin';
 import { TUTORIALS, startTutorial, tutNext, tutPrev, tutSkip } from './tutorial';
 import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap } from './init';
 
@@ -75,7 +75,7 @@ Object.assign(window, {
   openFeedback, selectFeedbackType, submitFeedback, showFeedbackFab,
 
   // feedback-admin
-  renderFeedbackAdmin, setFeedbackFilter, copyFeedbackForClaude,
+  renderFeedbackAdmin, setFeedbackFilter, copyFeedbackForClaude, toggleFeedbackItemProcessed, toggleFeedbackProcessed,
 
   // tutorial
   startTutorial, tutNext, tutPrev, tutSkip,

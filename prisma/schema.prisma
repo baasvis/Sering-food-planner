@@ -163,7 +163,8 @@ model Feedback {
   type      String @default("general")
   screen    String @default("")
   text      String
-  userAgent String @default("") @map("user_agent")
+  userAgent  String  @default("") @map("user_agent")
+  processed  Boolean @default(false)
 
   @@map("feedback")
 }
