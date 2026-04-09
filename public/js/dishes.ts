@@ -5,6 +5,13 @@ import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { addDishFromRecipe } from './recipes';
 import { batchDragStart, batchDragEnd, startAssignMode, openReplaceBatch } from './planner';
+import type { Batch, DishType, Location, StorageType, Service, RecipeIngredient } from '@shared/types';
+
+// Legacy fields that exist on batch objects at runtime but aren't in the Batch interface
+interface BatchWithLegacy extends Batch {
+  cookMode?: string;
+  cookDay?: string | null;
+}
 
 // ── DISH LIST ─────────────────────────────────────────────
 export let dishSort = { col: 'default', dir: 'asc' };
@@ -26,8 +33,8 @@ export function renderDishesOverview() {
   });
 
   // Sort
-  const sorted = dishSort.col === 'default' ? filtered : [...filtered].sort((a: any, b: any) => {
-    let va, vb;
+  const sorted = dishSort.col === 'default' ? filtered : [...filtered].sort((a: Batch, b: Batch) => {
+    let va: string | number, vb: string | number;
     switch (dishSort.col) {
       case 'name': va = a.name.toLowerCase(); vb = b.name.toLowerCase(); break;
       case 'date':
@@ -46,8 +53,8 @@ export function renderDishesOverview() {
     return 0;
   });
 
-  const arrow = (col: any) => dishSort.col === col ? (dishSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
-  const sCls = (col: any) => `sortable${dishSort.col === col ? ' active' : ''}`;
+  const arrow = (col: string) => dishSort.col === col ? (dishSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  const sCls = (col: string) => `sortable${dishSort.col === col ? ' active' : ''}`;
 
   const html = `
   <div class="btn-row" style="margin-bottom:12px;">
@@ -88,11 +95,11 @@ export function renderDishesOverview() {
   </div>
   ${sorted.length === 0 ? '<div class="empty">No batches match these filters</div>' : (dishSort.col !== 'default' ? sorted.map(d => renderBatchTile(d)).join('') : renderDishGroups(sorted))}`;
 
-  document.getElementById('planner-content').innerHTML = html;
+  document.getElementById('planner-content')!.innerHTML = html;
   renderSplitBar();
 }
 
-export function dishSortBy(col: any) {
+export function dishSortBy(col: string) {
   if (dishSort.col === col) {
     if (dishSort.dir === 'asc') dishSort.dir = 'desc';
     else { dishSort.col = 'default'; dishSort.dir = 'asc'; } // third click resets
@@ -103,20 +110,20 @@ export function dishSortBy(col: any) {
   rerenderCurrentView();
 }
 
-export function cookDateSortVal(ddmmyyyy: any) {
+export function cookDateSortVal(ddmmyyyy: string) {
   if (!ddmmyyyy) return '9999-99-99';
   const parts = ddmmyyyy.split('/');
   if (parts.length === 3) return parts[2] + '-' + parts[1] + '-' + parts[0];
   return ddmmyyyy;
 }
 
-export function logisticsRowClass(d: any) {
+export function logisticsRowClass(d: Batch) {
   const loc = d.location || 'west';
   if (d.inTransit) return loc === 'centraal' ? 'log-twc' : 'log-tww';
   return loc === 'centraal' ? 'log-centraal' : 'log-west';
 }
 
-export function renderDishGroups(dishes: any) {
+export function renderDishGroups(dishes: Batch[]) {
   const toCook = dishes.filter(d => !isBatchCooked(d) && d.storage !== 'Frozen');
   const cooked = dishes.filter(d => isBatchCooked(d) && d.storage !== 'Frozen');
   const frozen = dishes.filter(d => d.storage === 'Frozen');
@@ -143,7 +150,7 @@ export function renderDishGroups(dishes: any) {
 
 // NOTE: This was overwritten in original JS by the 2-arg version below.
 // Renamed to avoid duplicate export. This is dead code.
-export function renderBatchTileOverview(d: any) {
+export function renderBatchTileOverview(d: Batch) {
   const req = calcRequired(d);
   const { diff, str, cls } = diffStr(d);
   const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
@@ -192,7 +199,7 @@ export function renderBatchTileOverview(d: any) {
 }
 
 // ── BATCH TILE (compact/expand) ──────────────────────────
-export function toggleBatchExpand(id: any) {
+export function toggleBatchExpand(id: string) {
   // Don't toggle during drag — the click fires after dragstart and
   // rerenderCurrentView() would destroy the DOM element being dragged,
   // silently canceling the browser's native drag operation.
@@ -202,7 +209,7 @@ export function toggleBatchExpand(id: any) {
   rerenderCurrentView();
 }
 
-export function renderBatchTile(d: any, showAssign?: any) {
+export function renderBatchTile(d: Batch, showAssign?: boolean) {
   const { str, cls } = diffStr(d);
   const isExpanded = S.expandedBatches.has(d.id);
   const isSel = S.selected.has(d.id);
@@ -308,7 +315,7 @@ export function renderBatchTile(d: any, showAssign?: any) {
 }
 
 // Remove or replace a batch reference in all caterings
-export function cleanCateringRefs(oldId: any, newId: any) {
+export function cleanCateringRefs(oldId: string, newId: string | null) {
   (S.caterings || []).forEach(c => {
     if (!c.dishes) return;
     if (newId) {
@@ -324,7 +331,7 @@ export function cleanCateringRefs(oldId: any, newId: any) {
   });
 }
 
-export function deleteBatch(id: any) {
+export function deleteBatch(id: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   if (isBatchCooked(d)) {
@@ -341,7 +348,7 @@ export function deleteBatch(id: any) {
   toast(esc(d.name) + ' deleted');
 }
 
-export function inlineEdit(id: any, field: any, value: any) {
+export function inlineEdit(id: string, field: string, value: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   if (field === 'name') { d.name = value.trim() || d.name; }
@@ -350,7 +357,7 @@ export function inlineEdit(id: any, field: any, value: any) {
     // Auto-set cook date when stock first entered
     if (d.stock > 0 && !d.cookDate) d.cookDate = dateToStr(getToday());
   }
-  else if (field === 'location') { d.location = value; d.inTransit = false; }
+  else if (field === 'location') { d.location = value as Location; d.inTransit = false; }
   else if (field === 'note') { d.note = value; }
   rebuildPlanner();
   scheduleSave();
@@ -364,7 +371,7 @@ export function inlineEdit(id: any, field: any, value: any) {
   }
 }
 
-export function inlineRemoveAllergen(id: any, allergen: any) {
+export function inlineRemoveAllergen(id: string, allergen: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.allergens = (d.allergens || []).filter(a => a !== allergen);
@@ -373,11 +380,11 @@ export function inlineRemoveAllergen(id: any, allergen: any) {
   rerenderCurrentView();
 }
 
-export function inlineAddAllergenStart(id: any, evt: any) {
+export function inlineAddAllergenStart(id: string, evt: Event | null) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   // Use the clicked button's parent to avoid duplicate-ID issues (e.g. dashboard shows same batch twice)
-  const btn = evt ? evt.target.closest('.allergen-add-btn') : null;
+  const btn = evt ? (evt.target as HTMLElement).closest('.allergen-add-btn') : null;
   const container = btn ? btn.closest('.allergen-inline') : document.getElementById('ag-inline-' + id);
   if (!container || container.querySelector('.allergen-add-select')) return;
   const addBtn = btn || container.querySelector('.allergen-add-btn');
@@ -389,17 +396,17 @@ export function inlineAddAllergenStart(id: any, evt: any) {
   select.innerHTML = '<option value="">pick...</option>'
     + available.map(a => `<option value="${a}">${a}</option>`).join('')
     + '<option value="__custom">Other...</option>';
-  select.onchange = function() {
+  select.onchange = function(this: HTMLSelectElement) {
     if (this.value === '__custom') {
       this.remove();
       const input = document.createElement('input');
       input.className = 'allergen-add-input';
       input.placeholder = 'type...';
-      input.onkeydown = function(e) {
+      input.onkeydown = function(this: HTMLInputElement, e: KeyboardEvent) {
         if (e.key === 'Enter') { inlineAddAllergenConfirm(id, this.value); }
         if (e.key === 'Escape') { rerenderCurrentView(); }
       };
-      input.onblur = function() {
+      input.onblur = function(this: HTMLInputElement) {
         if (this.value.trim()) inlineAddAllergenConfirm(id, this.value);
         else rerenderCurrentView();
       };
@@ -409,15 +416,15 @@ export function inlineAddAllergenStart(id: any, evt: any) {
       inlineAddAllergenConfirm(id, this.value);
     }
   };
-  select.onblur = function() {
+  select.onblur = function(this: HTMLSelectElement) {
     if (!this.value) rerenderCurrentView();
   };
   container.insertBefore(select, addBtn);
-  addBtn.style.display = 'none';
+  (addBtn as HTMLElement).style.display = 'none';
   select.focus();
 }
 
-export function inlineAddAllergenConfirm(id: any, value: any) {
+export function inlineAddAllergenConfirm(id: string, value: string) {
   const val = value.trim();
   if (!val) { rerenderCurrentView(); return; }
   const d = S.batches.find(x => x.id === id);
@@ -455,11 +462,11 @@ export function getCookDayOptions() {
   return opts;
 }
 
-export function isDishCooked(d: any) {
+export function isDishCooked(d: Batch) {
   return isBatchCooked(d);
 }
 
-export function isCookDayToday(d: any) {
+export function isCookDayToday(d: Batch) {
   if (!d.cookDate) return false;
   const cd = strToDate(d.cookDate);
   if (!cd) return false;
@@ -467,29 +474,29 @@ export function isCookDayToday(d: any) {
   return cd.getTime() === today.getTime() && !isBatchCooked(d);
 }
 
-export function isDishStale(d: any) {
+export function isDishStale(d: Batch) {
   if (!isBatchCooked(d) || !d.cookDate) return false;
   if (d.storage === 'Frozen') return false;
   const cd = strToDate(d.cookDate);
   if (!cd) return false;
-  const diff = (getToday() - cd) / (1000*60*60*24);
+  const diff = (getToday().getTime() - cd.getTime()) / (1000*60*60*24);
   return diff >= 3;
 }
 
-export function daysSinceCooked(d: any) {
+export function daysSinceCooked(d: Batch) {
   if (!isBatchCooked(d) || !d.cookDate) return 0;
   const cd = strToDate(d.cookDate);
   if (!cd) return 0;
-  return Math.floor((getToday() - cd) / (1000*60*60*24));
+  return Math.floor((getToday().getTime() - cd.getTime()) / (1000*60*60*24));
 }
 
 // Short cook date label for the compact batch tile row
-export function batchCookLabel(d: any) {
+export function batchCookLabel(d: Batch) {
   if (isBatchCooked(d) && d.cookDate) {
     // Already cooked — show "Cooked DD/M"
     const iso = cookDateToISO(d.cookDate);
     const dt = new Date(iso);
-    if (!isNaN(dt)) {
+    if (!isNaN(dt.getTime())) {
       const stale = isDishStale(d);
       return `<span class="cook-label cooked${stale ? ' stale' : ''}" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Click to change cook date">${dt.getDate()}/${dt.getMonth()+1}</span>`;
     }
@@ -499,7 +506,7 @@ export function batchCookLabel(d: any) {
     // Planned cook date — show "Cook DD/M"
     const iso = cookDateToISO(d.cookDate);
     const dt = new Date(iso);
-    if (!isNaN(dt)) {
+    if (!isNaN(dt.getTime())) {
       return `<span class="cook-label planned" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Click to change cook date">${dt.getDate()}/${dt.getMonth()+1}</span>`;
     }
   }
@@ -508,7 +515,7 @@ export function batchCookLabel(d: any) {
 }
 
 // Inline date picker triggered from tile cook label
-export function tileEditCookDate(id: any) {
+export function tileEditCookDate(id: string) {
   if (S.draggingBatchId) return;
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
@@ -520,16 +527,16 @@ export function tileEditCookDate(id: any) {
   inp.id = 'tile-cook-picker';
   inp.style.cssText = 'position:fixed;top:-100px;left:-100px;opacity:0;';
   inp.value = d.cookDate ? cookDateToISO(d.cookDate) : '';
-  inp.onchange = function() {
+  inp.onchange = function(this: HTMLInputElement) {
     setCookDateDirect(id, this.value);
     this.remove();
   };
-  inp.onblur = function() { setTimeout(() => this.remove(), 200); };
+  inp.onblur = function(this: HTMLInputElement) { setTimeout(() => this.remove(), 200); };
   document.body.appendChild(inp);
   inp.showPicker ? inp.showPicker() : inp.click();
 }
 
-export function getCookCellHtml(d: any) {
+export function getCookCellHtml(d: Batch) {
   const opts = getCookDayOptions();
 
   // Already cooked (stock > 0) — show date + stale warning + editable date
@@ -562,21 +569,21 @@ export function getCookCellHtml(d: any) {
   </select>`;
 }
 
-export function cookDateToISO(ddmmyyyy: any) {
+export function cookDateToISO(ddmmyyyy: string) {
   if (!ddmmyyyy) return '';
   const parts = ddmmyyyy.split('/');
   if (parts.length === 3) return parts[2]+'-'+parts[1]+'-'+parts[0];
   return ddmmyyyy;
 }
 
-export function isoToCookDate(iso: any) {
+export function isoToCookDate(iso: string) {
   if (!iso) return '';
   const parts = iso.split('-');
   if (parts.length === 3) return parts[2]+'/'+parts[1]+'/'+parts[0];
   return iso;
 }
 
-export function setCookDay(id: any, value: any) {
+export function setCookDay(id: string, value: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   if (value === '__date') {
@@ -587,10 +594,10 @@ export function setCookDay(id: any, value: any) {
       input.type = 'date';
       input.className = 'cook-date-input';
       input.style.width = '100%';
-      input.onchange = function() {
+      input.onchange = function(this: HTMLInputElement) {
         setCookDateDirect(id, this.value);
       };
-      input.onclick = function(e) { e.stopPropagation(); };
+      input.onclick = function(e: MouseEvent) { e.stopPropagation(); };
       row.replaceWith(input);
       input.focus();
       input.showPicker && input.showPicker();
@@ -602,7 +609,7 @@ export function setCookDay(id: any, value: any) {
   rerenderCurrentView();
 }
 
-export function setCookDateDirect(id: any, isoDate: any) {
+export function setCookDateDirect(id: string, isoDate: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.cookDate = isoToCookDate(isoDate);
@@ -617,7 +624,7 @@ export function setCookDateDirect(id: any, isoDate: any) {
   rerenderCurrentView();
 }
 
-export function confirmCooked(id: any) {
+export function confirmCooked(id: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.cookDate = dateToStr(getToday());
@@ -630,10 +637,10 @@ export function confirmCooked(id: any) {
   toast(esc(d.name) + ' marked as cooked — stock set to ' + d.stock + 'L');
 }
 
-export function setFilter(group: any, val: any) { S.filters[group] = val; S.selected.clear(); rerenderCurrentView(); }
-export function toggleSelect(id: any) { if (S.draggingBatchId) return; if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id); rerenderCurrentView(); }
+export function setFilter(group: keyof typeof S.filters, val: string) { S.filters[group] = val; S.selected.clear(); rerenderCurrentView(); }
+export function toggleSelect(id: string) { if (S.draggingBatchId) return; if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id); rerenderCurrentView(); }
 
-export function calcRequiredForLoc(dish: any, loc: any) {
+export function calcRequiredForLoc(dish: Batch, loc: string) {
   let total = 0;
   (dish.services || []).forEach(svc => {
     if (svc.loc !== loc) return;
@@ -649,7 +656,7 @@ export function calcRequiredForLoc(dish: any, loc: any) {
 export function renderSplitBar() {
   const area = document.getElementById('split-bar-area');
   if (!area || S.selected.size === 0) { if (area) area.innerHTML = ''; return; }
-  const selD = [...S.selected].map(id => S.batches.find(d => d.id === id)).filter(Boolean);
+  const selD = [...S.selected].map(id => S.batches.find(d => d.id === id)).filter((d): d is Batch => !!d);
   const names = selD.map(d => d.name).join(', ');
   const hasWest = selD.some(d => d.location === 'west' && !d.inTransit);
   const hasCentraal = selD.some(d => d.location === 'centraal' && !d.inTransit);
@@ -687,10 +694,10 @@ export function renderSplitBar() {
   </div>`;
 }
 
-export function doSplit(isTransport: any, targetLoc: any, smartAmounts: any) {
-  const manualAmt = parseFloat(document.getElementById('sp-amt').value);
-  const defaultStorage = document.getElementById('sp-storage').value;
-  const splitLocation = isTransport ? targetLoc : document.getElementById('sp-location').value;
+export function doSplit(isTransport: boolean, targetLoc?: string, smartAmounts?: boolean) {
+  const manualAmt = parseFloat((document.getElementById('sp-amt') as HTMLInputElement).value);
+  const defaultStorage = (document.getElementById('sp-storage') as HTMLSelectElement).value;
+  const splitLocation = isTransport ? targetLoc! : (document.getElementById('sp-location') as HTMLSelectElement).value;
   const splitInTransit = isTransport ? true : false;
   let errors = [];
   [...S.selected].forEach(id => {
@@ -721,14 +728,15 @@ export function doSplit(isTransport: any, targetLoc: any, smartAmounts: any) {
     d.stock = Math.round((d.stock - amt) * 10) / 10;
     const targetLocName = targetLoc === 'centraal' ? 'centraal' : 'west';
     const splitName = d.name.replace(/ \(split\)$/, '') + ' (split)';
-    const newDish = {
-      id: newId(), name: splitName, type: d.type, storage, location: splitLocation, inTransit: splitInTransit, stock: amt,
+    const newDish: Batch = {
+      id: newId(), name: splitName, type: d.type, storage: storage as StorageType, location: splitLocation as Location, inTransit: splitInTransit, stock: amt,
       serving: d.serving || 280, recipeSheetId: d.recipeSheetId,
       recipeVolume: d.recipeVolume,
-      recipeIngredients: d.recipeIngredients ? [...d.recipeIngredients] : undefined,
+      recipeIngredients: d.recipeIngredients ? [...d.recipeIngredients] : null,
       allergens: [...(d.allergens || [])], extraAllergens: [...(d.extraAllergens || [])],
       orderFor: false, parentId: d.id, cookDate: d.cookDate,
-      services: (d.services || []).filter(s => s.loc === splitLocation)
+      services: (d.services || []).filter(s => s.loc === splitLocation),
+      note: d.note || '', createdAt: new Date().toISOString()
     };
     // Remove services that moved to the new batch
     if (splitLocation !== (d.location || 'west')) {
@@ -740,7 +748,7 @@ export function doSplit(isTransport: any, targetLoc: any, smartAmounts: any) {
   S.selected.clear(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast('Stock split created');
 }
-export function doTransportSplit(tl: any, smartAmt: any) { doSplit(true, tl, true); }
+export function doTransportSplit(tl: string, smartAmt: number) { doSplit(true, tl, true); }
 
 // ── NEW DISH ──────────────────────────────────────────────
 export function openNewDish() {
@@ -748,7 +756,7 @@ export function openNewDish() {
 }
 
 export function searchNewDishModal() {
-  const searchQuery = (document.getElementById('new-dish-search') || {}).value || '';
+  const searchQuery = (document.getElementById('new-dish-search') as HTMLInputElement | null)?.value || '';
   let recipes = S.recipeIndex;
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
@@ -804,16 +812,16 @@ export function openNewDishScratch() {
 }
 
 export async function saveNewDish() {
-  const name = document.getElementById('nd-name').value.trim();
+  const name = (document.getElementById('nd-name') as HTMLInputElement).value.trim();
   if (!name) { alert('Please enter a batch name'); return; }
-  const sheetId = document.getElementById('nd-sheetid').value.trim();
-  const newDish = {
+  const sheetId = (document.getElementById('nd-sheetid') as HTMLInputElement).value.trim();
+  const newDish: Partial<Batch> & { recipeVolume?: number | null; recipeIngredients?: RecipeIngredient[] | null } = {
     id: newId(), name,
-    type: document.getElementById('nd-type').value,
-    stock: parseFloat(document.getElementById('nd-stock').value) || 0,
-    serving: parseInt(document.getElementById('nd-serving').value) || 280,
-    storage: document.getElementById('nd-storage').value,
-    location: document.getElementById('nd-location').value,
+    type: (document.getElementById('nd-type') as HTMLSelectElement).value as DishType,
+    stock: parseFloat((document.getElementById('nd-stock') as HTMLInputElement).value) || 0,
+    serving: parseInt((document.getElementById('nd-serving') as HTMLInputElement).value) || 280,
+    storage: (document.getElementById('nd-storage') as HTMLSelectElement).value as StorageType,
+    location: (document.getElementById('nd-location') as HTMLSelectElement).value as Location,
     inTransit: false,
     recipeSheetId: sheetId || null,
     allergens: [], extraAllergens: [], orderFor: false, parentId: null,
@@ -829,14 +837,14 @@ export async function saveNewDish() {
       toast('Recipe data loaded from Google Sheet');
     } catch (e: unknown) { toastError('Could not fetch recipe: ' + (e instanceof Error ? e.message : 'Unknown error')); }
   }
-  S.batches.push(newDish);
+  S.batches.push(newDish as Batch);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`"${name}" added`);
 }
 
 // ── EDIT DISH ─────────────────────────────────────────────
-export function openEditDish(id: any) {
-  const d = S.batches.find(x => x.id === id);
+export function openEditDish(id: string) {
+  const d = S.batches.find(x => x.id === id) as BatchWithLegacy | undefined;
   if (!d) return;
   const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
   const agHtml = allAg.map(a => {
@@ -892,19 +900,19 @@ export function openEditDish(id: any) {
     </div>`);
 }
 
-export function setCookMode(id: any, mode: any) {
-  const d = S.batches.find(x => x.id === id); if (!d) return;
+export function setCookMode(id: string, mode: string) {
+  const d = S.batches.find(x => x.id === id) as BatchWithLegacy | undefined; if (!d) return;
   d.cookMode = mode;
-  document.getElementById('ct-day').classList.toggle('active', mode === 'day');
-  document.getElementById('ct-date').classList.toggle('active', mode === 'date');
-  document.getElementById('cook-input').innerHTML = mode === 'day'
+  document.getElementById('ct-day')!.classList.toggle('active', mode === 'day');
+  document.getElementById('ct-date')!.classList.toggle('active', mode === 'date');
+  document.getElementById('cook-input')!.innerHTML = mode === 'day'
     ? `<select id="ed-cookday">${['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => `<option${d.cookDay === day ? ' selected' : ''}>${day}</option>`).join('')}</select>`
     : `<input type="date" id="ed-cookdate" value="${d.cookDate || ''}" />`;
 }
 
-export function addExtraAllergen(id: any) {
+export function addExtraAllergen(id: string) {
   const d = S.batches.find(x => x.id === id); if (!d) return;
-  const inp = document.getElementById('ag-new');
+  const inp = document.getElementById('ag-new') as HTMLInputElement;
   const val = (inp.value || '').trim(); if (!val) return;
   if (!d.extraAllergens) d.extraAllergens = [];
   if (!d.extraAllergens.includes(val) && !(d.allergens || []).includes(val)) d.extraAllergens.push(val);
@@ -912,21 +920,21 @@ export function addExtraAllergen(id: any) {
   refreshAllergenTags(d);
 }
 
-export function removeExtraAllergen(id: any, allergen: any) {
+export function removeExtraAllergen(id: string, allergen: string) {
   const d = S.batches.find(x => x.id === id); if (!d) return;
   d.extraAllergens = (d.extraAllergens || []).filter(a => a !== allergen);
   refreshAllergenTags(d);
 }
 
-export function refreshAllergenTags(d: any) {
+export function refreshAllergenTags(d: Batch) {
   const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
-  document.getElementById('ag-tags').innerHTML = allAg.map(a => {
+  document.getElementById('ag-tags')!.innerHTML = allAg.map(a => {
     const isBase = (d.allergens || []).includes(a);
     return `<div class="at-tag">${esc(a)}${isBase ? ` <span style="opacity:.4;font-size:9px;">base</span>` : ` <span class="at-rm" onclick="removeExtraAllergen('${d.id}','${esc(a)}')">&#215;</span>`}</div>`;
   }).join('') || '<span style="font-size:12px;color:var(--text3);">none</span>';
 }
 
-export async function refreshRecipe(id: any) {
+export async function refreshRecipe(id: string) {
   const d = S.batches.find(x => x.id === id); if (!d || !d.recipeSheetId) return;
   try {
     const recipe = await apiGet(`/api/recipe?sheetId=${d.recipeSheetId}`);
@@ -939,22 +947,22 @@ export async function refreshRecipe(id: any) {
   } catch (e: unknown) { toastError('Could not fetch recipe: ' + (e instanceof Error ? e.message : 'Unknown error')); }
 }
 
-export function saveEditDish(id: any) {
-  const d = S.batches.find(x => x.id === id); if (!d) return;
-  d.name = document.getElementById('ed-name').value;
-  d.stock = parseFloat(document.getElementById('ed-stock').value) || 0;
-  d.type = document.getElementById('ed-type').value;
-  d.storage = document.getElementById('ed-storage').value;
-  d.location = document.getElementById('ed-location').value;
-  d.inTransit = document.getElementById('ed-intransit').value === 'true';
-  d.orderFor = document.getElementById('ed-order').value === 'true';
-  if (d.cookMode === 'day') { const el = document.getElementById('ed-cookday'); if (el) d.cookDay = el.value || null; }
-  else { const el = document.getElementById('ed-cookdate'); if (el) d.cookDate = el.value || null; }
+export function saveEditDish(id: string) {
+  const d = S.batches.find(x => x.id === id) as BatchWithLegacy | undefined; if (!d) return;
+  d.name = (document.getElementById('ed-name') as HTMLInputElement).value;
+  d.stock = parseFloat((document.getElementById('ed-stock') as HTMLInputElement).value) || 0;
+  d.type = (document.getElementById('ed-type') as HTMLSelectElement).value as DishType;
+  d.storage = (document.getElementById('ed-storage') as HTMLSelectElement).value as StorageType;
+  d.location = (document.getElementById('ed-location') as HTMLSelectElement).value as Location;
+  d.inTransit = (document.getElementById('ed-intransit') as HTMLSelectElement).value === 'true';
+  d.orderFor = (document.getElementById('ed-order') as HTMLSelectElement).value === 'true';
+  if (d.cookMode === 'day') { const el = document.getElementById('ed-cookday') as HTMLSelectElement | null; if (el) d.cookDay = el.value || null; }
+  else { const el = document.getElementById('ed-cookdate') as HTMLInputElement | null; if (el) d.cookDate = el.value || null; }
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast('Batch saved');
 }
 
-export function deleteDish(id: any) {
+export function deleteDish(id: string) {
   if (!confirm('Delete this batch? This cannot be undone.')) return;
   S.batches = S.batches.filter(d => d.id !== id);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();

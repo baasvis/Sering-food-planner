@@ -120,6 +120,15 @@ export interface RecipeEntry {
 
 // ── Ingredient stock: location → amount (number) ──
 
+export interface LocationStockEntry {
+  amount: number;
+  date: string;
+}
+
+export interface DetailedStock {
+  [location: string]: LocationStockEntry;
+}
+
 export interface LocationStock {
   [location: string]: number;
 }
@@ -147,7 +156,7 @@ export interface Ingredient {
   pricePer100: number;
   priceAlert: boolean;
   storageLocations: StorageLocationMap;
-  stock: LocationStock;
+  stock: DetailedStock;
   targetStock: LocationStock;
   allergens: string;
   notes: string;

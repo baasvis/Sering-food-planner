@@ -1,3 +1,4 @@
+import type { Batch, RecipeEntry, DishType, Location, Meal, Service } from '@shared/types';
 import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError } from './utils';
 import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate } from './core';
@@ -29,7 +30,7 @@ export function renderWeekPlan() {
   renderPlannerSubTab();
 }
 
-export function setPlannerSubTab(tab: any) {
+export function setPlannerSubTab(tab: string) {
   S.plannerSubTab = tab;
   document.querySelectorAll('.sub-tab').forEach(b => {
     b.classList.toggle('active', b.dataset.tab === tab);
@@ -56,13 +57,13 @@ setOpenInventoryFn(openInventory);
 
 export let _plannerDayOffset = 0;
 
-export function changePlannerDay(delta: any) {
+export function changePlannerDay(delta: number) {
   _plannerDayOffset = Math.max(-14, Math.min(14, _plannerDayOffset + delta));
   renderPlannerSubTab();
 }
 
 // ── LOCATION PLAN (West / Centraal) ─────────────────────
-export function renderLocationPlan(loc: any) {
+export function renderLocationPlan(loc: string) {
   const typeGroups = [
     { key: 'Soup', label: 'Soups', cls: 'chip-soup' },
     { key: 'Main course', label: 'Mains', cls: 'chip-main' },
@@ -152,7 +153,7 @@ export function renderLocationPlan(loc: any) {
 }
 
 // ── BATCH POOL (per-type, below each calendar) ─────────
-export function getPoolBatches(loc: any) {
+export function getPoolBatches(loc: string) {
   return S.batches.filter(d => {
     const locatedHere = d.location === loc;
     const hasSvcHere = (d.services || []).some(s => s.loc === loc);
@@ -160,14 +161,14 @@ export function getPoolBatches(loc: any) {
   });
 }
 
-export function toggleTypeBatchPool(typeKey: any) {
+export function toggleTypeBatchPool(typeKey: string) {
   if (!S.openBatchPools) S.openBatchPools = new Set();
   if (S.openBatchPools.has(typeKey)) S.openBatchPools.delete(typeKey);
   else S.openBatchPools.add(typeKey);
   rerenderCurrentView();
 }
 
-export function renderTypeBatchPool(loc: any, typeKey: any, typeLabel: any, typeCls: any) {
+export function renderTypeBatchPool(loc: string, typeKey: string, typeLabel: string, typeCls: string) {
   const poolBatches = getPoolBatches(loc).filter(d => d.type === typeKey);
   if (poolBatches.length === 0) return '';
 
@@ -186,7 +187,7 @@ export function renderTypeBatchPool(loc: any, typeKey: any, typeLabel: any, type
     const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && d.storage !== 'Frozen'));
     const frozen = poolBatches.filter(d => d.storage === 'Frozen');
 
-    const renderGroup = (batches: any) => {
+    const renderGroup = (batches: Batch[]) => {
       return `<div class="batch-tile-grid">${batches.map(d => renderBatchTile(d, true)).join('')}</div>`;
     };
 
@@ -214,7 +215,7 @@ export function toggleShowAllBatches() {
   rerenderCurrentView();
 }
 
-export function renderShowAllBatches(loc: any) {
+export function renderShowAllBatches(loc: string) {
   const poolBatches = getPoolBatches(loc);
   if (poolBatches.length === 0) return '';
 
@@ -228,7 +229,7 @@ export function renderShowAllBatches(loc: any) {
     const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && d.storage !== 'Frozen'));
     const frozen = poolBatches.filter(d => d.storage === 'Frozen');
 
-    const renderGroup = (batches: any) => {
+    const renderGroup = (batches: Batch[]) => {
       return `<div class="batch-tile-grid">${batches.map(d => renderBatchTile(d, true)).join('')}</div>`;
     };
 
@@ -251,38 +252,40 @@ export function renderShowAllBatches(loc: any) {
 }
 
 // ── DRAG & DROP ─────────────────────────────────────────
-export function batchDragStart(e: any, batchId: any) {
+export function batchDragStart(e: DragEvent, batchId: string) {
   S.draggingBatchId = batchId;
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', batchId);
-  e.target.closest('.batch-tile').classList.add('dragging');
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', batchId);
+  }
+  (e.target as HTMLElement)?.closest('.batch-tile')?.classList.add('dragging');
   // Highlight all slots as drop targets
   document.querySelectorAll('.slot').forEach(s => s.classList.add('slot-assign-target'));
 }
 
-export function batchDragEnd(e: any) {
+export function batchDragEnd(e: DragEvent) {
   S.draggingBatchId = null;
-  const tile = e.target.closest('.batch-tile');
+  const tile = (e.target as HTMLElement)?.closest('.batch-tile');
   if (tile) tile.classList.remove('dragging');
   document.querySelectorAll('.slot').forEach(s => {
     s.classList.remove('slot-assign-target', 'slot-drag-over');
   });
 }
 
-export function slotDragOver(e: any) {
+export function slotDragOver(e: DragEvent) {
   e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  e.currentTarget.classList.add('slot-drag-over');
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  (e.currentTarget as HTMLElement)?.classList.add('slot-drag-over');
 }
 
-export function slotDragLeave(e: any) {
-  e.currentTarget.classList.remove('slot-drag-over');
+export function slotDragLeave(e: DragEvent) {
+  (e.currentTarget as HTMLElement)?.classList.remove('slot-drag-over');
 }
 
-export function slotDrop(e: any, loc: any, date: any, meal: any) {
+export function slotDrop(e: DragEvent, loc: string, date: string, meal: string) {
   e.preventDefault();
-  e.currentTarget.classList.remove('slot-drag-over');
-  const batchId = S.draggingBatchId || e.dataTransfer.getData('text/plain');
+  (e.currentTarget as HTMLElement)?.classList.remove('slot-drag-over');
+  const batchId = S.draggingBatchId || e.dataTransfer?.getData('text/plain');
   if (!batchId) return;
   const batch = S.batches.find(d => d.id === batchId);
   if (!batch) return;
@@ -298,7 +301,7 @@ export function slotDrop(e: any, loc: any, date: any, meal: any) {
 }
 
 // ── ASSIGN MODE ─────────────────────────────────────────
-export function startAssignMode(batchId: any) {
+export function startAssignMode(batchId: string) {
   S.assigningBatchId = batchId;
   rerenderCurrentView();
 }
@@ -308,7 +311,7 @@ export function cancelAssignMode() {
   rerenderCurrentView();
 }
 
-export function assignBatchToSlot(loc: any, date: any, meal: any) {
+export function assignBatchToSlot(loc: string, date: string, meal: string) {
   const batchId = S.assigningBatchId;
   if (!batchId) return;
   const batch = S.batches.find(d => d.id === batchId);
@@ -389,7 +392,7 @@ export function addTransportItem() {
   rerenderCurrentView();
 }
 
-export function deliverTransportItem(id: any) {
+export function deliverTransportItem(id: string) {
   S.transportItems = S.transportItems.filter(i => i.id !== id);
   scheduleSave();
   rerenderCurrentView();
@@ -416,18 +419,18 @@ export function markSelectedArrived() {
 }
 
 // ── ADD DISH MODAL ───────────────────────────────────────
-export function removeDishFromSlot(dishId: any, loc: any, date: any, meal: any) {
+export function removeDishFromSlot(dishId: string, loc: string, date: string, meal: string) {
   const dish = S.batches.find(d => d.id === dishId);
   if (dish) { dish.services = (dish.services || []).filter(s => !(s.loc === loc && s.date === date && s.meal === meal)); }
   rebuildPlanner(); rerenderCurrentView(); scheduleSave();
 }
 
-export function toggleTypeCollapse(key: any) {
+export function toggleTypeCollapse(key: string) {
   S.collapsedTypes[key] = !S.collapsedTypes[key];
   rerenderCurrentView();
 }
 
-export function copyDayToOther(fromLoc: any, date: any) {
+export function copyDayToOther(fromLoc: string, date: string) {
   const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
   const toLabel = toLoc === 'west' ? 'Sering West' : 'Sering Centraal';
   const dayName = dateToDayName(date);
@@ -452,7 +455,7 @@ export function copyDayToOther(fromLoc: any, date: any) {
   }
 }
 
-export function copySlotToOther(fromLoc: any, date: any, meal: any) {
+export function copySlotToOther(fromLoc: string, date: string, meal: string) {
   const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
   const toLabel = toLoc === 'west' ? 'Sering West' : 'Sering Centraal';
   const k = `${fromLoc}-${date}-${meal}`;
@@ -477,17 +480,17 @@ export function copySlotToOther(fromLoc: any, date: any, meal: any) {
   }
 }
 
-export function openAddDishTyped(loc: any, date: any, meal: any, type: any) {
+export function openAddDishTyped(loc: string, date: string, meal: string, type: string) {
   const existing = (S.planner[`${loc}-${date}-${meal}`] || []).map(d => d.id);
   renderAddModal(loc, date, meal, existing, '', type, 'cooked');
 }
 
-export function openAddDish(loc: any, date: any, meal: any) {
+export function openAddDish(loc: string, date: string, meal: string) {
   const existing = (S.planner[`${loc}-${date}-${meal}`] || []).map(d => d.id);
   renderAddModal(loc, date, meal, existing, '', '', 'cooked');
 }
 
-export function renderAddModal(loc: any, date: any, meal: any, existing: any, searchQuery: any, typeFilter: any, tab: any, locFilter?: any) {
+export function renderAddModal(loc: string, date: string, meal: string, existing: string[], searchQuery: string, typeFilter: string, tab: string, locFilter?: string) {
   // Store modal state globally so onclick/oninput handlers can reference it
   // without embedding JSON in HTML attributes (which breaks on double quotes)
   if (!locFilter) locFilter = loc;
@@ -517,7 +520,7 @@ export function renderAddModal(loc: any, date: any, meal: any, existing: any, se
   }
 
   // Render dish options helper
-  const renderDishOpts = (dishes: any) => dishes.map(d => {
+  const renderDishOpts = (dishes: Batch[]) => dishes.map(d => {
     const { diff, str, cls } = diffStr(d);
     const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
     const agHtml = allAg.slice(0, 4).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
@@ -537,7 +540,7 @@ export function renderAddModal(loc: any, date: any, meal: any, existing: any, se
   }).join('');
 
   // Render recipe options helper
-  const renderRecipeOpts = (recipes: any) => recipes.slice(0, 20).map(r => {
+  const renderRecipeOpts = (recipes: RecipeEntry[]) => recipes.slice(0, 20).map(r => {
     const ags = (r.allergens || []).slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
     return `<div class="dish-opt" onclick="addRecipeToSlot('${r.id}','${loc}','${date}','${meal}')">
       <div style="flex:1;">
@@ -605,13 +608,13 @@ export function renderAddModal(loc: any, date: any, meal: any, existing: any, se
   if (si) si.focus();
 }
 
-export function updateAddModal(loc: any, date: any, meal: any, existing: any, typeFilter: any, tab: any) {
+export function updateAddModal(loc: string, date: string, meal: string, existing: string[], typeFilter: string, tab: string) {
   const searchQuery = (document.getElementById('planner-search') || {}).value || '';
   const locFilter = S._addModalState ? S._addModalState.locFilter : loc;
   renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab, locFilter);
 }
 
-export function switchAddModalTab(tab: any) {
+export function switchAddModalTab(tab: string) {
   const s = S._addModalState;
   if (!s) return;
   s.tab = tab;
@@ -619,7 +622,7 @@ export function switchAddModalTab(tab: any) {
   renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, tab, s.locFilter);
 }
 
-export function switchAddModalLoc(newLoc: any) {
+export function switchAddModalLoc(newLoc: string) {
   const s = S._addModalState;
   if (!s) return;
   s.locFilter = newLoc;
@@ -634,14 +637,14 @@ export function searchAddModal() {
   renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, s.tab, s.locFilter);
 }
 
-export function confirmAddDish(dishId: any, loc: any, date: any, meal: any) {
+export function confirmAddDish(dishId: string, loc: string, date: string, meal: string) {
   const dish = S.batches.find(d => d.id === dishId);
   if (dish) { if (!dish.services) dish.services = []; dish.services.push({ loc, date, meal }); }
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`${dish.name} added to ${dateToDayName(date)} ${meal}`);
 }
 
-export function addRecipeToSlot(recipeId: any, loc: any, date: any, meal: any) {
+export function addRecipeToSlot(recipeId: string, loc: string, date: string, meal: string) {
   const r = S.recipeIndex.find(x => x.id === recipeId);
   if (!r) return;
   const newDish = {
@@ -702,7 +705,7 @@ export function addPlaceholderDish() {
 
 // ── REPLACE BATCH ────────────────────────────────────────
 
-export function openReplaceBatch(batchId: any) {
+export function openReplaceBatch(batchId: string) {
   const old = S.batches.find(d => d.id === batchId);
   if (!old) return;
   if (isBatchCooked(old)) { toast('Cannot replace a cooked batch'); return; }
@@ -741,7 +744,7 @@ export function renderReplaceModal() {
   }
 
   // Render batch options
-  const renderBatchOpts = (batches: any) => batches.map(d => {
+  const renderBatchOpts = (batches: Batch[]) => batches.map(d => {
     const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
     const agHtml = allAg.slice(0, 4).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
     const cookInfo = d.cookDate ? 'Cook: ' + d.cookDate : '';
@@ -759,7 +762,7 @@ export function renderReplaceModal() {
     </div>`;
   }).join('');
 
-  const renderRecipeOpts = (recs: any) => recs.slice(0, 20).map(r => {
+  const renderRecipeOpts = (recs: RecipeEntry[]) => recs.slice(0, 20).map(r => {
     const ags = (r.allergens || []).slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
     return `<div class="dish-opt" onclick="replaceWithRecipe('${r.id}')">
       <div style="flex:1;">
@@ -812,7 +815,7 @@ export function renderReplaceModal() {
   if (si) si.focus();
 }
 
-export function switchReplaceTab(tab: any) {
+export function switchReplaceTab(tab: string) {
   const rs = S._replaceState;
   if (!rs) return;
   rs.tab = tab;
@@ -827,7 +830,7 @@ export function searchReplaceModal() {
   renderReplaceModal();
 }
 
-export function confirmReplaceBatch(newBatchId: any) {
+export function confirmReplaceBatch(newBatchId: string) {
   const rs = S._replaceState;
   if (!rs) return;
   const old = S.batches.find(d => d.id === rs.oldBatchId);
@@ -858,7 +861,7 @@ export function confirmReplaceBatch(newBatchId: any) {
   toast(`Replaced ${oldName} with ${replacement.name}`);
 }
 
-export function replaceWithRecipe(recipeId: any) {
+export function replaceWithRecipe(recipeId: string) {
   const rs = S._replaceState;
   if (!rs) return;
   const old = S.batches.find(d => d.id === rs.oldBatchId);
@@ -908,7 +911,7 @@ export function replaceWithRecipe(recipeId: any) {
 // ── INVENTORY ────────────────────────────────────────────
 // getAmsterdamNow() is defined in core.js (shared with isServicePast)
 
-export function getInventoryState(loc: any) {
+export function getInventoryState(loc: string) {
   const now = getAmsterdamNow();
   const h = now.getHours(), m = now.getMinutes();
   const mins = h * 60 + m;
@@ -941,7 +944,7 @@ export function getInventoryState(loc: any) {
   return { window: 'done', label: 'Inventory done', done: true, urgent: false };
 }
 
-export function getInventoryButton(loc: any) {
+export function getInventoryButton(loc: string) {
   const st = getInventoryState(loc);
   if (st.done && st.window === 'done') {
     return `<button class="btn inv-btn inv-done" disabled>&#10003; Inventory done</button>`;
@@ -950,7 +953,7 @@ export function getInventoryButton(loc: any) {
   return `<button class="btn ${cls}" onclick="openInventory('${loc}')">${st.label}</button>`;
 }
 
-export function openInventory(loc: any) {
+export function openInventory(loc: string) {
   const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
   const dishes = S.batches.filter(d => {
     if (!isBatchCooked(d)) return false; // Only cooked batches need inventory
@@ -966,8 +969,8 @@ export function openInventory(loc: any) {
   html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Update stock for each batch, or mark as served.</div>`;
   html += `<div class="inv-list">`;
 
-  const sorted = [...dishes].sort((a: any, b: any) => {
-    const typeOrder = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  const sorted = [...dishes].sort((a: Batch, b: Batch) => {
+    const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
     return (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0);
   });
 
@@ -1005,20 +1008,20 @@ export function openInventory(loc: any) {
   if (modal) modal.style.width = '560px';
 }
 
-export function updateInventoryStock(id: any, value: any) {
+export function updateInventoryStock(id: string, value: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.stock = parseFloat(value) || 0;
   scheduleSave();
 }
 
-export function openServedFromInventory(id: any, loc: any) {
+export function openServedFromInventory(id: string, loc: string) {
   // Store that we came from inventory so we can reopen it
   S._inventoryLoc = loc;
   openServedDialog(id);
 }
 
-export function finishInventory(loc: any) {
+export function finishInventory(loc: string) {
   const now = getAmsterdamNow();
   const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
   const st = getInventoryState(loc);

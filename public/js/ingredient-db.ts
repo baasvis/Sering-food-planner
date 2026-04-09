@@ -1,3 +1,4 @@
+import type { Ingredient } from '@shared/types';
 import { S, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, rebuildStorageCategories, getStorageConfigForLoc, getStorageColor, DEFAULT_STORAGE_CONFIG } from './state';
 import { toast, toastError, apiGet, apiPost, saveStorageConfig, loadIngredientDb } from './utils';
 import { chipClass } from './core';
@@ -7,7 +8,7 @@ import { renderOrders, currentOrdersLoc } from './orders';
 // ── INGREDIENT DATABASE TAB ──────────────────────────────────
 
 // State
-export let ingredientDbFull = [];       // full ingredient list from /api/ingredients/full
+export let ingredientDbFull: Ingredient[] = [];       // full ingredient list from /api/ingredients/full
 export let ingredientDbFullLoaded = false;
 export let ingredientDbSearch = '';
 export let ingredientDbTypeFilter = 'all'; // 'all' | 'Food' | 'Drinks' | 'Non-food'
@@ -20,17 +21,28 @@ export let ingredientDbEditId: string | null = null;   // id of ingredient being
 export function setIngredientDbEditId(id: string | null) {
   ingredientDbEditId = id;
 }
-export let supplierUploadData = null;   // parsed Hanos XLSX data for import
+interface SupplierProduct {
+  orderCode: string;
+  recentOrders: number;
+  title: string;
+  price: number;
+  orderUnit: string;
+  orderUnitSize: number;
+  priceHistory?: Array<{ month: string; price: number }>;
+  nutrition?: Record<string, number>;
+}
+
+export let supplierUploadData: SupplierProduct[] | null = null;   // parsed Hanos XLSX data for import
 export let ingredientDbPage = 0;        // current page for pagination
 export const INGREDIENTS_PER_PAGE = 50;
 
-export function updateIngredientSearch(el: any) {
+export function updateIngredientSearch(el: HTMLInputElement) {
   const pos = el.selectionStart;
   ingredientDbSearch = el.value;
   ingredientDbPage = 0;
   renderOrders();
   requestAnimationFrame(() => {
-    const input = document.getElementById('ing-db-search');
+    const input = document.getElementById('ing-db-search') as HTMLInputElement | null;
     if (input) { input.focus(); input.setSelectionRange(pos, pos); }
   });
 }
@@ -54,7 +66,7 @@ export function getCategoriesForTypeFilter() {
   return group ? INGREDIENT_CATEGORIES[group] : ALL_CATEGORIES;
 }
 
-export function ingredientMatchesTypeFilter(ing: any) {
+export function ingredientMatchesTypeFilter(ing: Ingredient) {
   if (ingredientDbTypeFilter === 'all') return true;
   const types = ing.types || [];
   if (ingredientDbTypeFilter === 'Food' || ingredientDbTypeFilter === 'Drinks' || ingredientDbTypeFilter === 'Non-food') {
@@ -93,31 +105,31 @@ export function getFilteredIngredients() {
   }
 
   // Sort
-  if (ingredientDbSort === 'supplier') list = [...list].sort((a: any, b: any) => (a.supplier || '').localeCompare(b.supplier || '') || a.name.localeCompare(b.name));
-  else if (ingredientDbSort === 'category') list = [...list].sort((a: any, b: any) => (a.category || '').localeCompare(b.category || '') || a.name.localeCompare(b.name));
-  else if (ingredientDbSort === 'type') list = [...list].sort((a: any, b: any) => ((a.types||[])[0]||'').localeCompare((b.types||[])[0]||'') || a.name.localeCompare(b.name));
-  else list = [...list].sort((a: any, b: any) => a.name.localeCompare(b.name));
+  if (ingredientDbSort === 'supplier') list = [...list].sort((a: Ingredient, b: Ingredient) => (a.supplier || '').localeCompare(b.supplier || '') || a.name.localeCompare(b.name));
+  else if (ingredientDbSort === 'category') list = [...list].sort((a: Ingredient, b: Ingredient) => (a.category || '').localeCompare(b.category || '') || a.name.localeCompare(b.name));
+  else if (ingredientDbSort === 'type') list = [...list].sort((a: Ingredient, b: Ingredient) => ((a.types||[])[0]||'').localeCompare((b.types||[])[0]||'') || a.name.localeCompare(b.name));
+  else list = [...list].sort((a: Ingredient, b: Ingredient) => a.name.localeCompare(b.name));
 
   return list;
 }
 
-export function renderTypePills(types: any) {
+export function renderTypePills(types: string[]) {
   if (!types || !types.length) return '<span style="color:var(--text3);font-size:11px;">—</span>';
   return types.map(t => {
-    const colors = {Food:'--green',Drinks:'--blue','Kitchen Equipment':'--text2',Cleaning:'--purple','FOH Supplies':'--orange','FOH Equipment':'--orange',Office:'--text2'};
+    const colors: Record<string, string> = {Food:'--green',Drinks:'--blue','Kitchen Equipment':'--text2',Cleaning:'--purple','FOH Supplies':'--orange','FOH Equipment':'--orange',Office:'--text2'};
     const c = colors[t] || '--text2';
     return `<span class="type-pill" style="border-color:var(${c});color:var(${c});">${esc(t)}</span>`;
   }).join(' ');
 }
 
-export function renderPriceLevel(level: any) {
+export function renderPriceLevel(level: string) {
   if (!level) return '';
-  const icons = {cheap:'$',medium:'$$',expensive:'$$$'};
-  const colors = {cheap:'var(--green)',medium:'var(--orange)',expensive:'var(--red)'};
+  const icons: Record<string, string> = {cheap:'$',medium:'$$',expensive:'$$$'};
+  const colors: Record<string, string> = {cheap:'var(--green)',medium:'var(--orange)',expensive:'var(--red)'};
   return `<span style="font-size:11px;font-weight:600;color:${colors[level]||'var(--text2)'};" title="${level}">${icons[level]||level}</span>`;
 }
 
-export function renderInlineStock(ing: any) {
+export function renderInlineStock(ing: Ingredient) {
   const stock = ing.stock || {};
   const wAmt = (stock.west && stock.west.amount) || '';
   const cAmt = (stock.centraal && stock.centraal.amount) || '';
@@ -129,8 +141,8 @@ export function renderInlineStock(ing: any) {
   </div>`;
 }
 
-export let _inlineStockTimeout = null;
-export function saveInlineStock(ingId: any, location: any, val: any) {
+export let _inlineStockTimeout: ReturnType<typeof setTimeout> | null = null;
+export function saveInlineStock(ingId: string, location: string, val: string) {
   const amount = parseFloat(val) || 0;
 
   // Update local state
@@ -156,7 +168,7 @@ export function saveInlineStock(ingId: any, location: any, val: any) {
   }, 600);
 }
 
-export function renderStockBadges(stock: any) {
+export function renderStockBadges(stock: Ingredient['stock'] | undefined) {
   if (!stock || (!stock.west && !stock.centraal)) return '<span style="color:var(--text3);font-size:11px;">—</span>';
   const parts = [];
   if (stock.west) parts.push(`<span class="stock-badge" title="West: ${stock.west.date||''}">W:${stock.west.amount||0}</span>`);
@@ -293,7 +305,7 @@ export function renderIngredientDbTab() {
   return html;
 }
 
-export function renderIngredientEditRow(ing: any) {
+export function renderIngredientEditRow(ing: Ingredient) {
   const types = ing.types || [];
   const storLocs = ing.storageLocations || {};
   const nutrition = ing.nutrition || {};
@@ -463,7 +475,7 @@ export function renderIngredientEditRow(ing: any) {
   </tr>`;
 }
 
-export function showInlineCategoryEdit(ingId: any, td: any) {
+export function showInlineCategoryEdit(ingId: string, td: HTMLElement) {
   const ing = ingredientDbFull.find(i => i.id === ingId);
   if (!ing) return;
   const opts = '<option value="">—</option>' + ALL_CATEGORIES.map(c =>
@@ -473,7 +485,7 @@ export function showInlineCategoryEdit(ingId: any, td: any) {
   td.querySelector('select').focus();
 }
 
-export async function saveInlineCategory(ingId: any, value: any) {
+export async function saveInlineCategory(ingId: string, value: string) {
   const ing = ingredientDbFull.find(i => i.id === ingId);
   if (!ing) return;
   ing.category = value;
@@ -487,9 +499,9 @@ export async function saveInlineCategory(ingId: any, value: any) {
   }
 }
 
-export function updateStorageLocOpts(building: any) {
-  const catSel = document.getElementById('ing-edit-storage' + (building === 'west' ? 'West' : 'Centraal') + 'Cat');
-  const locSel = document.getElementById('ing-edit-storage' + (building === 'west' ? 'West' : 'Centraal') + 'Loc');
+export function updateStorageLocOpts(building: string) {
+  const catSel = document.getElementById('ing-edit-storage' + (building === 'west' ? 'West' : 'Centraal') + 'Cat') as HTMLSelectElement | null;
+  const locSel = document.getElementById('ing-edit-storage' + (building === 'west' ? 'West' : 'Centraal') + 'Loc') as HTMLSelectElement | null;
   if (!catSel || !locSel) return;
   const cat = catSel.value;
   const locs = cat && STORAGE_CATEGORIES[cat] ? STORAGE_CATEGORIES[cat] : [];
@@ -497,14 +509,14 @@ export function updateStorageLocOpts(building: any) {
 }
 
 export function updateEditCategoryOptions() {
-  const checks = document.querySelectorAll('.ing-edit-type-cb');
+  const checks = document.querySelectorAll<HTMLInputElement>('.ing-edit-type-cb');
   const checked = [...checks].filter(c => c.checked).map(c => c.value);
   const groups = new Set(checked.map(t => INGREDIENT_TYPE_TO_GROUP[t]).filter(Boolean));
-  let catOptions = [];
+  let catOptions: string[] = [];
   if (groups.size === 0) { catOptions = ALL_CATEGORIES; }
   else { groups.forEach(g => { catOptions = catOptions.concat(INGREDIENT_CATEGORIES[g] || []); }); }
 
-  const sel = document.getElementById('ing-edit-category');
+  const sel = document.getElementById('ing-edit-category') as HTMLSelectElement | null;
   if (!sel) return;
   const current = sel.value;
   sel.innerHTML = '<option value="">— Select —</option>' + catOptions.map(c =>
@@ -512,56 +524,56 @@ export function updateEditCategoryOptions() {
   ).join('');
 }
 
-export async function saveIngredientEdit(id: any) {
+export async function saveIngredientEdit(id: string) {
   const ing = ingredientDbFull.find(i => i.id === id);
   if (!ing) return;
 
-  const nameVal = (document.getElementById('ing-edit-name')?.value || '').trim();
+  const nameVal = ((document.getElementById('ing-edit-name') as HTMLInputElement | null)?.value || '').trim();
   if (!nameVal) { toastError('Name is required'); return; }
-  const catVal = document.getElementById('ing-edit-category')?.value || '';
+  const catVal = (document.getElementById('ing-edit-category') as HTMLSelectElement | null)?.value || '';
   if (!catVal) { toastError('Category is required'); return; }
 
   // Collect types from checkboxes
-  const typeChecks = document.querySelectorAll('.ing-edit-type-cb');
+  const typeChecks = document.querySelectorAll<HTMLInputElement>('.ing-edit-type-cb');
   const types = [...typeChecks].filter(c => c.checked).map(c => c.value);
   if (!types.length) { toastError('At least one type is required'); return; }
 
   // Collect nutrition
-  const nutrition = {};
+  const nutrition: Record<string, number> = {};
   ['energyKj','energyKcal','protein','carbs','sugar','fat','saturatedFat','fiber','salt'].forEach(k => {
-    const el = document.getElementById('ing-edit-nut-' + k);
+    const el = document.getElementById('ing-edit-nut-' + k) as HTMLInputElement | null;
     if (el && el.value !== '') nutrition[k] = parseFloat(el.value) || 0;
   });
 
-  const orderPrice = parseFloat(document.getElementById('ing-edit-orderPrice').value) || null;
-  const orderUnitSize = parseFloat(document.getElementById('ing-edit-orderUnitSize').value) || 0;
+  const orderPrice = parseFloat((document.getElementById('ing-edit-orderPrice') as HTMLInputElement).value) || null;
+  const orderUnitSize = parseFloat((document.getElementById('ing-edit-orderUnitSize') as HTMLInputElement).value) || 0;
 
   const updated = {
     ...ing,
-    name: document.getElementById('ing-edit-name').value.trim(),
-    supplierName: document.getElementById('ing-edit-supplierName').value.trim(),
+    name: (document.getElementById('ing-edit-name') as HTMLInputElement).value.trim(),
+    supplierName: (document.getElementById('ing-edit-supplierName') as HTMLInputElement).value.trim(),
     types,
-    category: document.getElementById('ing-edit-category').value,
-    unit: document.getElementById('ing-edit-unit').value,
-    supplier: document.getElementById('ing-edit-supplier').value.trim(),
-    orderCode: document.getElementById('ing-edit-orderCode').value.trim(),
-    orderUnit: document.getElementById('ing-edit-orderUnit').value.trim(),
+    category: (document.getElementById('ing-edit-category') as HTMLSelectElement).value,
+    unit: (document.getElementById('ing-edit-unit') as HTMLSelectElement).value,
+    supplier: (document.getElementById('ing-edit-supplier') as HTMLInputElement).value.trim(),
+    orderCode: (document.getElementById('ing-edit-orderCode') as HTMLInputElement).value.trim(),
+    orderUnit: (document.getElementById('ing-edit-orderUnit') as HTMLInputElement).value.trim(),
     orderPrice,
     orderUnitSize,
-    priceLevel: document.getElementById('ing-edit-priceLevel').value,
+    priceLevel: (document.getElementById('ing-edit-priceLevel') as HTMLSelectElement).value,
     pricePer100: (orderPrice && orderUnitSize > 0) ? Math.round((orderPrice / orderUnitSize) * 10000) / 100 : 0,
     storageLocations: {
-      west: { category: document.getElementById('ing-edit-storageWestCat').value, location: document.getElementById('ing-edit-storageWestLoc').value },
-      centraal: { category: document.getElementById('ing-edit-storageCentraalCat').value, location: document.getElementById('ing-edit-storageCentraalLoc').value },
+      west: { category: (document.getElementById('ing-edit-storageWestCat') as HTMLSelectElement).value, location: (document.getElementById('ing-edit-storageWestLoc') as HTMLSelectElement).value },
+      centraal: { category: (document.getElementById('ing-edit-storageCentraalCat') as HTMLSelectElement).value, location: (document.getElementById('ing-edit-storageCentraalLoc') as HTMLSelectElement).value },
     },
     stock: {
-      west: { amount: parseFloat(document.getElementById('ing-edit-stockWest').value) || 0, date: new Date().toISOString().slice(0, 10) },
-      centraal: { amount: parseFloat(document.getElementById('ing-edit-stockCentraal').value) || 0, date: new Date().toISOString().slice(0, 10) },
+      west: { amount: parseFloat((document.getElementById('ing-edit-stockWest') as HTMLInputElement).value) || 0, date: new Date().toISOString().slice(0, 10) },
+      centraal: { amount: parseFloat((document.getElementById('ing-edit-stockCentraal') as HTMLInputElement).value) || 0, date: new Date().toISOString().slice(0, 10) },
     },
     nutrition: Object.keys(nutrition).length ? nutrition : {},
-    active: document.getElementById('ing-edit-active').checked,
-    notes: document.getElementById('ing-edit-notes').value.trim(),
-    allergens: document.getElementById('ing-edit-allergens').value.trim(),
+    active: (document.getElementById('ing-edit-active') as HTMLInputElement).checked,
+    notes: (document.getElementById('ing-edit-notes') as HTMLInputElement).value.trim(),
+    allergens: (document.getElementById('ing-edit-allergens') as HTMLInputElement).value.trim(),
   };
 
   if (!updated.name) { toastError('Name is required'); return; }
@@ -579,7 +591,7 @@ export async function saveIngredientEdit(id: any) {
   }
 }
 
-export async function toggleIngredientActive(id: any) {
+export async function toggleIngredientActive(id: string) {
   const ing = ingredientDbFull.find(i => i.id === id);
   if (!ing) return;
   ing.active = !ing.active;
@@ -592,7 +604,7 @@ export async function toggleIngredientActive(id: any) {
   }
 }
 
-export async function deleteIngredient(id: any, name: any) {
+export async function deleteIngredient(id: string, name: string) {
   if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
   try {
     const r = await fetch('/api/ingredients/' + id, { method: 'DELETE' });
@@ -607,7 +619,7 @@ export async function deleteIngredient(id: any, name: any) {
   }
 }
 
-export async function openIngredientModal(name: any) {
+export async function openIngredientModal(name: string) {
   if (!ingredientDbFullLoaded) await loadIngredientDbFull();
   const ing = ingredientDbFull.find(i => i.name.toLowerCase().trim() === name.toLowerCase().trim());
   if (!ing) { toastError('Ingredient not found in database'); return; }
@@ -786,50 +798,50 @@ export async function openIngredientModal(name: any) {
   showModal(modalHtml);
 }
 
-export async function saveIngredientFromModal(id: any) {
+export async function saveIngredientFromModal(id: string) {
   // Reuse saveIngredientEdit logic but close modal instead of re-rendering inline
   const ing = ingredientDbFull.find(i => i.id === id);
   if (!ing) return;
-  const newName = (document.getElementById('ing-edit-name')?.value || '').trim();
+  const newName = ((document.getElementById('ing-edit-name') as HTMLInputElement | null)?.value || '').trim();
   if (!newName) { toastError('Name is required'); return; }
-  const category = document.getElementById('ing-edit-category')?.value || '';
+  const category = (document.getElementById('ing-edit-category') as HTMLSelectElement | null)?.value || '';
   if (!category) { toastError('Category is required'); return; }
-  const typeChecks = document.querySelectorAll('.ing-edit-type-cb');
+  const typeChecks = document.querySelectorAll<HTMLInputElement>('.ing-edit-type-cb');
   const types = [...typeChecks].filter(c => c.checked).map(c => c.value);
   if (!types.length) { toastError('At least one type is required'); return; }
 
   // Read all fields (same as saveIngredientEdit)
   ing.name = newName;
-  ing.supplierName = document.getElementById('ing-edit-supplierName')?.value.trim() || '';
-  ing.supplier = document.getElementById('ing-edit-supplier')?.value.trim() || '';
-  ing.category = document.getElementById('ing-edit-category')?.value || '';
-  ing.unit = document.getElementById('ing-edit-unit')?.value || 'Grams';
-  ing.priceLevel = document.getElementById('ing-edit-priceLevel')?.value || '';
-  ing.active = document.getElementById('ing-edit-active')?.checked !== false;
-  ing.orderCode = document.getElementById('ing-edit-orderCode')?.value.trim() || '';
-  ing.orderUnit = document.getElementById('ing-edit-orderUnit')?.value.trim() || '';
-  ing.orderPrice = parseFloat(document.getElementById('ing-edit-orderPrice')?.value) || 0;
-  ing.orderUnitSize = parseFloat(document.getElementById('ing-edit-orderUnitSize')?.value) || 0;
-  ing.allergens = document.getElementById('ing-edit-allergens')?.value.trim() || '';
-  ing.notes = document.getElementById('ing-edit-notes')?.value.trim() || '';
+  ing.supplierName = (document.getElementById('ing-edit-supplierName') as HTMLInputElement | null)?.value.trim() || '';
+  ing.supplier = (document.getElementById('ing-edit-supplier') as HTMLInputElement | null)?.value.trim() || '';
+  ing.category = (document.getElementById('ing-edit-category') as HTMLSelectElement | null)?.value || '';
+  ing.unit = (document.getElementById('ing-edit-unit') as HTMLSelectElement | null)?.value || 'Grams';
+  ing.priceLevel = (document.getElementById('ing-edit-priceLevel') as HTMLSelectElement | null)?.value || '';
+  ing.active = (document.getElementById('ing-edit-active') as HTMLInputElement | null)?.checked !== false;
+  ing.orderCode = (document.getElementById('ing-edit-orderCode') as HTMLInputElement | null)?.value.trim() || '';
+  ing.orderUnit = (document.getElementById('ing-edit-orderUnit') as HTMLInputElement | null)?.value.trim() || '';
+  ing.orderPrice = parseFloat((document.getElementById('ing-edit-orderPrice') as HTMLInputElement | null)?.value ?? '') || 0;
+  ing.orderUnitSize = parseFloat((document.getElementById('ing-edit-orderUnitSize') as HTMLInputElement | null)?.value ?? '') || 0;
+  ing.allergens = (document.getElementById('ing-edit-allergens') as HTMLInputElement | null)?.value.trim() || '';
+  ing.notes = (document.getElementById('ing-edit-notes') as HTMLInputElement | null)?.value.trim() || '';
 
-  const checks = document.querySelectorAll('.ing-edit-type-cb');
+  const checks = document.querySelectorAll<HTMLInputElement>('.ing-edit-type-cb');
   ing.types = [...checks].filter(c => c.checked).map(c => c.value);
 
   ing.storageLocations = {
-    west: { category: document.getElementById('ing-edit-storageWestCat')?.value || '', location: document.getElementById('ing-edit-storageWestLoc')?.value || '' },
-    centraal: { category: document.getElementById('ing-edit-storageCentraalCat')?.value || '', location: document.getElementById('ing-edit-storageCentraalLoc')?.value || '' },
+    west: { category: (document.getElementById('ing-edit-storageWestCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageWestLoc') as HTMLSelectElement | null)?.value || '' },
+    centraal: { category: (document.getElementById('ing-edit-storageCentraalCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageCentraalLoc') as HTMLSelectElement | null)?.value || '' },
   };
 
-  const stockWest = document.getElementById('ing-edit-stockWest')?.value;
-  const stockCentraal = document.getElementById('ing-edit-stockCentraal')?.value;
+  const stockWest = (document.getElementById('ing-edit-stockWest') as HTMLInputElement | null)?.value;
+  const stockCentraal = (document.getElementById('ing-edit-stockCentraal') as HTMLInputElement | null)?.value;
   if (!ing.stock) ing.stock = {};
   if (stockWest !== '' && stockWest !== undefined) ing.stock.west = { amount: parseFloat(stockWest) || 0, date: new Date().toISOString().slice(0, 10) };
   if (stockCentraal !== '' && stockCentraal !== undefined) ing.stock.centraal = { amount: parseFloat(stockCentraal) || 0, date: new Date().toISOString().slice(0, 10) };
 
-  const nut = {};
+  const nut: Record<string, number> = {};
   ['energyKj','energyKcal','protein','carbs','sugar','fat','saturatedFat','fiber','salt'].forEach(k => {
-    const v = parseFloat(document.getElementById('ing-edit-nut-' + k)?.value);
+    const v = parseFloat((document.getElementById('ing-edit-nut-' + k) as HTMLInputElement | null)?.value ?? '');
     if (!isNaN(v)) nut[k] = v;
   });
   ing.nutrition = nut;
@@ -877,7 +889,7 @@ export async function hanosLookupProduct() {
     const product = await resp.json();
 
     // Fill in form fields
-    const setVal = (id: any, val: any) => { const el = document.getElementById(id); if (el && val !== undefined && val !== null && val !== '') el.value = val; };
+    const setVal = (id: string, val: string | number | null | undefined) => { const el = document.getElementById(id) as HTMLInputElement | null; if (el && val !== undefined && val !== null && val !== '') el.value = String(val); };
     setVal('ing-edit-orderCode', product.orderCode);
     setVal('ing-edit-orderUnit', product.orderUnit);
     setVal('ing-edit-orderPrice', product.orderPrice);
@@ -887,11 +899,11 @@ export async function hanosLookupProduct() {
     if (product.allergens) setVal('ing-edit-allergens', product.allergens);
 
     // Set unit dropdown
-    const unitSel = document.getElementById('ing-edit-unit');
+    const unitSel = document.getElementById('ing-edit-unit') as HTMLSelectElement | null;
     if (unitSel && product.unit) unitSel.value = product.unit;
 
     // If name field is empty, fill it too
-    const nameField = document.getElementById('ing-edit-name');
+    const nameField = document.getElementById('ing-edit-name') as HTMLInputElement | null;
     if (nameField && !nameField.value.trim()) {
       nameField.value = product.name;
     }
@@ -1047,34 +1059,34 @@ export function openAddIngredientModal() {
   showModal(modalHtml);
 }
 
-export async function saveNewIngredient(id: any) {
-  const name = (document.getElementById('ing-edit-name')?.value || '').trim();
+export async function saveNewIngredient(id: string) {
+  const name = ((document.getElementById('ing-edit-name') as HTMLInputElement | null)?.value || '').trim();
   if (!name) { toastError('Name is required'); return; }
-  const category = document.getElementById('ing-edit-category')?.value || '';
+  const category = (document.getElementById('ing-edit-category') as HTMLSelectElement | null)?.value || '';
   if (!category) { toastError('Category is required'); return; }
-  const checks = document.querySelectorAll('.ing-edit-type-cb');
+  const checks = document.querySelectorAll<HTMLInputElement>('.ing-edit-type-cb');
   const types = [...checks].filter(c => c.checked).map(c => c.value);
   if (!types.length) { toastError('At least one type is required'); return; }
 
   const ing = {
     id,
     name,
-    supplierName: document.getElementById('ing-edit-supplierName')?.value.trim() || '',
+    supplierName: (document.getElementById('ing-edit-supplierName') as HTMLInputElement | null)?.value.trim() || '',
     types,
-    category: document.getElementById('ing-edit-category')?.value || '',
-    unit: document.getElementById('ing-edit-unit')?.value || 'Grams',
-    supplier: document.getElementById('ing-edit-supplier')?.value.trim() || '',
-    orderCode: document.getElementById('ing-edit-orderCode')?.value.trim() || '',
-    orderUnit: document.getElementById('ing-edit-orderUnit')?.value.trim() || '',
-    orderPrice: parseFloat(document.getElementById('ing-edit-orderPrice')?.value) || 0,
-    orderUnitSize: parseFloat(document.getElementById('ing-edit-orderUnitSize')?.value) || 0,
-    priceLevel: document.getElementById('ing-edit-priceLevel')?.value || '',
-    active: document.getElementById('ing-edit-active')?.checked !== false,
-    allergens: document.getElementById('ing-edit-allergens')?.value.trim() || '',
-    notes: document.getElementById('ing-edit-notes')?.value.trim() || '',
+    category: (document.getElementById('ing-edit-category') as HTMLSelectElement | null)?.value || '',
+    unit: (document.getElementById('ing-edit-unit') as HTMLSelectElement | null)?.value || 'Grams',
+    supplier: (document.getElementById('ing-edit-supplier') as HTMLInputElement | null)?.value.trim() || '',
+    orderCode: (document.getElementById('ing-edit-orderCode') as HTMLInputElement | null)?.value.trim() || '',
+    orderUnit: (document.getElementById('ing-edit-orderUnit') as HTMLInputElement | null)?.value.trim() || '',
+    orderPrice: parseFloat((document.getElementById('ing-edit-orderPrice') as HTMLInputElement | null)?.value ?? '') || 0,
+    orderUnitSize: parseFloat((document.getElementById('ing-edit-orderUnitSize') as HTMLInputElement | null)?.value ?? '') || 0,
+    priceLevel: (document.getElementById('ing-edit-priceLevel') as HTMLSelectElement | null)?.value || '',
+    active: (document.getElementById('ing-edit-active') as HTMLInputElement | null)?.checked !== false,
+    allergens: (document.getElementById('ing-edit-allergens') as HTMLInputElement | null)?.value.trim() || '',
+    notes: (document.getElementById('ing-edit-notes') as HTMLInputElement | null)?.value.trim() || '',
     storageLocations: {
-      west: { category: document.getElementById('ing-edit-storageWestCat')?.value || '', location: document.getElementById('ing-edit-storageWestLoc')?.value || '' },
-      centraal: { category: document.getElementById('ing-edit-storageCentraalCat')?.value || '', location: document.getElementById('ing-edit-storageCentraalLoc')?.value || '' },
+      west: { category: (document.getElementById('ing-edit-storageWestCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageWestLoc') as HTMLSelectElement | null)?.value || '' },
+      centraal: { category: (document.getElementById('ing-edit-storageCentraalCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageCentraalLoc') as HTMLSelectElement | null)?.value || '' },
     },
     measureMode: 'weight',
     pricePer100: 0,
@@ -1102,7 +1114,7 @@ export async function saveNewIngredient(id: any) {
 
 // ── Storage location popover (reusable from any view) ─────────
 
-export function openStoragePopover(ingredientId: any, anchorEl: any) {
+export function openStoragePopover(ingredientId: string, anchorEl: HTMLElement) {
   // Close any existing popover
   const existing = document.getElementById('storage-popover');
   if (existing) existing.remove();
@@ -1148,8 +1160,8 @@ export function openStoragePopover(ingredientId: any, anchorEl: any) {
 
   // Close on outside click
   setTimeout(() => {
-    document.addEventListener('click', function closePopover(e: any) {
-      if (!pop.contains(e.target) && e.target !== anchorEl) {
+    document.addEventListener('click', function closePopover(e: MouseEvent) {
+      if (!pop.contains(e.target as Node) && e.target !== anchorEl) {
         pop.remove();
         document.removeEventListener('click', closePopover);
       }
@@ -1157,19 +1169,19 @@ export function openStoragePopover(ingredientId: any, anchorEl: any) {
   }, 50);
 }
 
-export function updatePopStorageLoc(building: any) {
-  const catSel = document.getElementById('pop-storage-' + building + '-cat');
-  const locSel = document.getElementById('pop-storage-' + building + '-loc');
+export function updatePopStorageLoc(building: string) {
+  const catSel = document.getElementById('pop-storage-' + building + '-cat') as HTMLSelectElement | null;
+  const locSel = document.getElementById('pop-storage-' + building + '-loc') as HTMLSelectElement | null;
   if (!catSel || !locSel) return;
   const cat = catSel.value;
   const locs = cat && STORAGE_CATEGORIES[cat] ? STORAGE_CATEGORIES[cat] : [];
   locSel.innerHTML = '<option value="">—</option>' + locs.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
 }
 
-export async function saveStorageFromPopover(ingredientId: any) {
+export async function saveStorageFromPopover(ingredientId: string) {
   const curLoc = currentOrdersLoc || S.currentLoc || 'west';
-  const catEl = document.getElementById('pop-storage-' + curLoc + '-cat');
-  const locEl = document.getElementById('pop-storage-' + curLoc + '-loc');
+  const catEl = document.getElementById('pop-storage-' + curLoc + '-cat') as HTMLSelectElement | null;
+  const locEl = document.getElementById('pop-storage-' + curLoc + '-loc') as HTMLSelectElement | null;
   if (!catEl || !locEl) return;
 
   // Update in full DB — only change the current location, preserve the other
@@ -1198,7 +1210,7 @@ export async function saveStorageFromPopover(ingredientId: any) {
 
 // ── Supplier XLSX Upload + Import ────────────────────────────
 
-export async function handleSupplierUpload(file: any) {
+export async function handleSupplierUpload(file: File | undefined) {
   if (!file) return;
   toast('Parsing supplier file...');
   const formData = new FormData();
@@ -1240,7 +1252,7 @@ export function renderSupplierImportPanel() {
 
 export async function applySupplierUpdate() {
   if (!supplierUploadData) return;
-  const byCode = {};
+  const byCode: Record<string, SupplierProduct> = {};
   supplierUploadData.forEach(p => { byCode[p.orderCode] = p; });
 
   let updated = 0;
@@ -1297,7 +1309,7 @@ export async function applySupplierUpdate() {
 // ── Storage Location Management Modal ─────────────────────────
 
 export let storageModalLoc = 'west';
-export let storageModalDragIdx = null;
+export let storageModalDragIdx: number | null = null;
 
 export function openStorageLocationsModal() {
   storageModalLoc = currentOrdersLoc || S.currentLoc || 'west';
@@ -1314,7 +1326,7 @@ export function renderStorageModal() {
     <button class="order-loc-btn${loc === 'centraal' ? ' active' : ''}" onclick="storageModalLoc='centraal';renderStorageModal()">Sering Centraal</button>
   </div>`;
 
-  let html = areas.map((area: any, idx: any) => {
+  let html = areas.map((area: { name: string; color: string; spots: string[] }, idx: number) => {
     return `<div class="sc-area-row" draggable="true" data-sc-idx="${idx}"
         ondragstart="storageModalDragIdx=${idx};this.style.opacity='.5'"
         ondragend="this.style.opacity='1'"
@@ -1329,7 +1341,7 @@ export function renderStorageModal() {
         <button class="btn btn-sm btn-danger" onclick="removeStorageCategory(${idx})">Remove</button>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;margin-left:52px;">
-        ${(area.spots || []).map((l: any, i: any) => `<span style="font-size:12px;padding:2px 8px;background:var(--bg);border:1px solid var(--border);border-radius:12px;display:inline-flex;align-items:center;gap:4px;">${esc(l)} <span style="cursor:pointer;opacity:.5;font-size:14px;" onclick="removeStorageSpot(${idx},${i})">&times;</span></span>`).join('')}
+        ${(area.spots || []).map((l: string, i: number) => `<span style="font-size:12px;padding:2px 8px;background:var(--bg);border:1px solid var(--border);border-radius:12px;display:inline-flex;align-items:center;gap:4px;">${esc(l)} <span style="cursor:pointer;opacity:.5;font-size:14px;" onclick="removeStorageSpot(${idx},${i})">&times;</span></span>`).join('')}
       </div>
       <div style="display:flex;gap:6px;margin-left:52px;">
         <input class="order-stock-input" style="flex:1;text-align:left;" id="new-spot-${idx}" placeholder="New spot..." onkeydown="if(event.key==='Enter')addStorageSpot(${idx})" />
@@ -1357,7 +1369,7 @@ export function renderStorageModal() {
   showModal(modalHtml);
 }
 
-export function dropStorageArea(toIdx: any) {
+export function dropStorageArea(toIdx: number) {
   const fromIdx = storageModalDragIdx;
   if (fromIdx === null || fromIdx === toIdx) return;
   const loc = storageModalLoc;
@@ -1370,7 +1382,7 @@ export function dropStorageArea(toIdx: any) {
   renderStorageModal();
 }
 
-export function updateStorageColor(idx: any, color: any) {
+export function updateStorageColor(idx: number, color: string) {
   const loc = storageModalLoc;
   if (S.storageConfig[loc] && S.storageConfig[loc][idx]) {
     S.storageConfig[loc][idx].color = color;
@@ -1379,7 +1391,7 @@ export function updateStorageColor(idx: any, color: any) {
 }
 
 export function addStorageCategory() {
-  const input = document.getElementById('new-storage-cat');
+  const input = document.getElementById('new-storage-cat') as HTMLInputElement | null;
   if (!input) return;
   const name = input.value.trim();
   if (!name) return;
@@ -1393,7 +1405,7 @@ export function addStorageCategory() {
   toast('Area added');
 }
 
-export function removeStorageCategory(idx: any) {
+export function removeStorageCategory(idx: number) {
   const loc = storageModalLoc;
   const area = S.storageConfig[loc] && S.storageConfig[loc][idx];
   if (!area || !confirm('Remove "' + area.name + '" and all its spots?')) return;
@@ -1404,8 +1416,8 @@ export function removeStorageCategory(idx: any) {
   toast('Area removed');
 }
 
-export function addStorageSpot(idx: any) {
-  const input = document.getElementById('new-spot-' + idx);
+export function addStorageSpot(idx: number) {
+  const input = document.getElementById('new-spot-' + idx) as HTMLInputElement | null;
   if (!input) return;
   const name = input.value.trim();
   if (!name) return;
@@ -1421,7 +1433,7 @@ export function addStorageSpot(idx: any) {
   toast('Spot added');
 }
 
-export function removeStorageSpot(areaIdx: any, spotIdx: any) {
+export function removeStorageSpot(areaIdx: number, spotIdx: number) {
   const loc = storageModalLoc;
   const area = S.storageConfig[loc] && S.storageConfig[loc][areaIdx];
   if (!area || !area.spots) return;
@@ -1461,13 +1473,13 @@ export function openMigrationModal() {
   showModal(modalHtml);
 }
 
-export async function runMigration(dryRun: any) {
-  const oldFile = document.getElementById('migrate-old-csv').files[0];
-  const hanosFile = document.getElementById('migrate-hanos-csv').files[0];
+export async function runMigration(dryRun: boolean) {
+  const oldFile = (document.getElementById('migrate-old-csv') as HTMLInputElement).files?.[0];
+  const hanosFile = (document.getElementById('migrate-hanos-csv') as HTMLInputElement).files?.[0];
   if (!hanosFile) { toastError('Hanos CSV is required'); return; }
 
   const status = document.getElementById('migrate-status');
-  status.textContent = dryRun ? 'Running dry run...' : 'Running migration...';
+  if (status) status.textContent = dryRun ? 'Running dry run...' : 'Running migration...';
 
   const formData = new FormData();
   if (oldFile) formData.append('oldCsv', oldFile);
@@ -1480,7 +1492,7 @@ export async function runMigration(dryRun: any) {
     const result = await r.json();
 
     if (dryRun) {
-      status.innerHTML = `<strong>Dry run result:</strong><br>
+      if (status) status.innerHTML = `<strong>Dry run result:</strong><br>
         Total: ${result.total} ingredients<br>
         Matched (old name kept): ${result.matched}<br>
         Hanos only (Dutch name): ${result.hanosOnly}<br>
@@ -1488,7 +1500,7 @@ export async function runMigration(dryRun: any) {
         Inactive: ${result.inactive}<br>
         <span style="color:var(--green);">Ready to run for real.</span>`;
     } else {
-      status.innerHTML = `<strong style="color:var(--green);">Migration complete!</strong><br>
+      if (status) status.innerHTML = `<strong style="color:var(--green);">Migration complete!</strong><br>
         ${result.total} ingredients saved. ${result.matched} matched with old DB.`;
       ingredientDbFullLoaded = false;
       loadIngredientDb();
@@ -1496,7 +1508,7 @@ export async function runMigration(dryRun: any) {
     }
   } catch (e: unknown) {
     const errMsg = e instanceof Error ? e.message : 'Unknown error';
-    status.innerHTML = `<span style="color:var(--red);">Error: ${esc(errMsg)}</span>`;
+    if (status) status.innerHTML = `<span style="color:var(--red);">Error: ${esc(errMsg)}</span>`;
     toastError('Migration failed: ' + errMsg);
   }
 }

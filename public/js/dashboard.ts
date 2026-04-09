@@ -1,4 +1,8 @@
+import type { Batch, Location, Meal, DishType } from '@shared/types';
 import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, NAV_SCREENS } from './state';
+
+/** Batch with optional dashboard-only starch selection (not persisted in shared type) */
+type DashBatch = Batch & { starch?: string | null };
 import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId } from './utils';
 import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
@@ -107,7 +111,7 @@ export function getIngredientCategoryCache() {
   return _ingredientCategoryCache;
 }
 
-export function isChoppableIngredient(name: any) {
+export function isChoppableIngredient(name: string) {
   const lower = name.toLowerCase().trim();
   // Hard exclusion: pantry staples are never choppable regardless of DB category
   if (PANTRY_KEYWORDS.some(kw => lower.includes(kw))) return false;
@@ -117,7 +121,7 @@ export function isChoppableIngredient(name: any) {
   const exact = cache.get(lower);
   if (exact) return CHOPPABLE_CATEGORIES.includes(exact);
   // Word-level fuzzy: "red onion" contains word "onion", "carrot (purple)" contains "carrot"
-  const wordBoundary = (haystack: any, needle: any) => {
+  const wordBoundary = (haystack: string, needle: string) => {
     const i = haystack.indexOf(needle);
     if (i === -1) return false;
     const before = i === 0 || /\W/.test(haystack[i - 1]);
@@ -138,11 +142,11 @@ export function isChoppableIngredient(name: any) {
   return true;
 }
 
-export function isDishAtLocation(dish: any, loc: any) {
+export function isDishAtLocation(dish: Batch, loc: Location) {
   return dish.location === loc;
 }
 
-export function getCookDateDishes(loc: any, date: any) {
+export function getCookDateDishes(loc: Location, date: Date) {
   const dateStr = dateToStr(date);
   return S.batches.filter(d =>
     d.cookDate === dateStr &&
@@ -152,9 +156,9 @@ export function getCookDateDishes(loc: any, date: any) {
 }
 
 // Get all unique dishes in the menu for a given location + ISO date string
-export function getMenuDishes(loc: any, dateStr: any) {
-  const seen = new Set();
-  const dishes = [];
+export function getMenuDishes(loc: Location, dateStr: string) {
+  const seen = new Set<string>();
+  const dishes: Batch[] = [];
   MEALS.forEach(meal => {
     const k = `${loc}-${dateStr}-${meal}`;
     (S.planner[k] || []).forEach(d => {
@@ -164,7 +168,7 @@ export function getMenuDishes(loc: any, dateStr: any) {
   return dishes;
 }
 
-export function calcLitersForService(dish: any, loc: any, dateStr: any, meal: any) {
+export function calcLitersForService(dish: Batch, loc: Location, dateStr: string, meal: Meal) {
   const k = `${loc}-${dateStr}-${meal}`;
   const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
   const count = Math.max(peers.length, 1);
@@ -172,9 +176,11 @@ export function calcLitersForService(dish: any, loc: any, dateStr: any, meal: an
   return Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
 }
 
-export function getVegIngredients(dishes: any) {
+interface VegIngredient { name: string; amount: number; unit: string }
+
+export function getVegIngredients(dishes: Batch[]) {
   // Returns array of { name, amount, unit }  aggregated across dishes
-  const combined = {};
+  const combined: Record<string, VegIngredient> = {};
   dishes.forEach(dish => {
     const ings = calcIngredientsFromRecipe(dish);
     if (!ings || ings.length === 0) return;
@@ -184,12 +190,12 @@ export function getVegIngredients(dishes: any) {
       combined[key].amount += ing.amount;
     });
   });
-  return Object.values(combined).sort((a: any, b: any) => a.name.localeCompare(b.name));
+  return Object.values(combined).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // Per-dish starch selector (Rice or Pasta)
-export function setDishStarch(dishId: any, starch: any) {
-  const d = S.batches.find(x => x.id === dishId);
+export function setDishStarch(dishId: string, starch: string) {
+  const d = S.batches.find(x => x.id === dishId) as DashBatch | undefined;
   if (!d) return;
   d.starch = (d.starch === starch) ? null : starch;
   scheduleSave();
@@ -197,17 +203,17 @@ export function setDishStarch(dishId: any, starch: any) {
 }
 
 // Meal-level starch summary — aggregates all mains in a meal
-export function starchSummaryHtml(dishes: any, gc: any) {
+export function starchSummaryHtml(dishes: DashBatch[], gc: number) {
   const mains = dishes.filter(d => d.type === 'Main course' && d.starch);
   if (!mains.length) return '';
-  const totals = {};
+  const totals: Record<string, number> = {};
   mains.forEach(d => {
     const peers = dishes.filter(p => p.type === 'Main course');
     const guestsForDish = Math.round(gc / Math.max(peers.length, 1));
     const kg = parseFloat((Math.round(guestsForDish * 1.2) * 80 / 1000).toFixed(1));
-    totals[d.starch] = (totals[d.starch] || 0) + kg;
+    totals[d.starch!] = (totals[d.starch!] || 0) + kg;
   });
-  const parts = Object.entries(totals).map(([name, kg]: any) =>
+  const parts = Object.entries(totals).map(([name, kg]) =>
     `<span class="dash-starch-summary-item">${name === 'Rice' ? '🍚' : '🍝'} Cook <strong>${kg} kg</strong> ${name}</span>`
   );
   return `<div class="dash-starch-meal-summary">${parts.join('<span class="dash-starch-sep">+</span>')}</div>`;
@@ -238,7 +244,7 @@ export function renderDashboard() {
   loadPrepChecklist(loc).then(() => { renderDashboardContent(); renderTeamTodos(); });
 }
 
-export function setDashboardLoc(loc: any) {
+export function setDashboardLoc(loc: Location) {
   S.dashboardLoc = loc;
   document.querySelectorAll('.dash-tab').forEach(t => t.classList.remove('active'));
   document.querySelector(`.dash-tab[onclick="setDashboardLoc('${loc}')"]`).classList.add('active');
@@ -251,21 +257,21 @@ export function setDashboardLoc(loc: any) {
 
 export let _guestFlowMeal = 'lunch'; // current toggle state
 
-export function setGuestFlowMeal(meal: any) {
+export function setGuestFlowMeal(meal: Meal) {
   _guestFlowMeal = meal;
   document.querySelectorAll('.dash-flow-toggle').forEach(b => b.classList.toggle('active', b.dataset.meal === meal));
   drawGuestFlowChart();
 }
 
 // Gaussian bell curve: returns value 0-1 centered at `center` with spread `sigma`
-export function gaussian(x: any, center: any, sigma: any) {
+export function gaussian(x: number, center: number, sigma: number) {
   return Math.exp(-0.5 * Math.pow((x - center) / sigma, 2));
 }
 
 // Build a distribution of guest arrivals per 5-min slot for a meal.
 // Uses real historical distribution if available, falls back to gaussian.
 // Returns array of { time: "HH:MM", guests: number }
-export function buildGuestFlowData(totalGuests: any, meal: any, loc: any) {
+export function buildGuestFlowData(totalGuests: number, meal: string, loc: string) {
   // Check for real distribution data
   const today = getToday();
   const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -277,18 +283,18 @@ export function buildGuestFlowData(totalGuests: any, meal: any, loc: any) {
     lunch:  { start: 12 * 60, end: 14 * 60 },
     dinner: { start: 18 * 60, end: 21 * 60 },
   };
-  const win = SERVICE_WINDOWS[meal];
+  const win = SERVICE_WINDOWS[meal as Meal];
 
-  if (dist && dist[loc] && dist[loc][meal] && dist[loc][meal][dow]) {
-    const buckets = dist[loc][meal][dow];
+  if (dist && dist[loc] && (dist[loc] as Record<string, Record<string, Record<string, number>>>)[meal] && (dist[loc] as Record<string, Record<string, Record<string, number>>>)[meal][dow]) {
+    const buckets = (dist[loc] as Record<string, Record<string, Record<string, number>>>)[meal][dow];
     // Convert bucket map to sorted array, filter to service window
     const entries = Object.entries(buckets)
-      .map(([minStr, frac]: any) => ({ min: parseInt(minStr), frac }))
+      .map(([minStr, frac]) => ({ min: parseInt(minStr), frac: frac as number }))
       .filter(e => e.min >= win.start && e.min < win.end)
-      .sort((a: any, b: any) => a.min - b.min);
+      .sort((a, b) => a.min - b.min);
     if (entries.length >= 3) {
       // Re-normalize fractions after filtering so they sum to 1
-      const fracSum = entries.reduce((s: any, e: any) => s + e.frac, 0);
+      const fracSum = entries.reduce((s, e) => s + e.frac, 0);
       const scale = fracSum > 0 ? 1 / fracSum : 1;
       return entries.map(e => {
         const h = Math.floor(e.min / 60);
@@ -325,13 +331,13 @@ export function buildGuestFlowData(totalGuests: any, meal: any, loc: any) {
 }
 
 export function drawGuestFlowChart() {
-  const canvas = document.getElementById('guest-flow-canvas');
+  const canvas = document.getElementById('guest-flow-canvas') as HTMLCanvasElement | null;
   if (!canvas) return;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d')!;
 
   // HiDPI support
   const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.parentElement.getBoundingClientRect();
+  const rect = canvas.parentElement!.getBoundingClientRect();
   const w = rect.width;
   const h = 180;
   canvas.style.width = w + 'px';
@@ -396,7 +402,7 @@ export function drawGuestFlowChart() {
   ctx.fillStyle = textColor;
   ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   ctx.textAlign = 'center';
-  data.forEach((d: any, i: any) => {
+  data.forEach((d, i) => {
     const mins = parseInt(d.time.split(':')[1]);
     if (mins === 0 || mins === 30) {
       ctx.fillText(d.time, xOf(i), h - 6);
@@ -406,7 +412,7 @@ export function drawGuestFlowChart() {
   // Fill area under curve
   ctx.beginPath();
   ctx.moveTo(xOf(0), yOf(0));
-  data.forEach((d: any, i: any) => ctx.lineTo(xOf(i), yOf(d.guests)));
+  data.forEach((d, i) => ctx.lineTo(xOf(i), yOf(d.guests)));
   ctx.lineTo(xOf(data.length - 1), yOf(0));
   ctx.closePath();
   ctx.fillStyle = fillColor;
@@ -414,7 +420,7 @@ export function drawGuestFlowChart() {
 
   // Line
   ctx.beginPath();
-  data.forEach((d: any, i: any) => {
+  data.forEach((d, i) => {
     if (i === 0) ctx.moveTo(xOf(i), yOf(d.guests));
     else ctx.lineTo(xOf(i), yOf(d.guests));
   });
@@ -446,7 +452,7 @@ export function drawGuestFlowChart() {
     ctx.fillText('Now', nowX, pad.top - 4);
 
     // Remaining guests: sum all slots after current time
-    const remaining = Math.round(data.reduce((sum: any, d: any) => {
+    const remaining = Math.round(data.reduce((sum: number, d) => {
       const slotMins = parseInt(d.time.split(':')[0]) * 60 + parseInt(d.time.split(':')[1]);
       return sum + (slotMins >= nowMins ? d.guests : 0);
     }, 0));
@@ -466,7 +472,7 @@ export function drawGuestFlowChart() {
   }
 
   // Peak label
-  const peakIdx = data.reduce((best: any, d: any, i: any) => d.guests > data[best].guests ? i : best, 0);
+  const peakIdx = data.reduce((best: number, d, i) => d.guests > data[best].guests ? i : best, 0);
   const peakD = data[peakIdx];
   ctx.fillStyle = lineColor;
   ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
@@ -498,13 +504,13 @@ export function saveDayTodos() {
   }));
 }
 
-export function toggleHeatItem(dishId: any) {
+export function toggleHeatItem(dishId: string) {
   S.heatChecked.has(dishId) ? S.heatChecked.delete(dishId) : S.heatChecked.add(dishId);
   saveDayTodos();
   renderDashboardContent();
 }
 
-export function toggleCookItem(dishId: any) {
+export function toggleCookItem(dishId: string) {
   const d = S.batches.find(x => x.id === dishId);
   if (d && !isBatchCooked(d)) {
     // Actually mark the dish as cooked (same as "click to mark as cooked" on the tile)
@@ -521,7 +527,7 @@ export function toggleCookItem(dishId: any) {
   renderDashboardContent();
 }
 
-export function addCustomTodo(text: any) {
+export function addCustomTodo(text: string) {
   if (!text.trim()) return;
   S.customTodos.push({ id: newId(), text: text.trim(), done: false });
   saveDayTodos();
@@ -529,12 +535,12 @@ export function addCustomTodo(text: any) {
   setTimeout(() => document.getElementById('custom-todo-input')?.focus(), 0);
 }
 
-export function toggleCustomTodo(id: any) {
+export function toggleCustomTodo(id: string) {
   const t = S.customTodos.find(x => x.id === id);
   if (t) { t.done = !t.done; saveDayTodos(); renderTeamTodos(); }
 }
 
-export function deleteCustomTodo(id: any) {
+export function deleteCustomTodo(id: string) {
   S.customTodos = S.customTodos.filter(x => x.id !== id);
   saveDayTodos();
   renderTeamTodos();
@@ -577,7 +583,7 @@ export function renderTeamTodos() {
 }
 
 // ── Prep checklist toggle ──────────────────────────────
-export function togglePrepItem(loc: any, key: any) {
+export function togglePrepItem(loc: string, key: string) {
   if (!S.prepChecklist[loc]) S.prepChecklist[loc] = new Set();
   if (S.prepChecklist[loc].has(key)) {
     S.prepChecklist[loc].delete(key);
@@ -619,7 +625,7 @@ export function renderDashboardContent() {
       menuHtml += `<div class="dash-empty">No batches planned</div>`;
     } else {
       const typeOrder = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
-      const sorted = [...dishes].sort((a: any, b: any) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
+      const sorted = ([...dishes] as DashBatch[]).sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
       sorted.forEach(d => {
         const liters = calcLitersForService(d, loc, todayIso, meal);
         const isMain = d.type === 'Main course';
@@ -682,7 +688,7 @@ export function renderDashboardContent() {
   const vegTomorrow = getVegIngredients(menuTomorrow);
   const prepToday    = vegToday.map(i => ({ ...i, dayTag: 'today',    key: `today-${i.name.toLowerCase().trim()}` }));
   const prepTomorrow = vegTomorrow.map(i => ({ ...i, dayTag: 'tomorrow', key: `tomorrow-${i.name.toLowerCase().trim()}` }));
-  const allPrep = [...prepToday, ...prepTomorrow].sort((a: any, b: any) => a.name.localeCompare(b.name));
+  const allPrep = [...prepToday, ...prepTomorrow].sort((a, b) => a.name.localeCompare(b.name));
   const checkedSet = S.prepChecklist[loc] || new Set();
   const doneCount  = allPrep.filter(i => checkedSet.has(i.key)).length;
 
@@ -690,17 +696,17 @@ export function renderDashboardContent() {
   function renderStockOverview(loc: string) {
     const stockBatches = S.batches
       .filter(b => b.location === loc && (b.stock || 0) > 0 && !b.inTransit)
-      .sort((a: any, b: any) => {
+      .sort((a, b) => {
         const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
         return (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name);
       });
     if (stockBatches.length === 0) {
       return `<div class="dash-empty">No cooked food in stock — time to cook!</div>`;
     }
-    const totalL = Math.round(stockBatches.reduce((s: number, b: any) => s + (b.stock || 0), 0) * 10) / 10;
+    const totalL = Math.round(stockBatches.reduce((s, b) => s + (b.stock || 0), 0) * 10) / 10;
     const typeColors: Record<string, string> = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
     let html = `<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${stockBatches.length} batches — ${totalL} L total</div>`;
-    stockBatches.forEach((b: any) => {
+    stockBatches.forEach(b => {
       const col = typeColors[b.type] || 'gray';
       const storageIcon = b.storage === 'Frozen' ? ' ❄️' : '';
       const cookInfo = isBatchCooked(b) ? '' : ' <span style="color:var(--amber);font-size:10px;">uncooked</span>';
@@ -714,10 +720,10 @@ export function renderDashboardContent() {
   }
 
   // ── Cook dish row helper — tappable checkbox ──
-  function cookDishRow(d: any, note: any, checkedSet: any, toggleFn: any, dateStr?: any, meal?: any) {
+  function cookDishRow(d: Batch, note: string, checkedSet: Set<string>, toggleFn: string, dateStr?: string, meal?: Meal) {
     const checked = checkedSet && checkedSet.has(d.id);
     const req = (dateStr && meal) ? calcLitersForService(d, loc, dateStr, meal) : calcRequiredForLoc(d, loc);
-    const typeColors = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
+    const typeColors: Record<string, string> = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
     const col = typeColors[d.type] || 'gray';
     return `<div class="dash-cook-item${checked ? ' checked' : ''}" onclick="${toggleFn}('${esc(d.id)}')">
       <div class="dash-prep-check">${checked ? '✓' : ''}</div>
@@ -849,7 +855,7 @@ export function renderPrepChecklist() {
     return;
   }
 
-  function renderItem(item: any) {
+  function renderItem(item: VegIngredient & { dayTag: string; key: string }) {
     const checked = checkedSet.has(item.key);
     const amt = Math.round(item.amount);
     const unit = item.unit || 'g';
@@ -862,8 +868,8 @@ export function renderPrepChecklist() {
   }
 
   // Always show split: Today first, then Tomorrow
-  const todayItems   = prepToday.sort((a: any, b: any) => a.name.localeCompare(b.name));
-  const tomorrowItems = prepTomorrow.sort((a: any, b: any) => a.name.localeCompare(b.name));
+  const todayItems   = prepToday.sort((a, b) => a.name.localeCompare(b.name));
+  const tomorrowItems = prepTomorrow.sort((a, b) => a.name.localeCompare(b.name));
   let html = '';
   if (todayItems.length > 0) {
     const doneCt = todayItems.filter(i => checkedSet.has(i.key)).length;
@@ -886,7 +892,7 @@ export function renderPrepChecklist() {
   el.innerHTML = html;
 }
 
-export function navTo(screen: any, subTab: any) {
+export function navTo(screen: string, subTab: string) {
   if (subTab) S.plannerSubTab = subTab;
   showScreen(screen);
 }

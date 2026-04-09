@@ -3,6 +3,81 @@ import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ing
 import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { ingredientDbFull, openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
+import type { Ingredient, Batch, Location } from '@shared/types';
+
+// ── Local type aliases for order data ──
+
+/** Storage location value — either a plain string (legacy) or an object with category/location */
+type StorageLocValue = string | { category?: string; location?: string };
+
+/**
+ * Runtime stock entry shape — the Prisma JSON field stores objects with amount+date,
+ * even though the shared Ingredient type declares LocationStock as Record<string, number>.
+ * This local type reflects the actual runtime shape used by the frontend.
+ */
+interface StockEntry { amount: number; date?: string }
+type RuntimeStock = Record<string, StockEntry>;
+type RuntimeStorageLocations = Record<string, StorageLocValue>;
+
+/**
+ * Extended Ingredient type reflecting actual runtime JSON shapes for stock and storageLocations.
+ * The shared Ingredient type uses simpler primitives; at runtime Prisma JSON fields are richer.
+ */
+/**
+ * Extended Ingredient type reflecting actual runtime JSON shapes for stock and storageLocations.
+ * The shared Ingredient type uses simpler primitives; at runtime Prisma JSON fields are richer.
+ */
+interface IngredientRuntime extends Omit<Ingredient, 'stock' | 'storageLocations'> {
+  stock: RuntimeStock;
+  storageLocations: RuntimeStorageLocations;
+}
+
+/** Cast S.ingredientDb items to the runtime shape (stock/storageLocations are richer JSON at runtime) */
+function ingredientDb(): IngredientRuntime[] {
+  return S.ingredientDb as unknown as IngredientRuntime[];
+}
+
+/** A single item in a Hanos cart request */
+interface HanosItem {
+  name: string;
+  orderCode: string;
+  quantity: number;
+  unit: string;
+  unitLabel: string;
+  price: number;
+}
+
+/** Aggregated ingredient entry in the combined order */
+interface CombinedOrderEntry {
+  name: string;
+  totalGrams: number;
+  standardGrams: number;
+  dishGrams: number;
+  dishes: string[];
+}
+
+/** Aggregated ingredient in the batch ingredients tab */
+interface BatchIngredientAgg {
+  name: string;
+  amount: number;
+  unit: string;
+  source: string;
+  perBatch: Array<{ batchId: string; batchName: string; amount: number; unit: string }>;
+}
+
+/** Hanos add-to-cart result entry */
+interface HanosResult {
+  orderCode: string;
+  success: boolean;
+  error?: string;
+}
+
+/** Partial ingredient shape used in updateStocktakeToOrder (from DOM data) */
+interface StocktakeOrderInfo {
+  orderUnitSize: number;
+  unit: string;
+  orderUnit: string;
+}
 
 // ── ORDER OVERVIEW ────────────────────────────────────────
 
@@ -22,20 +97,20 @@ export const BATCH_COLORS = ['#2563eb', '#7c3aed', '#059669', '#d97706', '#dc262
 // ── Shared helpers ────────────────────────────────────────
 
 // Convert to base units: grams for weight, ml for volume, raw count for pieces
-export function toBaseUnit(amount: any, unit: any) {
+export function toBaseUnit(amount: number, unit: string) {
   const u = (unit || '').toLowerCase().replace(/'/g, '');
   if (u === 'kilos' || u === 'kilo' || u === 'kg') return amount * 1000;
   if (u === 'liters' || u === 'liter' || u === 'litres' || u === 'l') return amount * 1000;
   return amount;
 }
 
-export function normalizeSupplier(s: any) {
+export function normalizeSupplier(s: string) {
   if (!s) return 'Unknown';
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
 
 // Format a base-unit amount with the right suffix (g/kg, ml/L, or pcs)
-export function formatAmount(val: any, baseUnit: any) {
+export function formatAmount(val: number, baseUnit: string) {
   const u = (baseUnit || 'g').toLowerCase();
   if (u === 'ml' || u === 'liters' || u === 'l') {
     if (val >= 1000) {
@@ -55,24 +130,25 @@ export function formatAmount(val: any, baseUnit: any) {
   return { amount: Math.round(val), unit: 'g' };
 }
 
-export function lookupIngredient(name: any) {
-  if (!S.ingredientDb.length || !name) return null;
+export function lookupIngredient(name: string): IngredientRuntime | null {
+  const db = ingredientDb();
+  if (!db.length || !name) return null;
   const q = name.toLowerCase().trim();
-  let match = S.ingredientDb.find(i => i.name.toLowerCase().trim() === q);
+  let match = db.find(i => i.name.toLowerCase().trim() === q);
   if (match) return match;
-  match = S.ingredientDb.find(i => {
+  match = db.find(i => {
     const dn = i.name.toLowerCase().trim();
     return dn.startsWith(q) || q.startsWith(dn);
   });
   if (match) return match;
   const qBase = q.replace(/\s*\(.*\)\s*$/, '').trim();
   if (qBase !== q) {
-    match = S.ingredientDb.find(i => i.name.toLowerCase().trim().replace(/\s*\(.*\)\s*$/, '').trim() === qBase);
+    match = db.find(i => i.name.toLowerCase().trim().replace(/\s*\(.*\)\s*$/, '').trim() === qBase);
   }
   return match || null;
 }
 
-export function getDbStockTotal(db: any) {
+export function getDbStockTotal(db: IngredientRuntime | null | undefined) {
   if (!db || !db.stock) return 0;
   let total = 0;
   if (db.stock.west) total += (db.stock.west.amount || 0);
@@ -81,13 +157,13 @@ export function getDbStockTotal(db: any) {
 }
 
 /** Check if stock has been explicitly counted (even if amount is 0) */
-export function hasDbStockEntry(db: any) {
+export function hasDbStockEntry(db: IngredientRuntime | null | undefined) {
   if (!db || !db.stock) return false;
   // Stock entries have a `date` field when explicitly counted via stocktake
   return !!(db.stock.west?.date || db.stock.centraal?.date);
 }
 
-export function formatStorageLoc(s: any) {
+export function formatStorageLoc(s: StorageLocValue | null | undefined) {
   if (!s) return '';
   if (typeof s === 'string') return s; // backward compat
   if (s.category && s.location) return s.category + ' / ' + s.location;
@@ -95,7 +171,7 @@ export function formatStorageLoc(s: any) {
   return '';
 }
 
-export function getStorageCategory(db: any, building: any) {
+export function getStorageCategory(db: IngredientRuntime | null | undefined, building: string) {
   if (!db || !db.storageLocations) return '';
   const s = db.storageLocations[building];
   if (!s) return '';
@@ -103,7 +179,7 @@ export function getStorageCategory(db: any, building: any) {
   return s.category || '';
 }
 
-export function renderStorageBadge(db: any, loc?: any) {
+export function renderStorageBadge(db: IngredientRuntime | null | undefined, loc?: string) {
   if (!db || !db.storageLocations) return '';
   const building = loc || currentOrdersLoc || 'west';
   const s = db.storageLocations[building];
@@ -114,7 +190,7 @@ export function renderStorageBadge(db: any, loc?: any) {
   return `<span class="stock-badge" style="cursor:pointer;font-size:10px;background:${color}22;color:${color};border:1px solid ${color}44;" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to edit">${esc(label)}</span>`;
 }
 
-export function calcOrderUnits(amountBase: any, dbEntry: any) {
+export function calcOrderUnits(amountBase: number, dbEntry: { orderUnitSize: number; unit?: string; orderUnit?: string } | null | undefined) {
   if (!dbEntry || !dbEntry.orderUnitSize || dbEntry.orderUnitSize <= 0) return null;
   const units = Math.ceil(amountBase / dbEntry.orderUnitSize);
   return { units, perUnit: dbEntry.orderUnitSize, unitType: dbEntry.unit || 'g' };
@@ -123,14 +199,14 @@ export function calcOrderUnits(amountBase: any, dbEntry: any) {
 // ── Standard Inventory (now reads from ingredient targetStock) ──
 
 // Get ingredients that have targetStock set for a location
-export function getStandardInventoryItems(loc: any) {
-  return S.ingredientDb.filter(ing => {
+export function getStandardInventoryItems(loc: string): IngredientRuntime[] {
+  return ingredientDb().filter(ing => {
     const ts = ing.targetStock;
     return ts && ts[loc] && ts[loc] > 0;
   });
 }
 
-export function updateSiSearch(val: any) {
+export function updateSiSearch(val: string) {
   siSearchQuery = val;
   const sugContainer = document.getElementById('si-suggestions');
   if (!sugContainer) return;
@@ -138,7 +214,7 @@ export function updateSiSearch(val: any) {
   const loc = currentOrdersLoc || 'west';
   const addedIds = new Set(getStandardInventoryItems(loc).map(i => i.id));
   const suggestions = query.length >= 2
-    ? S.ingredientDb.filter(i => i.name.toLowerCase().includes(query) || (i.orderCode && i.orderCode.toLowerCase().includes(query))).slice(0, 8)
+    ? ingredientDb().filter(i => i.name.toLowerCase().includes(query) || (i.orderCode && i.orderCode.toLowerCase().includes(query))).slice(0, 8)
     : [];
   let html = suggestions.map(ing => {
     const isAdded = addedIds.has(ing.id);
@@ -162,9 +238,9 @@ export function hideSiSuggestions() {
   }, 200);
 }
 
-export async function addToStandardInventory(ingredientId: any) {
+export async function addToStandardInventory(ingredientId: string) {
   const loc = currentOrdersLoc || 'west';
-  const ing = S.ingredientDb.find(i => i.id === ingredientId);
+  const ing = ingredientDb().find(i => i.id === ingredientId);
   if (!ing) return;
   // Set a default target of 0 (user will edit)
   if (!ing.targetStock) ing.targetStock = {};
@@ -176,9 +252,9 @@ export async function addToStandardInventory(ingredientId: any) {
   renderOrders();
 }
 
-export async function removeSiItem(ingredientId: any) {
+export async function removeSiItem(ingredientId: string) {
   const loc = currentOrdersLoc || 'west';
-  const ing = S.ingredientDb.find(i => i.id === ingredientId);
+  const ing = ingredientDb().find(i => i.id === ingredientId);
   if (ing && ing.targetStock) delete ing.targetStock[loc];
   try {
     await apiPost('/api/ingredients/target-stock', { ingredientId, location: loc, amount: null });
@@ -186,10 +262,10 @@ export async function removeSiItem(ingredientId: any) {
   renderOrders();
 }
 
-export let siTargetTimeout = null;
-export function updateSiTarget(ingredientId: any, val: any) {
+export let siTargetTimeout: ReturnType<typeof setTimeout> | null = null;
+export function updateSiTarget(ingredientId: string, val: string) {
   const loc = currentOrdersLoc || 'west';
-  const ing = S.ingredientDb.find(i => i.id === ingredientId);
+  const ing = ingredientDb().find(i => i.id === ingredientId);
   if (!ing) return;
   if (!ing.targetStock) ing.targetStock = {};
   // Input is in order units — convert to base units for storage
@@ -205,10 +281,10 @@ export function updateSiTarget(ingredientId: any, val: any) {
   }, 800);
 }
 
-export let siStockTimeout = null;
-export function updateSiStock(ingredientId: any, val: any) {
+export let siStockTimeout: ReturnType<typeof setTimeout> | null = null;
+export function updateSiStock(ingredientId: string, val: string) {
   const loc = currentOrdersLoc || 'west';
-  const ing = S.ingredientDb.find(i => i.id === ingredientId);
+  const ing = ingredientDb().find(i => i.id === ingredientId);
   if (!ing) return;
   if (!ing.stock) ing.stock = {};
   // Input is in order units — convert to base units for storage
@@ -225,7 +301,7 @@ export function updateSiStock(ingredientId: any, val: any) {
 }
 
 /** Inline update the to-order cell for a standard inventory row */
-export function _updateSiToOrder(ingredientId: any, ing: any) {
+export function _updateSiToOrder(ingredientId: string, ing: IngredientRuntime) {
   const loc = currentOrdersLoc || 'west';
   const row = document.querySelector(`tr[data-si-id="${ingredientId}"]`);
   if (!row) return;
@@ -251,7 +327,7 @@ export function _updateSiToOrder(ingredientId: any, ing: any) {
 
 // ── Tab switching ─────────────────────────────────────────
 
-export function switchOrdersTab(tab: any) {
+export function switchOrdersTab(tab: string) {
   currentOrdersTab = tab;
   renderOrders();
 }
@@ -261,7 +337,7 @@ export function resetBatchToggles() {
   batchIngredientTogglesInitialized = false;
 }
 
-export function switchOrdersLoc(loc: any) {
+export function switchOrdersLoc(loc: string) {
   // If stocktake is active and user switches location, exit stocktake first
   // to prevent cross-location contamination (#161)
   if (stocktakeActive) {
@@ -365,7 +441,7 @@ export function renderStandardInventoryTab() {
       deficit,
       orderCalc,
     };
-  }).sort((a: any, b: any) => a.name.localeCompare(b.name));
+  }).sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name));
 
   // Calculate total estimated order cost
   let totalValue = 0;
@@ -376,7 +452,7 @@ export function renderStandardInventoryTab() {
   });
 
   // Group by storage category
-  const byStorage = {};
+  const byStorage: Record<string, typeof ingList> = {};
   ingList.forEach(ing => {
     const cat = getStorageCategory(ing, curLoc) || 'Unsorted';
     if (!byStorage[cat]) byStorage[cat] = [];
@@ -498,7 +574,7 @@ function ensureBatchTogglesInitialized(loc: string) {
 async function persistBatchOrderFor(batchId: string, orderFor: boolean) {
   // Update local state immediately
   const batch = S.batches.find(b => b.id === batchId);
-  if (batch) (batch as any).orderFor = orderFor;
+  if (batch) batch.orderFor = orderFor;
   // Save to server
   try {
     await apiPost(`/api/batches/${batchId}`, { orderFor }, 'PATCH');
@@ -508,7 +584,7 @@ async function persistBatchOrderFor(batchId: string, orderFor: boolean) {
 }
 
 /** Toggle a batch on/off in the Batch Ingredients tab */
-export function toggleBatchIngredient(batchId: any) {
+export function toggleBatchIngredient(batchId: string) {
   batchIngredientToggles[batchId] = !batchIngredientToggles[batchId];
   const isOn = !!batchIngredientToggles[batchId];
   // Update toggle row visual
@@ -540,7 +616,7 @@ export function toggleCombinedIncludeDishes() {
 }
 
 /** Toggle all batches on or off */
-export function toggleAllBatchIngredients(on: any) {
+export function toggleAllBatchIngredients(on: boolean) {
   const curLoc = currentOrdersLoc || 'west';
   const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
   eligible.forEach(b => {
@@ -573,8 +649,8 @@ export function renderDishesTab() {
   ensureBatchTogglesInitialized(curLoc);
 
   // Assign colors to batches (stable order by id)
-  const batchColorMap = {};
-  eligible.forEach((b: any, i: any) => { batchColorMap[b.id] = BATCH_COLORS[i % BATCH_COLORS.length]; });
+  const batchColorMap: Record<string, string> = {};
+  eligible.forEach((b: Batch, i: number) => { batchColorMap[b.id] = BATCH_COLORS[i % BATCH_COLORS.length]; });
 
   // ── Batch toggle list ──
   const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
@@ -597,7 +673,7 @@ export function renderDishesTab() {
       const isOn = !!batchIngredientToggles[b.id];
       const color = batchColorMap[b.id];
       const typeBadge = b.type ? `<span class="batch-type-pill" style="background:${color}20;color:${color};border:1px solid ${color}40;">${esc(b.type)}</span>` : '';
-      const cookLabel = b.cookDate ? b.cookDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, (_: any, y: any, m: any, d: any) => `${parseInt(d)}/${parseInt(m)}`) : '';
+      const cookLabel = b.cookDate ? b.cookDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, (_: string, _y: string, m: string, d: string) => `${parseInt(d)}/${parseInt(m)}`) : '';
       const cookBadge = cookLabel ? `<span style="font-size:11px;color:${b.stock > 0 ? 'var(--green)' : 'var(--blue)'};font-weight:500;">${cookLabel}</span>` : '';
       html += `<div class="batch-toggle-row${isOn ? ' on' : ''}" data-batch-id="${esc(b.id)}" onclick="toggleBatchIngredient('${esc(b.id)}')">
         <span class="batch-toggle-dot" style="background:${color};"></span>
@@ -630,13 +706,13 @@ export function renderBatchIngredientTable() {
   const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
 
   // Assign colors (same stable order as toggle list)
-  const batchColorMap = {};
-  eligible.forEach((b: any, i: any) => { batchColorMap[b.id] = BATCH_COLORS[i % BATCH_COLORS.length]; });
+  const batchColorMap: Record<string, string> = {};
+  eligible.forEach((b: Batch, i: number) => { batchColorMap[b.id] = BATCH_COLORS[i % BATCH_COLORS.length]; });
 
   const activeBatches = eligible.filter(b => batchIngredientToggles[b.id]);
 
   // Aggregate ingredients with per-batch breakdown
-  const combined = {};
+  const combined: Record<string, BatchIngredientAgg> = {};
   activeBatches.forEach(dish => {
     const ings = calcIngredientsFromRecipe(dish);
     ings.forEach(ing => {
@@ -659,7 +735,7 @@ export function renderBatchIngredientTable() {
       orderCode: db ? db.orderCode : '',
       orderCalc: db ? calcOrderUnits(amtInGrams, db) : null,
     };
-  }).sort((a: any, b: any) => a.name.localeCompare(b.name));
+  }).sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name));
 
   if (!activeBatches.length) {
     return `<div class="empty" style="margin-top:12px;">Toggle batches above to see their ingredient requirements.</div>`;
@@ -670,7 +746,7 @@ export function renderBatchIngredientTable() {
   }
 
   // Group by storage category
-  const byStorage = {};
+  const byStorage: Record<string, typeof ingList> = {};
   ingList.forEach(ing => {
     const cat = getStorageCategory(ing.db, curLoc) || 'Unsorted';
     if (!byStorage[cat]) byStorage[cat] = [];
@@ -794,7 +870,7 @@ export function renderBatchIngredientTable() {
 
 export function renderCombinedOrderTab() {
   const curLoc = currentOrdersLoc || 'west';
-  const combined = {};
+  const combined: Record<string, CombinedOrderEntry> = {};
 
   // Use the same per-batch toggles as the Batch Ingredients tab (initialized from localStorage)
   ensureBatchTogglesInitialized(curLoc);
@@ -802,7 +878,7 @@ export function renderCombinedOrderTab() {
     d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]
   );
 
-  function addToMap(name: any, amtGrams: any, isStandard: any, dishName: any) {
+  function addToMap(name: string, amtGrams: number, isStandard: boolean, dishName: string | null) {
     const key = name.toLowerCase().trim();
     if (!combined[key]) combined[key] = { name, totalGrams: 0, standardGrams: 0, dishGrams: 0, dishes: [] };
     combined[key].totalGrams += amtGrams;
@@ -836,7 +912,7 @@ export function renderCombinedOrderTab() {
     return `<div class="empty">No items to order. Add items to Standard Inventory or flag batches for ordering in the Week plan.</div>`;
   }
 
-  const ingList = Object.values(combined).sort((a: any, b: any) => a.name.localeCompare(b.name)).map(ing => {
+  const ingList = Object.values(combined).sort((a: CombinedOrderEntry, b: CombinedOrderEntry) => a.name.localeCompare(b.name)).map(ing => {
     const db = lookupIngredient(ing.name);
     return {
       ...ing,
@@ -848,7 +924,7 @@ export function renderCombinedOrderTab() {
   });
 
   // Group by storage category (current building) instead of supplier
-  const byStorage = {};
+  const byStorage: Record<string, typeof ingList> = {};
   ingList.forEach(ing => {
     const cat = getStorageCategory(ing.db, curLoc) || 'Unsorted';
     if (!byStorage[cat]) byStorage[cat] = [];
@@ -1026,7 +1102,7 @@ export function renderCombinedOrderTab() {
 
 // ── Copy helpers ──────────────────────────────────────────
 
-export function copyOrderCodes(supplier: any) {
+export function copyOrderCodes(supplier: string) {
   const curLoc = currentOrdersLoc || 'west';
   ensureBatchTogglesInitialized(curLoc);
   const items = [];
@@ -1041,7 +1117,7 @@ export function copyOrderCodes(supplier: any) {
   if (items.length) navigator.clipboard.writeText(items.join('\n')).then(() => toast(items.length + ' order codes copied'));
 }
 
-export function copyDishOrderCodes(storageCat: any) {
+export function copyDishOrderCodes(storageCat: string) {
   const curLoc = currentOrdersLoc || 'west';
   ensureBatchTogglesInitialized(curLoc);
   const items = new Set();
@@ -1058,7 +1134,7 @@ export function copyDishOrderCodes(storageCat: any) {
   if (arr.length) navigator.clipboard.writeText(arr.join('\n')).then(() => toast(arr.length + ' order codes copied'));
 }
 
-export function copySiOrderCodes(storageCat: any) {
+export function copySiOrderCodes(storageCat: string) {
   const curLoc = currentOrdersLoc || 'west';
   const items = new Set();
   getStandardInventoryItems(curLoc).forEach(ing => {
@@ -1071,7 +1147,7 @@ export function copySiOrderCodes(storageCat: any) {
   if (arr.length) navigator.clipboard.writeText(arr.join('\n')).then(() => toast(arr.length + ' order codes copied'));
 }
 
-export function copyCombinedOrderCodes(supplier: any) {
+export function copyCombinedOrderCodes(supplier: string) {
   const curLoc = currentOrdersLoc || 'west';
   ensureBatchTogglesInitialized(curLoc);
   const items = new Set();
@@ -1114,9 +1190,9 @@ export function isHanosEnabled() {
 }
 
 /** Collect all Hanos items from the combined order table that need ordering */
-export function collectHanosItems(storageCat: any) {
+export function collectHanosItems(storageCat: string | null | undefined): HanosItem[] {
   const rows = document.querySelectorAll('.ing-table tr[data-combined-key]');
-  const items = [];
+  const items: HanosItem[] = [];
   rows.forEach(row => {
     // If filtering by storage category, check the group
     if (storageCat) {
@@ -1153,7 +1229,8 @@ export function collectHanosItems(storageCat: any) {
 }
 
 /** Send a single item to Hanos cart */
-export async function hanosAddSingle(orderCode: any, name: any) {
+export async function hanosAddSingle(orderCode: string | undefined, name: string | undefined) {
+  if (!name || !orderCode) return;
   const db = lookupIngredient(name);
   if (!db) return;
 
@@ -1199,7 +1276,7 @@ export async function hanosAddSingle(orderCode: any, name: any) {
 }
 
 /** Show confirmation modal for bulk Hanos add (combined order) */
-export function hanosConfirmBulk(storageCat: any) {
+export function hanosConfirmBulk(storageCat?: string) {
   const items = collectHanosItems(storageCat);
   if (!items.length) {
     toast('No items with order codes and quantities to send');
@@ -1209,9 +1286,9 @@ export function hanosConfirmBulk(storageCat: any) {
 }
 
 /** Collect Hanos items from batch ingredients tab */
-export function collectHanosBatchItems(storageCat: any) {
+export function collectHanosBatchItems(storageCat: string | null | undefined): HanosItem[] {
   const rows = document.querySelectorAll('.ing-table tr[data-stock-key]');
-  const items = [];
+  const items: HanosItem[] = [];
   rows.forEach(row => {
     if (storageCat) {
       const group = row.closest('.storage-group');
@@ -1245,7 +1322,7 @@ export function collectHanosBatchItems(storageCat: any) {
 }
 
 /** Show confirmation modal for batch ingredients Hanos add */
-export function hanosConfirmBulkBatches(storageCat: any) {
+export function hanosConfirmBulkBatches(storageCat?: string) {
   const items = collectHanosBatchItems(storageCat);
   if (!items.length) {
     toast('No items with order codes and quantities to send');
@@ -1255,7 +1332,7 @@ export function hanosConfirmBulkBatches(storageCat: any) {
 }
 
 /** Shared confirmation modal with €200 warning */
-export function showHanosConfirmModal(items: any, storageCat: any, source: any) {
+export function showHanosConfirmModal(items: HanosItem[], storageCat: string | undefined, source: string) {
   // Check for items over €200
   const expensiveItems = items.filter(i => i.price && i.quantity * i.price > 200);
 
@@ -1282,7 +1359,7 @@ export function showHanosConfirmModal(items: any, storageCat: any, source: any) 
   }).join('');
 
   const label = storageCat ? esc(storageCat) : 'all groups';
-  const totalCost = items.reduce((sum: any, i: any) => sum + (i.price ? i.quantity * i.price : 0), 0);
+  const totalCost = items.reduce((sum: number, i: HanosItem) => sum + (i.price ? i.quantity * i.price : 0), 0);
 
   showModal(`
     <h3 style="margin-bottom:12px;">Add to Hanos Cart</h3>
@@ -1305,7 +1382,7 @@ export function showHanosConfirmModal(items: any, storageCat: any, source: any) 
 }
 
 /** Execute from the shared modal */
-export async function hanosExecuteFromModal(source: any, storageCat: any) {
+export async function hanosExecuteFromModal(source: string, storageCat: string) {
   const items = source === 'batches'
     ? collectHanosBatchItems(storageCat || null)
     : collectHanosItems(storageCat || null);
@@ -1348,7 +1425,7 @@ export async function hanosExecuteFromModal(source: any, storageCat: any) {
 }
 
 /** Mark rows as succeeded/failed after Hanos add-to-cart */
-function markHanosResults(results: any[], source: string) {
+function markHanosResults(results: HanosResult[], source: string) {
   if (!results || !results.length) return;
   const dataAttr = source === 'batches' ? 'data-stock-key' : 'data-combined-key';
   for (const r of results) {
@@ -1379,20 +1456,20 @@ function markHanosResults(results: any[], source: string) {
 
 // ── Grams-per-piece for stuk items ──────────────────────
 
-export async function saveGramsPerPiece(ingredientId: any, combinedKey: any, value: any) {
+export async function saveGramsPerPiece(ingredientId: string, combinedKey: string, value: string) {
   const grams = parseInt(value, 10);
   if (!grams || grams <= 0) return;
 
-  const db = S.ingredientDb.find(i => i.id === ingredientId);
-  if (!db) return;
+  const dbIng = ingredientDb().find(i => i.id === ingredientId);
+  if (!dbIng) return;
 
   // Update locally
-  db.orderUnitSize = grams;
+  dbIng.orderUnitSize = grams;
 
   // Save to server
   try {
-    await apiPost(`/api/ingredients/${ingredientId}`, { ...db, orderUnitSize: grams });
-    toast(`Saved ${grams}g per piece for ${db.name}`);
+    await apiPost(`/api/ingredients/${ingredientId}`, { ...dbIng, orderUnitSize: grams });
+    toast(`Saved ${grams}g per piece for ${dbIng.name}`);
     renderOrders();
   } catch (e: unknown) {
     toastError('Failed to save: ' + (e instanceof Error ? e.message : 'Unknown error'));
@@ -1401,15 +1478,15 @@ export async function saveGramsPerPiece(ingredientId: any, combinedKey: any, val
 
 // ── Existing helpers ──────────────────────────────────────
 
-export function toggleOrderSection(key: any) { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }
+export function toggleOrderSection(key: 'batches' | 'standard') { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }
 
 // Persist stock to the ingredient DB so it survives reloads and syncs across tabs
-export let _stockSaveTimeout = null;
-export function persistIngredientStock(ingredientName: any, amount: any) {
+export let _stockSaveTimeout: ReturnType<typeof setTimeout> | null = null;
+export function persistIngredientStock(ingredientName: string, amount: number) {
   const db = lookupIngredient(ingredientName);
   if (!db || !db.id) return;
   const loc = S.currentLoc || 'west';
-  const amountNum = parseFloat(amount) || 0;
+  const amountNum = amount || 0;
 
   // Update in S.ingredientDb immediately
   if (!db.stock) db.stock = {};
@@ -1436,7 +1513,7 @@ export function persistIngredientStock(ingredientName: any, amount: any) {
 }
 
 // Shared inline stock update — input is in order units, convert to base for storage
-export function _updateStockInline(storageObj: any, key: any, val: any, rowSelector: any, neededAttr: any) {
+export function _updateStockInline(storageObj: Record<string, number>, key: string, val: string | null, rowSelector: string, neededAttr: string) {
   if (val === '' || val === null) {
     delete storageObj[key];
   } else {
@@ -1478,11 +1555,11 @@ export function _updateStockInline(storageObj: any, key: any, val: any, rowSelec
   }
 }
 
-export function updateCombinedOrderStock(key: any, val: any) {
+export function updateCombinedOrderStock(key: string, val: string) {
   _updateStockInline(combinedOrderStock, key, val, `[data-combined-key="${key}"]`, 'needed');
 }
 
-export function updateOrderStock(key: any, val: any) {
+export function updateOrderStock(key: string, val: string) {
   _updateStockInline(orderInventory, key, val, `[data-stock-key="${key}"]`, 'needed');
 }
 
@@ -1517,7 +1594,7 @@ export let stocktakeSavedAreas = [];   // area names that have been saved alread
 
 /** Build combined order data (shared between render and stocktake) */
 export function buildCombinedOrderData() {
-  const combined = {};
+  const combined: Record<string, CombinedOrderEntry> = {};
   const curLoc = currentOrdersLoc || 'west';
 
   // Use the same per-batch toggles as the Batch Ingredients tab
@@ -1526,7 +1603,7 @@ export function buildCombinedOrderData() {
     d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]
   );
 
-  function addToMap(name: any, amtGrams: any, isStandard: any, dishName: any) {
+  function addToMap(name: string, amtGrams: number, isStandard: boolean, dishName: string | null) {
     const key = name.toLowerCase().trim();
     if (!combined[key]) combined[key] = { name, totalGrams: 0, standardGrams: 0, dishGrams: 0, dishes: [] };
     combined[key].totalGrams += amtGrams;
@@ -1560,17 +1637,19 @@ export function buildCombinedOrderData() {
 }
 
 /** Get all ingredients for a given storage area at the current location */
-export function getIngredientsForArea(areaName: any) {
+export function getIngredientsForArea(areaName: string) {
   const loc = currentOrdersLoc || 'west';
   const combinedData = buildCombinedOrderData();
-  const combinedByKey = {};
+  const combinedByKey: Record<string, (typeof combinedData)[number]> = {};
   combinedData.forEach(c => { combinedByKey[c.name.toLowerCase().trim()] = c; });
 
   // Get ingredients that are needed (standard inventory or batch) and stored in this area
-  return S.ingredientDb.filter(ing => {
+  return ingredientDb().filter(ing => {
     if (!ing.storageLocations) return false;
     const sl = ing.storageLocations[loc];
-    if (!sl || sl.category !== areaName) return false;
+    if (!sl) return false;
+    const slCat = typeof sl === 'string' ? sl : sl.category;
+    if (slCat !== areaName) return false;
     // Only include if this item is in the combined order (has demand)
     const key = ing.name.toLowerCase().trim();
     return !!combinedByKey[key];
@@ -1584,7 +1663,8 @@ export function getIngredientsForArea(areaName: any) {
     const standardBase = combined ? combined.standardGrams : 0;
     const dishBase = combined ? combined.dishGrams : 0;
     const neededCalc = hasOrderUnit && neededBase > 0 ? calcOrderUnits(neededBase, ing) : null;
-    const spot = (ing.storageLocations[loc] && ing.storageLocations[loc].location) || '';
+    const slVal = ing.storageLocations[loc];
+    const spot = (slVal && typeof slVal !== 'string' && slVal.location) || '';
     return {
       ...ing,
       spot,
@@ -1596,7 +1676,7 @@ export function getIngredientsForArea(areaName: any) {
       neededCalc,
       hasOrderUnit,
     };
-  }).sort((a: any, b: any) => {
+  }).sort((a: { spot: string; name: string }, b: { spot: string; name: string }) => {
     // Sort by spot first, then name
     if (a.spot !== b.spot) return a.spot.localeCompare(b.spot);
     return a.name.localeCompare(b.name);
@@ -1645,7 +1725,7 @@ export function renderStocktakeAreaPicker() {
   container.innerHTML = html;
 }
 
-export function enterStocktakeArea(areaName: any) {
+export function enterStocktakeArea(areaName: string) {
   stocktakeArea = areaName;
   renderStocktakeArea();
 }
@@ -1658,7 +1738,7 @@ export function renderStocktakeArea() {
   const container = document.getElementById('screen-orders');
 
   // Group by spot
-  const bySpot = {};
+  const bySpot: Record<string, typeof items> = {};
   items.forEach(ing => {
     const spot = ing.spot || 'No spot assigned';
     if (!bySpot[spot]) bySpot[spot] = [];
@@ -1744,7 +1824,7 @@ export function renderStocktakeArea() {
   if (firstEmpty) firstEmpty.focus();
 }
 
-export function _calcStocktakeToOrder(ing: any, stockUnitsVal: any) {
+export function _calcStocktakeToOrder(ing: { hasOrderUnit: boolean; orderUnitSize: number; neededBase: number; unit: string; orderUnit: string }, stockUnitsVal: string | number | undefined | null) {
   // Empty/undefined = not counted → show dash
   if (stockUnitsVal === '' || stockUnitsVal === undefined || stockUnitsVal === null) {
     return '<span style="color:var(--text2);font-style:italic;">not counted</span>';
@@ -1763,7 +1843,7 @@ export function _calcStocktakeToOrder(ing: any, stockUnitsVal: any) {
   return `<span class="to-order-positive">${f.amount} ${f.unit}</span>`;
 }
 
-export function updateStocktakeToOrder(input: any) {
+export function updateStocktakeToOrder(input: HTMLInputElement) {
   const row = input.closest('.stocktake-row');
   const toOrderCell = row.querySelector('.stocktake-to-order');
   if (!toOrderCell) return;
@@ -1797,7 +1877,7 @@ export function updateStocktakeToOrder(input: any) {
 }
 
 /** Save stocktake for current area — persist stock to DB */
-export async function saveStocktakeArea(goToNext: any) {
+export async function saveStocktakeArea(goToNext: boolean) {
   const loc = currentOrdersLoc || 'west';
   const items = getIngredientsForArea(stocktakeArea);
   let saved = 0;

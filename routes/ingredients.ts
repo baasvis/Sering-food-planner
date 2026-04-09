@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import fs from 'fs';
 import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
+import { Prisma } from '@prisma/client';
 import { prisma, dbAppendLog } from '../lib/db';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
@@ -85,7 +86,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
           priceHistory: ing.priceHistory || [],
           priceAlert: !!ing.priceAlert,
           storageLocations: ing.storageLocations || {},
-          stock: ing.stock || {},
+          stock: (ing.stock || {}) as unknown as Prisma.InputJsonValue,
           targetStock: ing.targetStock || {},
           nutrition: ing.nutrition || {},
           allergens: ing.allergens || '',
@@ -112,7 +113,7 @@ router.post('/target-stock', asyncHandler(async (req: Request, res: Response) =>
   } else {
     targetStock[location] = parseFloat(amount);
   }
-  await prisma.ingredient.update({ where: { id: ingredientId }, data: { targetStock } });
+  await prisma.ingredient.update({ where: { id: ingredientId }, data: { targetStock: targetStock as unknown as Prisma.InputJsonValue } });
   res.json({ ok: true });
 }));
 
@@ -124,7 +125,7 @@ router.post('/stock', asyncHandler(async (req: Request, res: Response) => {
   if (!ing) return res.status(404).json({ error: 'Ingredient not found' });
   const stock = (ing.stock || {}) as Record<string, { amount: number; date: string }>;
   stock[location] = { amount: parseFloat(amount) || 0, date: new Date().toISOString().slice(0, 10) };
-  await prisma.ingredient.update({ where: { id: ingredientId }, data: { stock } });
+  await prisma.ingredient.update({ where: { id: ingredientId }, data: { stock: stock as unknown as Prisma.InputJsonValue } });
   res.json({ ok: true });
 }));
 
@@ -138,7 +139,7 @@ router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
       if (!ing) continue;
       const stock = (ing.stock || {}) as Record<string, { amount: number; date: string }>;
       stock[u.location] = { amount: parseFloat(u.amount) || 0, date: new Date().toISOString().slice(0, 10) };
-      await tx.ingredient.update({ where: { id: u.ingredientId }, data: { stock } });
+      await tx.ingredient.update({ where: { id: u.ingredientId }, data: { stock: stock as unknown as Prisma.InputJsonValue } });
     }
   });
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
