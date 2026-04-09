@@ -6,6 +6,7 @@ import express, { Request, Response } from 'express';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import { prisma } from '../lib/db';
+import { asyncHandler } from '../lib/config';
 import type { Prisma } from '@prisma/client';
 
 const router = express.Router();
@@ -27,7 +28,7 @@ function killSync(reason: string) {
   }
 }
 
-router.get('/revenue', async (req: Request, res: Response) => {
+router.get('/revenue', asyncHandler(async (req: Request, res: Response) => {
   const { start, end } = req.query;
   if (!start || !end) {
     return res.status(400).json({ error: 'start and end query params required (YYYY-MM-DD)' });
@@ -39,9 +40,9 @@ router.get('/revenue', async (req: Request, res: Response) => {
   });
 
   res.json(rows);
-});
+}));
 
-router.get('/products', async (req: Request, res: Response) => {
+router.get('/products', asyncHandler(async (req: Request, res: Response) => {
   const { start, end, location, meal, groupBy } = req.query;
   if (!start || !end) {
     return res.status(400).json({ error: 'start and end query params required (YYYY-MM-DD)' });
@@ -80,7 +81,7 @@ router.get('/products', async (req: Request, res: Response) => {
   }
 
   res.json(rows);
-});
+}));
 
 router.post('/sync', (req: Request, res: Response) => {
   if (syncProcess) {

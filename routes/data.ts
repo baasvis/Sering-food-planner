@@ -1,35 +1,33 @@
 import express, { Request, Response } from 'express';
 import { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateBatches, validateGuests, withWriteLock, dbWriteBatches, dbWriteGuests, dbWriteCaterings, dbWriteTransportItems } from '../lib/db';
 import { broadcast } from './events';
-import { errMsg } from '../lib/config';
+import { asyncHandler } from '../lib/config';
+import type { Batch, Catering, TransportItem } from '../shared/types';
 
 const router = express.Router();
 
-router.get('/', async (_req: Request, res: Response) => {
-  try { res.json(await dbReadAll()); }
-  catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
-});
+router.get('/', asyncHandler(async (_req: Request, res: Response) => {
+  res.json(await dbReadAll());
+}));
 
-router.post('/', async (req: Request, res: Response) => {
-  try {
-    const batches = req.body.batches || [];
-    const guests = req.body.guests || getDefaultGuests();
-    const caterings = req.body.caterings || [];
-    const transportItems = req.body.transportItems || [];
+router.post('/', asyncHandler(async (req: Request, res: Response) => {
+  const batches = req.body.batches || [];
+  const guests = req.body.guests || getDefaultGuests();
+  const caterings = req.body.caterings || [];
+  const transportItems = req.body.transportItems || [];
 
-    const batchErr = validateBatches(batches);
-    if (batchErr) return res.status(400).json({ error: batchErr });
-    const guestErr = validateGuests(guests);
-    if (guestErr) return res.status(400).json({ error: guestErr });
+  const batchErr = validateBatches(batches);
+  if (batchErr) return res.status(400).json({ error: batchErr });
+  const guestErr = validateGuests(guests);
+  if (guestErr) return res.status(400).json({ error: guestErr });
 
-    await dbWriteAll(batches, guests, caterings, transportItems);
+  await dbWriteAll(batches, guests, caterings, transportItems);
 
-    const user = req.user || { email: 'anonymous', name: 'Anonymous' };
-    dbAppendLog(user.email, user.name, 'save', `${batches.length} batches`);
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'save', `${batches.length} batches`);
 
-    res.json({ ok: true, savedAt: new Date().toISOString() });
-  } catch (e: unknown) { res.status(500).json({ error: errMsg(e) }); }
-});
+  res.json({ ok: true, savedAt: new Date().toISOString() });
+}));
 
 // ── Concurrent save detection ──
 const CONCURRENT_WINDOW_MS = 5 * 60 * 1000;
@@ -48,77 +46,73 @@ function checkConcurrent(user: { email: string; name: string }) {
 
 // ── Patch save: item-level merge to prevent concurrent overwrites ──
 
-router.post('/patch', async (req: Request, res: Response) => {
-  try {
-    const { batches, deletedBatches, guests, caterings, deletedCaterings,
-            transportItems, deletedTransportItems } = req.body;
+router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
+  const { batches, deletedBatches, guests, caterings, deletedCaterings,
+          transportItems, deletedTransportItems } = req.body;
 
-    await withWriteLock(async () => {
-      const current = await dbReadAll();
+  await withWriteLock(async () => {
+    const current = await dbReadAll();
 
-      // Merge batches
-      if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
-        const batchMap = new Map(current.batches.map((b: any) => [b.id, b]));
-        if (deletedBatches) deletedBatches.forEach((id: string) => batchMap.delete(id));
-        if (batches && batches.length) {
-          const batchErr = validateBatches(batches);
-          if (batchErr) throw new Error(batchErr);
-          batches.forEach((b: any) => batchMap.set(b.id, b));
+    // Merge batches
+    if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
+      const batchMap = new Map(current.batches.map((b: Batch) => [b.id, b]));
+      if (deletedBatches) deletedBatches.forEach((id: string) => batchMap.delete(id));
+      if (batches && batches.length) {
+        const batchErr = validateBatches(batches);
+        if (batchErr) throw new Error(batchErr);
+        batches.forEach((b: Batch) => batchMap.set(b.id, b));
+      }
+      await dbWriteBatches([...batchMap.values()]);
+    }
+
+    // Merge guests
+    if (guests) {
+      const guestErr = validateGuests(guests);
+      if (guestErr) throw new Error(guestErr);
+      const merged = current.guests;
+      for (const loc of ['west', 'centraal']) {
+        if (!guests[loc]) continue;
+        for (const day of Object.keys(guests[loc])) {
+          if (!merged[loc][day]) continue;
+          merged[loc][day] = guests[loc][day];
         }
-        await dbWriteBatches([...batchMap.values()]);
       }
+      await dbWriteGuests(merged);
+    }
 
-      // Merge guests
-      if (guests) {
-        const guestErr = validateGuests(guests);
-        if (guestErr) throw new Error(guestErr);
-        const merged = current.guests;
-        for (const loc of ['west', 'centraal']) {
-          if (!guests[loc]) continue;
-          for (const day of Object.keys(guests[loc])) {
-            if (!merged[loc][day]) continue;
-            merged[loc][day] = guests[loc][day];
-          }
-        }
-        await dbWriteGuests(merged);
-      }
+    // Merge caterings
+    if ((caterings && caterings.length) || (deletedCaterings && deletedCaterings.length)) {
+      const catMap = new Map(current.caterings.map((c: Catering) => [c.id, c]));
+      if (deletedCaterings) deletedCaterings.forEach((id: string) => catMap.delete(id));
+      if (caterings) caterings.forEach((c: Catering) => catMap.set(c.id, c));
+      await dbWriteCaterings([...catMap.values()]);
+    }
 
-      // Merge caterings
-      if ((caterings && caterings.length) || (deletedCaterings && deletedCaterings.length)) {
-        const catMap = new Map(current.caterings.map((c: any) => [c.id, c]));
-        if (deletedCaterings) deletedCaterings.forEach((id: string) => catMap.delete(id));
-        if (caterings) caterings.forEach((c: any) => catMap.set(c.id, c));
-        await dbWriteCaterings([...catMap.values()]);
-      }
+    // Merge transport items
+    if ((transportItems && transportItems.length) || (deletedTransportItems && deletedTransportItems.length)) {
+      const trMap = new Map(current.transportItems.map((t: TransportItem) => [t.id, t]));
+      if (deletedTransportItems) deletedTransportItems.forEach((id: string) => trMap.delete(id));
+      if (transportItems) transportItems.forEach((t: TransportItem) => trMap.set(t.id, t));
+      await dbWriteTransportItems([...trMap.values()]);
+    }
+  });
 
-      // Merge transport items
-      if ((transportItems && transportItems.length) || (deletedTransportItems && deletedTransportItems.length)) {
-        const trMap = new Map(current.transportItems.map((t: any) => [t.id, t]));
-        if (deletedTransportItems) deletedTransportItems.forEach((id: string) => trMap.delete(id));
-        if (transportItems) transportItems.forEach((t: any) => trMap.set(t.id, t));
-        await dbWriteTransportItems([...trMap.values()]);
-      }
-    });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  const concurrent = checkConcurrent(user);
+  dbAppendLog(user.email, user.name, 'patch',
+    `B:${(batches||[]).length}u/${(deletedBatches||[]).length}d G:${guests?'y':'n'} C:${(caterings||[]).length}/${(deletedCaterings||[]).length}d T:${(transportItems||[]).length}/${(deletedTransportItems||[]).length}d`);
 
-    const user = req.user || { email: 'anonymous', name: 'Anonymous' };
-    const concurrent = checkConcurrent(user);
-    dbAppendLog(user.email, user.name, 'patch',
-      `B:${(batches||[]).length}u/${(deletedBatches||[]).length}d G:${guests?'y':'n'} C:${(caterings||[]).length}/${(deletedCaterings||[]).length}d T:${(transportItems||[]).length}/${(deletedTransportItems||[]).length}d`);
+  // Broadcast the patch to all other connected clients
+  broadcast(user.email, 'patch', {
+    user: user.name,
+    batches, deletedBatches, guests,
+    caterings, deletedCaterings,
+    transportItems, deletedTransportItems,
+  });
 
-    // Broadcast the patch to all other connected clients
-    broadcast(user.email, 'patch', {
-      user: user.name,
-      batches, deletedBatches, guests,
-      caterings, deletedCaterings,
-      transportItems, deletedTransportItems,
-    });
-
-    const result: any = { ok: true, savedAt: new Date().toISOString() };
-    if (concurrent) result.concurrent = concurrent;
-    res.json(result);
-  } catch (e: unknown) {
-    res.status(500).json({ error: errMsg(e) });
-  }
-});
+  const result: { ok: true; savedAt: string; concurrent?: { recentUser: string; agoSeconds: number } } = { ok: true, savedAt: new Date().toISOString() };
+  if (concurrent) result.concurrent = concurrent;
+  res.json(result);
+}));
 
 export default router;

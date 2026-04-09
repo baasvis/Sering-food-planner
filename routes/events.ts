@@ -43,7 +43,7 @@ router.get('/', (req: Request, res: Response) => {
 });
 
 // ── Broadcast a patch to all clients EXCEPT the sender ──
-export function broadcast(senderEmail: string, eventType: string, data: Record<string, any>) {
+export function broadcast(senderEmail: string, eventType: string, data: Record<string, unknown>) {
   const payload = JSON.stringify({ type: eventType, ...data });
   const message = `data: ${payload}\n\n`;
 
