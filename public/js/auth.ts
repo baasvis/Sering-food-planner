@@ -3,6 +3,8 @@
 
 import { S } from './state';
 import { showFeedbackFab } from './feedback';
+import { disconnectLiveSync } from './utils';
+import { initApp } from './init';
 
 declare const google: any;
 
@@ -59,15 +61,12 @@ export async function doLogout() {
   initGoogleSignIn();
 }
 
-// Forward declaration — imported lazily to avoid circular deps
-function disconnectLiveSync() {
-  // This will be overridden in main.ts via the utils module
-  (window as any).disconnectLiveSync?.();
-}
+// _googleSignInReady flag (module-level instead of window)
+let _googleSignInReady = false;
 
 // Initialize (or re-initialize) the Google Sign-In button on the login screen
 export function initGoogleSignIn() {
-  if ((window as any)._googleSignInReady) return; // already set up
+  if (_googleSignInReady) return; // already set up
   (async () => {
     try {
       const health = await (await fetch('/api/health')).json();
@@ -78,7 +77,7 @@ export function initGoogleSignIn() {
       }
       let attempts = 0;
       const waitForGoogle = () => {
-        if ((window as any).google && google.accounts) {
+        if (typeof google !== 'undefined' && google.accounts) {
           google.accounts.id.initialize({
             client_id: health.googleClientId,
             callback: handleGoogleLogin,
@@ -87,7 +86,7 @@ export function initGoogleSignIn() {
             document.querySelector('.g_id_signin'),
             { theme: 'outline', size: 'large', text: 'sign_in_with', shape: 'rectangular', width: 300 }
           );
-          (window as any)._googleSignInReady = true;
+          _googleSignInReady = true;
         } else if (attempts++ < 50) {
           setTimeout(waitForGoogle, 100);
         } else {
@@ -128,7 +127,7 @@ export function showApp() {
     img.src = S.user.picture;
     img.style.display = 'block';
   }
-  (window as any).initApp?.();
+  initApp();
   if (typeof showFeedbackFab === 'function') showFeedbackFab();
 }
 

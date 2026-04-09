@@ -1,8 +1,6 @@
 import { S, LOCATIONS, DAYS } from './state';
 import { apiGet, apiPost, toast, toastError } from './utils';
-
-// Window-indirect aliases (avoid circular deps)
-const esc = (...args: any[]) => (window as any).esc?.(...args);
+import { esc } from './modal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FINANCE — Revenue overview from Tebi POS

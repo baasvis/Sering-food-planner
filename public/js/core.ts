@@ -3,15 +3,10 @@
 
 import { S, DAYS, MEALS, STORAGE } from './state';
 import type { Batch, Service, Catering, CateringDish, RecipeEntry, RecipeIngredient, Location, Meal, DishType, StorageType, BatchRatings } from '@shared/types';
-
-// utils functions accessed via window to avoid circular deps
-const scheduleSave = (): void => (window as any).scheduleSave?.();
-const apiPost = (path: string, body: unknown): Promise<unknown> => (window as any).apiPost?.(path, body);
-const toast = (msg: string): void => (window as any).toast?.(msg);
-// init functions accessed via window to avoid circular deps
-const esc = (str: string): string => (window as any).esc?.(str) || '';
-const showModal = (content: string): void => (window as any).showModal?.(content);
-const closeModal = (): void => (window as any).closeModal?.();
+import { scheduleSave, apiPost, toast } from './utils';
+import { showModal, closeModal, esc } from './modal';
+import { rerenderCurrentView } from './navigate';
+import { renderBatchTile } from './dishes';
 
 export function isBatchCooked(d: Batch): boolean {
   return (d.stock || 0) > 0;
@@ -87,11 +82,11 @@ export function renderDishListSplit(dishes: Batch[]): string {
   let html = '';
   if (uncooked.length > 0) {
     html += `<div class="cook-group-hdr uncooked-hdr">To cook (${uncooked.length})</div>`;
-    uncooked.forEach((d: Batch) => { html += (window as any).renderBatchTile(d); });
+    uncooked.forEach((d: Batch) => { html += renderBatchTile(d); });
   }
   if (cooked.length > 0) {
     html += `<div class="cook-group-hdr cooked-hdr">Cooked (${cooked.length})</div>`;
-    cooked.forEach((d: Batch) => { html += (window as any).renderBatchTile(d); });
+    cooked.forEach((d: Batch) => { html += renderBatchTile(d); });
   }
   return html;
 }
@@ -254,7 +249,7 @@ export function cycleStorage(id: string): void {
   const idx = STORAGE.indexOf(d.storage || 'Gastro');
   d.storage = STORAGE[(idx + 1) % STORAGE.length];
   scheduleSave();
-  (window as any).rerenderCurrentView?.();
+  rerenderCurrentView();
 }
 export function logisticsBadge(d: Batch): string {
   const loc = d.location || 'west';
@@ -284,7 +279,7 @@ export function cycleLocation(id: string): void {
   d.inTransit = false;
   rebuildPlanner();
   scheduleSave();
-  (window as any).rerenderCurrentView?.();
+  rerenderCurrentView();
 }
 
 // ── SERVED / ARCHIVE ─────────────────────────────────────
@@ -358,7 +353,7 @@ export function archiveDish(id: string, withRating: boolean): void {
   pendingRatings = { skill:0, speed:0, banger:0 };
   closeModal();
   rebuildPlanner();
-  (window as any).rerenderCurrentView?.();
+  rerenderCurrentView();
   scheduleSave();
   toast(esc(d.name) + ' archived');
 }
@@ -377,14 +372,14 @@ export function cycleType(id: string): void {
   const idx = TYPES.indexOf(d.type || 'Soup');
   d.type = TYPES[(idx + 1) % TYPES.length];
   scheduleSave();
-  (window as any).rerenderCurrentView?.();
+  rerenderCurrentView();
 }
 export function toggleOrder(id: string): void {
   const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
   d.orderFor = !d.orderFor;
   scheduleSave();
-  (window as any).rerenderCurrentView?.();
+  rerenderCurrentView();
 }
 export function chipClass(d: Batch): string {
   if (d.inTransit) return 'chip-tr';

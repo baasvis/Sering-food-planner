@@ -1,19 +1,8 @@
 import { S, DAYS, MEALS, LOCATIONS, ALLERGENS } from './state';
 import { newId, scheduleSave, toast } from './utils';
-import { rebuildPlanner, calcRequired, locationBadge, typeBadge, typeBadgeClass, TYPES, getToday } from './core';
-
-// Window-indirect aliases (avoid circular deps)
-const closeModal = (...args: any[]) => (window as any).closeModal?.(...args);
-const cookDateToISO = (...args: any[]) => (window as any).cookDateToISO?.(...args);
-const diffStr = (...args: any[]) => (window as any).diffStr?.(...args);
-const esc = (...args: any[]) => (window as any).esc?.(...args);
-const isBatchCooked = (...args: any[]) => (window as any).isBatchCooked?.(...args);
-const isoToCookDate = (...args: any[]) => (window as any).isoToCookDate?.(...args);
-const logisticsBadgeClass = (...args: any[]) => (window as any).logisticsBadgeClass?.(...args);
-const logisticsShort = (...args: any[]) => (window as any).logisticsShort?.(...args);
-const showModal = (...args: any[]) => (window as any).showModal?.(...args);
-const storageBadge = (...args: any[]) => (window as any).storageBadge?.(...args);
-const strToDate = (...args: any[]) => (window as any).strToDate?.(...args);
+import { rebuildPlanner, calcRequired, locationBadge, typeBadge, typeBadgeClass, TYPES, getToday, isBatchCooked, diffStr, logisticsBadgeClass, logisticsShort, storageBadge, strToDate } from './core';
+import { showModal, closeModal, esc } from './modal';
+import { cookDateToISO, isoToCookDate } from './dishes';
 
 // ── CATERINGS ─────────────────────────────────────────────
 

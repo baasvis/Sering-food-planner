@@ -1,23 +1,12 @@
 import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError } from './utils';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate } from './core';
+import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate } from './core';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
-import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay } from './dishes';
-import { calcLitersForService, getMenuDishes } from './dashboard';
-
-// Window-indirect aliases (avoid circular deps)
-const cleanCateringRefs = (...args: any[]) => (window as any).cleanCateringRefs?.(...args);
-const closeModal = (...args: any[]) => (window as any).closeModal?.(...args);
-const diffStr = (...args: any[]) => (window as any).diffStr?.(...args);
-const esc = (...args: any[]) => (window as any).esc?.(...args);
-const openNewDish = (...args: any[]) => (window as any).openNewDish?.(...args);
-const openServedDialog = (...args: any[]) => (window as any).openServedDialog?.(...args);
-const renderCaterings = (...args: any[]) => (window as any).renderCaterings?.(...args);
-const renderDashboard = (...args: any[]) => (window as any).renderDashboard?.(...args);
-const renderDishesOverview = (...args: any[]) => (window as any).renderDishesOverview?.(...args);
-const renderSplitBar = (...args: any[]) => (window as any).renderSplitBar?.(...args);
-const showModal = (...args: any[]) => (window as any).showModal?.(...args);
-const sortByCookDate = (...args: any[]) => (window as any).sortByCookDate?.(...args);
+import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, renderSplitBar, cleanCateringRefs } from './dishes';
+import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
+import { showModal, closeModal, esc, setOpenInventoryFn } from './modal';
+import { renderCaterings } from './caterings';
+import { rerenderCurrentView } from './navigate';
 
 // ── WEEK PLAN (UNIFIED) ──────────────────────────────────
 
@@ -58,12 +47,12 @@ export function renderPlannerSubTab() {
 }
 
 // Dispatcher: called by dishes.js and core.js instead of old renderDishes()
-export function rerenderCurrentView() {
-  const screen = document.querySelector('.screen.active');
-  if (!screen) return;
-  if (screen.id === 'screen-planner') renderPlannerSubTab();
-  else if (screen.id === 'screen-dashboard') renderDashboard();
-}
+// Re-export from navigate so existing imports keep working
+export { rerenderCurrentView } from './navigate';
+
+// Register openInventory callback with modal system (for served dialog → inventory reopen)
+// This runs at import time, which is fine since it's a simple assignment.
+setOpenInventoryFn(openInventory);
 
 export let _plannerDayOffset = 0;
 

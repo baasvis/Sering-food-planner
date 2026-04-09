@@ -51,8 +51,13 @@ app.use('/api/health',            healthRouter);
 // ── Global error handler ──
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error('Unhandled error:', err.message);
-  res.status((err as any).status || 500).json({ error: err.message });
+  console.error('Unhandled error:', err.stack || err.message);
+  const status = (err as Error & { status?: number }).status || 500;
+  // In production, don't leak internal error messages for 500s
+  const message = status >= 500 && process.env.NODE_ENV === 'production'
+    ? 'Internal server error'
+    : err.message;
+  res.status(status).json({ error: message });
 });
 
 export default app;

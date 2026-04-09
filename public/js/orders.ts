@@ -1,16 +1,8 @@
-import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS } from './state';
+import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS, rebuildStorageCategories } from './state';
 import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ingredientDbLoaded, ingredientDbError } from './utils';
 import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
-
-// Window-indirect aliases (avoid circular deps)
-const closeModal = (...args: any[]) => (window as any).closeModal?.(...args);
-const esc = (...args: any[]) => (window as any).esc?.(...args);
-const ingredientDbFull = (window as any).ingredientDbFull;
-const openIngredientModal = (...args: any[]) => (window as any).openIngredientModal?.(...args);
-const openStoragePopover = (...args: any[]) => (window as any).openStoragePopover?.(...args);
-const rebuildStorageCategories = (...args: any[]) => (window as any).rebuildStorageCategories?.(...args);
-const renderIngredientDbTab = (...args: any[]) => (window as any).renderIngredientDbTab?.(...args);
-const showModal = (...args: any[]) => (window as any).showModal?.(...args);
+import { showModal, closeModal, esc } from './modal';
+import { ingredientDbFull, openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
 
 // ── ORDER OVERVIEW ────────────────────────────────────────
 

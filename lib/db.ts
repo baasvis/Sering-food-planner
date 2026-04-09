@@ -18,48 +18,36 @@ const VALID_LOCATIONS = ['west', 'centraal'];
 const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const VALID_MEALS = ['lunch', 'dinner'];
 
+export function validateBatch(b: Batch, prefix = ''): string | null {
+  const p = prefix ? `${prefix}: ` : '';
+  if (!b.id || typeof b.id !== 'string') return `${p}missing or invalid id`;
+  if (!b.name || typeof b.name !== 'string' || b.name.length > 200) return `${p}invalid name`;
+  if (!VALID_TYPES.includes(b.type)) return `${p}invalid type "${b.type}"`;
+  if (typeof b.stock !== 'number' || b.stock < 0 || b.stock > 99999) return `${p}invalid stock`;
+  if (typeof b.serving !== 'number' || b.serving < 1 || b.serving > 9999) return `${p}invalid serving`;
+  if (!VALID_STORAGE.includes(b.storage)) return `${p}invalid storage`;
+  if (!VALID_LOCATIONS.includes(b.location)) return `${p}invalid location "${b.location}"`;
+  if (typeof b.inTransit !== 'undefined' && typeof b.inTransit !== 'boolean') return `${p}inTransit must be boolean`;
+  if (typeof b.note !== 'undefined' && (typeof b.note !== 'string' || b.note.length > 1000)) return `${p}invalid note`;
+  if (!Array.isArray(b.services)) return `${p}services must be an array`;
+  for (const svc of b.services) {
+    if (!VALID_LOCATIONS.includes(svc.loc)) return `${p}invalid service location`;
+    if (!svc.date || typeof svc.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(svc.date)) return `${p}invalid service date (expected YYYY-MM-DD)`;
+    if (!VALID_MEALS.includes(svc.meal)) return `${p}invalid service meal`;
+  }
+  return null;
+}
+
 export function validateBatches(batches: Batch[]): string | null {
   if (!Array.isArray(batches)) return 'batches must be an array';
   if (batches.length > 500) return 'Too many batches (max 500)';
   const ids = new Set<string>();
   for (let i = 0; i < batches.length; i++) {
     const b = batches[i];
-    if (!b.id || typeof b.id !== 'string') return `Batch ${i}: missing or invalid id`;
     if (ids.has(b.id)) return `Batch ${i}: duplicate id "${b.id}"`;
     ids.add(b.id);
-    if (!b.name || typeof b.name !== 'string' || b.name.length > 200) return `Batch ${i}: invalid name`;
-    if (!VALID_TYPES.includes(b.type)) return `Batch ${i}: invalid type "${b.type}"`;
-    if (typeof b.stock !== 'number' || b.stock < 0 || b.stock > 99999) return `Batch ${i}: invalid stock`;
-    if (typeof b.serving !== 'number' || b.serving < 1 || b.serving > 9999) return `Batch ${i}: invalid serving`;
-    if (!VALID_STORAGE.includes(b.storage)) return `Batch ${i}: invalid storage`;
-    if (!VALID_LOCATIONS.includes(b.location)) return `Batch ${i}: invalid location "${b.location}"`;
-    if (typeof b.inTransit !== 'undefined' && typeof b.inTransit !== 'boolean') return `Batch ${i}: inTransit must be boolean`;
-    if (typeof b.note !== 'undefined' && (typeof b.note !== 'string' || b.note.length > 1000)) return `Batch ${i}: invalid note`;
-    if (!Array.isArray(b.services)) return `Batch ${i}: services must be an array`;
-    for (const svc of b.services) {
-      if (!VALID_LOCATIONS.includes(svc.loc)) return `Batch ${i}: invalid service location`;
-      if (!svc.date || typeof svc.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(svc.date)) return `Batch ${i}: invalid service date (expected YYYY-MM-DD)`;
-      if (!VALID_MEALS.includes(svc.meal)) return `Batch ${i}: invalid service meal`;
-    }
-  }
-  return null;
-}
-
-export function validateBatch(b: Batch): string | null {
-  if (!b.id || typeof b.id !== 'string') return 'missing or invalid id';
-  if (!b.name || typeof b.name !== 'string' || b.name.length > 200) return 'invalid name';
-  if (!VALID_TYPES.includes(b.type)) return `invalid type "${b.type}"`;
-  if (typeof b.stock !== 'number' || b.stock < 0 || b.stock > 99999) return 'invalid stock';
-  if (typeof b.serving !== 'number' || b.serving < 1 || b.serving > 9999) return 'invalid serving';
-  if (!VALID_STORAGE.includes(b.storage)) return 'invalid storage';
-  if (!VALID_LOCATIONS.includes(b.location)) return `invalid location "${b.location}"`;
-  if (typeof b.inTransit !== 'undefined' && typeof b.inTransit !== 'boolean') return 'inTransit must be boolean';
-  if (typeof b.note !== 'undefined' && (typeof b.note !== 'string' || b.note.length > 1000)) return 'invalid note';
-  if (!Array.isArray(b.services)) return 'services must be an array';
-  for (const svc of b.services) {
-    if (!VALID_LOCATIONS.includes(svc.loc)) return 'invalid service location';
-    if (!svc.date || typeof svc.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(svc.date)) return 'invalid service date (expected YYYY-MM-DD)';
-    if (!VALID_MEALS.includes(svc.meal)) return 'invalid service meal';
+    const err = validateBatch(b, `Batch ${i}`);
+    if (err) return err;
   }
   return null;
 }

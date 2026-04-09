@@ -6,6 +6,9 @@ import type { StorageArea, Batch, Catering, TransportItem, GuestsData, PatchRequ
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
+import { esc } from './modal';
+import { rerenderCurrentView } from './navigate';
+import { invalidateCategoryCache } from './dashboard';
 
 export function newId(): string {
   return crypto.randomUUID();
@@ -194,7 +197,7 @@ export function showDataError(msg: string): void {
     const content = document.querySelector('.content');
     if (content) content.prepend(banner);
   }
-  banner.innerHTML = `<span>${(window as any).esc ? (window as any).esc(msg) : msg}</span><button onclick="retryLoad()">Retry</button>`;
+  banner.innerHTML = `<span>${esc(msg)}</span><button onclick="retryLoad()">Retry</button>`;
   banner.style.display = '';
 }
 
@@ -211,7 +214,7 @@ export async function retryLoad(): Promise<void> {
   }
   await loadData();
   rebuildPlanner();
-  (window as any).rerenderCurrentView?.();
+  rerenderCurrentView();
 }
 
 export let ingredientDbLoaded = false;
@@ -226,7 +229,7 @@ export async function loadIngredientDb(): Promise<void> {
       ingredientDbError = result.error;
     } else if (Array.isArray(result)) {
       S.ingredientDb = result;
-      (window as any)._ingredientCategoryCache = null; // invalidate choppable lookup cache
+      invalidateCategoryCache(); // invalidate choppable lookup cache
       ingredientDbError = '';
       console.log('Ingredient DB loaded:', S.ingredientDb.length, 'items');
       if (S.ingredientDb.length > 0) console.log('Sample:', S.ingredientDb[0].name, '| code:', S.ingredientDb[0].orderCode);
@@ -428,7 +431,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     takeSnapshot();
     // Re-render current view
     rebuildPlanner();
-    (window as any).rerenderCurrentView?.();
+    rerenderCurrentView();
     toast(`${user || 'Someone'} made changes — updated live`);
   }
 }

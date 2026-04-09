@@ -1,21 +1,10 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
-import { newId, scheduleSave, toast, toastError, apiPost } from './utils';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate } from './core';
-
-// Window-indirect aliases (avoid circular deps)
-const addDishFromRecipe = (...args: any[]) => (window as any).addDishFromRecipe?.(...args);
-const apiGet = (...args: any[]) => (window as any).apiGet?.(...args);
-const batchDragEnd = (...args: any[]) => (window as any).batchDragEnd?.(...args);
-const batchDragStart = (...args: any[]) => (window as any).batchDragStart?.(...args);
-const closeModal = (...args: any[]) => (window as any).closeModal?.(...args);
-const esc = (...args: any[]) => (window as any).esc?.(...args);
-const getGuests = (...args: any[]) => (window as any).getGuests?.(...args);
-const openReplaceBatch = (...args: any[]) => (window as any).openReplaceBatch?.(...args);
-const openServedDialog = (...args: any[]) => (window as any).openServedDialog?.(...args);
-const rerenderCurrentView = (...args: any[]) => (window as any).rerenderCurrentView?.(...args);
-const showModal = (...args: any[]) => (window as any).showModal?.(...args);
-const startAssignMode = (...args: any[]) => (window as any).startAssignMode?.(...args);
-const toggleOrder = (...args: any[]) => (window as any).toggleOrder?.(...args);
+import { newId, scheduleSave, toast, toastError, apiPost, apiGet } from './utils';
+import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder } from './core';
+import { showModal, closeModal, esc } from './modal';
+import { rerenderCurrentView } from './navigate';
+import { addDishFromRecipe } from './recipes';
+import { batchDragStart, batchDragEnd, startAssignMode, openReplaceBatch } from './planner';
 
 // ── DISH LIST ─────────────────────────────────────────────
 export let dishSort = { col: 'default', dir: 'asc' };

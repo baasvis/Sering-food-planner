@@ -28,6 +28,11 @@ model Batch {
   services          Json     @default("[]")
   createdAt         String   @map("created_at")
 
+  parent       Batch?  @relation("BatchParent", fields: [parentId], references: [id], onDelete: SetNull)
+  childBatches Batch[] @relation("BatchParent")
+
+  @@index([location])
+  @@index([cookDate])
   @@map("batches")
 }
 
@@ -61,6 +66,7 @@ model RecipeIndex {
   avgBanger         Float    @default(0) @map("avg_banger")
   timesServed       Int      @default(0) @map("times_served")
 
+  @@index([type])
   @@map("recipe_index")
 }
 
@@ -85,33 +91,35 @@ model TransportItem {
 }
 
 model Ingredient {
-  id                  String  @id
-  name                String  @default("")
-  supplierName        String  @default("") @map("supplier_name")
-  category            String  @default("")
-  unit                String  @default("Grams")
-  supplier            String  @default("")
-  orderCode           String  @default("") @map("order_code")
-  orderUnit           String  @default("") @map("order_unit")
-  orderPrice          Float?  @map("order_price")
-  orderUnitSize       Float   @default(0) @map("order_unit_size")
-  allergens           String  @default("")
-  notes               String  @default("")
-  active              Boolean @default(true)
-  nutrition           Json    @default("{}")
-  priceAlert          Boolean @default(false) @map("price_alert")
-  priceHistory        Json    @default("[]") @map("price_history")
-  priceLevel          String  @default("") @map("price_level")
-  pricePer100         Float   @default(0) @map("price_per_100")
-  stock               Json    @default("{}")
-  storageLocations    Json    @default("{}") @map("storage_locations")
-  types               Json    @default("[]")
-  measureMode         String  @default("weight") @map("measure_mode")
-  targetStock         Json    @default("{}") @map("target_stock")
-  orderUnitStandard   String  @default("") @map("order_unit_standard")
-  orderAmountGrams    Float   @default(0) @map("order_amount_grams")
-  pricePer100g        Float   @default(0) @map("price_per_100g")
+  id                String  @id
+  name              String  @default("")
+  supplierName      String  @default("") @map("supplier_name")
+  category          String  @default("")
+  unit              String  @default("Grams")
+  supplier          String  @default("")
+  orderCode         String  @default("") @map("order_code")
+  orderUnit         String  @default("") @map("order_unit")
+  orderPrice        Float?  @map("order_price")
+  orderUnitSize     Float   @default(0) @map("order_unit_size")
+  allergens         String  @default("")
+  notes             String  @default("")
+  active            Boolean @default(true)
+  nutrition         Json    @default("{}")
+  priceAlert        Boolean @default(false) @map("price_alert")
+  priceHistory      Json    @default("[]") @map("price_history")
+  priceLevel        String  @default("") @map("price_level")
+  pricePer100       Float   @default(0) @map("price_per_100")
+  stock             Json    @default("{}")
+  storageLocations  Json    @default("{}") @map("storage_locations")
+  types             Json    @default("[]")
+  measureMode       String  @default("weight") @map("measure_mode")
+  targetStock       Json    @default("{}") @map("target_stock")
+  orderUnitStandard String  @default("") @map("order_unit_standard")
+  orderAmountGrams  Float   @default(0) @map("order_amount_grams")
+  pricePer100g      Float   @default(0) @map("price_per_100g")
 
+  @@index([active])
+  @@index([category])
   @@map("ingredients")
 }
 
@@ -153,19 +161,21 @@ model Log {
   action    String
   details   String
 
+  @@index([timestamp])
   @@map("log")
 }
 
 model Feedback {
-  id        Int    @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   timestamp String
-  user      String @default("anonymous")
-  type      String @default("general")
-  screen    String @default("")
+  user      String  @default("anonymous")
+  type      String  @default("general")
+  screen    String  @default("")
   text      String
-  userAgent  String  @default("") @map("user_agent")
-  processed  Boolean @default(false)
+  userAgent String  @default("") @map("user_agent")
+  processed Boolean @default(false)
 
+  @@index([processed])
   @@map("feedback")
 }
 
@@ -216,7 +226,7 @@ model ProductRevenue {
   id              Int    @id @default(autoincrement())
   date            String
   location        String
-  meal            String // morning, lunch, afternoon, dinner, bar
+  meal            String
   productName     String @map("product_name")
   productCategory String @default("") @map("product_category")
   quantity        Float  @default(0)

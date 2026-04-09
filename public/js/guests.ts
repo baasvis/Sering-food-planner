@@ -1,14 +1,8 @@
 import { S, DAYS, MEALS, LOCATIONS } from './state';
-import { scheduleSave, toast } from './utils';
+import { scheduleSave, toast, apiGet, apiPost, scheduleNextWeeksSave, toastError } from './utils';
 import { getGuests, calcTotalGuests, getToday } from './core';
 import { parseCSV, categorizeUploadedFiles, predictGuests, getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav } from './predictions';
-
-// Window-indirect aliases (avoid circular deps)
-const apiGet = (...args: any[]) => (window as any).apiGet?.(...args);
-const apiPost = (...args: any[]) => (window as any).apiPost?.(...args);
-const esc = (...args: any[]) => (window as any).esc?.(...args);
-const scheduleNextWeeksSave = (...args: any[]) => (window as any).scheduleNextWeeksSave?.(...args);
-const toastError = (...args: any[]) => (window as any).toastError?.(...args);
+import { esc } from './modal';
 
 // ── GUESTS ────────────────────────────────────────────────
 

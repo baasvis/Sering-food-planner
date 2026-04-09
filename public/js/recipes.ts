@@ -1,12 +1,8 @@
 import { S, ALLERGENS, INGREDIENT_TYPES, PRICE_LEVELS } from './state';
 import { newId, scheduleSave, toast, toastError, apiGet, apiPost } from './utils';
 import { rebuildPlanner, typeBadge, typeBadgeClass, TYPES, chipClass } from './core';
-
-// Window-indirect aliases (avoid circular deps)
-const closeModal = (...args: any[]) => (window as any).closeModal?.(...args);
-const doLogout = (...args: any[]) => (window as any).doLogout?.(...args);
-const esc = (...args: any[]) => (window as any).esc?.(...args);
-const showModal = (...args: any[]) => (window as any).showModal?.(...args);
+import { showModal, closeModal, esc } from './modal';
+import { doLogout } from './auth';
 
 // ── RECIPE INDEX ──────────────────────────────────────────
 export let riSearch = '';

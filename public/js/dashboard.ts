@@ -1,26 +1,22 @@
 import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, NAV_SCREENS } from './state';
-import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync } from './utils';
+import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId } from './utils';
 import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
-import { calcRequiredForLoc } from './dishes';
-
-// Window-indirect aliases (avoid circular deps)
-const confirmCooked = (...args: any[]) => (window as any).confirmCooked?.(...args);
-const esc = (...args: any[]) => (window as any).esc?.(...args);
-const inlineAddAllergenStart = (...args: any[]) => (window as any).inlineAddAllergenStart?.(...args);
-const inlineRemoveAllergen = (...args: any[]) => (window as any).inlineRemoveAllergen?.(...args);
-const newId = (...args: any[]) => (window as any).newId?.(...args);
-const renderFeedbackAdmin = (...args: any[]) => (window as any).renderFeedbackAdmin?.(...args);
-const renderFinance = (...args: any[]) => (window as any).renderFinance?.(...args);
-const renderGuests = (...args: any[]) => (window as any).renderGuests?.(...args);
-const renderOrders = (...args: any[]) => (window as any).renderOrders?.(...args);
-const renderRecipeIndex = (...args: any[]) => (window as any).renderRecipeIndex?.(...args);
-const renderWeekPlan = (...args: any[]) => (window as any).renderWeekPlan?.(...args);
+import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
+import { esc } from './modal';
+import { registerRenderer, setCurrentScreen } from './navigate';
+import { renderFeedbackAdmin } from './feedback-admin';
+import { renderFinance } from './finance';
+import { renderGuests } from './guests';
+import { renderOrders } from './orders';
+import { renderRecipeIndex } from './recipes';
+import { renderWeekPlan } from './planner';
 
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
 
-export function showScreen(name: any, pushState = true) {
+export function showScreen(name: string, pushState = true) {
+  setCurrentScreen(name);
   // Switch active screen
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + name)?.classList.add('active');
@@ -97,7 +93,8 @@ export const PANTRY_KEYWORDS = [
 ];
 
 // Build a lookup cache from ingredient DB (name/supplierName → category)
-export let _ingredientCategoryCache = null;
+export let _ingredientCategoryCache: Map<string, string> | null = null;
+export function invalidateCategoryCache() { _ingredientCategoryCache = null; }
 export function getIngredientCategoryCache() {
   if (_ingredientCategoryCache && _ingredientCategoryCache.size > 0) return _ingredientCategoryCache;
   _ingredientCategoryCache = new Map();
@@ -893,3 +890,12 @@ export function navTo(screen: any, subTab: any) {
   if (subTab) S.plannerSubTab = subTab;
   showScreen(screen);
 }
+
+// ── Register screen renderers for rerenderCurrentView() ──
+registerRenderer('dashboard', renderDashboard);
+registerRenderer('guests', renderGuests);
+registerRenderer('planner', renderWeekPlan);
+registerRenderer('recipe-index', renderRecipeIndex);
+registerRenderer('orders', renderOrders);
+registerRenderer('finance', renderFinance);
+registerRenderer('feedback-admin', renderFeedbackAdmin);

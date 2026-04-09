@@ -1,13 +1,8 @@
 import { S, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, rebuildStorageCategories, getStorageConfigForLoc, getStorageColor, DEFAULT_STORAGE_CONFIG } from './state';
 import { toast, toastError, apiGet, apiPost, saveStorageConfig, loadIngredientDb } from './utils';
 import { chipClass } from './core';
-
-// Window-indirect aliases (avoid circular deps)
-const closeModal = (...args: any[]) => (window as any).closeModal?.(...args);
-const currentOrdersLoc = (window as any).currentOrdersLoc;
-const esc = (...args: any[]) => (window as any).esc?.(...args);
-const renderOrders = (...args: any[]) => (window as any).renderOrders?.(...args);
-const showModal = (...args: any[]) => (window as any).showModal?.(...args);
+import { showModal, closeModal, esc } from './modal';
+import { renderOrders, currentOrdersLoc } from './orders';
 
 // ── INGREDIENT DATABASE TAB ──────────────────────────────────
 

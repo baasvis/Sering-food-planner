@@ -1,7 +1,5 @@
 import { S, DAYS } from './state';
-
-// Window-indirect aliases (avoid circular deps)
-const getToday = (...args: any[]) => (window as any).getToday?.(...args);
+import { getToday } from './core';
 
 // ── PREDICTIONS — CSV parsing, Tebi categorization, guest prediction ────────
 

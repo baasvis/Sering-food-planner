@@ -3,6 +3,12 @@ import { loadData, connectLiveSync, saveState } from './utils';
 import { rebuildPlanner } from './core';
 import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
 import { checkSession, initGoogleSignIn } from './auth';
+import { closeModal } from './modal';
+import { rerenderCurrentView } from './navigate';
+import { cancelAssignMode } from './planner';
+
+// Re-export modal functions so existing imports from init.ts keep working
+export { showModal, closeModal, esc } from './modal';
 
 // ── THEME ─────────────────────────────────────────────────
 // Apply saved theme immediately to prevent flash
@@ -13,26 +19,6 @@ export function toggleTheme() {
   localStorage.setItem('theme', isDark ? 'dark' : 'light');
   const btn = document.querySelector('.theme-toggle');
   if (btn) btn.innerHTML = isDark ? '&#9788;' : '&#9790;';
-}
-
-// ── MODAL ─────────────────────────────────────────────────
-export function showModal(content: any) {
-  document.getElementById('modal-root')!.innerHTML = `<div class="modal-bg" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">${content}</div></div>`;
-}
-export function closeModal() {
-  document.getElementById('modal-root')!.innerHTML = '';
-  // Reopen inventory if we came from served dialog
-  if (S._inventoryLoc) {
-    const loc = S._inventoryLoc;
-    S._inventoryLoc = null;
-    setTimeout(() => (window as any).openInventory?.(loc), 200);
-  }
-}
-
-// ── HTML ESCAPE ───────────────────────────────────────────
-export function esc(str: any) {
-  if (!str) return '';
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 // ── NAV GENERATION ────────────────────────────────────────
@@ -75,10 +61,10 @@ export function buildNav() {
 }
 
 // ── GLOBAL KEY HANDLERS ──────────────────────────────────
-document.addEventListener('keydown', function(e: any) {
+document.addEventListener('keydown', function(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     // Cancel assign mode if active
-    if (S.assigningBatchId) { (window as any).cancelAssignMode?.(); return; }
+    if (S.assigningBatchId) { cancelAssignMode(); return; }
     // Close modal if open
     const modal = document.querySelector('.modal-bg');
     if (modal) closeModal();
@@ -145,7 +131,7 @@ export async function initApp() {
     const active = document.querySelector('.screen.active');
     if (active && active.id !== 'screen-dashboard') {
       const scrollY = window.scrollY;
-      (window as any).rerenderCurrentView?.();
+      rerenderCurrentView();
       requestAnimationFrame(() => window.scrollTo(0, scrollY));
     }
   }, 60000);

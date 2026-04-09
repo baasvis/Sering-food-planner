@@ -1,10 +1,6 @@
 import { S } from './state';
 import { apiGet, apiPost, toast } from './utils';
-
-// Window-indirect aliases (avoid circular deps)
-const closeModal = (...args: any[]) => (window as any).closeModal?.(...args);
-const esc = (...args: any[]) => (window as any).esc?.(...args);
-const showModal = (...args: any[]) => (window as any).showModal?.(...args);
+import { showModal, closeModal, esc } from './modal';
 
 // ── FEEDBACK ADMIN ──────────────────────────────────────
 // View all submitted feedback, filter by type, copy for Claude
