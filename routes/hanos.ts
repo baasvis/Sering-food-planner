@@ -17,7 +17,30 @@ router.get('/status', (_req: Request, res: Response) => {
     configured: !!(west.user && west.pass) || !!(centraal.user && centraal.pass),
     west: !!(west.user && west.pass),
     centraal: !!(centraal.user && centraal.pass),
+    // Diagnostic: show credential presence (not values) and client_secret presence
+    _diag: {
+      westUser: !!west.user,
+      westPass: !!west.pass,
+      centraalUser: !!centraal.user,
+      centraalPass: !!centraal.pass,
+      clientSecret: !!process.env.HANOS_CLIENT_SECRET,
+      clientSecretLen: (process.env.HANOS_CLIENT_SECRET || '').length,
+    },
   });
+});
+
+// Diagnostic: test login without adding to cart
+router.get('/test-login', async (req: Request, res: Response) => {
+  const loc = (req.query.location as string) || 'west';
+  try {
+    const creds = getCredentials(loc);
+    if (!creds.user || !creds.pass) return res.json({ ok: false, error: `No credentials for ${loc}` });
+    invalidateClient(loc); // force fresh login
+    const client = await getClient(loc);
+    res.json({ ok: true, hasToken: !!client.accessToken, hasCart: !!client.cartId });
+  } catch (e: unknown) {
+    res.json({ ok: false, error: errMsg(e), location: loc });
+  }
 });
 
 router.post('/add-to-cart', async (req: Request, res: Response) => {

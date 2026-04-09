@@ -37,8 +37,9 @@ export class HanosClient {
     return h;
   }
 
-  async login(username: string, password: string) {
+  async login(username: string, password: string, retryCount = 0): Promise<Record<string, unknown>> {
     if (!username || !password) throw new Error('Hanos credentials not configured for this location');
+    if (!CONFIG.HANOS_CLIENT_SECRET) throw new Error('HANOS_CLIENT_SECRET env var not set');
 
     const body = new URLSearchParams({
       grant_type: 'password',
@@ -60,7 +61,17 @@ export class HanosClient {
       const desc = err.error_description || 'Unknown error';
       throw new Error(`Hanos login failed: ${desc}`);
     }
-    if (!resp.ok) throw new Error(`Hanos login HTTP ${resp.status}`);
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => '');
+      console.error(`[Hanos] Login failed: HTTP ${resp.status} for user ${username.substring(0, 3)}*** — ${errBody}`);
+      // Retry once on 401 (transient auth issue)
+      if (resp.status === 401 && retryCount === 0) {
+        console.log('[Hanos] Retrying login after 401...');
+        await new Promise(r => setTimeout(r, 1000));
+        return this.login(username, password, 1);
+      }
+      throw new Error(`Hanos login HTTP ${resp.status}${errBody ? ': ' + errBody.substring(0, 200) : ''}`);
+    }
 
     const data = await resp.json() as Record<string, unknown>;
     this.accessToken = data.access_token as string;
