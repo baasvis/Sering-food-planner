@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-03-31*
+*Last updated: 2026-04-09*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -98,7 +98,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Transport view: "Mark selected as arrived" (changes logistics to destination), custom transport items list (free-text, disappear on delivery)
 - Dish management with inline editing, cook date tracking, stock levels, +/- status pills, sortable columns
 - Recipe index (library) with single + bulk import from Google Sheets, ratings, conditional cost colouring
-- Recipe system v2: full recipe editor with DB-linked ingredients, multi-step guided creation (basics → ingredients → prep steps → storage → review), ingredient autocomplete from DB (~2100 items), flexible ingredient slots ("Any vegetables" with category + suggestions), auto-allergen calculation from linked ingredients, live cost per serving, nutrition per serving (EU label format), photo upload (stored in PostgreSQL, resized client-side), manual versioning with snapshot history, printable A4 view (server-rendered HTML with @media print), post-cook recording (resolve flexible slots, adjust amounts, optional stock deduction, cook notes), auto-recalculate recipe costs when ingredient prices change. Unified recipe list shows v2 recipe cards above legacy table with View/Edit/Menu/Delete actions.
+- Recipe system v2: full recipe editor with DB-linked ingredients, multi-step guided creation (basics → ingredients → prep steps → storage → review), ingredient autocomplete from DB (~2100 items), flexible ingredient slots ("Any vegetables" with category + suggestions), auto-allergen calculation from linked ingredients, live cost per serving, nutrition per serving (EU label format), photo upload (stored in PostgreSQL, resized client-side), manual versioning with snapshot history, printable A4 view (server-rendered HTML with @media print), post-cook recording (resolve flexible slots, adjust amounts, optional stock deduction, cook notes), auto-recalculate recipe costs when ingredient prices change. Unified recipe list shows v2 recipes in a table above the legacy table (same column format: name, type, structure, cost, season, allergens, ratings, served, actions). V2 rows link to detail view on click, with Edit/+Menu/Delete actions. Batch recipe editor: unified fullscreen/modal editor for v2 recipe batches — shows ingredients with editable amounts, prep steps (read-only), cook notes, stock deduction toggle. Replaces old resolve-flexible and post-cook-recording modals. Accessible from batch tile "Open batch recipe" button in planner.
 - Order overview with 4-tab layout: Combined Order (default), Set Standard Inventory, Batch Ingredients, Ingredient Database
   - All tabs display amounts in order units (e.g. "5x Bak 1 kilogram") when ingredient has orderUnitSize, falling back to formatted metric (kg/L) otherwise. Stock inputs use order units with labels.
   - Standard Inventory: cooks build a weekly base order (persistent, per-location PostgreSQL JSON), searchable from ingredient DB, target stock in order units
