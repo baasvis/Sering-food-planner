@@ -23,9 +23,18 @@ export function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : 'Unknown error';
 }
 
+// Typed error with HTTP status code — caught by global error handler in app.ts
+export class AppError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = 'AppError';
+  }
+}
+
 // Wrap async route handlers so unhandled rejections are forwarded to Express error handler
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
-export function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<void>): RequestHandler {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Express handlers may return res.status().json() which is Response, not void
+export function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<any>): RequestHandler {
   return (req, res, next) => fn(req, res, next).catch(next);
 }
 
