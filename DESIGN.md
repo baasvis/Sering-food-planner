@@ -117,7 +117,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Finance v1: Tebi POS scraper (Playwright browser automation) pulls daily revenue data via Tebi's internal JSON API. Sync worker stores data in PostgreSQL DailyRevenue table. Finance screen shows weekly revenue table (per location per day), monthly summary cards (gross/net revenue, sales, covers), CSS bar chart of daily gross revenue, and week navigation. "Sync from Tebi" button triggers the scraper as a child process.
 - Finance v2 — Product-level revenue breakdown: scraper parses Tebi invoice line items to extract per-product revenue. Classifies each invoice by service period (morning 09–12, lunch 12–14, afternoon 14–18, dinner 18–21, bar 21–06). Data stored in PostgreSQL ProductRevenue table. Finance screen shows horizontal category bar chart, sortable product table (top 50), and filter pills for 5 service periods + 4 locations. API: GET /api/finance/products with optional location, meal, groupBy=category filters. Discovery flag: `--dump-invoices` on scraper to inspect raw Tebi invoice structure.
 - Live sync via Server-Sent Events (SSE): when any user saves changes, all other connected users receive the patch instantly and their UI updates automatically. Uses native browser EventSource (auto-reconnects on connection loss). Server broadcasts patches to all clients except the sender (matched by email). No polling, no WebSocket library needed.
-- TypeScript strict typing (refactored 2026-03-31): all `any` types replaced with proper interfaces and string literal unions. Domain types (`Location`, `Meal`, `DishType`, `StorageType`) enforce valid values at compile time. Global state object `S` typed as `AppState`. All catch blocks use `catch (e: unknown)` with `errMsg()` helper. Prisma JSON boundary uses explicit casts. Single shared Prisma client instance.
+- TypeScript strict typing (refactored 2026-03-31, cleaned 2026-04-09): all `any` types replaced with proper interfaces and string literal unions. Domain types (`Location`, `Meal`, `DishType`, `StorageType`) enforce valid values at compile time. Global state object `S` typed as `AppState`. All catch blocks use `catch (e: unknown)` with `errMsg()` helper. Prisma JSON boundary uses explicit casts. Single shared Prisma client instance. Cross-module `(window as any)` pattern eliminated — replaced with direct ES imports via `modal.ts` and `navigate.ts` registry pattern.
 
 **File structure:**
 ```
@@ -130,10 +130,11 @@ types/
   globals.d.ts         — Window index signature for onclick handlers
   multer.d.ts          — Multer module declaration
 lib/
-  config.ts            — Configuration, env vars, errMsg() helper
+  config.ts            — Configuration, env vars, errMsg() helper, asyncHandler()
   db.ts                — Prisma client, row transformers, validators
   recipe-sheets.ts     — Google Sheets client (external recipe reading only)
   hanos-parser.ts      — Hanos quantity parser
+  hanos-client.ts      — HanosClient class, OAuth login, cart management, product formatting
 routes/
   auth.ts              — Login, logout, session, requireAuth middleware
   data.ts              — GET/POST /api/data + POST /api/data/patch (main planner state)
@@ -144,7 +145,7 @@ routes/
   guests.ts            — Guest history + next-weeks predictions
   inventory.ts         — Standard inventory + storage config + prep checklist + activity log
   feedback.ts          — User feedback
-  hanos.ts             — Hanos OCC v2 API client (OAuth, cart, add-to-cart) + Express routes
+  hanos.ts             — Hanos API routes (imports client from lib/hanos-client.ts)
   events.ts            — SSE live sync: client registry, broadcast patches to other users
   finance.ts           — Finance revenue endpoints (GET revenue, POST sync, GET sync-status)
   health.ts            — Health check endpoint
@@ -170,7 +171,9 @@ public/
     feedback.ts        — Feedback button and form
     feedback-admin.ts  — Feedback admin screen (view, filter, export)
     tutorial.ts        — Interactive guided tutorial system
-    init.ts            — Modal system, esc helper, buildNav(), beforeunload guard, initApp
+    modal.ts           — Standalone modal utilities (showModal, closeModal, esc)
+    navigate.ts        — Screen renderer registry, rerenderCurrentView()
+    init.ts            — buildNav(), beforeunload guard, initApp
 seeds/
   ingredients.json     — Master ingredient database (~2,100 items, seed for first deploy)
   standard-inventory.json  — Default weekly base order (~140 items)
