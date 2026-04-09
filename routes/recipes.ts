@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import multer from 'multer';
 import { prisma, dbAppendLog, toRecipeFull, toRecipeIngredientFull, calcRecipeAllergens, calcRecipeCost, calcRecipeNutrition, validateRecipe, withWriteLock } from '../lib/db';
 import { getSheetsClient } from '../lib/recipe-sheets';
-import { asyncHandler } from '../lib/config';
+import { asyncHandler, errMsg } from '../lib/config';
 import { broadcast } from './events';
 import type { RecipeIngredientFull, RecipeVersionSnapshot } from '../shared/types';
 
@@ -264,10 +264,14 @@ router.post('/recipes/recalculate-costs', asyncHandler(async (_req: Request, res
 
   let updated = 0;
   for (const r of recipes) {
-    const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume);
-    if (cost !== r.costPerServing) {
-      await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
-      updated++;
+    try {
+      const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume);
+      if (cost !== r.costPerServing) {
+        await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
+        updated++;
+      }
+    } catch (e: unknown) {
+      console.warn(`Skipping recipe ${r.id} (${r.name}) cost recalc: ${errMsg(e)}`);
     }
   }
 

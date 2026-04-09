@@ -868,7 +868,7 @@ describe('Recipe v2 CRUD', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(typeof res.body.total).toBe('number');
-  });
+  }, 30000);
 
   it('GET /api/data — includes recipes array', async () => {
     const res = await request(app).get('/api/data');

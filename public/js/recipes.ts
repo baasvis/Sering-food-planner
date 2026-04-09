@@ -72,6 +72,23 @@ export function updateRecipeResults() {
     const q = riSearch.toLowerCase();
     v2Filtered = v2Filtered.filter(r => r.name.toLowerCase().includes(q) || [...(r.autoAllergens||[]),...(r.extraAllergens||[])].join(' ').toLowerCase().includes(q));
   }
+  v2Filtered = [...v2Filtered].sort((a, b) => {
+    let va: string | number, vb: string | number;
+    switch (riSort.col) {
+      case 'name': va = a.name.toLowerCase(); vb = b.name.toLowerCase(); break;
+      case 'type': va = a.type||''; vb = b.type||''; break;
+      case 'cost': va = a.costPerServing ?? 999; vb = b.costPerServing ?? 999; break;
+      case 'structure': va = a.structure||''; vb = b.structure||''; break;
+      case 'season': va = a.seasonality||''; vb = b.seasonality||''; break;
+      case 'banger': va = a.avgBanger||0; vb = b.avgBanger||0; break;
+      case 'rating': va = ((a.avgSkill||0)+(a.avgSpeed||0)+(a.avgBanger||0))/3; vb = ((b.avgSkill||0)+(b.avgSpeed||0)+(b.avgBanger||0))/3; break;
+      case 'served': va = a.timesServed||0; vb = b.timesServed||0; break;
+      default: va = a.name.toLowerCase(); vb = b.name.toLowerCase();
+    }
+    if (va < vb) return riSort.dir === 'asc' ? -1 : 1;
+    if (va > vb) return riSort.dir === 'asc' ? 1 : -1;
+    return 0;
+  });
 
   // ── Legacy recipes ──
   let filtered = S.recipeIndex;
