@@ -1,11 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// RECIPE EDITOR — multi-step guided creation & editing for Recipe v2
+// RECIPE EDITOR — single-screen recipe creation & editing for Recipe v2
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { S, ALLERGENS, INGREDIENT_CATEGORIES } from './state';
 import { apiGet, apiPost, toast, toastError, loadIngredientDb } from './utils';
 import { typeBadge, TYPES } from './core';
 import { showModal, closeModal, esc } from './modal';
+import { rerenderCurrentView } from './navigate';
 import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType } from '@shared/types';
 
 // ── Editor state ──
@@ -26,14 +27,12 @@ interface EditorIngredient {
 
 interface EditorState {
   recipeId: string | null;       // null = creating, string = editing
-  step: number;                  // 1-5
   name: string;
   type: string;
   structure: string;
   seasonality: string;
   servingTemp: string;
   servingSize: number;
-  recipeVolume: number | null;
   ingredients: EditorIngredient[];
   prepSteps: PrepStep[];
   coolingMethod: string;
@@ -62,6 +61,84 @@ function tempId(): string {
   return '_tmp_' + Math.random().toString(36).slice(2, 10);
 }
 
+// ── Auto-calculated recipe volume (sum of cooked amounts in liters) ──
+
+function calcRecipeVolume(): number {
+  if (!ed) return 0;
+  let totalML = 0;
+  for (const ing of ed.ingredients) {
+    const cooked = ing.cookedAmount ?? ing.rawAmount;
+    if (!cooked) continue;
+    switch (ing.unit) {
+      case 'Kilos': case 'Liters': totalML += cooked * 1000; break;
+      case 'ML': case 'Grams': default: totalML += cooked; break;
+    }
+  }
+  return Math.round(totalML) / 1000; // liters, rounded to ml precision
+}
+
+// ── Live cost calculation ──
+
+function calcEditorCostData(): { totalCost: number; hasPrice: number; totalNonFlex: number; perServing: number | null; servings: number | null; volume: number } {
+  const volume = calcRecipeVolume();
+  if (!ed) return { totalCost: 0, hasPrice: 0, totalNonFlex: 0, perServing: null, servings: null, volume };
+  let totalCost = 0;
+  let hasPrice = 0;
+  let totalNonFlex = 0;
+  ed.ingredients.forEach(ing => {
+    if (!ing.isFlexible) totalNonFlex++;
+    if (ing.ingredientId && !ing.isFlexible) {
+      const dbIng = S.ingredientDb.find(i => i.id === ing.ingredientId);
+      if (dbIng && dbIng.pricePer100 > 0) {
+        const grams = toGrams(ing.rawAmount, ing.unit);
+        totalCost += (grams / 100) * dbIng.pricePer100;
+        hasPrice++;
+      }
+    }
+  });
+  const servings = volume > 0 && ed.servingSize > 0 ? Math.round((volume * 1000) / ed.servingSize) : null;
+  const perServing = servings && servings > 0 ? totalCost / servings : null;
+  return { totalCost, hasPrice, totalNonFlex, perServing, servings, volume };
+}
+
+function toGrams(amount: number, unit: string): number {
+  switch (unit) {
+    case 'Kilos': return amount * 1000;
+    case 'Liters': return amount * 1000;
+    case 'ML': return amount;
+    default: return amount; // Grams
+  }
+}
+
+/** Render the sticky price bar HTML */
+function renderPriceBar(): string {
+  if (!ed) return '';
+  const { totalCost, hasPrice, totalNonFlex, perServing, servings, volume } = calcEditorCostData();
+  const priceClass = perServing !== null ? (perServing > 1.0 ? 're-price-high' : perServing > 0.6 ? 're-price-mid' : 're-price-low') : '';
+  return `<div class="re-price-bar" id="re-price-bar">
+    <div class="re-price-main">
+      <span class="re-price-label">Price per portion</span>
+      <span class="re-price-value ${priceClass}">${perServing !== null ? '€' + perServing.toFixed(2) : '—'}</span>
+    </div>
+    <div class="re-price-details">
+      <span>Total: €${totalCost.toFixed(2)}</span>
+      <span>Volume: ${volume > 0 ? volume.toFixed(1) + 'L' : '—'}</span>
+      <span>Servings: ${servings ?? '—'}</span>
+      <span class="re-price-coverage">${hasPrice}/${totalNonFlex} priced</span>
+    </div>
+  </div>`;
+}
+
+/** Update just the price bar without re-rendering everything */
+function refreshPriceBar() {
+  const bar = document.getElementById('re-price-bar');
+  if (!bar) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = renderPriceBar();
+  const newBar = tmp.firstElementChild;
+  if (newBar) bar.replaceWith(newBar);
+}
+
 // ── Public entry points ──
 
 export function openRecipeEditor(recipeId?: string) {
@@ -69,9 +146,9 @@ export function openRecipeEditor(recipeId?: string) {
     loadRecipeForEdit(recipeId);
   } else {
     ed = {
-      recipeId: null, step: 1,
+      recipeId: null,
       name: '', type: 'Soup', structure: '', seasonality: '', servingTemp: '',
-      servingSize: 280, recipeVolume: null,
+      servingSize: 280,
       ingredients: [], prepSteps: [], coolingMethod: '', storageMethod: '',
       extraAllergens: [], photoFile: null, hasPhoto: false, isComplete: false,
     };
@@ -79,10 +156,16 @@ export function openRecipeEditor(recipeId?: string) {
   }
 }
 
-export function openRecipeDetail(recipeId: string) {
-  const r = S.recipes.find(x => x.id === recipeId);
-  if (!r) { toastError('Recipe not found'); return; }
-  renderDetailModal(r);
+export async function openRecipeDetail(recipeId: string) {
+  try {
+    const r = await apiGet(`/api/recipes/${recipeId}`) as RecipeFull;
+    // Update cached copy with denormalized data
+    const idx = S.recipes.findIndex(x => x.id === recipeId);
+    if (idx >= 0) S.recipes[idx] = r; else S.recipes.push(r);
+    renderDetailModal(r);
+  } catch (e: unknown) {
+    toastError('Could not load recipe: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
 }
 
 // ── Load recipe for editing ──
@@ -91,9 +174,9 @@ async function loadRecipeForEdit(id: string) {
   try {
     const r: RecipeFull = await apiGet(`/api/recipes/${id}`);
     ed = {
-      recipeId: r.id, step: 1,
+      recipeId: r.id,
       name: r.name, type: r.type, structure: r.structure, seasonality: r.seasonality,
-      servingTemp: r.servingTemp, servingSize: r.servingSize, recipeVolume: r.recipeVolume,
+      servingTemp: r.servingTemp, servingSize: r.servingSize,
       ingredients: (r.ingredients || []).map(ing => ({
         id: ing.id,
         ingredientId: ing.ingredientId,
@@ -118,198 +201,189 @@ async function loadRecipeForEdit(id: string) {
   }
 }
 
-// ── Step navigation ──
-
-export function recipeEditorStep(step: number) {
-  if (!ed) return;
-  ed.step = step;
-  renderEditorBody();
-}
-
-// ── Render the editor modal shell ──
+// ── Render the editor modal (single-screen) ──
 
 function renderEditor() {
   if (!ed) return;
   const isNew = !ed.recipeId;
   showModal(`
-    <div class="re-editor" style="width:600px;max-width:90vw;">
+    <div class="re-editor">
       <div class="re-header">
         <h3>${isNew ? 'Create new recipe' : 'Edit recipe'}</h3>
-        ${renderCompleteness()}
       </div>
-      ${renderStepNav()}
-      <div id="re-body"></div>
+      ${renderPriceBar()}
+      <div id="re-body" class="re-body-scroll"></div>
     </div>
   `);
-  // Widen modal for recipe editor
   const modal = document.querySelector('.modal') as HTMLElement;
-  if (modal) { modal.style.width = '640px'; modal.style.maxWidth = '95vw'; }
+  if (modal) { modal.style.width = '780px'; modal.style.maxWidth = '95vw'; }
   renderEditorBody();
-}
-
-function renderCompleteness(): string {
-  if (!ed) return '';
-  let done = 0, total = 5;
-  if (ed.name && ed.type) done++;
-  if (ed.ingredients.length > 0) done++;
-  if (ed.prepSteps.length > 0) done++;
-  if (ed.coolingMethod || ed.storageMethod) done++;
-  if (ed.ingredients.length > 0 && ed.name) done++; // review = ready
-  const pct = Math.round((done / total) * 100);
-  return `<div class="re-completeness">
-    <div class="re-completeness-bar"><div class="re-completeness-fill" style="width:${pct}%"></div></div>
-    <span class="re-completeness-text">${pct}% complete</span>
-  </div>`;
-}
-
-function renderStepNav(): string {
-  if (!ed) return '';
-  const steps = [
-    { n: 1, label: 'Basics' },
-    { n: 2, label: 'Ingredients' },
-    { n: 3, label: 'Prep steps' },
-    { n: 4, label: 'Storage' },
-    { n: 5, label: 'Review' },
-  ];
-  return `<div class="re-step-nav">
-    ${steps.map(s => `<button class="re-step-btn${ed!.step === s.n ? ' active' : ''}" onclick="recipeEditorStep(${s.n})">${s.n}. ${s.label}</button>`).join('')}
-  </div>`;
 }
 
 function renderEditorBody() {
   if (!ed) return;
   const body = document.getElementById('re-body');
   if (!body) return;
-  switch (ed.step) {
-    case 1: body.innerHTML = renderStep1(); break;
-    case 2: body.innerHTML = renderStep2(); break;
-    case 3: body.innerHTML = renderStep3(); break;
-    case 4: body.innerHTML = renderStep4(); break;
-    case 5: body.innerHTML = renderStep5(); break;
-  }
+  body.innerHTML = renderBasicsSection()
+    + renderIngredientsSection()
+    + renderPrepStepsSection()
+    + renderStorageSection()
+    + renderAllergensSection()
+    + renderSaveSection();
 }
 
-// ── STEP 1: Basics ──
+// ── Section: Basics ──
 
-function renderStep1(): string {
+function renderBasicsSection(): string {
   if (!ed) return '';
   return `
-    <div class="re-step">
-      <div class="fr"><label>Recipe name *</label>
-        <input type="text" id="re-name" value="${esc(ed.name)}" onchange="reUpdateField('name',this.value)" placeholder="e.g. North African lentil soup" />
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div class="fr"><label>Type *</label>
-          <select id="re-type" onchange="reUpdateField('type',this.value)">
+    <div class="re-section re-basics">
+      <div class="re-basics-row">
+        <div class="re-basics-field re-basics-name">
+          <label>Name *</label>
+          <input type="text" class="re-inline-input" id="re-name" value="${esc(ed.name)}" onchange="reUpdateField('name',this.value)" placeholder="e.g. North African lentil soup" />
+        </div>
+        <div class="re-basics-field">
+          <label>Type *</label>
+          <select class="re-inline-select" id="re-type" onchange="reUpdateField('type',this.value)">
             ${['Soup', 'Main course', 'Dessert'].map(t => `<option${ed!.type === t ? ' selected' : ''}>${t}</option>`).join('')}
           </select>
         </div>
-        <div class="fr"><label>Structure</label>
-          <select id="re-structure" onchange="reUpdateField('structure',this.value)">
+        <div class="re-basics-field">
+          <label>Serving (ml) *</label>
+          <input type="number" class="re-inline-input re-inline-num" id="re-serving" value="${ed.servingSize}" min="1" onchange="reUpdateField('servingSize',+this.value)" />
+        </div>
+      </div>
+      <div class="re-basics-row">
+        <div class="re-basics-field">
+          <label>Structure</label>
+          <select class="re-inline-select" id="re-structure" onchange="reUpdateField('structure',this.value)">
             ${STRUCTURES.map(s => `<option value="${esc(s)}"${ed!.structure === s ? ' selected' : ''}>${s || '—'}</option>`).join('')}
           </select>
         </div>
-        <div class="fr"><label>Seasonality</label>
-          <select id="re-season" onchange="reUpdateField('seasonality',this.value)">
+        <div class="re-basics-field">
+          <label>Seasonality</label>
+          <select class="re-inline-select" id="re-season" onchange="reUpdateField('seasonality',this.value)">
             ${SEASONS.map(s => `<option value="${esc(s)}"${ed!.seasonality === s ? ' selected' : ''}>${s || '—'}</option>`).join('')}
           </select>
         </div>
-        <div class="fr"><label>Serving temp</label>
-          <select id="re-temp" onchange="reUpdateField('servingTemp',this.value)">
+        <div class="re-basics-field">
+          <label>Serving temp</label>
+          <select class="re-inline-select" id="re-temp" onchange="reUpdateField('servingTemp',this.value)">
             ${TEMPS.map(t => `<option value="${esc(t)}"${ed!.servingTemp === t ? ' selected' : ''}>${t || '—'}</option>`).join('')}
           </select>
         </div>
-        <div class="fr"><label>Serving size (ml) *</label>
-          <input type="number" id="re-serving" value="${ed.servingSize}" min="1" onchange="reUpdateField('servingSize',+this.value)" />
+        <div class="re-basics-field">
+          <label>Photo</label>
+          ${ed.hasPhoto && ed.recipeId ? `<img src="/api/recipes/${ed.recipeId}/photo" class="re-photo-thumb" />` : ''}
+          <input type="file" id="re-photo-input" accept="image/*" onchange="rePhotoSelected(this)" style="font-size:11px;max-width:120px;" />
+          ${ed.hasPhoto ? '<button class="re-act re-act-del" onclick="reRemovePhoto()" title="Remove photo">&times;</button>' : ''}
         </div>
-        <div class="fr"><label>Recipe volume (liters)</label>
-          <input type="number" id="re-volume" value="${ed.recipeVolume || ''}" min="0" step="0.1" onchange="reUpdateField('recipeVolume',this.value ? +this.value : null)" />
-        </div>
-      </div>
-      <div class="fr"><label>Photo</label>
-        <div class="re-photo-area">
-          ${ed.hasPhoto && ed.recipeId ? `<img src="/api/recipes/${ed.recipeId}/photo" class="re-photo-preview" />` : ''}
-          <input type="file" id="re-photo-input" accept="image/*" onchange="rePhotoSelected(this)" style="font-size:12px;" />
-          ${ed.hasPhoto ? '<button class="btn btn-sm btn-danger" onclick="reRemovePhoto()" style="margin-top:4px;">Remove photo</button>' : ''}
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="recipeEditorStep(2)">Next: Ingredients &rarr;</button>
       </div>
     </div>`;
 }
 
-// ── STEP 2: Ingredients ──
+// ── Section: Ingredients ──
 
-function renderStep2(): string {
+function renderIngredientsSection(): string {
   if (!ed) return '';
   const rows = ed.ingredients.map((ing, i) => renderIngredientRow(ing, i)).join('');
-  const costHtml = calcEditorCost();
   return `
-    <div class="re-step">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <span style="font-size:13px;font-weight:500;">${ed.ingredients.length} ingredient${ed.ingredients.length !== 1 ? 's' : ''}</span>
+    <div class="re-section">
+      <div class="re-section-title-row">
+        <span class="re-section-title">Ingredients</span>
         <button class="btn btn-sm" onclick="reAddIngredient()">+ Add ingredient</button>
       </div>
-      <div class="re-ingredients-list" id="re-ingredients-list">
-        ${rows || '<div class="empty" style="padding:16px;">No ingredients yet. Click "+ Add ingredient" to start.</div>'}
-      </div>
-      ${costHtml}
-      <div class="modal-actions">
-        <button class="btn" onclick="recipeEditorStep(1)">&larr; Basics</button>
-        <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="recipeEditorStep(3)">Next: Prep steps &rarr;</button>
-      </div>
+      ${ed.ingredients.length > 0 ? `
+      <table class="re-ing-table" id="re-ingredients-list">
+        <thead><tr>
+          <th class="re-th-num">#</th>
+          <th class="re-th-name">Ingredient</th>
+          <th class="re-th-amt">Raw</th>
+          <th class="re-th-amt">Cooked</th>
+          <th class="re-th-unit">Unit</th>
+          <th class="re-th-cost">€/port</th>
+          <th class="re-th-actions"></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : '<div class="empty" style="padding:16px;">No ingredients yet. Click "+ Add ingredient" to start.</div>'}
     </div>`;
+}
+
+/** Calculate per-portion costs for all ingredients (for conditional formatting) */
+function calcIngredientPortionCosts(): number[] {
+  if (!ed) return [];
+  const { servings } = calcEditorCostData();
+  return ed.ingredients.map(ing => {
+    if (ing.ingredientId && !ing.isFlexible) {
+      const dbIng = S.ingredientDb.find(i => i.id === ing.ingredientId);
+      if (dbIng && dbIng.pricePer100 > 0) {
+        const grams = toGrams(ing.rawAmount, ing.unit);
+        const total = (grams / 100) * dbIng.pricePer100;
+        return servings && servings > 0 ? total / servings : total;
+      }
+    }
+    return 0;
+  });
+}
+
+/** Interpolate from green (0) to red (1) */
+function costColor(ratio: number): string {
+  const r = Math.round(200 * Math.min(ratio * 2, 1));
+  const g = Math.round(160 * Math.min((1 - ratio) * 2, 1));
+  return `rgb(${r},${g},40)`;
 }
 
 function renderIngredientRow(ing: EditorIngredient, idx: number): string {
-  if (ing.isFlexible) {
-    return `<div class="re-ing-row re-ing-flexible" data-idx="${idx}">
-      <div class="re-ing-header">
-        <span class="re-ing-num">${idx + 1}</span>
-        <span class="badge" style="background:var(--purple-bg);color:var(--purple);font-size:10px;">Flexible</span>
-        <div style="flex:1;"></div>
-        <button class="btn btn-sm" onclick="reMoveIngredient(${idx},-1)" ${idx === 0 ? 'disabled' : ''} title="Move up">&uarr;</button>
-        <button class="btn btn-sm" onclick="reMoveIngredient(${idx},1)" ${idx === ed!.ingredients.length - 1 ? 'disabled' : ''} title="Move down">&darr;</button>
-        <button class="btn btn-sm btn-danger" onclick="reRemoveIngredient(${idx})" title="Remove">&times;</button>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
-        <div class="fr"><label>Label</label>
-          <input type="text" value="${esc(ing.flexLabel || '')}" onchange="reUpdateIngredient(${idx},'flexLabel',this.value)" placeholder="e.g. Any vegetables" />
-        </div>
-        <div class="fr"><label>Category</label>
-          <select onchange="reUpdateIngredient(${idx},'flexCategory',this.value)">
-            <option value="">Select category...</option>
-            ${FOOD_CATEGORIES.map(c => `<option value="${esc(c)}"${ing.flexCategory === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      <div class="fr"><label>Suggested names (comma-separated)</label>
-        <input type="text" value="${esc(ing.suggestedNames.join(', '))}" onchange="reUpdateIngredient(${idx},'suggestedNames',this.value)" placeholder="e.g. Carrot, Pumpkin, Celeriac" />
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
-        <div class="fr"><label>Raw amount</label>
-          <input type="number" value="${ing.rawAmount || ''}" min="0" step="1" onchange="reUpdateIngredient(${idx},'rawAmount',+this.value)" />
-        </div>
-        <div class="fr"><label>Cooked amount</label>
-          <input type="number" value="${ing.cookedAmount ?? ''}" min="0" step="1" onchange="reUpdateIngredient(${idx},'cookedAmount',this.value ? +this.value : null)" />
-        </div>
-        <div class="fr"><label>Unit</label>
-          <select onchange="reUpdateIngredient(${idx},'unit',this.value)">
-            ${UNITS.map(u => `<option${ing.unit === u ? ' selected' : ''}>${u}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-    </div>`;
+  // Cost per portion for this ingredient (with color)
+  let costStr = '';
+  const portionCosts = calcIngredientPortionCosts();
+  const maxCost = Math.max(...portionCosts.filter(c => c > 0), 0.01);
+  const thisCost = portionCosts[idx] || 0;
+  if (thisCost > 0) {
+    const ratio = thisCost / maxCost;
+    costStr = `<span style="color:${costColor(ratio)};font-weight:600;">€${thisCost.toFixed(2)}</span>`;
   }
 
-  return `<div class="re-ing-row" data-idx="${idx}">
-    <div class="re-ing-header">
-      <span class="re-ing-num">${idx + 1}</span>
-      <div style="flex:1;position:relative;">
-        <input type="text" class="re-ing-search" value="${esc(ing.ingredientName)}"
+  if (ing.isFlexible) {
+    // Flexible rows get a spanning sub-row for category/suggestions
+    return `<tr class="re-ing-flex-row" data-idx="${idx}">
+      <td class="re-td-num">${idx + 1}</td>
+      <td class="re-td-name">
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span class="badge" style="background:var(--purple-bg);color:var(--purple);font-size:9px;padding:1px 5px;">Flex</span>
+          <input type="text" class="re-inline-input re-inline-name" value="${esc(ing.flexLabel || '')}" onchange="reUpdateIngredient(${idx},'flexLabel',this.value)" placeholder="e.g. Any vegetables" />
+        </div>
+      </td>
+      <td class="re-td-amt"><input type="number" class="re-inline-input re-inline-num" value="${ing.rawAmount || ''}" min="0" step="1" onchange="reUpdateIngredient(${idx},'rawAmount',+this.value)" /></td>
+      <td class="re-td-amt"><input type="number" class="re-inline-input re-inline-num" value="${ing.cookedAmount ?? ''}" min="0" step="1" onchange="reUpdateIngredient(${idx},'cookedAmount',this.value ? +this.value : null)" /></td>
+      <td class="re-td-unit"><select class="re-inline-select" onchange="reUpdateIngredient(${idx},'unit',this.value)">${UNITS.map(u => `<option${ing.unit === u ? ' selected' : ''}>${u}</option>`).join('')}</select></td>
+      <td class="re-td-cost">${costStr}</td>
+      <td class="re-td-actions">
+        <button class="re-act" onclick="reMoveIngredient(${idx},-1)" ${idx === 0 ? 'disabled' : ''} title="Move up">&uarr;</button>
+        <button class="re-act" onclick="reMoveIngredient(${idx},1)" ${idx === ed!.ingredients.length - 1 ? 'disabled' : ''} title="Move down">&darr;</button>
+        <button class="re-act re-act-del" onclick="reRemoveIngredient(${idx})" title="Remove">&times;</button>
+      </td>
+    </tr>
+    <tr class="re-ing-flex-detail" data-idx="${idx}">
+      <td></td>
+      <td colspan="6">
+        <div class="re-flex-detail-row">
+          <select class="re-inline-select" onchange="reUpdateIngredient(${idx},'flexCategory',this.value)" style="max-width:160px;">
+            <option value="">Category...</option>
+            ${FOOD_CATEGORIES.map(c => `<option value="${esc(c)}"${ing.flexCategory === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+          </select>
+          <input type="text" class="re-inline-input" value="${esc(ing.suggestedNames.join(', '))}" onchange="reUpdateIngredient(${idx},'suggestedNames',this.value)" placeholder="Suggestions: Carrot, Pumpkin..." style="flex:1;" />
+        </div>
+      </td>
+    </tr>`;
+  }
+
+  return `<tr data-idx="${idx}">
+    <td class="re-td-num">${idx + 1}</td>
+    <td class="re-td-name">
+      <div style="position:relative;">
+        <input type="text" class="re-inline-input re-inline-name re-ing-search" value="${esc(ing.ingredientName)}"
           placeholder="Search ingredient..."
           oninput="reIngredientSearch(${idx},this.value)"
           onfocus="reIngredientSearch(${idx},this.value)"
@@ -317,122 +391,109 @@ function renderIngredientRow(ing: EditorIngredient, idx: number): string {
           data-idx="${idx}" />
         <div class="re-ing-suggestions" id="re-sug-${idx}"></div>
       </div>
-      <button class="btn btn-sm" style="font-size:10px;" onclick="reToggleFlexible(${idx})" title="Make flexible">Flex</button>
-      <button class="btn btn-sm" onclick="reMoveIngredient(${idx},-1)" ${idx === 0 ? 'disabled' : ''} title="Move up">&uarr;</button>
-      <button class="btn btn-sm" onclick="reMoveIngredient(${idx},1)" ${idx === ed!.ingredients.length - 1 ? 'disabled' : ''} title="Move down">&darr;</button>
-      <button class="btn btn-sm btn-danger" onclick="reRemoveIngredient(${idx})" title="Remove">&times;</button>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:4px;">
-      <div class="fr"><label>Raw amount</label>
-        <input type="number" value="${ing.rawAmount || ''}" min="0" step="1" onchange="reUpdateIngredient(${idx},'rawAmount',+this.value)" />
-      </div>
-      <div class="fr"><label>Cooked amount</label>
-        <input type="number" value="${ing.cookedAmount ?? ''}" min="0" step="1" onchange="reUpdateIngredient(${idx},'cookedAmount',this.value ? +this.value : null)" />
-      </div>
-      <div class="fr"><label>Unit</label>
-        <select onchange="reUpdateIngredient(${idx},'unit',this.value)">
-          ${UNITS.map(u => `<option${ing.unit === u ? ' selected' : ''}>${u}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-  </div>`;
+    </td>
+    <td class="re-td-amt"><input type="number" class="re-inline-input re-inline-num" value="${ing.rawAmount || ''}" min="0" step="1" onchange="reUpdateIngredient(${idx},'rawAmount',+this.value)" /></td>
+    <td class="re-td-amt"><input type="number" class="re-inline-input re-inline-num" value="${ing.cookedAmount ?? ''}" min="0" step="1" onchange="reUpdateIngredient(${idx},'cookedAmount',this.value ? +this.value : null)" /></td>
+    <td class="re-td-unit"><select class="re-inline-select" onchange="reUpdateIngredient(${idx},'unit',this.value)">${UNITS.map(u => `<option${ing.unit === u ? ' selected' : ''}>${u}</option>`).join('')}</select></td>
+    <td class="re-td-cost">${costStr}</td>
+    <td class="re-td-actions">
+      <button class="re-act" style="font-size:9px;" onclick="reToggleFlexible(${idx})" title="Make flexible">F</button>
+      <button class="re-act" onclick="reMoveIngredient(${idx},-1)" ${idx === 0 ? 'disabled' : ''} title="Move up">&uarr;</button>
+      <button class="re-act" onclick="reMoveIngredient(${idx},1)" ${idx === ed!.ingredients.length - 1 ? 'disabled' : ''} title="Move down">&darr;</button>
+      <button class="re-act re-act-del" onclick="reRemoveIngredient(${idx})" title="Remove">&times;</button>
+    </td>
+  </tr>`;
 }
 
-function calcEditorCost(): string {
-  if (!ed || ed.ingredients.length === 0) return '';
-  let totalCost = 0;
-  let hasPrice = 0;
-  ed.ingredients.forEach(ing => {
-    if (ing.ingredientId && !ing.isFlexible) {
-      const dbIng = S.ingredientDb.find(i => i.id === ing.ingredientId);
-      if (dbIng && dbIng.pricePer100 > 0) {
-        const grams = toGrams(ing.rawAmount, ing.unit);
-        totalCost += (grams / 100) * dbIng.pricePer100;
-        hasPrice++;
-      }
-    }
-  });
-  if (hasPrice === 0) return '';
-  const servings = ed.recipeVolume && ed.servingSize ? Math.round((ed.recipeVolume * 1000) / ed.servingSize) : null;
-  const perServing = servings && servings > 0 ? totalCost / servings : null;
-  return `<div class="re-cost-summary">
-    <span>Total ingredient cost: <strong>&euro;${totalCost.toFixed(2)}</strong></span>
-    ${perServing !== null ? `<span style="margin-left:12px;">Per serving: <strong>&euro;${perServing.toFixed(2)}</strong></span>` : ''}
-    <span style="margin-left:12px;font-size:11px;color:var(--text2);">(${hasPrice}/${ed.ingredients.filter(i => !i.isFlexible).length} ingredients have prices)</span>
-  </div>`;
-}
+// ── Section: Prep steps ──
 
-function toGrams(amount: number, unit: string): number {
-  switch (unit) {
-    case 'Kilos': return amount * 1000;
-    case 'Liters': return amount * 1000;
-    case 'ML': return amount;
-    default: return amount; // Grams
-  }
-}
-
-// ── STEP 3: Prep steps ──
-
-function renderStep3(): string {
+function renderPrepStepsSection(): string {
   if (!ed) return '';
-  const steps = ed.prepSteps.map((ps, i) => `
-    <div class="re-prep-step" data-idx="${i}">
-      <div class="re-prep-header">
-        <span class="re-ing-num">${i + 1}</span>
-        <button class="btn btn-sm" onclick="reMovePrepStep(${i},-1)" ${i === 0 ? 'disabled' : ''} title="Move up">&uarr;</button>
-        <button class="btn btn-sm" onclick="reMovePrepStep(${i},1)" ${i === ed!.prepSteps.length - 1 ? 'disabled' : ''} title="Move down">&darr;</button>
-        <button class="btn btn-sm btn-danger" onclick="reRemovePrepStep(${i})" title="Remove">&times;</button>
-      </div>
-      <textarea class="re-prep-text" rows="2" onchange="reUpdatePrepStep(${i},'text',this.value)" placeholder="Describe this step...">${esc(ps.text)}</textarea>
-      <input type="text" class="re-prep-note" value="${esc(ps.note || '')}" onchange="reUpdatePrepStep(${i},'note',this.value)" placeholder="Optional note (e.g. Don't walk away)" />
-    </div>`).join('');
+  const rows = ed.prepSteps.map((ps, i) => `<tr data-idx="${i}">
+    <td class="re-td-num">${i + 1}</td>
+    <td class="re-prep-td-text"><textarea class="re-inline-input re-prep-textarea" onchange="reUpdatePrepStep(${i},'text',this.value)" placeholder="Describe this step..." rows="2">${esc(ps.text)}</textarea></td>
+    <td class="re-prep-td-note"><textarea class="re-inline-input re-inline-note re-prep-textarea" onchange="reUpdatePrepStep(${i},'note',this.value)" placeholder="Note..." rows="2">${esc(ps.note || '')}</textarea></td>
+    <td class="re-td-actions">
+      <button class="re-act" onclick="reMovePrepStep(${i},-1)" ${i === 0 ? 'disabled' : ''} title="Move up">&uarr;</button>
+      <button class="re-act" onclick="reMovePrepStep(${i},1)" ${i === ed!.prepSteps.length - 1 ? 'disabled' : ''} title="Move down">&darr;</button>
+      <button class="re-act re-act-del" onclick="reRemovePrepStep(${i})" title="Remove">&times;</button>
+    </td>
+  </tr>`).join('');
 
   return `
-    <div class="re-step">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <span style="font-size:13px;font-weight:500;">${ed.prepSteps.length} step${ed.prepSteps.length !== 1 ? 's' : ''}</span>
-        <button class="btn btn-sm" onclick="reAddPrepStep()">+ Add step</button>
-      </div>
-      <div id="re-prep-list">
-        ${steps || '<div class="empty" style="padding:16px;">No prep steps yet.</div>'}
-      </div>
-      <div class="modal-actions">
-        <button class="btn" onclick="recipeEditorStep(2)">&larr; Ingredients</button>
-        <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="recipeEditorStep(4)">Next: Storage &rarr;</button>
+    <div class="re-section">
+      <div class="re-section-title">Prep steps</div>
+      <table class="re-prep-table" id="re-prep-list">
+        <thead><tr>
+          <th class="re-th-num">#</th>
+          <th>Step</th>
+          <th class="re-prep-th-note">Note</th>
+          <th class="re-th-actions"></th>
+        </tr></thead>
+        <tbody>
+          ${rows}
+          <tr class="re-prep-ghost">
+            <td class="re-td-num" style="color:var(--border2);">${ed.prepSteps.length + 1}</td>
+            <td><input type="text" class="re-inline-input re-ghost-input" value="" onfocus="rePrepGhostFocus(this)" placeholder="Add step..." /></td>
+            <td></td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ── Section: Storage ──
+
+function renderStorageSection(): string {
+  if (!ed) return '';
+  return `
+    <div class="re-section re-basics">
+      <div class="re-basics-row">
+        <div class="re-basics-field" style="flex:1;">
+          <label>Cooling method</label>
+          <input type="text" class="re-inline-input" value="${esc(ed.coolingMethod)}" onchange="reUpdateField('coolingMethod',this.value)" placeholder="e.g. Cool in ice bath within 2 hours, then refrigerate" />
+        </div>
+        <div class="re-basics-field" style="flex:1;">
+          <label>Storage method</label>
+          <input type="text" class="re-inline-input" value="${esc(ed.storageMethod)}" onchange="reUpdateField('storageMethod',this.value)" placeholder="e.g. Walk-in fridge, shelf 2, labelled with date" />
+        </div>
       </div>
     </div>`;
 }
 
-// ── STEP 4: Storage ──
+// ── Section: Allergens ──
 
-function renderStep4(): string {
-  if (!ed) return '';
-  return `
-    <div class="re-step">
-      <div class="fr"><label>Cooling method</label>
-        <textarea id="re-cooling" rows="3" style="width:100%;font-size:13px;border:1px solid var(--border2);border-radius:var(--radius);padding:8px;background:var(--bg);color:var(--text);resize:vertical;" onchange="reUpdateField('coolingMethod',this.value)" placeholder="e.g. Cool in ice bath within 2 hours, then refrigerate">${esc(ed.coolingMethod)}</textarea>
-      </div>
-      <div class="fr"><label>Storage method</label>
-        <textarea id="re-storage" rows="3" style="width:100%;font-size:13px;border:1px solid var(--border2);border-radius:var(--radius);padding:8px;background:var(--bg);color:var(--text);resize:vertical;" onchange="reUpdateField('storageMethod',this.value)" placeholder="e.g. Walk-in fridge, shelf 2, labelled with date">${esc(ed.storageMethod)}</textarea>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" onclick="recipeEditorStep(3)">&larr; Prep steps</button>
-        <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="recipeEditorStep(5)">Next: Review &rarr;</button>
-      </div>
-    </div>`;
-}
-
-// ── STEP 5: Review & Save ──
-
-function renderStep5(): string {
+function renderAllergensSection(): string {
   if (!ed) return '';
   const allergens = calcAutoAllergens();
   const allAllergens = [...new Set([...allergens, ...ed.extraAllergens])];
-  const servings = ed.recipeVolume && ed.servingSize ? Math.round((ed.recipeVolume * 1000) / ed.servingSize) : null;
+  return `
+    <div class="re-section">
+      <div class="re-section-title">Allergens</div>
+      <div style="margin-bottom:8px;">
+        ${allAllergens.map(a => `<span class="allergen-pill">${esc(a)}</span>`).join(' ') || '<span style="color:var(--text2);font-size:12px;">None detected</span>'}
+      </div>
+      <div>
+        <label style="font-size:12px;font-weight:500;color:var(--text2);">Extra allergens (cross-contamination, etc.)</label>
+        <div class="allergen-tags" id="re-extra-allergens">
+          ${ed.extraAllergens.map(a => `<span class="at-tag">${esc(a)} <span class="at-rm" onclick="reRemoveExtraAllergen('${esc(a)}')">&times;</span></span>`).join('')}
+        </div>
+        <div class="allergen-input-row" style="margin-top:6px;">
+          <select id="re-add-allergen">
+            <option value="">Add allergen...</option>
+            ${ALLERGENS.filter(a => !ed!.extraAllergens.includes(a) && !allergens.includes(a)).map(a => `<option>${a}</option>`).join('')}
+          </select>
+          <button class="btn btn-sm" onclick="reAddExtraAllergen()">Add</button>
+        </div>
+      </div>
+    </div>`;
+}
 
-  let checklistHtml = '';
+// ── Section: Save ──
+
+function renderSaveSection(): string {
+  if (!ed) return '';
   const checks = [
     { ok: !!ed.name, label: 'Recipe name' },
     { ok: !!ed.type, label: 'Dish type' },
@@ -441,60 +502,13 @@ function renderStep5(): string {
     { ok: ed.prepSteps.length > 0, label: 'At least 1 prep step' },
     { ok: !!(ed.coolingMethod || ed.storageMethod), label: 'Storage info' },
   ];
-  checklistHtml = checks.map(c => `<div class="re-check ${c.ok ? 're-check-ok' : ''}">
-    <span>${c.ok ? '&#10003;' : '&#9675;'}</span> ${esc(c.label)}
-  </div>`).join('');
   const allOk = checks.every(c => c.ok);
+  const checklistHtml = checks.map(c => `<span class="re-check-inline ${c.ok ? 're-check-ok' : ''}">${c.ok ? '&#10003;' : '&#9675;'} ${esc(c.label)}</span>`).join('');
 
   return `
-    <div class="re-step">
-      <h4 style="margin-bottom:6px;">${esc(ed.name) || 'Unnamed recipe'}</h4>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-        ${typeBadge((ed.type || 'Soup') as DishType)}
-        ${ed.structure ? `<span class="badge" style="background:var(--bg2);color:var(--text2);">${esc(ed.structure)}</span>` : ''}
-        ${ed.seasonality ? `<span class="badge" style="background:var(--bg2);color:var(--text2);">${esc(ed.seasonality)}</span>` : ''}
-        ${servings ? `<span class="badge" style="background:var(--blue-bg);color:var(--blue);">${servings} servings</span>` : ''}
-      </div>
-
-      <div class="re-review-section">
-        <strong>Ingredients (${ed.ingredients.length})</strong>
-        <div class="re-review-ingredients">
-          ${ed.ingredients.map(ing => `<div class="re-review-ing">
-            ${ing.isFlexible
-              ? `<em>${esc(ing.flexLabel || 'Flexible')}</em> (${esc(ing.flexCategory || '')})`
-              : esc(ing.ingredientName || 'Unnamed')}
-            <span class="re-review-amt">${ing.rawAmount} ${ing.unit}</span>
-          </div>`).join('') || '<span style="color:var(--text2);">None</span>'}
-        </div>
-      </div>
-
-      <div class="re-review-section">
-        <strong>Allergens</strong>
-        <div style="margin-top:4px;">
-          ${allAllergens.map(a => `<span class="allergen-pill">${esc(a)}</span>`).join(' ') || '<span style="color:var(--text2);">None detected</span>'}
-        </div>
-        <div style="margin-top:8px;">
-          <label style="font-size:12px;font-weight:500;color:var(--text2);">Extra allergens (cross-contamination, etc.)</label>
-          <div class="allergen-tags" id="re-extra-allergens">
-            ${ed.extraAllergens.map(a => `<span class="at-tag">${esc(a)} <span class="at-rm" onclick="reRemoveExtraAllergen('${esc(a)}')">&times;</span></span>`).join('')}
-          </div>
-          <div class="allergen-input-row" style="margin-top:6px;">
-            <select id="re-add-allergen">
-              <option value="">Add allergen...</option>
-              ${ALLERGENS.filter(a => !ed!.extraAllergens.includes(a) && !allergens.includes(a)).map(a => `<option>${a}</option>`).join('')}
-            </select>
-            <button class="btn btn-sm" onclick="reAddExtraAllergen()">Add</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="re-review-section">
-        <strong>Completeness</strong>
-        <div style="margin-top:4px;">${checklistHtml}</div>
-      </div>
-
+    <div class="re-section re-save-section">
+      <div class="re-checklist-inline">${checklistHtml}</div>
       <div class="modal-actions">
-        <button class="btn" onclick="recipeEditorStep(4)">&larr; Storage</button>
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="reSaveRecipe(false)">Save${allOk ? '' : ' (incomplete)'}</button>
         ${allOk ? '<button class="btn btn-primary" onclick="reSaveRecipe(true)" style="background:var(--green);border-color:var(--green);">Save as complete</button>' : ''}
@@ -519,14 +533,17 @@ function calcAutoAllergens(): string[] {
 // ── Field update handlers ──
 
 type EditorTextField = 'name' | 'type' | 'structure' | 'seasonality' | 'servingTemp' | 'coolingMethod' | 'storageMethod';
-type EditorNumField = 'servingSize' | 'recipeVolume';
+type EditorNumField = 'servingSize';
 type EditorField = EditorTextField | EditorNumField;
 
 export function reUpdateField(field: EditorField, value: string | number | null) {
   if (!ed) return;
-  if (field === 'servingSize') ed.servingSize = Number(value) || 0;
-  else if (field === 'recipeVolume') ed.recipeVolume = value != null ? Number(value) || null : null;
-  else ed[field] = String(value ?? '');
+  if (field === 'servingSize') {
+    ed.servingSize = Number(value) || 0;
+    refreshPriceBar();
+  } else {
+    ed[field] = String(value ?? '');
+  }
 }
 
 export function rePhotoSelected(input: HTMLInputElement) {
@@ -563,6 +580,7 @@ export function reAddIngredient() {
     suggestedNames: [],
   });
   renderEditorBody();
+  refreshPriceBar();
 }
 
 export function reRemoveIngredient(idx: number) {
@@ -570,6 +588,7 @@ export function reRemoveIngredient(idx: number) {
   ed.ingredients.splice(idx, 1);
   ed.ingredients.forEach((ing, i) => ing.sortOrder = i);
   renderEditorBody();
+  refreshPriceBar();
 }
 
 export function reMoveIngredient(idx: number, dir: number) {
@@ -592,6 +611,7 @@ export function reToggleFlexible(idx: number) {
     ing.ingredientName = '';
   }
   renderEditorBody();
+  refreshPriceBar();
 }
 
 type IngredientField = 'rawAmount' | 'cookedAmount' | 'unit' | 'flexCategory' | 'flexLabel' | 'suggestedNames';
@@ -601,9 +621,9 @@ export function reUpdateIngredient(idx: number, field: IngredientField, value: s
   const ing = ed.ingredients[idx];
   switch (field) {
     case 'suggestedNames': ing.suggestedNames = String(value ?? '').split(',').map(s => s.trim()).filter(Boolean); break;
-    case 'rawAmount': ing.rawAmount = Number(value) || 0; break;
-    case 'cookedAmount': ing.cookedAmount = value != null ? Number(value) || null : null; break;
-    case 'unit': ing.unit = String(value ?? 'Grams'); break;
+    case 'rawAmount': ing.rawAmount = Number(value) || 0; refreshPriceBar(); break;
+    case 'cookedAmount': ing.cookedAmount = value != null ? Number(value) || null : null; refreshPriceBar(); break;
+    case 'unit': ing.unit = String(value ?? 'Grams'); refreshPriceBar(); break;
     case 'flexCategory': ing.flexCategory = value ? String(value) : null; break;
     case 'flexLabel': ing.flexLabel = value ? String(value) : null; break;
   }
@@ -638,6 +658,7 @@ export function reSelectIngredient(idx: number, ingredientId: string, name: stri
   if (sugEl) sugEl.innerHTML = '';
   const input = document.querySelector(`[data-idx="${idx}"].re-ing-search`) as HTMLInputElement;
   if (input) input.value = name;
+  refreshPriceBar();
 }
 
 export function reHideSuggestions(idx: number) {
@@ -651,6 +672,19 @@ export function reAddPrepStep() {
   if (!ed) return;
   ed.prepSteps.push({ step: ed.prepSteps.length + 1, text: '', note: '' });
   renderEditorBody();
+}
+
+/** When the ghost placeholder row is focused, create a real step and re-render */
+export function rePrepGhostFocus(input: HTMLInputElement) {
+  if (!ed) return;
+  ed.prepSteps.push({ step: ed.prepSteps.length + 1, text: '', note: '' });
+  renderEditorBody();
+  // Focus the new row's text input
+  const newIdx = ed.prepSteps.length - 1;
+  setTimeout(() => {
+    const row = document.querySelector(`#re-prep-list tr[data-idx="${newIdx}"] .re-inline-input`) as HTMLInputElement;
+    if (row) row.focus();
+  }, 20);
 }
 
 export function reRemovePrepStep(idx: number) {
@@ -702,6 +736,8 @@ export async function reSaveRecipe(markComplete: boolean) {
   if (!ed.name.trim()) { toastError('Recipe name is required'); return; }
   if (ed.servingSize <= 0) { toastError('Serving size must be positive'); return; }
 
+  const recipeVolume = calcRecipeVolume();
+
   const payload = {
     name: ed.name.trim(),
     type: ed.type,
@@ -709,7 +745,7 @@ export async function reSaveRecipe(markComplete: boolean) {
     seasonality: ed.seasonality,
     servingTemp: ed.servingTemp,
     servingSize: ed.servingSize,
-    recipeVolume: ed.recipeVolume,
+    recipeVolume: recipeVolume > 0 ? recipeVolume : null,
     prepSteps: ed.prepSteps.filter(ps => ps.text.trim()),
     coolingMethod: ed.coolingMethod,
     storageMethod: ed.storageMethod,
@@ -757,7 +793,6 @@ export async function reSaveRecipe(markComplete: boolean) {
     // Re-render recipe index if visible
     const screen = document.getElementById('screen-recipe-index');
     if (screen && screen.classList.contains('active')) {
-      // Dynamically import to avoid circular dep
       const { renderRecipeIndex } = await import('./recipes');
       renderRecipeIndex();
     }
@@ -874,7 +909,6 @@ export async function reVersionRecipe(recipeId: string) {
   try {
     await apiPost(`/api/recipes/${recipeId}/version`, { notes });
     toast('Version saved');
-    // Reload detail
     const r: RecipeFull = await apiGet(`/api/recipes/${recipeId}`);
     const idx = S.recipes.findIndex(x => x.id === r.id);
     if (idx >= 0) S.recipes[idx] = r;
@@ -884,193 +918,393 @@ export async function reVersionRecipe(recipeId: string) {
   }
 }
 
-// ── Post-cook recording ──
+// ── Batch Recipe Editor ──
+// Unified editor for batch-specific recipe: resolve flex, edit ingredients, view prep, record notes
 
-interface PostCookIngredient {
+interface BatchIngredient {
   ingredientId: string | null;
   name: string;
   amount: number;
   unit: string;
   isFlexible: boolean;
-  resolved: boolean; // flexible slot has been picked
+  flexLabel: string | null;
+  flexCategory: string | null;
+  resolved: boolean;
+  removed: boolean;
 }
 
-let _postCookState: {
+interface BatchRecipeState {
   batchId: string;
-  ingredients: PostCookIngredient[];
+  recipeId: string;
+  recipeName: string;
+  ingredients: BatchIngredient[];
+  prepSteps: PrepStep[];
   cookNotes: string;
   deductStock: boolean;
-} | null = null;
+  isFullscreen: boolean;
+}
 
-/**
- * Called after confirmCooked() for batches with a v2 recipeId.
- * Shows a modal to record actual ingredients used.
- */
-export function openPostCookRecording(batchId: string) {
+let _brState: BatchRecipeState | null = null;
+
+/** Open batch recipe editor — used for pre-cook flex resolution AND post-cook recording */
+export function openBatchRecipe(batchId: string) {
   const batch = S.batches.find(b => b.id === batchId);
   if (!batch || !batch.recipeId) return;
   const recipe = S.recipes.find(r => r.id === batch.recipeId);
   if (!recipe) return;
 
-  // Scale ingredients from recipe to batch
   let scaleFactor = 1;
   if (recipe.recipeVolume && recipe.recipeVolume > 0) {
-    // Use batch stock if > 0, otherwise recipe volume (uncooked batch = 1:1 scale)
     const batchLiters = (batch.stock || 0) > 0 ? batch.stock : recipe.recipeVolume;
     scaleFactor = batchLiters / recipe.recipeVolume;
   }
 
-  _postCookState = {
+  // Pre-fill from existing actualIngredients if available
+  const existing = batch.actualIngredients as Array<{ ingredientId: string; name: string; amount: number; unit: string }> | undefined;
+  const usedExisting = new Set<number>();
+
+  _brState = {
     batchId,
-    cookNotes: '',
+    recipeId: recipe.id,
+    recipeName: recipe.name,
+    prepSteps: recipe.prepSteps || [],
+    cookNotes: batch.cookNotes || '',
     deductStock: false,
-    ingredients: recipe.ingredients.map(ing => ({
-      ingredientId: ing.isFlexible ? null : ing.ingredientId,
-      name: ing.isFlexible ? (ing.flexLabel || 'Flexible') : (ing.ingredientName || 'Unknown'),
-      amount: Math.round(ing.rawAmount * scaleFactor),
-      unit: ing.unit,
-      isFlexible: ing.isFlexible,
-      resolved: !ing.isFlexible,
-    })),
+    isFullscreen: false,
+    ingredients: recipe.ingredients.map(ing => {
+      // Try to match pre-resolved flexible slots
+      if (ing.isFlexible && existing) {
+        const matchIdx = existing.findIndex((r, ri) => r.ingredientId && !usedExisting.has(ri));
+        if (matchIdx >= 0) {
+          usedExisting.add(matchIdx);
+          const match = existing[matchIdx];
+          return {
+            ingredientId: match.ingredientId,
+            name: match.name,
+            amount: match.amount,
+            unit: match.unit,
+            isFlexible: true,
+            flexLabel: ing.flexLabel || 'Flexible',
+            flexCategory: ing.flexCategory,
+            resolved: true,
+            removed: false,
+          };
+        }
+      }
+      return {
+        ingredientId: ing.isFlexible ? null : ing.ingredientId,
+        name: ing.isFlexible ? (ing.flexLabel || 'Flexible') : (ing.ingredientName || 'Unknown'),
+        amount: Math.round(ing.rawAmount * scaleFactor),
+        unit: ing.unit,
+        isFlexible: ing.isFlexible,
+        flexLabel: ing.isFlexible ? (ing.flexLabel || 'Flexible') : null,
+        flexCategory: ing.isFlexible ? ing.flexCategory : null,
+        resolved: !ing.isFlexible,
+        removed: false,
+      };
+    }),
   };
-  renderPostCookModal();
+  renderBatchRecipe();
 }
 
-function renderPostCookModal() {
-  if (!_postCookState) return;
-  const pc = _postCookState;
-  const batch = S.batches.find(b => b.id === pc.batchId);
+/** Backward-compat aliases */
+export function openResolveFlexible(batchId: string) { openBatchRecipe(batchId); }
+export function openPostCookRecording(batchId: string) { openBatchRecipe(batchId); }
+
+function renderBatchRecipe() {
+  if (!_brState) return;
+  const br = _brState;
+  const batch = S.batches.find(b => b.id === br.batchId);
   if (!batch) return;
 
-  const ingRows = pc.ingredients.map((ing, i) => {
-    if (ing.isFlexible && !ing.resolved) {
-      return `<div class="re-ing-row re-ing-flexible" style="padding:8px;">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-          <span class="badge" style="background:var(--purple-bg);color:var(--purple);font-size:10px;">Flex</span>
-          <span style="font-size:13px;font-style:italic;">${esc(ing.name)}</span>
-        </div>
-        <div style="position:relative;">
-          <input type="text" class="re-ing-search" placeholder="Pick ingredient..."
-            oninput="rePostCookSearch(${i},this.value)"
-            onfocus="rePostCookSearch(${i},this.value)"
-            onblur="setTimeout(()=>{const el=document.getElementById('pc-sug-${i}');if(el)el.innerHTML='';},200)" />
-          <div class="re-ing-suggestions" id="pc-sug-${i}"></div>
-        </div>
-      </div>`;
+  const html = buildBatchRecipeHTML(br, batch);
+
+  if (br.isFullscreen) {
+    // Remove modal if open
+    closeModal();
+    // Remove existing fullscreen overlay
+    let overlay = document.getElementById('br-fullscreen');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'br-fullscreen';
+      overlay.className = 'br-overlay';
+      document.body.appendChild(overlay);
     }
-    return `<div class="re-ing-row" style="padding:8px;">
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span style="font-size:13px;flex:1;">${esc(ing.name)}${ing.isFlexible ? ' <span style="font-size:10px;color:var(--purple);">(was flexible)</span>' : ''}</span>
-        <input type="number" style="width:80px;font-size:13px;height:28px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 6px;text-align:right;"
-          value="${ing.amount}" min="0" onchange="rePostCookUpdateAmount(${i},+this.value)" />
-        <span style="font-size:12px;color:var(--text2);width:50px;">${esc(ing.unit)}</span>
-      </div>
-    </div>`;
+    overlay.innerHTML = `<div class="br-editor br-fullscreen-inner">${html}</div>`;
+  } else {
+    // Remove fullscreen overlay if present
+    const overlay = document.getElementById('br-fullscreen');
+    if (overlay) overlay.remove();
+    showModal(`<div class="br-editor">${html}</div>`);
+  }
+}
+
+function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock: number }): string {
+  // Ingredient rows
+  const activeIngs = br.ingredients.filter(i => !i.removed);
+  const removedIngs = br.ingredients.map((ing, i) => ({ ...ing, _idx: i })).filter(i => i.removed);
+
+  const ingRows = br.ingredients.map((ing, i) => {
+    if (ing.removed) return '';
+
+    // Flexible & unresolved
+    if (ing.isFlexible && !ing.resolved) {
+      return `<tr class="re-ing-flex-row">
+        <td class="re-td-num">${activeIngs.indexOf(ing) + 1}</td>
+        <td class="re-td-name" style="position:relative;">
+          <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;">
+            <span class="badge" style="background:var(--purple-bg);color:var(--purple);font-size:10px;">Flex</span>
+            <span style="font-size:12px;font-style:italic;color:var(--text2);">${esc(ing.flexLabel || 'Flexible')}</span>
+          </div>
+          <input type="text" class="re-inline-input re-ing-search" placeholder="Pick ingredient..."
+            oninput="brIngSearch(${i},this.value)"
+            onfocus="brIngSearch(${i},this.value)"
+            onblur="setTimeout(()=>{const el=document.getElementById('br-sug-${i}');if(el)el.innerHTML='';},200)" />
+          <div class="re-ing-suggestions" id="br-sug-${i}"></div>
+        </td>
+        <td class="re-td-amt">
+          <input type="number" class="re-inline-input re-inline-num" value="${ing.amount}" min="0"
+            onchange="brUpdateAmount(${i},+this.value)" />
+        </td>
+        <td class="re-td-unit"><span style="font-size:12px;color:var(--text2);">${esc(ing.unit)}</span></td>
+        <td class="re-td-actions">
+          <button class="re-act re-act-del" onclick="brRemoveIng(${i})" title="Remove">&times;</button>
+        </td>
+      </tr>`;
+    }
+
+    // Resolved flexible or normal ingredient
+    return `<tr${ing.isFlexible ? ' class="re-ing-flex-row"' : ''}>
+      <td class="re-td-num">${activeIngs.indexOf(ing) + 1}</td>
+      <td class="re-td-name">
+        <span style="font-weight:500;">${esc(ing.name)}</span>
+        ${ing.isFlexible ? ` <span style="font-size:10px;color:var(--purple);">(${esc(ing.flexLabel || 'flex')})</span>` : ''}
+      </td>
+      <td class="re-td-amt">
+        <input type="number" class="re-inline-input re-inline-num" value="${ing.amount}" min="0"
+          onchange="brUpdateAmount(${i},+this.value)" />
+      </td>
+      <td class="re-td-unit"><span style="font-size:12px;color:var(--text2);">${esc(ing.unit)}</span></td>
+      <td class="re-td-actions">
+        ${ing.isFlexible ? `<button class="re-act" onclick="brUnresolve(${i})" title="Change ingredient">&#x21c4;</button>` : ''}
+        <button class="re-act re-act-del" onclick="brRemoveIng(${i})" title="Remove">&times;</button>
+      </td>
+    </tr>`;
   }).join('');
 
-  showModal(`
-    <div style="width:560px;max-width:90vw;">
-      <h3>Post-cook recording</h3>
-      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Record what was actually used for <strong>${esc(batch.name)}</strong> (${batch.stock}L)</p>
+  // Removed ingredients
+  const removedHTML = removedIngs.length ? `
+    <div style="margin-top:6px;font-size:12px;color:var(--text2);">
+      <strong>Removed:</strong>
+      ${removedIngs.map(r => `
+        <span style="text-decoration:line-through;margin-right:8px;">${esc(r.name)}</span>
+        <button class="re-act" onclick="brRestoreIng(${r._idx})" title="Restore" style="font-size:11px;">&#x21a9;</button>
+      `).join('')}
+    </div>` : '';
 
-      <div style="max-height:40vh;overflow-y:auto;margin-bottom:12px;" id="pc-ingredients">
-        ${ingRows}
+  // Prep steps (read-only from recipe)
+  const prepHTML = br.prepSteps.length ? `
+    <div class="re-section">
+      <div class="re-section-title">Prep steps</div>
+      <ol class="br-prep-list">
+        ${br.prepSteps.map(s => `<li>${esc(s.text)}${s.note ? `<div class="re-step-note">${esc(s.note)}</div>` : ''}</li>`).join('')}
+      </ol>
+    </div>` : '';
+
+  // Add ingredient search
+  const addIngHTML = `
+    <div style="margin-top:6px;position:relative;">
+      <input type="text" class="re-inline-input" placeholder="+ Add ingredient..." id="br-add-search"
+        oninput="brAddIngSearch(this.value)"
+        onfocus="brAddIngSearch(this.value)"
+        onblur="setTimeout(()=>{const el=document.getElementById('br-add-sug');if(el)el.innerHTML='';},200)" />
+      <div class="re-ing-suggestions" id="br-add-sug"></div>
+    </div>`;
+
+  return `
+    <div class="br-header">
+      <div style="flex:1;">
+        <h3 style="margin:0;">${esc(batch.name)}</h3>
+        <span style="font-size:12px;color:var(--text2);">Batch recipe &mdash; ${batch.stock}L</span>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button class="btn btn-sm" onclick="brToggleFullscreen()" title="${br.isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}">
+          ${br.isFullscreen ? '&#x2715; Exit fullscreen' : '&#x26F6; Fullscreen'}
+        </button>
+        <button class="btn btn-sm" onclick="openRecipeEditor('${jsEsc(br.recipeId)}')" title="Edit original recipe">
+          &#x270E; Edit original
+        </button>
+      </div>
+    </div>
+    <div class="br-body">
+      <div class="re-section">
+        <div class="re-section-title">Ingredients</div>
+        <table class="re-ing-table">
+          <thead><tr>
+            <th class="re-th-num">#</th>
+            <th class="re-th-name">Ingredient</th>
+            <th class="re-th-amt">Amount</th>
+            <th class="re-th-unit">Unit</th>
+            <th class="re-th-actions"></th>
+          </tr></thead>
+          <tbody>${ingRows}</tbody>
+        </table>
+        ${addIngHTML}
+        ${removedHTML}
       </div>
 
-      <div class="fr"><label>Cook notes</label>
-        <textarea style="width:100%;font-size:13px;border:1px solid var(--border2);border-radius:var(--radius);padding:8px;background:var(--bg);color:var(--text);resize:vertical;font-family:inherit;"
-          rows="2" onchange="rePostCookNotes(this.value)" placeholder="Any notes about this cook...">${esc(pc.cookNotes)}</textarea>
+      ${prepHTML}
+
+      <div class="re-section">
+        <div class="re-section-title">Cook notes</div>
+        <textarea class="re-inline-input" rows="2" style="height:auto;resize:vertical;"
+          onchange="brUpdateNotes(this.value)" placeholder="Any notes about this cook...">${esc(br.cookNotes)}</textarea>
       </div>
 
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:12px;">
-        <input type="checkbox" ${pc.deductStock ? 'checked' : ''} onchange="rePostCookDeduct(this.checked)" />
-        Deduct ingredients from stock
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin:8px 0 12px;">
+        <input type="checkbox" ${br.deductStock ? 'checked' : ''} onchange="brToggleDeduct(this.checked)" />
+        Deduct ingredients from stock after saving
       </label>
 
       <div class="modal-actions">
-        <button class="btn" onclick="rePostCookSkip()">Skip</button>
-        <button class="btn btn-primary" onclick="rePostCookSave()">Save recording</button>
+        <button class="btn" onclick="brClose()">Cancel</button>
+        <button class="btn btn-primary" onclick="brSave()">Save</button>
       </div>
-    </div>
-  `);
-  const modal = document.querySelector('.modal') as HTMLElement;
-  if (modal) { modal.style.width = '580px'; modal.style.maxWidth = '95vw'; }
+    </div>`;
 }
 
-export function rePostCookSearch(idx: number, query: string) {
-  if (!_postCookState) return;
-  const sugEl = document.getElementById(`pc-sug-${idx}`);
+export function brToggleFullscreen() {
+  if (!_brState) return;
+  _brState.isFullscreen = !_brState.isFullscreen;
+  renderBatchRecipe();
+}
+
+export function brIngSearch(idx: number, query: string) {
+  if (!_brState) return;
+  const sugEl = document.getElementById(`br-sug-${idx}`);
   if (!sugEl || !query || query.length < 2) { if (sugEl) sugEl.innerHTML = ''; return; }
-
-  // Filter by flex category if available
-  const recipe = S.recipes.find(r => r.id === S.batches.find(b => b.id === _postCookState!.batchId)?.recipeId);
-  const recipeIng = recipe?.ingredients[idx];
-  const flexCat = recipeIng?.flexCategory;
-
+  const flexCat = _brState.ingredients[idx].flexCategory;
   const q = query.toLowerCase();
   let matches = S.ingredientDb.filter(i => i.active !== false && i.name.toLowerCase().includes(q));
   if (flexCat) matches = matches.filter(i => i.category === flexCat).concat(matches.filter(i => i.category !== flexCat));
   matches = matches.slice(0, 8);
-
   sugEl.innerHTML = matches.map(m => `
-    <div class="re-sug-item" onmousedown="rePostCookResolve(${idx},'${jsEsc(m.id)}','${jsEsc(m.name)}')">
+    <div class="re-sug-item" onmousedown="brPickIng(${idx},'${jsEsc(m.id)}','${jsEsc(m.name)}')">
       <span>${esc(m.name)}</span>
       <span style="font-size:10px;color:var(--text2);">${esc(m.category || '')}</span>
     </div>`).join('');
 }
 
-export function rePostCookResolve(idx: number, ingredientId: string, name: string) {
-  if (!_postCookState) return;
-  _postCookState.ingredients[idx].ingredientId = ingredientId;
-  _postCookState.ingredients[idx].name = name;
-  _postCookState.ingredients[idx].resolved = true;
-  renderPostCookModal();
+export function brPickIng(idx: number, ingredientId: string, name: string) {
+  if (!_brState) return;
+  _brState.ingredients[idx].ingredientId = ingredientId;
+  _brState.ingredients[idx].name = name;
+  _brState.ingredients[idx].resolved = true;
+  renderBatchRecipe();
 }
 
-export function rePostCookUpdateAmount(idx: number, amount: number) {
-  if (!_postCookState) return;
-  _postCookState.ingredients[idx].amount = amount;
+export function brUnresolve(idx: number) {
+  if (!_brState) return;
+  _brState.ingredients[idx].ingredientId = null;
+  _brState.ingredients[idx].name = _brState.ingredients[idx].flexLabel || 'Flexible';
+  _brState.ingredients[idx].resolved = false;
+  renderBatchRecipe();
 }
 
-export function rePostCookNotes(notes: string) {
-  if (!_postCookState) return;
-  _postCookState.cookNotes = notes;
+export function brUpdateAmount(idx: number, amount: number) {
+  if (!_brState) return;
+  _brState.ingredients[idx].amount = amount;
 }
 
-export function rePostCookDeduct(checked: boolean) {
-  if (!_postCookState) return;
-  _postCookState.deductStock = checked;
+export function brRemoveIng(idx: number) {
+  if (!_brState) return;
+  _brState.ingredients[idx].removed = true;
+  renderBatchRecipe();
 }
 
-export function rePostCookSkip() {
-  _postCookState = null;
+export function brRestoreIng(idx: number) {
+  if (!_brState) return;
+  _brState.ingredients[idx].removed = false;
+  renderBatchRecipe();
+}
+
+export function brAddIngSearch(query: string) {
+  if (!_brState) return;
+  const sugEl = document.getElementById('br-add-sug');
+  if (!sugEl || !query || query.length < 2) { if (sugEl) sugEl.innerHTML = ''; return; }
+  const q = query.toLowerCase();
+  const matches = S.ingredientDb.filter(i => i.active !== false && i.name.toLowerCase().includes(q)).slice(0, 8);
+  sugEl.innerHTML = matches.map(m => `
+    <div class="re-sug-item" onmousedown="brAddIng('${jsEsc(m.id)}','${jsEsc(m.name)}','${jsEsc(m.unit || 'Grams')}')">
+      <span>${esc(m.name)}</span>
+      <span style="font-size:10px;color:var(--text2);">${esc(m.category || '')}</span>
+    </div>`).join('');
+}
+
+export function brAddIng(ingredientId: string, name: string, unit: string) {
+  if (!_brState) return;
+  _brState.ingredients.push({
+    ingredientId,
+    name,
+    amount: 0,
+    unit,
+    isFlexible: false,
+    flexLabel: null,
+    flexCategory: null,
+    resolved: true,
+    removed: false,
+  });
+  renderBatchRecipe();
+  // Focus the amount field of the new ingredient
+  setTimeout(() => {
+    const rows = document.querySelectorAll('.br-editor .re-ing-table tbody tr');
+    const lastRow = rows[rows.length - 1];
+    if (lastRow) {
+      const amtInput = lastRow.querySelector('.re-inline-num') as HTMLInputElement;
+      if (amtInput) amtInput.focus();
+    }
+  }, 50);
+}
+
+export function brUpdateNotes(notes: string) {
+  if (!_brState) return;
+  _brState.cookNotes = notes;
+}
+
+export function brToggleDeduct(checked: boolean) {
+  if (!_brState) return;
+  _brState.deductStock = checked;
+}
+
+export function brClose() {
+  _brState = null;
+  const overlay = document.getElementById('br-fullscreen');
+  if (overlay) overlay.remove();
   closeModal();
 }
 
-export async function rePostCookSave() {
-  if (!_postCookState) return;
-  const pc = _postCookState;
-  const batch = S.batches.find(b => b.id === pc.batchId);
+export async function brSave() {
+  if (!_brState) return;
+  const br = _brState;
+  const batch = S.batches.find(b => b.id === br.batchId);
   if (!batch) return;
 
-  const actualIngredients = pc.ingredients
-    .filter(i => i.resolved && i.ingredientId)
+  const actualIngredients = br.ingredients
+    .filter(i => !i.removed && i.resolved && i.ingredientId)
     .map(i => ({ ingredientId: i.ingredientId!, name: i.name, amount: i.amount, unit: i.unit }));
 
   try {
-    await apiPost(`/api/batches/${pc.batchId}`, {
+    await apiPost(`/api/batches/${br.batchId}`, {
       actualIngredients,
-      cookNotes: pc.cookNotes,
-      stockDeducted: pc.deductStock,
+      cookNotes: br.cookNotes,
+      stockDeducted: br.deductStock,
     }, 'PATCH');
 
-    // Update local state
     batch.actualIngredients = actualIngredients;
-    batch.cookNotes = pc.cookNotes;
-    batch.stockDeducted = pc.deductStock;
+    batch.cookNotes = br.cookNotes;
+    batch.stockDeducted = br.deductStock;
 
-    // Deduct stock from ingredient DB if requested
-    if (pc.deductStock) {
+    if (br.deductStock) {
       const stockUpdates: Array<{ id: string; amount: number }> = [];
       actualIngredients.forEach(ai => {
         if (ai.ingredientId) {
@@ -1090,10 +1324,13 @@ export async function rePostCookSave() {
       }
     }
 
-    _postCookState = null;
+    _brState = null;
+    const overlay = document.getElementById('br-fullscreen');
+    if (overlay) overlay.remove();
     closeModal();
-    toast('Cook recording saved');
+    toast('Batch recipe saved');
+    rerenderCurrentView();
   } catch (e: unknown) {
-    toastError('Could not save recording: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }

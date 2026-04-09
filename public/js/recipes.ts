@@ -113,60 +113,75 @@ export function updateRecipeResults() {
 
   let html = '';
 
-  // V2 recipes section
+  // Helper to render a recipe table (reused for both v2 and legacy)
+  const tableHeaders = `<thead><tr>
+    <th class="${thCls('name')}" onclick="riSortBy('name')">Name <span class="sort-arrow">${arrow('name')}</span></th>
+    <th class="${thCls('type')}" onclick="riSortBy('type')">Type <span class="sort-arrow">${arrow('type')}</span></th>
+    <th class="${thCls('structure')}" onclick="riSortBy('structure')">Structure <span class="sort-arrow">${arrow('structure')}</span></th>
+    <th class="${thCls('cost')}" onclick="riSortBy('cost')">Cost <span class="sort-arrow">${arrow('cost')}</span></th>
+    <th class="${thCls('season')}" onclick="riSortBy('season')">Season <span class="sort-arrow">${arrow('season')}</span></th>
+    <th>Allergens</th>
+    <th class="${thCls('banger')}" onclick="riSortBy('banger')">Banger <span class="sort-arrow">${arrow('banger')}</span></th>
+    <th class="${thCls('rating')}" onclick="riSortBy('rating')">Avg <span class="sort-arrow">${arrow('rating')}</span></th>
+    <th class="${thCls('served')}" onclick="riSortBy('served')">Served <span class="sort-arrow">${arrow('served')}</span></th>
+    <th>Actions</th>
+  </tr></thead>`;
+
+  // ── V2 recipes table ──
   if (v2Filtered.length > 0) {
-    html += `<div style="margin-bottom:16px;"><div class="re-v2-list">`;
+    // Collect v2 costs by type for color scaling
+    const v2CostsByType: Record<string, number[]> = {};
     v2Filtered.forEach(r => {
+      if (r.costPerServing != null) {
+        if (!v2CostsByType[r.type || 'Soup']) v2CostsByType[r.type || 'Soup'] = [];
+        v2CostsByType[r.type || 'Soup'].push(r.costPerServing);
+      }
+    });
+
+    html += `<div class="ri-table-wrap"><table class="ri-table">${tableHeaders}<tbody>`;
+    v2Filtered.forEach(r => {
+      const cost = r.costPerServing;
+      const typeCosts = v2CostsByType[r.type || 'Soup'] || [];
+      const cStyle = cost != null ? costColor(cost, typeCosts) : '';
       const allAllergens = [...new Set([...(r.autoAllergens||[]),...(r.extraAllergens||[])])];
       const ags = allAllergens.map(a => `<span class="allergen-pill">${esc(a)}</span>`).join(' ');
-      html += `<div class="re-v2-card">
-        <div class="re-v2-card-header">
-          <span class="re-v2-name">${esc(r.name)}</span>
-          ${typeBadge((r.type || 'Soup') as DishType)}
-          ${r.isComplete ? '<span class="badge" style="background:var(--green-bg);color:var(--green);font-size:10px;">Complete</span>' : '<span class="badge" style="background:var(--amber-bg);color:var(--amber);font-size:10px;">Draft</span>'}
-        </div>
-        <div class="re-v2-card-meta">
-          ${r.structure ? `<span>${esc(r.structure)}</span>` : ''}
-          ${r.seasonality ? `<span>${esc(r.seasonality)}</span>` : ''}
-          ${r.costPerServing != null ? `<span>&euro;${r.costPerServing.toFixed(2)}/serving</span>` : ''}
-          ${r.ingredients.length > 0 ? `<span>${r.ingredients.length} ingredients</span>` : ''}
-        </div>
-        ${ags ? `<div style="margin-top:4px;">${ags}</div>` : ''}
-        <div class="re-v2-card-actions">
-          <button class="btn btn-sm" onclick="openRecipeDetail('${esc(r.id)}')">View</button>
+
+      html += `<tr>
+        <td class="ri-name-cell"><a href="javascript:void(0)" onclick="openRecipeDetail('${esc(r.id)}')" style="color:var(--text);text-decoration:none;">${esc(r.name)}</a></td>
+        <td>${typeBadge((r.type || 'Soup') as DishType)}</td>
+        <td style="font-size:12px;">${esc(r.structure || '—')}</td>
+        <td>${cost != null ? `<span class="ri-cost-cell" style="${cStyle}">&euro;${cost.toFixed(2)}</span>` : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
+        <td style="font-size:12px;">${esc(r.seasonality || '—')}</td>
+        <td>${ags || '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
+        <td><span style="color:var(--text2);font-size:11px;">—</span></td>
+        <td><span style="color:var(--text2);font-size:11px;">—</span></td>
+        <td style="text-align:center;">—</td>
+        <td style="white-space:nowrap;">
           <button class="btn btn-sm" onclick="openRecipeEditor('${esc(r.id)}')">Edit</button>
           <button class="btn btn-sm" onclick="addDishFromV2Recipe('${esc(r.id)}')">+ Menu</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteV2Recipe('${esc(r.id)}')">Delete</button>
-        </div>
-      </div>`;
+          <button class="btn btn-sm btn-danger" onclick="deleteV2Recipe('${esc(r.id)}')">✕</button>
+        </td>
+      </tr>`;
     });
-    html += `</div></div>`;
+    html += `</tbody></table></div>`;
   }
 
-  // Legacy recipes section
-  if (sorted.length === 0 && S.recipeIndex.length === 0 && v2Filtered.length === 0) {
-    html += `<div class="ri-empty">
-      <p style="font-size:16px;font-weight:600;">No recipes yet</p>
-      <p>Create your first recipe or import from a Google Sheet.</p>
-    </div>`;
-  } else if (sorted.length === 0 && filtered.length === 0 && v2Filtered.length === 0) {
-    html += `<div class="ri-empty"><p>No recipes match your search</p></div>`;
+  // ── Legacy recipes table ──
+  if (sorted.length === 0 && v2Filtered.length === 0) {
+    if (S.recipeIndex.length === 0 && (S.recipes || []).length === 0) {
+      html += `<div class="ri-empty">
+        <p style="font-size:16px;font-weight:600;">No recipes yet</p>
+        <p>Create your first recipe or import from a Google Sheet.</p>
+      </div>`;
+    } else {
+      html += `<div class="ri-empty"><p>No recipes match your search</p></div>`;
+    }
   }
   if (sorted.length > 0) {
-    html += `${v2Filtered.length > 0 ? '<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px;">Legacy recipes (imported from Google Sheets)</div>' : ''}
-    <div class="ri-table-wrap"><table class="ri-table">
-    <thead><tr>
-      <th class="${thCls('name')}" onclick="riSortBy('name')">Name <span class="sort-arrow">${arrow('name')}</span></th>
-      <th class="${thCls('type')}" onclick="riSortBy('type')">Type <span class="sort-arrow">${arrow('type')}</span></th>
-      <th class="${thCls('structure')}" onclick="riSortBy('structure')">Structure <span class="sort-arrow">${arrow('structure')}</span></th>
-      <th class="${thCls('cost')}" onclick="riSortBy('cost')">Cost <span class="sort-arrow">${arrow('cost')}</span></th>
-      <th class="${thCls('season')}" onclick="riSortBy('season')">Season <span class="sort-arrow">${arrow('season')}</span></th>
-      <th>Allergens</th>
-      <th class="${thCls('banger')}" onclick="riSortBy('banger')">Banger <span class="sort-arrow">${arrow('banger')}</span></th>
-      <th class="${thCls('rating')}" onclick="riSortBy('rating')">Avg <span class="sort-arrow">${arrow('rating')}</span></th>
-      <th class="${thCls('served')}" onclick="riSortBy('served')">Served <span class="sort-arrow">${arrow('served')}</span></th>
-      <th>Actions</th>
-    </tr></thead><tbody>`;
+    if (v2Filtered.length > 0) {
+      html += `<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.3px;margin:14px 0 6px;">Legacy recipes (imported from Google Sheets)</div>`;
+    }
+    html += `<div class="ri-table-wrap"><table class="ri-table">${tableHeaders}<tbody>`;
 
     sorted.forEach(r => {
       const cost = parseCost(r.costPerServing);

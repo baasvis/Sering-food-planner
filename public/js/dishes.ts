@@ -4,9 +4,22 @@ import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDa
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { addDishFromRecipe } from './recipes';
-import { openPostCookRecording } from './recipe-editor';
+import { openPostCookRecording, openBatchRecipe } from './recipe-editor';
 import { batchDragStart, batchDragEnd, startAssignMode, openReplaceBatch } from './planner';
 import type { Batch, DishType, Location, StorageType, Service, RecipeIngredient } from '@shared/types';
+
+/** Check if a batch has a v2 recipe with unresolved flexible ingredient slots */
+function hasUnresolvedFlexible(d: Batch): boolean {
+  if (!d.recipeId) return false;
+  const recipe = S.recipes.find(r => r.id === d.recipeId);
+  if (!recipe) return false;
+  const hasFlex = recipe.ingredients.some(i => i.isFlexible);
+  if (!hasFlex) return false;
+  // Check if already resolved via actualIngredients
+  const resolved = d.actualIngredients as Array<{ ingredientId: string; name: string }> | undefined;
+  if (resolved && resolved.length > 0) return false;
+  return true;
+}
 
 // Legacy fields that exist on batch objects at runtime but aren't in the Batch interface
 interface BatchWithLegacy extends Batch {
@@ -287,6 +300,7 @@ export function renderBatchTile(d: Batch, showAssign?: boolean) {
           <span>${d.serving || 280} ml/guest</span>
         </div>
         ${d.recipeSheetId ? `<div class="batch-detail-section"><label>Recipe</label><a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" class="recipe-btn" onclick="event.stopPropagation()">Open recipe &#8599;</a></div>` : ''}
+        ${d.recipeId ? `<div class="batch-detail-section"><label>Batch recipe</label><button class="btn btn-sm" onclick="event.stopPropagation();openBatchRecipe('${d.id}')">${hasUnresolvedFlexible(d) ? '&#x26A0; Resolve &amp; edit' : '&#x1F4CB; Open batch recipe'}</button></div>` : ''}
         <div class="batch-detail-section">
           <label>Services</label>
           <div>${svcLbls || '<span style="color:var(--red);font-weight:600;">No services assigned</span>'}</div>
