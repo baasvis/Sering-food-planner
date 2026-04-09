@@ -12,6 +12,10 @@ afterAll(async () => {
   await prisma.ingredient.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.standardInventory.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.feedback.deleteMany({ where: { user: 'test-runner' } });
+  // Clean up test guest history entries (test date prefix 2099-)
+  await prisma.guestHistory.deleteMany({ where: { date: { startsWith: '2099-' } } });
+  // Clean up test next-weeks entries (test monday key prefix 2099-)
+  await prisma.guestsNextWeeks.deleteMany({ where: { mondayKey: { startsWith: '2099-' } } });
   await prisma.$disconnect();
 });
 
@@ -422,4 +426,303 @@ describe('Guests Next Weeks API', () => {
     expect(res.status).toBe(200);
     expect(typeof res.body).toBe('object');
   });
+});
+
+// ── Ingredient Target Stock ──
+
+describe('Ingredient Target Stock API', () => {
+  const ingId = T + 'target-stock-ing';
+
+  beforeAll(async () => {
+    await request(app)
+      .post('/api/ingredients/' + ingId)
+      .send({ id: ingId, name: 'Target Stock Test', unit: 'Grams', active: true });
+  });
+
+  afterAll(async () => {
+    await prisma.ingredient.deleteMany({ where: { id: ingId } });
+  });
+
+  it('POST /api/ingredients/target-stock — sets target stock', async () => {
+    const res = await request(app)
+      .post('/api/ingredients/target-stock')
+      .send({ ingredientId: ingId, location: 'west', amount: 1000 });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // Verify via /full
+    const full = await request(app).get('/api/ingredients/full');
+    const found = full.body.find((i: any) => i.id === ingId);
+    expect(found).toBeTruthy();
+    expect(found.targetStock.west).toBe(1000);
+  });
+
+  it('POST /api/ingredients/target-stock — clears target with amount 0', async () => {
+    const res = await request(app)
+      .post('/api/ingredients/target-stock')
+      .send({ ingredientId: ingId, location: 'west', amount: 0 });
+    expect(res.status).toBe(200);
+
+    const full = await request(app).get('/api/ingredients/full');
+    const found = full.body.find((i: any) => i.id === ingId);
+    expect(found.targetStock.west).toBeUndefined();
+  });
+
+  it('POST /api/ingredients/target-stock — 400 without ingredientId', async () => {
+    const res = await request(app)
+      .post('/api/ingredients/target-stock')
+      .send({ location: 'west', amount: 500 });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/ingredients/target-stock — 404 for unknown ingredient', async () => {
+    const res = await request(app)
+      .post('/api/ingredients/target-stock')
+      .send({ ingredientId: 'nonexistent-ing', location: 'west', amount: 500 });
+    expect(res.status).toBe(404);
+  });
+});
+
+// ── Ingredient Stock Bulk ──
+
+describe('Ingredient Stock Bulk API', () => {
+  const ing1 = T + 'bulk-ing-1';
+  const ing2 = T + 'bulk-ing-2';
+
+  beforeAll(async () => {
+    await request(app)
+      .post('/api/ingredients/' + ing1)
+      .send({ id: ing1, name: 'Bulk Test 1', unit: 'Grams', active: true });
+    await request(app)
+      .post('/api/ingredients/' + ing2)
+      .send({ id: ing2, name: 'Bulk Test 2', unit: 'Liters', active: true });
+  });
+
+  afterAll(async () => {
+    await prisma.ingredient.deleteMany({ where: { id: { in: [ing1, ing2] } } });
+  });
+
+  it('POST /api/ingredients/stock/bulk — updates multiple ingredients', async () => {
+    const res = await request(app)
+      .post('/api/ingredients/stock/bulk')
+      .send([
+        { ingredientId: ing1, location: 'west', amount: 500 },
+        { ingredientId: ing2, location: 'centraal', amount: 2.5 },
+      ]);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.updated).toBe(2);
+
+    // Verify stock was set
+    const full = await request(app).get('/api/ingredients/full');
+    const found1 = full.body.find((i: any) => i.id === ing1);
+    const found2 = full.body.find((i: any) => i.id === ing2);
+    expect(found1.stock.west.amount).toBe(500);
+    expect(found2.stock.centraal.amount).toBe(2.5);
+  });
+
+  it('POST /api/ingredients/stock/bulk — 400 for non-array', async () => {
+    const res = await request(app)
+      .post('/api/ingredients/stock/bulk')
+      .send({ ingredientId: ing1, location: 'west', amount: 100 });
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── Guest History Roundtrip ──
+
+describe('Guest History Roundtrip', () => {
+  it('POST /api/guest-history and GET roundtrip', async () => {
+    const testData = {
+      west: { lunch: { '2099-01-01': 42, '2099-01-02': 38 } },
+    };
+
+    const postRes = await request(app)
+      .post('/api/guest-history')
+      .send(testData);
+    expect(postRes.status).toBe(200);
+    expect(postRes.body.ok).toBe(true);
+
+    const getRes = await request(app).get('/api/guest-history');
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.west).toBeTruthy();
+    expect(getRes.body.west.lunch['2099-01-01']).toBe(42);
+    expect(getRes.body.west.lunch['2099-01-02']).toBe(38);
+  });
+
+  it('POST /api/guest-history — 400 for null body', async () => {
+    const res = await request(app)
+      .post('/api/guest-history')
+      .set('Content-Type', 'application/json')
+      .send('null');
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── Guests Next Weeks Roundtrip ──
+
+describe('Guests Next Weeks Roundtrip', () => {
+  it('POST /api/guests-next-weeks and GET roundtrip', async () => {
+    const testData = {
+      '2099-01-06': {
+        west: {
+          monday: { lunch: 30, dinner: 25 },
+        },
+      },
+    };
+
+    const postRes = await request(app)
+      .post('/api/guests-next-weeks')
+      .send(testData);
+    expect(postRes.status).toBe(200);
+    expect(postRes.body.ok).toBe(true);
+
+    const getRes = await request(app).get('/api/guests-next-weeks');
+    expect(getRes.status).toBe(200);
+    expect(getRes.body['2099-01-06']).toBeTruthy();
+    expect(getRes.body['2099-01-06'].west.monday.lunch).toBe(30);
+    expect(getRes.body['2099-01-06'].west.monday.dinner).toBe(25);
+  });
+
+  it('POST /api/guests-next-weeks — 400 for null body', async () => {
+    const res = await request(app)
+      .post('/api/guests-next-weeks')
+      .set('Content-Type', 'application/json')
+      .send('null');
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── Feedback CRUD ──
+
+describe('Feedback CRUD', () => {
+  let feedbackId: number;
+
+  it('GET /api/feedback — returns array', async () => {
+    const res = await request(app).get('/api/feedback');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('POST + GET + PATCH — create, find, mark processed', async () => {
+    // Create
+    const postRes = await request(app)
+      .post('/api/feedback')
+      .send({ text: 'CRUD test feedback', type: 'idea', user: 'test-runner' });
+    expect(postRes.status).toBe(200);
+
+    // Find it in the list
+    const listRes = await request(app).get('/api/feedback');
+    const found = listRes.body.find((f: any) => f.text === 'CRUD test feedback');
+    expect(found).toBeTruthy();
+    expect(found.processed).toBe(false);
+    feedbackId = found.id;
+
+    // Mark processed
+    const patchRes = await request(app)
+      .patch('/api/feedback/' + feedbackId)
+      .send({ processed: true });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.processed).toBe(true);
+
+    // Verify it stayed processed
+    const verifyRes = await request(app).get('/api/feedback');
+    const updated = verifyRes.body.find((f: any) => f.id === feedbackId);
+    expect(updated.processed).toBe(true);
+  });
+
+  it('PATCH /api/feedback/:id — 400 for non-boolean processed', async () => {
+    const res = await request(app)
+      .patch('/api/feedback/' + feedbackId)
+      .send({ processed: 'yes' });
+    expect(res.status).toBe(400);
+  });
+
+  it('PATCH /api/feedback/:id — 400 for invalid id', async () => {
+    const res = await request(app)
+      .patch('/api/feedback/notanumber')
+      .send({ processed: true });
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── Finance Revenue ──
+
+describe('Finance Revenue API', () => {
+  it('GET /api/finance/revenue — returns array with valid params', async () => {
+    const res = await request(app).get('/api/finance/revenue?start=2020-01-01&end=2020-01-02');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('GET /api/finance/revenue — 400 without params', async () => {
+    const res = await request(app).get('/api/finance/revenue');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/start and end/i);
+  });
+});
+
+// ── Finance Products ──
+
+describe('Finance Products API', () => {
+  it('GET /api/finance/products — returns array with valid params', async () => {
+    const res = await request(app).get('/api/finance/products?start=2020-01-01&end=2020-01-02');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('GET /api/finance/products — groupBy=category returns array', async () => {
+    const res = await request(app).get('/api/finance/products?start=2020-01-01&end=2020-01-02&groupBy=category');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('GET /api/finance/products — 400 without params', async () => {
+    const res = await request(app).get('/api/finance/products');
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── Data Patch ──
+
+describe('Data Patch API', () => {
+  const patchBatchId = T + 'patch-batch';
+
+  it('POST /api/data/patch — adds a batch, then deletes it', async () => {
+    // Add a batch via patch
+    const addRes = await request(app)
+      .post('/api/data/patch')
+      .send({
+        batches: [{
+          id: patchBatchId,
+          name: 'Patch Test Soup',
+          type: 'Soup',
+          stock: 0,
+          serving: 280,
+          storage: 'Gastro',
+          location: 'west',
+          services: [],
+        }],
+      });
+    expect(addRes.status).toBe(200);
+    expect(addRes.body.ok).toBe(true);
+
+    // Verify it appears in GET /api/data
+    const dataRes = await request(app).get('/api/data');
+    const found = dataRes.body.batches.find((b: any) => b.id === patchBatchId);
+    expect(found).toBeTruthy();
+    expect(found.name).toBe('Patch Test Soup');
+
+    // Delete it via patch
+    const delRes = await request(app)
+      .post('/api/data/patch')
+      .send({ deletedBatches: [patchBatchId] });
+    expect(delRes.status).toBe(200);
+    expect(delRes.body.ok).toBe(true);
+
+    // Verify it's gone
+    const checkRes = await request(app).get('/api/data');
+    const gone = checkRes.body.batches.find((b: any) => b.id === patchBatchId);
+    expect(gone).toBeUndefined();
+  }, 15000);
 });
