@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import fs from 'fs';
 import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
 import { Prisma } from '@prisma/client';
-import { prisma, dbAppendLog } from '../lib/db';
+import { prisma, dbAppendLog, recalcRecipeCostsForIngredient } from '../lib/db';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
@@ -184,6 +184,10 @@ router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
   });
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'ingredient', `saved "${ingredient.name}"`);
+  // Recalculate costs for any recipes using this ingredient (fire-and-forget)
+  recalcRecipeCostsForIngredient(req.params.id as string).catch(e => {
+    console.error(`Failed to recalculate recipe costs for ingredient ${req.params.id}:`, e);
+  });
   res.json({ ok: true });
 }));
 

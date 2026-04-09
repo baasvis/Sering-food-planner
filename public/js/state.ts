@@ -1,6 +1,6 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeEntry, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeEntry, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings } from '@shared/types';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -114,6 +114,7 @@ export interface AppState {
   draggingBatchId: string | null;
   showAllBatches: boolean;
   recipeIndex: RecipeEntry[];
+  recipes: RecipeFull[];
   ingredientDb: Ingredient[];
   planner: Record<string, Batch[]>;
   user: AppUser | null;
@@ -164,6 +165,7 @@ export let S: AppState = {
   draggingBatchId: null,
   showAllBatches: false,
   recipeIndex:[],
+  recipes:[],
   ingredientDb:[],
   planner:{},
   user:null,

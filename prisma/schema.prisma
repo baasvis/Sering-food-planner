@@ -28,11 +28,19 @@ model Batch {
   services          Json     @default("[]")
   createdAt         String   @map("created_at")
 
+  // Recipe v2 fields
+  recipeId          String?  @map("recipe_id")
+  actualIngredients Json?    @map("actual_ingredients")
+  cookNotes         String   @default("") @map("cook_notes")
+  stockDeducted     Boolean  @default(false) @map("stock_deducted")
+
   parent       Batch?  @relation("BatchParent", fields: [parentId], references: [id], onDelete: SetNull)
   childBatches Batch[] @relation("BatchParent")
+  recipe       Recipe? @relation("BatchRecipe", fields: [recipeId], references: [id], onDelete: SetNull)
 
   @@index([location])
   @@index([cookDate])
+  @@index([recipeId])
   @@map("batches")
 }
 
@@ -117,6 +125,8 @@ model Ingredient {
   orderUnitStandard String  @default("") @map("order_unit_standard")
   orderAmountGrams  Float   @default(0) @map("order_amount_grams")
   pricePer100g      Float   @default(0) @map("price_per_100g")
+
+  recipeUsages      RecipeIngredientRow[]
 
   @@index([active])
   @@index([category])
@@ -236,4 +246,100 @@ model ProductRevenue {
 
   @@unique([date, location, meal, productName])
   @@map("product_revenue")
+}
+
+// ── Recipe system (v2) ──────────────────────────────────────────────────────
+
+model Recipe {
+  id                String   @id
+  name              String
+  type              String   @default("Soup")
+
+  // Descriptors
+  structure         String   @default("")
+  seasonality       String   @default("")
+  servingTemp       String   @default("") @map("serving_temp")
+  servingSize       Int      @default(280) @map("serving_size")
+
+  // Volume & scaling
+  recipeVolume      Float?   @map("recipe_volume")
+
+  // Allergens
+  autoAllergens     String[] @map("auto_allergens")
+  extraAllergens    String[] @map("extra_allergens")
+
+  // Cost (auto-calculated from ingredients, Float not String)
+  costPerServing    Float?   @map("cost_per_serving")
+
+  // Ratings (aggregated from batch serve events)
+  avgSkill          Float    @default(0) @map("avg_skill")
+  avgSpeed          Float    @default(0) @map("avg_speed")
+  avgBanger         Float    @default(0) @map("avg_banger")
+  timesServed       Int      @default(0) @map("times_served")
+
+  // Prep steps: [{step, text, note?}]
+  prepSteps         Json     @default("[]") @map("prep_steps")
+
+  // Storage instructions
+  coolingMethod     String   @default("") @map("cooling_method")
+  storageMethod     String   @default("") @map("storage_method")
+
+  // Photo (URL served from RecipePhoto table)
+  photoUrl          String?  @map("photo_url")
+
+  // Completeness (guided creation)
+  isComplete        Boolean  @default(false) @map("is_complete")
+
+  // Versioning: JSON array of snapshots [{version, date, changedBy, ingredients, notes}]
+  versions          Json     @default("[]")
+
+  // Metadata
+  createdBy         String   @default("") @map("created_by")
+  createdAt         String   @map("created_at")
+  updatedAt         String   @map("updated_at")
+
+  // Legacy link (migrated from Google Sheet)
+  legacySheetId     String?  @map("legacy_sheet_id")
+
+  // Relations
+  ingredients       RecipeIngredientRow[]
+  batches           Batch[]  @relation("BatchRecipe")
+
+  @@index([type])
+  @@map("recipes")
+}
+
+model RecipeIngredientRow {
+  id              String  @id
+  recipeId        String  @map("recipe_id")
+  ingredientId    String? @map("ingredient_id")
+  sortOrder       Int     @default(0) @map("sort_order")
+
+  // Amounts
+  rawAmount       Float   @map("raw_amount")
+  cookedAmount    Float?  @map("cooked_amount")
+  unit            String  @default("Grams")
+
+  // Flexible ingredient support ("Any vegetables")
+  isFlexible      Boolean @default(false) @map("is_flexible")
+  flexCategory    String? @map("flex_category")
+  flexLabel       String? @map("flex_label")
+  suggestedNames  String[] @map("suggested_names")
+
+  // Relations
+  recipe          Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient      Ingredient? @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+
+  @@index([recipeId])
+  @@map("recipe_ingredients")
+}
+
+model RecipePhoto {
+  id        String @id
+  recipeId  String @unique @map("recipe_id")
+  mimeType  String @map("mime_type")
+  data      Bytes
+  createdAt String @map("created_at")
+
+  @@map("recipe_photos")
 }

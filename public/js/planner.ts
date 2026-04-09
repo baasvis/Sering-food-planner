@@ -666,6 +666,7 @@ export function addRecipeToSlot(recipeId: string, loc: string, date: string, mea
     cookDate: null,
     services: [{ loc, date, meal }],
     createdAt: new Date().toISOString(),
+    recipeId: null, actualIngredients: null, cookNotes: '', stockDeducted: false,
   };
   S.batches.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
@@ -697,6 +698,7 @@ export function addPlaceholderDish() {
     cookDate: null,
     services: [{ loc, date, meal }],
     createdAt: new Date().toISOString(),
+    recipeId: null, actualIngredients: null, cookNotes: '', stockDeducted: false,
   };
   S.batches.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
@@ -889,6 +891,7 @@ export function replaceWithRecipe(recipeId: string) {
     note: '',
     services: [...(old.services || [])],
     createdAt: new Date().toISOString(),
+    recipeId: null, actualIngredients: null, cookNotes: '', stockDeducted: false,
   };
   S.batches.push(newBatch);
 

@@ -4,6 +4,7 @@ import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDa
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { addDishFromRecipe } from './recipes';
+import { openPostCookRecording } from './recipe-editor';
 import { batchDragStart, batchDragEnd, startAssignMode, openReplaceBatch } from './planner';
 import type { Batch, DishType, Location, StorageType, Service, RecipeIngredient } from '@shared/types';
 
@@ -635,6 +636,10 @@ export function confirmCooked(id: string) {
   scheduleSave();
   rerenderCurrentView();
   toast(esc(d.name) + ' marked as cooked — stock set to ' + d.stock + 'L');
+  // Offer post-cook recording for v2 recipe batches
+  if (d.recipeId) {
+    openPostCookRecording(id);
+  }
 }
 
 export function setFilter(group: keyof typeof S.filters, val: string) { S.filters[group] = val; S.selected.clear(); rerenderCurrentView(); }
@@ -736,7 +741,8 @@ export function doSplit(isTransport: boolean, targetLoc?: string, smartAmounts?:
       allergens: [...(d.allergens || [])], extraAllergens: [...(d.extraAllergens || [])],
       orderFor: false, parentId: d.id, cookDate: d.cookDate,
       services: (d.services || []).filter(s => s.loc === splitLocation),
-      note: d.note || '', createdAt: new Date().toISOString()
+      note: d.note || '', createdAt: new Date().toISOString(),
+      recipeId: d.recipeId || null, actualIngredients: null, cookNotes: '', stockDeducted: false,
     };
     // Remove services that moved to the new batch
     if (splitLocation !== (d.location || 'west')) {

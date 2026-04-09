@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { PrismaClient, Prisma } from '@prisma/client';
-import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeEntry } from '../shared/types';
+import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeEntry, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient } from '../shared/types';
 
 export const prisma = new PrismaClient();
 
@@ -103,6 +103,10 @@ export function toBatchRow(b: Batch) {
     note: b.note || '',
     services: (b.services || []) as unknown as Prisma.InputJsonValue,
     createdAt: b.createdAt || new Date().toISOString(),
+    recipeId: b.recipeId || null,
+    actualIngredients: (b.actualIngredients || undefined) as Prisma.InputJsonValue | undefined,
+    cookNotes: b.cookNotes || '',
+    stockDeducted: !!b.stockDeducted,
   };
 }
 
@@ -168,12 +172,13 @@ async function writeTransport(tx: TxClient, items: TransportItem[]): Promise<voi
 
 export async function dbReadAll(): Promise<DataResponse> {
   try {
-    const [batchRows, guestRows, recipeRows, cateringRows, transportRows] = await Promise.all([
+    const [batchRows, guestRows, recipeRows, cateringRows, transportRows, recipeV2Rows] = await Promise.all([
       prisma.batch.findMany(),
       prisma.guest.findMany(),
       prisma.recipeIndex.findMany(),
       prisma.catering.findMany(),
       prisma.transportItem.findMany(),
+      prisma.recipe.findMany({ include: { ingredients: { orderBy: { sortOrder: 'asc' } } } }),
     ]);
 
     const batches: Batch[] = batchRows.map(b => ({
@@ -196,6 +201,10 @@ export async function dbReadAll(): Promise<DataResponse> {
       note: b.note,
       services: Array.isArray(b.services) ? (b.services as unknown as Service[]) : [],
       createdAt: b.createdAt,
+      recipeId: b.recipeId,
+      actualIngredients: (b.actualIngredients ?? null) as ActualIngredient[] | null,
+      cookNotes: b.cookNotes,
+      stockDeducted: b.stockDeducted,
     }));
 
     const guests = getDefaultGuests();
@@ -238,11 +247,13 @@ export async function dbReadAll(): Promise<DataResponse> {
 
     const transportItems: TransportItem[] = transportRows.map(t => ({ id: t.id, text: t.text }));
 
-    return { batches, guests, recipeIndex, caterings, transportItems };
+    const recipes: RecipeFull[] = recipeV2Rows.map(toRecipeFull);
+
+    return { batches, guests, recipeIndex, recipes, caterings, transportItems };
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Unknown error';
     console.error('dbReadAll error:', message);
-    return { batches: [], guests: getDefaultGuests(), recipeIndex: [], caterings: [], transportItems: [] };
+    return { batches: [], guests: getDefaultGuests(), recipeIndex: [], recipes: [], caterings: [], transportItems: [] };
   }
 }
 
@@ -299,4 +310,205 @@ export async function dbAppendLog(userEmail: string, userName: string, action: s
     const message = e instanceof Error ? e.message : 'Unknown error';
     console.error('Log append error:', message);
   }
+}
+
+// ── Recipe v2 helpers ──
+
+// Type for Recipe row with included ingredients from Prisma
+type RecipeWithIngredients = Awaited<ReturnType<typeof prisma.recipe.findFirst<{ include: { ingredients: true } }>>>;
+
+export function toRecipeIngredientFull(row: { id: string; ingredientId: string | null; sortOrder: number; rawAmount: number; cookedAmount: number | null; unit: string; isFlexible: boolean; flexCategory: string | null; flexLabel: string | null; suggestedNames: string[] }): RecipeIngredientFull {
+  return {
+    id: row.id,
+    ingredientId: row.ingredientId,
+    sortOrder: row.sortOrder,
+    rawAmount: row.rawAmount,
+    cookedAmount: row.cookedAmount,
+    unit: row.unit,
+    isFlexible: row.isFlexible,
+    flexCategory: row.flexCategory,
+    flexLabel: row.flexLabel,
+    suggestedNames: row.suggestedNames,
+  };
+}
+
+export function toRecipeFull(r: NonNullable<RecipeWithIngredients>): RecipeFull {
+  return {
+    id: r.id,
+    name: r.name,
+    type: r.type,
+    structure: r.structure,
+    seasonality: r.seasonality,
+    servingTemp: r.servingTemp,
+    servingSize: r.servingSize,
+    recipeVolume: r.recipeVolume,
+    autoAllergens: r.autoAllergens,
+    extraAllergens: r.extraAllergens,
+    costPerServing: r.costPerServing,
+    avgSkill: r.avgSkill,
+    avgSpeed: r.avgSpeed,
+    avgBanger: r.avgBanger,
+    timesServed: r.timesServed,
+    prepSteps: (r.prepSteps ?? []) as unknown as PrepStep[],
+    coolingMethod: r.coolingMethod,
+    storageMethod: r.storageMethod,
+    photoUrl: r.photoUrl,
+    isComplete: r.isComplete,
+    versions: (r.versions ?? []) as unknown as RecipeVersionSnapshot[],
+    createdBy: r.createdBy,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    legacySheetId: r.legacySheetId,
+    ingredients: (r.ingredients || []).map(toRecipeIngredientFull),
+  };
+}
+
+/** Compute auto-allergens by looking up each linked ingredient's allergens */
+export async function calcRecipeAllergens(ingredientIds: string[]): Promise<string[]> {
+  if (ingredientIds.length === 0) return [];
+  const ingredients = await prisma.ingredient.findMany({
+    where: { id: { in: ingredientIds } },
+    select: { allergens: true },
+  });
+  const allergenSet = new Set<string>();
+  for (const ing of ingredients) {
+    if (ing.allergens) {
+      // allergens field is a comma-separated string on Ingredient
+      for (const a of ing.allergens.split(',')) {
+        const trimmed = a.trim();
+        if (trimmed) allergenSet.add(trimmed);
+      }
+    }
+  }
+  return [...allergenSet].sort();
+}
+
+/** Compute cost per serving from ingredient prices and amounts */
+export async function calcRecipeCost(
+  ingredients: Array<{ ingredientId: string | null; rawAmount: number; unit: string; isFlexible: boolean }>,
+  servingSize: number,
+  recipeVolume: number | null,
+): Promise<number | null> {
+  const linkedIds = ingredients.filter(i => i.ingredientId && !i.isFlexible).map(i => i.ingredientId!);
+  if (linkedIds.length === 0 || !recipeVolume) return null;
+
+  const dbIngredients = await prisma.ingredient.findMany({
+    where: { id: { in: linkedIds } },
+    select: { id: true, pricePer100g: true, pricePer100: true },
+  });
+  const priceMap = new Map(dbIngredients.map(i => [i.id, i.pricePer100g || i.pricePer100 || 0]));
+
+  const baseServings = (recipeVolume * 1000) / servingSize;
+  if (baseServings <= 0) return null;
+
+  let totalCost = 0;
+  for (const ing of ingredients) {
+    if (!ing.ingredientId || ing.isFlexible) continue;
+    const pricePer100 = priceMap.get(ing.ingredientId) || 0;
+    // Convert rawAmount to grams for cost calc (amounts stored in recipe unit)
+    const amountGrams = toGrams(ing.rawAmount, ing.unit);
+    totalCost += (amountGrams / 100) * pricePer100;
+  }
+
+  return Math.round((totalCost / baseServings) * 100) / 100;
+}
+
+/** Compute nutrition per serving from ingredient nutrition data */
+export async function calcRecipeNutrition(
+  ingredients: Array<{ ingredientId: string | null; rawAmount: number; unit: string; isFlexible: boolean }>,
+  servingSize: number,
+  recipeVolume: number | null,
+): Promise<NutritionInfo | null> {
+  const linkedIds = ingredients.filter(i => i.ingredientId && !i.isFlexible).map(i => i.ingredientId!);
+  if (linkedIds.length === 0 || !recipeVolume) return null;
+
+  const dbIngredients = await prisma.ingredient.findMany({
+    where: { id: { in: linkedIds } },
+    select: { id: true, nutrition: true },
+  });
+  const nutritionMap = new Map(dbIngredients.map(i => [i.id, i.nutrition as Record<string, number> | null]));
+
+  const baseServings = (recipeVolume * 1000) / servingSize;
+  if (baseServings <= 0) return null;
+
+  const totals = { energyKcal: 0, energyKj: 0, fat: 0, saturatedFat: 0, carbs: 0, sugar: 0, fiber: 0, protein: 0, salt: 0 };
+  let withData = 0;
+  let total = 0;
+
+  for (const ing of ingredients) {
+    if (!ing.ingredientId || ing.isFlexible) continue;
+    total++;
+    const nutr = nutritionMap.get(ing.ingredientId);
+    if (!nutr || Object.keys(nutr).length === 0) continue;
+    withData++;
+    const amountGrams = toGrams(ing.rawAmount, ing.unit);
+    const factor = amountGrams / 100; // nutrition is per 100g
+    totals.energyKcal += (nutr.energyKcal || 0) * factor;
+    totals.energyKj += (nutr.energyKj || 0) * factor;
+    totals.fat += (nutr.fat || 0) * factor;
+    totals.saturatedFat += (nutr.saturatedFat || 0) * factor;
+    totals.carbs += (nutr.carbs || 0) * factor;
+    totals.sugar += (nutr.sugar || 0) * factor;
+    totals.fiber += (nutr.fiber || 0) * factor;
+    totals.protein += (nutr.protein || 0) * factor;
+    totals.salt += (nutr.salt || 0) * factor;
+  }
+
+  // Divide by servings to get per-serving values
+  const result: NutritionInfo = {
+    energyKcal: Math.round(totals.energyKcal / baseServings),
+    energyKj: Math.round(totals.energyKj / baseServings),
+    fat: Math.round(totals.fat / baseServings * 10) / 10,
+    saturatedFat: Math.round(totals.saturatedFat / baseServings * 10) / 10,
+    carbs: Math.round(totals.carbs / baseServings * 10) / 10,
+    sugar: Math.round(totals.sugar / baseServings * 10) / 10,
+    fiber: Math.round(totals.fiber / baseServings * 10) / 10,
+    protein: Math.round(totals.protein / baseServings * 10) / 10,
+    salt: Math.round(totals.salt / baseServings * 100) / 100,
+    completeness: total > 0 ? withData / total : 0,
+  };
+  return result;
+}
+
+/** Convert amount in recipe unit to grams */
+function toGrams(amount: number, unit: string): number {
+  switch (unit.toLowerCase()) {
+    case 'kilos': case "kilo's": case 'kg': return amount * 1000;
+    case 'liters': case 'l': return amount * 1000; // 1L ≈ 1000g for liquids
+    case 'ml': return amount;
+    case 'grams': case 'g': default: return amount;
+  }
+}
+
+/** Validate a recipe for required fields */
+export function validateRecipe(r: { name?: string; type?: string; servingSize?: number }): string | null {
+  if (!r.name || typeof r.name !== 'string' || r.name.length > 200) return 'invalid name';
+  if (r.type && !VALID_TYPES.includes(r.type)) return `invalid type "${r.type}"`;
+  if (r.servingSize !== undefined && (typeof r.servingSize !== 'number' || r.servingSize < 1 || r.servingSize > 9999)) return 'invalid servingSize';
+  return null;
+}
+
+/** Recalculate cost for all recipes that use a specific ingredient */
+export async function recalcRecipeCostsForIngredient(ingredientId: string): Promise<number> {
+  const rows = await prisma.recipeIngredientRow.findMany({
+    where: { ingredientId },
+    select: { recipeId: true },
+  });
+  const recipeIds = [...new Set(rows.map(r => r.recipeId))];
+  if (recipeIds.length === 0) return 0;
+
+  const recipes = await prisma.recipe.findMany({
+    where: { id: { in: recipeIds } },
+    include: { ingredients: true },
+  });
+
+  let updated = 0;
+  for (const r of recipes) {
+    const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume);
+    if (cost !== r.costPerServing) {
+      await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
+      updated++;
+    }
+  }
+  return updated;
 }

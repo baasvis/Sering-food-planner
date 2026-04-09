@@ -98,6 +98,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Transport view: "Mark selected as arrived" (changes logistics to destination), custom transport items list (free-text, disappear on delivery)
 - Dish management with inline editing, cook date tracking, stock levels, +/- status pills, sortable columns
 - Recipe index (library) with single + bulk import from Google Sheets, ratings, conditional cost colouring
+- Recipe system v2: full recipe editor with DB-linked ingredients, multi-step guided creation (basics → ingredients → prep steps → storage → review), ingredient autocomplete from DB (~2100 items), flexible ingredient slots ("Any vegetables" with category + suggestions), auto-allergen calculation from linked ingredients, live cost per serving, nutrition per serving (EU label format), photo upload (stored in PostgreSQL, resized client-side), manual versioning with snapshot history, printable A4 view (server-rendered HTML with @media print), post-cook recording (resolve flexible slots, adjust amounts, optional stock deduction, cook notes), auto-recalculate recipe costs when ingredient prices change. Unified recipe list shows v2 recipe cards above legacy table with View/Edit/Menu/Delete actions.
 - Order overview with 4-tab layout: Combined Order (default), Set Standard Inventory, Batch Ingredients, Ingredient Database
   - All tabs display amounts in order units (e.g. "5x Bak 1 kilogram") when ingredient has orderUnitSize, falling back to formatted metric (kg/L) otherwise. Stock inputs use order units with labels.
   - Standard Inventory: cooks build a weekly base order (persistent, per-location PostgreSQL JSON), searchable from ingredient DB, target stock in order units
@@ -117,7 +118,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Finance v1: Tebi POS scraper (Playwright browser automation) pulls daily revenue data via Tebi's internal JSON API. Sync worker stores data in PostgreSQL DailyRevenue table. Finance screen shows weekly revenue table (per location per day), monthly summary cards (gross/net revenue, sales, covers), CSS bar chart of daily gross revenue, and week navigation. "Sync from Tebi" button triggers the scraper as a child process.
 - Finance v2 — Product-level revenue breakdown: scraper parses Tebi invoice line items to extract per-product revenue. Classifies each invoice by service period (morning 09–12, lunch 12–14, afternoon 14–18, dinner 18–21, bar 21–06). Data stored in PostgreSQL ProductRevenue table. Finance screen shows horizontal category bar chart, sortable product table (top 50), and filter pills for 5 service periods + 4 locations. API: GET /api/finance/products with optional location, meal, groupBy=category filters. Discovery flag: `--dump-invoices` on scraper to inspect raw Tebi invoice structure.
 - Live sync via Server-Sent Events (SSE): when any user saves changes, all other connected users receive the patch instantly and their UI updates automatically. Uses native browser EventSource (auto-reconnects on connection loss). Server broadcasts patches to all clients except the sender (matched by email). No polling, no WebSocket library needed.
-- TypeScript strict typing (refactored 2026-03-31, cleaned 2026-04-09): `any` types nearly eliminated across both backend and frontend. Backend has 6 remaining (XLSX parsing in ingredients-import.ts); frontend's 5 largest files (orders, dishes, planner, dashboard, ingredient-db) are `any`-free with proper Ingredient/Batch/Service/Location types. Domain types (`Location`, `Meal`, `DishType`, `StorageType`) enforce valid values at compile time. Global state object `S` typed as `AppState`. All catch blocks use `catch (e: unknown)` with `errMsg()` helper. Prisma JSON boundary uses explicit casts with `AppError` class for typed HTTP errors. Single shared Prisma client instance. Cross-module `(window as any)` pattern eliminated — replaced with direct ES imports via `modal.ts` and `navigate.ts` registry pattern. All async route handlers wrapped in `asyncHandler()` with centralized error handling. 59 API integration tests.
+- TypeScript strict typing (refactored 2026-03-31, cleaned 2026-04-09): `any` types nearly eliminated across both backend and frontend. Backend has 6 remaining (XLSX parsing in ingredients-import.ts); frontend's 5 largest files (orders, dishes, planner, dashboard, ingredient-db) are `any`-free with proper Ingredient/Batch/Service/Location types. Domain types (`Location`, `Meal`, `DishType`, `StorageType`) enforce valid values at compile time. Global state object `S` typed as `AppState`. All catch blocks use `catch (e: unknown)` with `errMsg()` helper. Prisma JSON boundary uses explicit casts with `AppError` class for typed HTTP errors. Single shared Prisma client instance. Cross-module `(window as any)` pattern eliminated — replaced with direct ES imports via `modal.ts` and `navigate.ts` registry pattern. All async route handlers wrapped in `asyncHandler()` with centralized error handling. 74 API integration tests.
 
 **File structure:**
 ```
@@ -139,7 +140,7 @@ routes/
   auth.ts              — Login, logout, session, requireAuth middleware
   data.ts              — GET/POST /api/data + POST /api/data/patch (main planner state)
   batches.ts           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
-  recipes.ts           — Recipe index CRUD + single recipe fetch
+  recipes.ts           — Recipe index CRUD + single recipe fetch + Recipe v2 CRUD + photo + print + versioning + cost recalc
   ingredients.ts       — Ingredient CRUD + stock management
   ingredients-import.ts — Hanos XLSX upload + CSV migration
   guests.ts            — Guest history + next-weeks predictions
@@ -164,7 +165,8 @@ public/
     planner.ts         — Week plan: sub-tabs, location grids, batch pool, assign mode, transport view
     dishes.ts          — Dish list + cook workflow + CRUD
     caterings.ts       — Caterings CRUD, dish picker, auto-calculated requirements
-    recipes.ts         — Recipe index screen
+    recipes.ts         — Recipe index screen (legacy + v2 unified list)
+    recipe-editor.ts   — Recipe v2 editor (multi-step modal), detail view, post-cook recording
     orders.ts          — Order overview (combined, standard inventory, dish ingredients tabs)
     ingredient-db.ts   — Ingredient database editor + supplier import
     finance.ts         — Finance screen (revenue dashboard, sync, week nav)
@@ -196,9 +198,12 @@ SETUP_GUIDE.md         — Installation instructions
 
 | Entity | Key Fields | Prisma Model / Table |
 |--------|-----------|-----------|
-| Batch | id, name, type, stock, serving, storage, logistics, allergens, cookDate, cookConfirmed, recipeSheetId, recipeVolume, recipeIngredients, services (JSON), location, inTransit, note | Batch |
+| Batch | id, name, type, stock, serving, storage, logistics, allergens, cookDate, cookConfirmed, recipeSheetId, recipeId, recipeVolume, recipeIngredients, actualIngredients (JSON), cookNotes, stockDeducted, services (JSON), location, inTransit, note | Batch |
 | Guests | location, day, lunch count, dinner count | AppState (JSON) |
 | Recipe Index | id, name, type, recipeSheetId, allergens, costPerServing, structure, seasonality, ratings, timesServed | RecipeIndex |
+| Recipe (v2) | id, name, type, structure, seasonality, servingTemp, servingSize, recipeVolume, autoAllergens, extraAllergens, costPerServing, prepSteps (JSON), coolingMethod, storageMethod, photoUrl, isComplete, versions (JSON), createdBy, updatedAt | Recipe |
+| Recipe Ingredient Row | id, recipeId, ingredientId, sortOrder, rawAmount, cookedAmount, unit, isFlexible, flexCategory, flexLabel, suggestedNames | RecipeIngredientRow |
+| Recipe Photo | id, recipeId, mimeType, data (binary) | RecipePhoto |
 | Catering | id, name, date, guestCount, deliveryMode, dishes (JSON), logisticsNotes | AppState (JSON) |
 | Transport Item | id, text | AppState (JSON) |
 | Feedback | timestamp, user, type, screen, text, userAgent | Feedback |

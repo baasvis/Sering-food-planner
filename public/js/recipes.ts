@@ -3,6 +3,8 @@ import { newId, scheduleSave, toast, toastError, apiGet, apiPost } from './utils
 import { rebuildPlanner, typeBadge, typeBadgeClass, TYPES, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { doLogout } from './auth';
+import { openRecipeEditor, openRecipeDetail } from './recipe-editor';
+import type { DishType } from '@shared/types';
 
 // ── RECIPE INDEX ──────────────────────────────────────────
 export let riSearch = '';
@@ -43,10 +45,12 @@ export function avgRating(r: any) {
 export function renderRecipeIndex() {
   const types = [...new Set(S.recipeIndex.map(r => r.type).filter(Boolean))];
 
+  const v2Count = S.recipes.length;
   let html = `
   <div class="btn-row" style="margin-bottom:12px;">
-    <button class="btn btn-primary" onclick="openAddRecipe()">+ Add recipe</button>
-    <span style="font-size:12px;color:var(--text2);margin-left:8px;">${S.recipeIndex.length} recipes in index</span>
+    <button class="btn btn-primary" onclick="openRecipeEditor()">+ Create recipe</button>
+    <button class="btn" onclick="openAddRecipe()">Import from Sheet</button>
+    <span style="font-size:12px;color:var(--text2);margin-left:8px;">${v2Count} recipe${v2Count !== 1 ? 's' : ''} + ${S.recipeIndex.length} legacy</span>
   </div>
   <input class="ri-search" id="ri-search-input" placeholder="Search recipes..." value="${esc(riSearch)}" oninput="updateRiSearch(this)" />
   <div class="ri-filter-bar">
@@ -61,6 +65,15 @@ export function renderRecipeIndex() {
 
 // Update only the results portion — search input stays in the DOM
 export function updateRecipeResults() {
+  // ── V2 recipes ──
+  let v2Filtered = S.recipes || [];
+  if (riTypeFilter !== 'all') v2Filtered = v2Filtered.filter(r => r.type === riTypeFilter);
+  if (riSearch) {
+    const q = riSearch.toLowerCase();
+    v2Filtered = v2Filtered.filter(r => r.name.toLowerCase().includes(q) || [...(r.autoAllergens||[]),...(r.extraAllergens||[])].join(' ').toLowerCase().includes(q));
+  }
+
+  // ── Legacy recipes ──
   let filtered = S.recipeIndex;
   if (riTypeFilter !== 'all') filtered = filtered.filter(r => r.type === riTypeFilter);
   if (riSearch) {
@@ -99,15 +112,49 @@ export function updateRecipeResults() {
   const thCls = (col: any) => riSort.col === col ? 'sorted' : '';
 
   let html = '';
-  if (sorted.length === 0 && S.recipeIndex.length === 0) {
-    html = `<div class="ri-empty">
+
+  // V2 recipes section
+  if (v2Filtered.length > 0) {
+    html += `<div style="margin-bottom:16px;"><div class="re-v2-list">`;
+    v2Filtered.forEach(r => {
+      const allAllergens = [...new Set([...(r.autoAllergens||[]),...(r.extraAllergens||[])])];
+      const ags = allAllergens.map(a => `<span class="allergen-pill">${esc(a)}</span>`).join(' ');
+      html += `<div class="re-v2-card">
+        <div class="re-v2-card-header">
+          <span class="re-v2-name">${esc(r.name)}</span>
+          ${typeBadge((r.type || 'Soup') as DishType)}
+          ${r.isComplete ? '<span class="badge" style="background:var(--green-bg);color:var(--green);font-size:10px;">Complete</span>' : '<span class="badge" style="background:var(--amber-bg);color:var(--amber);font-size:10px;">Draft</span>'}
+        </div>
+        <div class="re-v2-card-meta">
+          ${r.structure ? `<span>${esc(r.structure)}</span>` : ''}
+          ${r.seasonality ? `<span>${esc(r.seasonality)}</span>` : ''}
+          ${r.costPerServing != null ? `<span>&euro;${r.costPerServing.toFixed(2)}/serving</span>` : ''}
+          ${r.ingredients.length > 0 ? `<span>${r.ingredients.length} ingredients</span>` : ''}
+        </div>
+        ${ags ? `<div style="margin-top:4px;">${ags}</div>` : ''}
+        <div class="re-v2-card-actions">
+          <button class="btn btn-sm" onclick="openRecipeDetail('${esc(r.id)}')">View</button>
+          <button class="btn btn-sm" onclick="openRecipeEditor('${esc(r.id)}')">Edit</button>
+          <button class="btn btn-sm" onclick="addDishFromV2Recipe('${esc(r.id)}')">+ Menu</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteV2Recipe('${esc(r.id)}')">Delete</button>
+        </div>
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  // Legacy recipes section
+  if (sorted.length === 0 && S.recipeIndex.length === 0 && v2Filtered.length === 0) {
+    html += `<div class="ri-empty">
       <p style="font-size:16px;font-weight:600;">No recipes yet</p>
-      <p>Add your first recipe by clicking "+ Add recipe" and pasting a Google Sheet link.</p>
+      <p>Create your first recipe or import from a Google Sheet.</p>
     </div>`;
-  } else if (sorted.length === 0) {
-    html = `<div class="ri-empty"><p>No recipes match your search</p></div>`;
-  } else {
-    html = `<div class="ri-table-wrap"><table class="ri-table">
+  } else if (sorted.length === 0 && filtered.length === 0 && v2Filtered.length === 0) {
+    html += `<div class="ri-empty"><p>No recipes match your search</p></div>`;
+  }
+  if (sorted.length > 0) {
+    html += `${v2Filtered.length > 0 ? '<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px;">Legacy recipes (imported from Google Sheets)</div>' : ''}
+    <div class="ri-table-wrap"><table class="ri-table">
     <thead><tr>
       <th class="${thCls('name')}" onclick="riSortBy('name')">Name <span class="sort-arrow">${arrow('name')}</span></th>
       <th class="${thCls('type')}" onclick="riSortBy('type')">Type <span class="sort-arrow">${arrow('type')}</span></th>
@@ -405,9 +452,69 @@ export async function addDishFromRecipe(recipeId: any) {
     cookDate: null,
     services: [],
     createdAt: new Date().toISOString(),
+    recipeId: null, actualIngredients: null, cookNotes: '', stockDeducted: false,
   };
   S.batches.push(newDish);
   rebuildPlanner();
   scheduleSave();
   toast(esc(r.name) + ' added as batch to menu planner');
+}
+
+// Add a batch from a v2 recipe (with DB-linked ingredients)
+export function addDishFromV2Recipe(recipeId: string) {
+  const r = S.recipes.find(x => x.id === recipeId);
+  if (!r) return;
+  // Snapshot ingredients into JSON for order system compatibility
+  const snapshotIngredients = r.ingredients.map(ing => ({
+    name: ing.ingredientName || ing.flexLabel || 'Unknown',
+    amount: ing.rawAmount,
+    unit: ing.unit,
+    source: '',
+    cost: 0,
+  }));
+  const allAllergens = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
+  const newDish = {
+    id: newId(),
+    name: r.name,
+    type: r.type || 'Soup',
+    stock: 0,
+    serving: r.servingSize || 280,
+    storage: 'Gastro' as const,
+    location: 'west' as const,
+    inTransit: false,
+    recipeSheetId: null,
+    recipeVolume: r.recipeVolume || null,
+    recipeIngredients: snapshotIngredients,
+    allergens: allAllergens,
+    extraAllergens: [] as string[],
+    orderFor: false,
+    parentId: null,
+    cookDate: null,
+    note: '',
+    services: [] as never[],
+    createdAt: new Date().toISOString(),
+    recipeId: r.id,
+    actualIngredients: null,
+    cookNotes: '',
+    stockDeducted: false,
+  };
+  S.batches.push(newDish);
+  rebuildPlanner();
+  scheduleSave();
+  toast(esc(r.name) + ' added as batch to menu planner');
+}
+
+// Delete a v2 recipe
+export async function deleteV2Recipe(recipeId: string) {
+  const r = S.recipes.find(x => x.id === recipeId);
+  const name = r ? r.name : 'this recipe';
+  if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
+  try {
+    await apiPost(`/api/recipes/${recipeId}`, {}, 'DELETE');
+    S.recipes = S.recipes.filter(x => x.id !== recipeId);
+    renderRecipeIndex();
+    toast('Recipe deleted');
+  } catch (e: unknown) {
+    toastError('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
 }

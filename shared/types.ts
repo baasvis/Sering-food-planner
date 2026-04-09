@@ -69,6 +69,11 @@ export interface Batch {
   note: string;
   services: Service[];
   createdAt: string;
+  // Recipe v2 fields
+  recipeId: string | null;
+  actualIngredients: ActualIngredient[] | null;
+  cookNotes: string;
+  stockDeducted: boolean;
 }
 
 export interface GuestDay {
@@ -116,6 +121,89 @@ export interface RecipeEntry {
   avgSpeed: number;
   avgBanger: number;
   timesServed: number;
+}
+
+// ── Recipe system v2 ──
+
+export interface PrepStep {
+  step: number;
+  text: string;
+  note?: string;
+}
+
+export interface RecipeVersionSnapshot {
+  version: number;
+  date: string;
+  changedBy: string;
+  ingredients: RecipeIngredientFull[];
+  notes: string;
+}
+
+export interface RecipeIngredientFull {
+  id: string;
+  ingredientId: string | null;
+  sortOrder: number;
+  rawAmount: number;
+  cookedAmount: number | null;
+  unit: string;
+  isFlexible: boolean;
+  flexCategory: string | null;
+  flexLabel: string | null;
+  suggestedNames: string[];
+  // Denormalized from Ingredient for display
+  ingredientName?: string;
+  ingredientAllergens?: string;
+  costPer100?: number;
+}
+
+export interface NutritionInfo {
+  energyKcal: number;
+  energyKj: number;
+  fat: number;
+  saturatedFat: number;
+  carbs: number;
+  sugar: number;
+  fiber: number;
+  protein: number;
+  salt: number;
+  completeness: number; // fraction of ingredients with nutrition data (0-1)
+}
+
+export interface RecipeFull {
+  id: string;
+  name: string;
+  type: DishType | string;
+  structure: string;
+  seasonality: string;
+  servingTemp: string;
+  servingSize: number;
+  recipeVolume: number | null;
+  autoAllergens: string[];
+  extraAllergens: string[];
+  costPerServing: number | null;
+  avgSkill: number;
+  avgSpeed: number;
+  avgBanger: number;
+  timesServed: number;
+  prepSteps: PrepStep[];
+  coolingMethod: string;
+  storageMethod: string;
+  photoUrl: string | null;
+  isComplete: boolean;
+  versions: RecipeVersionSnapshot[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  legacySheetId: string | null;
+  ingredients: RecipeIngredientFull[];
+  nutrition?: NutritionInfo;
+}
+
+export interface ActualIngredient {
+  ingredientId: string;
+  name: string;
+  amount: number;
+  unit: string;
 }
 
 // ── Ingredient stock: location → amount (number) ──
@@ -188,6 +276,7 @@ export interface DataResponse {
   batches: Batch[];
   guests: GuestsData;
   recipeIndex: RecipeEntry[];
+  recipes: RecipeFull[];
   caterings: Catering[];
   transportItems: TransportItem[];
 }

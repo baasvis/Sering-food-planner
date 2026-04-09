@@ -26,7 +26,7 @@ routes/
   auth.ts              — Login, logout, session, requireAuth middleware
   data.ts              — GET/POST /api/data + POST /api/data/patch (main planner state)
   batches.ts           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
-  recipes.ts           — Recipe index CRUD + single recipe fetch
+  recipes.ts           — Recipe index CRUD + single recipe fetch + Recipe v2 CRUD + photo + print + versioning + cost recalc
   ingredients.ts       — Ingredient CRUD + stock management
   ingredients-import.ts — Hanos XLSX upload + CSV migration
   guests.ts            — Guest history + next-weeks predictions
@@ -45,6 +45,7 @@ public/
     planner.css        — Week grid, dish list, slots, inventory, cook workflow
     orders.css         — Order tabs, ingredient tables, ingredient DB styles
     recipes.css        — Recipe index table
+    recipe-editor.css  — Recipe v2 editor styles
     finance.css        — Finance dashboard styles
     feedback.css       — Feedback FAB and form
     tutorial.css       — Tutorial overlay and tooltips
@@ -61,7 +62,8 @@ public/
     planner.ts         — Week plan grid + transport + inventory modal
     dishes.ts          — Dish list + cook workflow + CRUD
     caterings.ts       — Catering events
-    recipes.ts         — Recipe index/library
+    recipes.ts         — Recipe index/library (legacy + v2 unified list)
+    recipe-editor.ts   — Recipe v2 editor (multi-step modal), detail view, post-cook recording
     orders.ts          — Order overview (combined, standard inventory, dish ingredients tabs)
     ingredient-db.ts   — Ingredient database editor + supplier import
     finance.ts         — Finance screen (revenue dashboard, sync, week nav)
@@ -82,7 +84,7 @@ vite.config.ts         — Vite config (root: public/, proxy /api to :3000, @sha
 npm run dev            # Vite on :5173 (frontend HMR) + tsx on :3000 (backend)
 npm run build          # Vite build + tsc backend → dist/
 npm start              # node dist/server/server.js (production)
-npm test               # Jest with @swc/jest (39 API tests)
+npm test               # Jest with @swc/jest (74 API tests)
 npm run typecheck      # tsc --noEmit on backend
 ```
 

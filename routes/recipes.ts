@@ -1,7 +1,13 @@
 import express, { Request, Response } from 'express';
-import { prisma, dbAppendLog } from '../lib/db';
+import { Prisma } from '@prisma/client';
+import multer from 'multer';
+import { prisma, dbAppendLog, toRecipeFull, toRecipeIngredientFull, calcRecipeAllergens, calcRecipeCost, calcRecipeNutrition, validateRecipe, withWriteLock } from '../lib/db';
 import { getSheetsClient } from '../lib/recipe-sheets';
 import { asyncHandler } from '../lib/config';
+import { broadcast } from './events';
+import type { RecipeIngredientFull, RecipeVersionSnapshot } from '../shared/types';
+
+const upload = multer({ limits: { fileSize: 2 * 1024 * 1024 } }); // 2MB max
 
 const router = express.Router();
 
@@ -130,5 +136,516 @@ router.get('/recipe', asyncHandler(async (req: Request, res: Response) => {
   });
   res.json({ dishName, serving, allergens, servingTemp, structure, dishType, recipeVolume: recipeVol, seasonality, costPerServing, ingredients });
 }));
+
+// ═════════════════════════════════════════════════════════════════════════════
+// RECIPE V2 ENDPOINTS
+// ═════════════════════════════════════════════════════════════════════════════
+
+const includeIngredients = { ingredients: { orderBy: { sortOrder: 'asc' as const } } };
+
+// List all recipes (with ingredients denormalized)
+router.get('/recipes', asyncHandler(async (_req: Request, res: Response) => {
+  const rows = await prisma.recipe.findMany({
+    include: includeIngredients,
+    orderBy: { name: 'asc' },
+  });
+  res.json(rows.map(toRecipeFull));
+}));
+
+// Get single recipe with full detail + nutrition
+router.get('/recipes/:id', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const row = await prisma.recipe.findUnique({
+    where: { id },
+    include: includeIngredients,
+  });
+  if (!row) return res.status(404).json({ error: 'Recipe not found' });
+
+  const recipe = toRecipeFull(row);
+
+  // Denormalize ingredient names and allergens
+  const linkedIds = recipe.ingredients.filter(i => i.ingredientId).map(i => i.ingredientId!);
+  if (linkedIds.length > 0) {
+    const dbIngs = await prisma.ingredient.findMany({
+      where: { id: { in: linkedIds } },
+      select: { id: true, name: true, allergens: true, pricePer100g: true, pricePer100: true },
+    });
+    const ingMap = new Map(dbIngs.map(i => [i.id, i]));
+    for (const ing of recipe.ingredients) {
+      if (ing.ingredientId) {
+        const dbIng = ingMap.get(ing.ingredientId);
+        if (dbIng) {
+          ing.ingredientName = dbIng.name;
+          ing.ingredientAllergens = dbIng.allergens;
+          ing.costPer100 = dbIng.pricePer100g || dbIng.pricePer100 || 0;
+        }
+      }
+    }
+  }
+
+  // Calculate nutrition
+  recipe.nutrition = await calcRecipeNutrition(
+    recipe.ingredients,
+    recipe.servingSize,
+    recipe.recipeVolume,
+  ) ?? undefined;
+
+  res.json(recipe);
+}));
+
+// Create a new recipe
+router.post('/recipes', asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body;
+  const err = validateRecipe(body);
+  if (err) return res.status(400).json({ error: err });
+
+  const now = new Date().toISOString();
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  const ingredients: RecipeIngredientFull[] = body.ingredients || [];
+
+  // Calculate auto-allergens and cost
+  const ingredientIds = ingredients.filter(i => i.ingredientId).map(i => i.ingredientId!);
+  const autoAllergens = await calcRecipeAllergens(ingredientIds);
+  const costPerServing = await calcRecipeCost(ingredients, body.servingSize || 280, body.recipeVolume || null);
+
+  const recipe = await withWriteLock(async () => {
+    return prisma.recipe.create({
+      data: {
+        id: body.id,
+        name: body.name,
+        type: body.type || 'Soup',
+        structure: body.structure || '',
+        seasonality: body.seasonality || '',
+        servingTemp: body.servingTemp || '',
+        servingSize: body.servingSize || 280,
+        recipeVolume: body.recipeVolume || null,
+        autoAllergens,
+        extraAllergens: body.extraAllergens || [],
+        costPerServing,
+        prepSteps: (body.prepSteps || []) as Prisma.InputJsonValue,
+        coolingMethod: body.coolingMethod || '',
+        storageMethod: body.storageMethod || '',
+        isComplete: !!body.isComplete,
+        versions: [] as unknown as Prisma.InputJsonValue,
+        createdBy: user.email,
+        createdAt: now,
+        updatedAt: now,
+        legacySheetId: body.legacySheetId || null,
+        ingredients: {
+          create: ingredients.map((ing, i) => ({
+            id: ing.id,
+            ingredientId: ing.ingredientId || null,
+            sortOrder: ing.sortOrder ?? i,
+            rawAmount: ing.rawAmount,
+            cookedAmount: ing.cookedAmount ?? null,
+            unit: ing.unit || 'Grams',
+            isFlexible: !!ing.isFlexible,
+            flexCategory: ing.flexCategory || null,
+            flexLabel: ing.flexLabel || null,
+            suggestedNames: ing.suggestedNames || [],
+          })),
+        },
+      },
+      include: includeIngredients,
+    });
+  });
+
+  dbAppendLog(user.email, user.name, 'recipe-create', `created "${body.name}"`);
+  const result = toRecipeFull(recipe);
+  broadcast(user.email, 'recipe', { action: 'create', recipe: result });
+  res.json(result);
+}));
+
+// Recalculate costs for all recipes (must be before /:id routes)
+router.post('/recipes/recalculate-costs', asyncHandler(async (_req: Request, res: Response) => {
+  const recipes = await prisma.recipe.findMany({
+    include: { ingredients: true },
+  });
+
+  let updated = 0;
+  for (const r of recipes) {
+    const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume);
+    if (cost !== r.costPerServing) {
+      await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
+      updated++;
+    }
+  }
+
+  res.json({ ok: true, updated, total: recipes.length });
+}));
+
+// Update recipe metadata and/or ingredients
+router.patch('/recipes/:id', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const body = req.body;
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  const now = new Date().toISOString();
+
+  const existing = await prisma.recipe.findUnique({ where: { id } });
+  if (!existing) return res.status(404).json({ error: 'Recipe not found' });
+
+  if (body.name !== undefined) {
+    const err = validateRecipe({ name: body.name, type: body.type, servingSize: body.servingSize });
+    if (err) return res.status(400).json({ error: err });
+  }
+
+  const recipe = await withWriteLock(async () => {
+    // If ingredients are provided, replace them all
+    if (body.ingredients) {
+      await prisma.recipeIngredientRow.deleteMany({ where: { recipeId: id } });
+      const ingredients: RecipeIngredientFull[] = body.ingredients;
+      if (ingredients.length > 0) {
+        await prisma.recipeIngredientRow.createMany({
+          data: ingredients.map((ing, i) => ({
+            id: ing.id,
+            recipeId: id,
+            ingredientId: ing.ingredientId || null,
+            sortOrder: ing.sortOrder ?? i,
+            rawAmount: ing.rawAmount,
+            cookedAmount: ing.cookedAmount ?? null,
+            unit: ing.unit || 'Grams',
+            isFlexible: !!ing.isFlexible,
+            flexCategory: ing.flexCategory || null,
+            flexLabel: ing.flexLabel || null,
+            suggestedNames: ing.suggestedNames || [],
+          })),
+        });
+      }
+    }
+
+    // Recalculate auto-allergens and cost from current ingredients
+    const currentIngs = await prisma.recipeIngredientRow.findMany({ where: { recipeId: id } });
+    const ingredientIds = currentIngs.filter(i => i.ingredientId).map(i => i.ingredientId!);
+    const autoAllergens = await calcRecipeAllergens(ingredientIds);
+    const servingSize = body.servingSize ?? existing.servingSize;
+    const recipeVolume = body.recipeVolume !== undefined ? body.recipeVolume : existing.recipeVolume;
+    const costPerServing = await calcRecipeCost(currentIngs, servingSize, recipeVolume);
+
+    // Build update data (only provided fields)
+    const updateData: Record<string, unknown> = {
+      autoAllergens,
+      costPerServing,
+      updatedAt: now,
+    };
+    const allowedFields = ['name', 'type', 'structure', 'seasonality', 'servingTemp', 'servingSize',
+      'recipeVolume', 'extraAllergens', 'coolingMethod', 'storageMethod', 'isComplete', 'legacySheetId',
+      'avgSkill', 'avgSpeed', 'avgBanger', 'timesServed'] as const;
+    for (const field of allowedFields) {
+      if (body[field] !== undefined) updateData[field] = body[field];
+    }
+    if (body.prepSteps !== undefined) {
+      updateData.prepSteps = body.prepSteps as Prisma.InputJsonValue;
+    }
+
+    return prisma.recipe.update({
+      where: { id },
+      data: updateData,
+      include: includeIngredients,
+    });
+  });
+
+  dbAppendLog(user.email, user.name, 'recipe-update', `updated "${recipe.name}"`);
+  const result = toRecipeFull(recipe);
+  broadcast(user.email, 'recipe', { action: 'update', recipe: result });
+  res.json(result);
+}));
+
+// Delete recipe
+router.delete('/recipes/:id', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+
+  // Check if batches reference this recipe
+  const batchCount = await prisma.batch.count({ where: { recipeId: id } });
+  if (batchCount > 0) {
+    return res.status(409).json({ error: `${batchCount} batch(es) reference this recipe. Remove batch links first.` });
+  }
+
+  await withWriteLock(async () => {
+    await prisma.recipePhoto.deleteMany({ where: { recipeId: id } });
+    await prisma.recipe.delete({ where: { id } });
+  });
+
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'recipe-delete', `deleted recipe ${id}`);
+  broadcast(user.email, 'recipe', { action: 'delete', recipeId: id });
+  res.json({ ok: true });
+}));
+
+// Save new version (snapshot current state)
+router.post('/recipes/:id/version', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  const notes = req.body.notes || '';
+
+  const recipe = await prisma.recipe.findUnique({
+    where: { id },
+    include: includeIngredients,
+  });
+  if (!recipe) return res.status(404).json({ error: 'Recipe not found' });
+
+  const currentVersions = (recipe.versions as unknown as RecipeVersionSnapshot[]) ?? [];
+  const nextVersion = currentVersions.length > 0 ? currentVersions[currentVersions.length - 1].version + 1 : 1;
+
+  const snapshot: RecipeVersionSnapshot = {
+    version: nextVersion,
+    date: new Date().toISOString(),
+    changedBy: user.email,
+    ingredients: recipe.ingredients.map(toRecipeIngredientFull),
+    notes,
+  };
+
+  const updated = await prisma.recipe.update({
+    where: { id },
+    data: {
+      versions: [...currentVersions, snapshot] as unknown as Prisma.InputJsonValue,
+      updatedAt: new Date().toISOString(),
+    },
+    include: includeIngredients,
+  });
+
+  dbAppendLog(user.email, user.name, 'recipe-version', `saved version ${nextVersion} of "${recipe.name}"`);
+  res.json(toRecipeFull(updated));
+}));
+
+// Get version history
+router.get('/recipes/:id/versions', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const recipe = await prisma.recipe.findUnique({
+    where: { id },
+    select: { versions: true, name: true },
+  });
+  if (!recipe) return res.status(404).json({ error: 'Recipe not found' });
+  res.json({ name: recipe.name, versions: recipe.versions as unknown as RecipeVersionSnapshot[] });
+}));
+
+// Upload photo
+router.post('/recipes/:id/photo', upload.single('photo'), asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const existing = await prisma.recipe.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Recipe not found' });
+
+  const file = (req as Request & { file?: { mimetype: string; buffer: Buffer } }).file;
+  if (!file) return res.status(400).json({ error: 'No photo uploaded' });
+  if (!file.mimetype.startsWith('image/')) return res.status(400).json({ error: 'File must be an image' });
+
+  const photoData = new Uint8Array(file.buffer);
+  await prisma.recipePhoto.upsert({
+    where: { recipeId: id },
+    create: {
+      id: `photo-${id}`,
+      recipeId: id,
+      mimeType: file.mimetype,
+      data: photoData,
+      createdAt: new Date().toISOString(),
+    },
+    update: {
+      mimeType: file.mimetype,
+      data: photoData,
+    },
+  });
+
+  const photoUrl = `/api/recipes/${id}/photo`;
+  await prisma.recipe.update({ where: { id }, data: { photoUrl } });
+
+  res.json({ ok: true, photoUrl });
+}));
+
+// Serve photo
+router.get('/recipes/:id/photo', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const photo = await prisma.recipePhoto.findUnique({ where: { recipeId: id } });
+  if (!photo) return res.status(404).json({ error: 'No photo' });
+  res.set('Content-Type', photo.mimeType);
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send(photo.data);
+}));
+
+// Delete photo
+router.delete('/recipes/:id/photo', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  await prisma.recipePhoto.deleteMany({ where: { recipeId: id } });
+  await prisma.recipe.update({ where: { id }, data: { photoUrl: null } });
+  res.json({ ok: true });
+}));
+
+// Suggest ingredients for a flexible slot (by category, sorted by stock at location)
+router.get('/ingredients/suggest', asyncHandler(async (req: Request, res: Response) => {
+  const category = req.query.category as string | undefined;
+  if (!category) return res.status(400).json({ error: 'category required' });
+
+  const ingredients = await prisma.ingredient.findMany({
+    where: {
+      category,
+      active: true,
+    },
+    select: {
+      id: true, name: true, category: true, unit: true,
+      stock: true, pricePer100g: true, pricePer100: true, allergens: true,
+    },
+    orderBy: { name: 'asc' },
+  });
+
+  // Sort by stock at the requested location (descending — most stock first)
+  const loc = (req.query.location as string) || 'west';
+  const sorted = ingredients.sort((a, b) => {
+    const stockA = (a.stock as Record<string, { amount: number }> | null)?.[loc]?.amount ?? 0;
+    const stockB = (b.stock as Record<string, { amount: number }> | null)?.[loc]?.amount ?? 0;
+    return stockB - stockA;
+  });
+
+  res.json(sorted);
+}));
+
+// ── Printable A4 recipe page ──
+
+const includeIngredientsForPrint = { ingredients: { include: { ingredient: true }, orderBy: { sortOrder: 'asc' as const } } };
+
+router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response) => {
+  const recipe = await prisma.recipe.findUnique({
+    where: { id: req.params.id as string },
+    include: includeIngredientsForPrint,
+  });
+  if (!recipe) return res.status(404).send('Recipe not found');
+
+  // Optional batch scaling
+  const batchId = req.query.batchId as string | undefined;
+  let scaleFactor = 1;
+  let batchLabel = '';
+  if (batchId) {
+    const batch = await prisma.batch.findUnique({ where: { id: batchId } });
+    if (batch && recipe.recipeVolume && recipe.servingSize) {
+      const recipeLiters = recipe.recipeVolume;
+      // Use batch stock if > 0, otherwise use the recipe volume (uncooked batch = 1:1 scale)
+      const batchLiters = (batch.stock || 0) > 0 ? batch.stock : recipeLiters;
+      if (recipeLiters > 0 && batchLiters > 0) {
+        scaleFactor = batchLiters / recipeLiters;
+      }
+      batchLabel = batch.name || '';
+    }
+  }
+
+  const ingredients = recipe.ingredients.map(ing => {
+    const name = ing.isFlexible
+      ? (ing.flexLabel || 'Flexible ingredient')
+      : (ing.ingredient?.name || 'Unknown');
+    const rawScaled = Math.round(ing.rawAmount * scaleFactor * 10) / 10;
+    const cookedScaled = ing.cookedAmount != null ? Math.round(ing.cookedAmount * scaleFactor * 10) / 10 : null;
+    const allergens = ing.ingredient?.allergens || '';
+    return { name, rawAmount: rawScaled, cookedAmount: cookedScaled, unit: ing.unit, isFlexible: ing.isFlexible, allergens };
+  });
+
+  const prepSteps = (recipe.prepSteps as unknown as Array<{ step: number; text: string; note?: string }>) || [];
+  const autoAllergens = recipe.autoAllergens as string[] || [];
+  const extraAllergens = recipe.extraAllergens as string[] || [];
+  const allAllergens = [...new Set([...autoAllergens, ...extraAllergens])].sort();
+  const servings = recipe.recipeVolume && recipe.servingSize
+    ? Math.round((recipe.recipeVolume * 1000) / recipe.servingSize * scaleFactor)
+    : null;
+  const hasPhoto = !!recipe.photoUrl;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${esc(recipe.name)} — De Sering Recipe</title>
+<style>
+  @page { size: A4; margin: 18mm 15mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 12px; line-height: 1.5; color: #1a1a18; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  h2 { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #555; margin: 16px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  .header { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
+  .header-photo { width: 100px; height: 100px; object-fit: cover; border-radius: 6px; }
+  .meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: #666; margin-bottom: 8px; }
+  .meta span { background: #f0f0f0; padding: 2px 8px; border-radius: 10px; }
+  .allergens { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
+  .allergen { background: #fce4e4; color: #993c1d; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
+  th { text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; color: #888; padding: 4px 6px; border-bottom: 2px solid #ccc; }
+  td { padding: 4px 6px; border-bottom: 1px solid #eee; }
+  tr.flexible td { font-style: italic; color: #534ab7; }
+  .steps { counter-reset: step; padding: 0; list-style: none; }
+  .steps li { counter-increment: step; padding: 6px 0 6px 28px; position: relative; border-bottom: 1px solid #f0f0f0; }
+  .steps li::before { content: counter(step); position: absolute; left: 0; width: 20px; height: 20px; background: #1a1a18; color: #fff; border-radius: 50%; font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center; top: 7px; }
+  .step-note { font-size: 11px; color: #ba7517; font-style: italic; margin-top: 2px; }
+  .storage-box { background: #f7f6f3; border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px; }
+  .storage-box strong { display: block; font-size: 11px; text-transform: uppercase; color: #888; margin-bottom: 4px; }
+  .footer { margin-top: 16px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 10px; color: #999; display: flex; justify-content: space-between; }
+  ${scaleFactor !== 1 ? '.scale-note { background: #e6f1fb; color: #185fa5; padding: 6px 10px; border-radius: 6px; font-size: 11px; margin-bottom: 12px; font-weight: 500; }' : ''}
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .no-print { display: none; }
+  }
+  @media screen {
+    body { max-width: 700px; margin: 20px auto; padding: 20px; }
+    .print-btn { position: fixed; top: 12px; right: 12px; padding: 8px 16px; background: #1a1a18; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    .print-btn:hover { opacity: 0.85; }
+  }
+</style>
+</head>
+<body>
+<button class="print-btn no-print" onclick="window.print()">Print (Ctrl+P)</button>
+
+<div class="header">
+  ${hasPhoto ? `<img src="/api/recipes/${recipe.id}/photo" class="header-photo" />` : ''}
+  <div>
+    <h1>${esc(recipe.name)}</h1>
+    <div class="meta">
+      <span>${esc(recipe.type)}</span>
+      ${recipe.structure ? `<span>${esc(recipe.structure)}</span>` : ''}
+      ${recipe.seasonality ? `<span>${esc(recipe.seasonality)}</span>` : ''}
+      ${recipe.servingTemp ? `<span>${esc(recipe.servingTemp)}</span>` : ''}
+      ${servings ? `<span>${servings} servings</span>` : ''}
+      ${recipe.servingSize ? `<span>${recipe.servingSize} ml/serving</span>` : ''}
+      ${recipe.costPerServing != null ? `<span>&euro;${recipe.costPerServing.toFixed(2)}/serving</span>` : ''}
+    </div>
+    ${allAllergens.length > 0 ? `<div class="allergens">${allAllergens.map(a => `<span class="allergen">${esc(a)}</span>`).join('')}</div>` : ''}
+  </div>
+</div>
+
+${scaleFactor !== 1 ? `<div class="scale-note">Scaled ${scaleFactor > 1 ? 'up' : 'down'} &times;${scaleFactor.toFixed(2)}${batchLabel ? ` for batch: ${esc(batchLabel)}` : ''}</div>` : ''}
+
+${ingredients.length > 0 ? `
+<h2>Ingredients</h2>
+<table>
+  <thead><tr><th>Ingredient</th><th>Raw amount</th><th>Cooked amount</th><th>Unit</th></tr></thead>
+  <tbody>
+    ${ingredients.map(i => `<tr${i.isFlexible ? ' class="flexible"' : ''}>
+      <td>${esc(i.name)}${i.allergens ? ` <span style="font-size:9px;color:#993c1d;">(${esc(i.allergens)})</span>` : ''}</td>
+      <td>${i.rawAmount}</td>
+      <td>${i.cookedAmount ?? '—'}</td>
+      <td>${esc(i.unit)}</td>
+    </tr>`).join('')}
+  </tbody>
+</table>` : ''}
+
+${prepSteps.length > 0 ? `
+<h2>Prep Steps</h2>
+<ol class="steps">
+  ${prepSteps.map(ps => `<li>${esc(ps.text)}${ps.note ? `<div class="step-note">${esc(ps.note)}</div>` : ''}</li>`).join('')}
+</ol>` : ''}
+
+${recipe.coolingMethod || recipe.storageMethod ? `
+<h2>Storage</h2>
+<div style="display:flex;gap:10px;flex-wrap:wrap;">
+  ${recipe.coolingMethod ? `<div class="storage-box" style="flex:1;min-width:200px;"><strong>Cooling</strong>${esc(recipe.coolingMethod)}</div>` : ''}
+  ${recipe.storageMethod ? `<div class="storage-box" style="flex:1;min-width:200px;"><strong>Storage</strong>${esc(recipe.storageMethod)}</div>` : ''}
+</div>` : ''}
+
+<div class="footer">
+  <span>De Sering — ${esc(recipe.name)}</span>
+  <span>Printed ${new Date().toLocaleDateString('en-GB')}</span>
+</div>
+</body>
+</html>`;
+
+  res.type('html').send(html);
+}));
+
+// HTML-escape helper for print view
+function esc(str: unknown): string {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 export default router;

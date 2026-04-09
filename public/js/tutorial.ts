@@ -126,19 +126,24 @@ export const TUTORIALS = {
       body: "Quickly narrow the list to just soups, mains, or desserts. Use the search box to find a recipe by name.",
     },
     {
-      selector: '.ri-table',
-      title: 'Your recipe library',
-      body: "Every recipe De Sering makes is listed here. Tap any row to open the full recipe with ingredients, method, and allergens.",
+      selector: '.ri-btn-group',
+      title: 'Create or import',
+      body: "'Create recipe' opens the guided editor where you build a recipe step by step — ingredients, method, storage. 'Import from Sheet' pulls in a recipe from the old Google Sheets format.",
     },
     {
-      selector: '.ri-name-cell',
-      title: 'Open a recipe',
-      body: "Tap a recipe name to see the full details. Ingredient amounts scale automatically based on the guest count you've set for that day.",
+      selector: '.re-card',
+      title: 'Recipe cards',
+      body: "New recipes show as cards with cost, allergens, and quick actions: View (read-only detail), Edit (open the editor), Menu (add to this week's plan), Delete.",
+    },
+    {
+      selector: '.ri-table',
+      title: 'Legacy recipes',
+      body: "Recipes imported from Google Sheets appear in this table. They still work for batch planning. Over time, recreate them with 'Create recipe' for full features.",
     },
     {
       selector: '.allergen-pill',
       title: 'Allergens',
-      body: "Allergen tags appear on every recipe and are shown on the Dashboard menu too — so front-of-house can always check what's in each batch.",
+      body: "Allergen tags appear on every recipe. New recipes auto-detect allergens from ingredients in the database — no manual entry needed.",
     },
   ],
 

@@ -7,14 +7,15 @@ const { prisma } = require('../lib/db');
 const T = 'test-' + Date.now() + '-';
 
 afterAll(async () => {
+  await prisma.recipeIngredientRow.deleteMany({ where: { recipeId: { startsWith: T } } });
+  await prisma.recipePhoto.deleteMany({ where: { recipeId: { startsWith: T } } });
+  await prisma.recipe.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.batch.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.recipeIndex.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.ingredient.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.standardInventory.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.feedback.deleteMany({ where: { user: 'test-runner' } });
-  // Clean up test guest history entries (test date prefix 2099-)
   await prisma.guestHistory.deleteMany({ where: { date: { startsWith: '2099-' } } });
-  // Clean up test next-weeks entries (test monday key prefix 2099-)
   await prisma.guestsNextWeeks.deleteMany({ where: { mondayKey: { startsWith: '2099-' } } });
   await prisma.$disconnect();
 });
@@ -725,4 +726,177 @@ describe('Data Patch API', () => {
     const gone = checkRes.body.batches.find((b: any) => b.id === patchBatchId);
     expect(gone).toBeUndefined();
   }, 15000);
+});
+
+// ── Recipe v2 CRUD ──
+
+describe('Recipe v2 CRUD', () => {
+  const recipeId = T + 'recipe-1';
+  const ingId = T + 'recipe-ing-1';
+
+  // Create a test ingredient for linking
+  beforeAll(async () => {
+    await prisma.ingredient.create({
+      data: {
+        id: T + 'ing-lentils',
+        name: 'Red lentils (test)',
+        category: 'Legumes & Proteins',
+        unit: 'Grams',
+        pricePer100g: 0.301,
+        allergens: '',
+        active: true,
+      },
+    });
+    await prisma.ingredient.create({
+      data: {
+        id: T + 'ing-onion',
+        name: 'Onion (test)',
+        category: 'Vegetables & Fruit',
+        unit: 'Grams',
+        pricePer100g: 0.0675,
+        allergens: 'Onion',
+        active: true,
+        nutrition: { energyKcal: 40, energyKj: 166, fat: 0.1, saturatedFat: 0, carbs: 9.3, sugar: 4.2, fiber: 1.7, protein: 1.1, salt: 0 },
+      },
+    });
+  });
+
+  it('POST /api/recipes — create recipe with ingredients', async () => {
+    const res = await request(app)
+      .post('/api/recipes')
+      .send({
+        id: recipeId,
+        name: 'Test Lentil Soup',
+        type: 'Soup',
+        servingSize: 280,
+        recipeVolume: 8.5,
+        structure: 'Open structure',
+        seasonality: 'Year round',
+        prepSteps: [{ step: 1, text: 'Heat oil' }, { step: 2, text: 'Add lentils' }],
+        coolingMethod: 'Blast chiller',
+        storageMethod: 'Label and refrigerate',
+        ingredients: [
+          { id: ingId, ingredientId: T + 'ing-lentils', sortOrder: 0, rawAmount: 500, unit: 'Grams', isFlexible: false, suggestedNames: [] },
+          { id: T + 'recipe-ing-2', ingredientId: T + 'ing-onion', sortOrder: 1, rawAmount: 1000, unit: 'Grams', isFlexible: false, suggestedNames: [] },
+          { id: T + 'recipe-ing-3', ingredientId: null, sortOrder: 2, rawAmount: 3000, unit: 'Grams', isFlexible: true, flexCategory: 'Vegetables & Fruit', flexLabel: 'Any vegetables', suggestedNames: ['Carrot', 'Pumpkin'] },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe('Test Lentil Soup');
+    expect(res.body.ingredients).toHaveLength(3);
+    expect(res.body.autoAllergens).toContain('Onion');
+    expect(res.body.costPerServing).toBeGreaterThan(0);
+    expect(res.body.prepSteps).toHaveLength(2);
+    expect(res.body.ingredients[2].isFlexible).toBe(true);
+    expect(res.body.ingredients[2].flexLabel).toBe('Any vegetables');
+  });
+
+  it('GET /api/recipes — lists recipes', async () => {
+    const res = await request(app).get('/api/recipes');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    const found = res.body.find((r: any) => r.id === recipeId);
+    expect(found).toBeTruthy();
+    expect(found.ingredients).toHaveLength(3);
+  });
+
+  it('GET /api/recipes/:id — single recipe with nutrition', async () => {
+    const res = await request(app).get(`/api/recipes/${recipeId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(recipeId);
+    expect(res.body.ingredients[0].ingredientName).toBe('Red lentils (test)');
+    expect(res.body.nutrition).toBeTruthy();
+    expect(res.body.nutrition.completeness).toBeGreaterThan(0);
+  });
+
+  it('PATCH /api/recipes/:id — update metadata', async () => {
+    const res = await request(app)
+      .patch(`/api/recipes/${recipeId}`)
+      .send({ name: 'Updated Lentil Soup', seasonality: 'Winter' });
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe('Updated Lentil Soup');
+    expect(res.body.seasonality).toBe('Winter');
+  });
+
+  it('PATCH /api/recipes/:id — update ingredients', async () => {
+    const res = await request(app)
+      .patch(`/api/recipes/${recipeId}`)
+      .send({
+        ingredients: [
+          { id: T + 'recipe-ing-new', ingredientId: T + 'ing-lentils', sortOrder: 0, rawAmount: 800, unit: 'Grams', isFlexible: false, suggestedNames: [] },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.ingredients).toHaveLength(1);
+    expect(res.body.ingredients[0].rawAmount).toBe(800);
+  });
+
+  it('POST /api/recipes/:id/version — save version snapshot', async () => {
+    const res = await request(app)
+      .post(`/api/recipes/${recipeId}/version`)
+      .send({ notes: 'Reduced to just lentils' });
+    expect(res.status).toBe(200);
+    expect(res.body.versions).toHaveLength(1);
+    expect(res.body.versions[0].version).toBe(1);
+    expect(res.body.versions[0].notes).toBe('Reduced to just lentils');
+  });
+
+  it('GET /api/recipes/:id/versions — version history', async () => {
+    const res = await request(app).get(`/api/recipes/${recipeId}/versions`);
+    expect(res.status).toBe(200);
+    expect(res.body.versions).toHaveLength(1);
+  });
+
+  it('GET /api/recipes/nonexistent — 404', async () => {
+    const res = await request(app).get('/api/recipes/nonexistent');
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /api/recipes — 400 for invalid data', async () => {
+    const res = await request(app).post('/api/recipes').send({ id: T + 'bad', name: '' });
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /api/ingredients/suggest — suggests by category', async () => {
+    const res = await request(app).get('/api/ingredients/suggest?category=Vegetables%20%26%20Fruit&location=west');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('POST /api/recipes/recalculate-costs — recalculates all', async () => {
+    const res = await request(app).post('/api/recipes/recalculate-costs');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(typeof res.body.total).toBe('number');
+  });
+
+  it('GET /api/data — includes recipes array', async () => {
+    const res = await request(app).get('/api/data');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.recipes)).toBe(true);
+  });
+
+  it('GET /api/recipes/:id/print — returns printable HTML', async () => {
+    const res = await request(app).get(`/api/recipes/${recipeId}/print`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/html/);
+    expect(res.text).toContain('De Sering');
+    expect(res.text).toContain('Updated Lentil Soup');
+    expect(res.text).toContain('Ingredients');
+    expect(res.text).toContain('@media print');
+  });
+
+  it('GET /api/recipes/:id/print — 404 for nonexistent', async () => {
+    const res = await request(app).get('/api/recipes/nonexistent/print');
+    expect(res.status).toBe(404);
+  });
+
+  it('DELETE /api/recipes/:id — deletes recipe', async () => {
+    const res = await request(app).delete(`/api/recipes/${recipeId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const check = await request(app).get(`/api/recipes/${recipeId}`);
+    expect(check.status).toBe(404);
+  });
 });

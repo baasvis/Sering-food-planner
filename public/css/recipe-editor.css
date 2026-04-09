@@ -1,0 +1,79 @@
+/* ═══════════ RECIPE EDITOR ═══════════ */
+
+/* Step navigation */
+.re-step-nav{display:flex;gap:4px;margin-bottom:16px;overflow-x:auto;padding-bottom:4px;}
+.re-step-btn{padding:6px 12px;font-size:12px;font-weight:500;border:1px solid var(--border2);border-radius:20px;background:transparent;cursor:pointer;color:var(--text2);white-space:nowrap;transition:all .15s;}
+.re-step-btn.active{background:var(--text);color:var(--bg);border-color:var(--text);}
+.re-step-btn:hover:not(.active){color:var(--text);border-color:var(--text3);}
+
+/* Completeness bar */
+.re-completeness{display:flex;align-items:center;gap:8px;margin-bottom:12px;}
+.re-completeness-bar{flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden;}
+.re-completeness-fill{height:100%;background:var(--green);border-radius:3px;transition:width .3s;}
+.re-completeness-text{font-size:11px;color:var(--text2);white-space:nowrap;}
+
+/* Steps */
+.re-step{animation:reFadeIn .15s ease-out;}
+@keyframes reFadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+
+/* Ingredient rows */
+.re-ingredients-list{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;max-height:50vh;overflow-y:auto;}
+.re-ing-row{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;}
+.re-ing-flexible{border-left:3px solid var(--purple);}
+.re-ing-header{display:flex;align-items:center;gap:6px;}
+.re-ing-num{width:22px;height:22px;border-radius:50%;background:var(--text);color:var(--bg);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.re-ing-search{width:100%;font-size:13px;height:32px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 8px;background:var(--bg);color:var(--text);}
+
+/* Ingredient suggestions dropdown */
+.re-ing-suggestions{position:absolute;top:100%;left:0;right:0;z-index:100;background:var(--bg);border:1px solid var(--border2);border-radius:var(--radius);max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.12);}
+.re-sug-item{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);}
+.re-sug-item:last-child{border-bottom:none;}
+.re-sug-item:hover{background:var(--bg2);}
+
+/* Cost summary */
+.re-cost-summary{font-size:13px;padding:10px 12px;background:var(--green-bg);border-radius:var(--radius);margin-bottom:12px;display:flex;flex-wrap:wrap;align-items:center;}
+
+/* Prep steps */
+.re-prep-step{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;margin-bottom:8px;}
+.re-prep-header{display:flex;align-items:center;gap:6px;margin-bottom:6px;}
+.re-prep-text{width:100%;font-size:13px;border:1px solid var(--border2);border-radius:var(--radius);padding:8px;background:var(--bg);color:var(--text);resize:vertical;font-family:inherit;}
+.re-prep-note{width:100%;font-size:12px;height:28px;border:1px solid var(--border);border-radius:var(--radius);padding:0 8px;background:var(--bg);color:var(--text2);margin-top:4px;}
+
+/* Review sections */
+.re-review-section{margin-bottom:14px;padding:10px 12px;background:var(--bg2);border-radius:var(--radius);border:1px solid var(--border);}
+.re-review-section strong{font-size:12px;text-transform:uppercase;letter-spacing:.3px;color:var(--text2);display:block;margin-bottom:6px;}
+.re-review-ingredients{display:flex;flex-direction:column;gap:2px;}
+.re-review-ing{display:flex;justify-content:space-between;font-size:13px;padding:2px 0;}
+.re-review-amt{font-size:12px;color:var(--text2);}
+
+/* Completeness checklist */
+.re-check{font-size:13px;padding:3px 0;color:var(--text2);}
+.re-check.re-check-ok{color:var(--green);}
+
+/* Photo */
+.re-photo-area{display:flex;flex-direction:column;gap:8px;}
+.re-photo-preview{width:120px;height:120px;object-fit:cover;border-radius:var(--radius);border:1px solid var(--border);}
+
+/* Detail modal */
+.re-detail-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;}
+.re-detail-table th{text-align:left;font-size:11px;font-weight:600;color:var(--text2);padding:4px 6px;border-bottom:1px solid var(--border);}
+.re-detail-table td{padding:4px 6px;border-bottom:1px solid var(--border);}
+.re-detail-steps{padding-left:20px;font-size:13px;margin-top:4px;}
+.re-detail-steps li{margin-bottom:6px;}
+.re-step-note{font-size:12px;color:var(--amber);font-style:italic;margin-top:2px;}
+
+/* Nutrition */
+.re-nutrition{margin-bottom:14px;padding:10px 12px;background:var(--bg2);border-radius:var(--radius);border:1px solid var(--border);}
+.re-nutrition strong{font-size:12px;text-transform:uppercase;letter-spacing:.3px;color:var(--text2);}
+.re-nutrition-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;}
+.re-nutrition-table td{padding:3px 6px;border-bottom:1px solid var(--border);}
+.re-nutrition-table td:last-child{text-align:right;font-weight:500;}
+
+/* V2 recipe cards on index screen */
+.re-v2-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;}
+.re-v2-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px 14px;}
+.re-v2-card:hover{border-color:var(--border2);}
+.re-v2-card-header{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.re-v2-name{font-size:14px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.re-v2-card-meta{display:flex;gap:10px;font-size:12px;color:var(--text2);flex-wrap:wrap;}
+.re-v2-card-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);}
