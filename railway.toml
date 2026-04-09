@@ -1,2 +1,2 @@
 [deploy]
-startCommand = "npx prisma migrate resolve --applied 20260409180000_add_recipe_v2_models && npx prisma migrate deploy && NODE_ENV=production node dist/server/server.js"
+startCommand = "npx prisma migrate deploy && NODE_ENV=production node dist/server/server.js"
