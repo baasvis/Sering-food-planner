@@ -29,10 +29,21 @@ export async function apiGet(path: string): Promise<any> {
   return r.json();
 }
 
+// Error with HTTP status attached so callers can distinguish client vs server errors
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export async function apiPost(path: string, body: unknown, method: string = 'POST'): Promise<any> {
   const r = await fetch(path, { method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-  if (r.status === 401) { doLogout(); throw new Error('Session expired'); }
-  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || 'Save failed'); }
+  if (r.status === 401) { doLogout(); throw new ApiError(401, 'Session expired'); }
+  if (!r.ok) {
+    const e = await r.json().catch(()=>({}));
+    throw new ApiError(r.status, e.error || `HTTP ${r.status}`);
+  }
   return r.json();
 }
 
@@ -56,6 +67,22 @@ export function setSaveState(state: SaveState, msg?: string): void {
   if (!dot || !text) return;
   dot.className = 'save-dot ' + state;
   text.textContent = msg || SAVE_STATE_LABELS[state];
+}
+
+// Ensure S.guests has all required locations × days × meals as numbers.
+// The server's validator requires every slot; sparse state would 400 every save.
+const GUEST_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+export function normalizeGuests(): void {
+  for (const loc of ['west', 'centraal']) {
+    if (!S.guests[loc]) S.guests[loc] = {};
+    for (const day of GUEST_DAYS) {
+      const d = S.guests[loc][day] || {};
+      S.guests[loc][day] = {
+        lunch: typeof d.lunch === 'number' ? d.lunch : 0,
+        dinner: typeof d.dinner === 'number' ? d.dinner : 0,
+      };
+    }
+  }
 }
 
 // ── Snapshot diffing for patch saves ──
@@ -88,6 +115,8 @@ export function computePatch(): PatchRequest {
   }
 
   // Guests (small fixed structure — send full if changed)
+  // Normalize first so validation never fails due to sparse state (missing day/meal)
+  normalizeGuests();
   if (JSON.stringify(S.guests) !== _lastSaved.guests) patch.guests = S.guests;
 
   // Caterings
@@ -144,14 +173,32 @@ export async function doSave(): Promise<void> {
       const c = result.concurrent;
       toast(`${c.recentUser} saved ${c.agoSeconds < 60 ? c.agoSeconds + 's' : Math.round(c.agoSeconds/60) + 'min'} ago — consider reloading`);
     }
-  } catch (_e: unknown) {
+  } catch (e: unknown) {
+    const status = e instanceof ApiError ? e.status : 0;
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    console.error(`[save] failed (status ${status}):`, msg, '| patch summary:', {
+      batches: patch.batches?.length || 0,
+      deletedBatches: patch.deletedBatches?.length || 0,
+      guests: patch.guests ? 'yes' : 'no',
+      caterings: patch.caterings?.length || 0,
+    });
+
+    // Client errors (400/404/409) won't succeed on retry — surface immediately
+    const isClientError = status >= 400 && status < 500;
+    if (isClientError) {
+      setSaveState('error', `Save failed: ${msg}`);
+      toastError(`Save rejected by server: ${msg}`);
+      retryCount = 0;
+      return;
+    }
+
     retryCount++;
     if (retryCount <= MAX_RETRIES) {
-      setSaveState('error', `Retry ${retryCount}/${MAX_RETRIES}...`);
+      setSaveState('error', `Retry ${retryCount}/${MAX_RETRIES}... (${msg})`);
       setTimeout(doSave, 2000 * retryCount);
     } else {
-      setSaveState('error', 'Save failed — check connection');
-      toastError('Could not save changes. Check your internet connection and try again.');
+      setSaveState('error', `Save failed: ${msg}`);
+      toastError(`Could not save changes: ${msg}`);
       retryCount = 0;
     }
   }

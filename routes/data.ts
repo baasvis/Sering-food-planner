@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateBatches, validateGuests, withWriteLock, dbWriteBatches, dbWriteGuests, dbWriteCaterings, dbWriteTransportItems } from '../lib/db';
 import { broadcast } from './events';
-import { asyncHandler } from '../lib/config';
+import { asyncHandler, AppError } from '../lib/config';
 import type { Batch, Catering, TransportItem } from '../shared/types';
 
 const router = express.Router();
@@ -59,7 +59,7 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
       if (deletedBatches) deletedBatches.forEach((id: string) => batchMap.delete(id));
       if (batches && batches.length) {
         const batchErr = validateBatches(batches);
-        if (batchErr) throw new Error(batchErr);
+        if (batchErr) throw new AppError(400, batchErr);
         batches.forEach((b: Batch) => batchMap.set(b.id, b));
       }
       await dbWriteBatches([...batchMap.values()]);
@@ -68,7 +68,7 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
     // Merge guests
     if (guests) {
       const guestErr = validateGuests(guests);
-      if (guestErr) throw new Error(guestErr);
+      if (guestErr) throw new AppError(400, guestErr);
       const merged = current.guests;
       for (const loc of ['west', 'centraal']) {
         if (!guests[loc]) continue;
