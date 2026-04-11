@@ -278,6 +278,84 @@ router.post('/recipes/recalculate-costs', asyncHandler(async (_req: Request, res
   res.json({ ok: true, updated, total: recipes.length });
 }));
 
+// One-off: migrate prep steps from legacy Google Sheets into v2 recipes.
+// Reads range A28:H46 from each legacy sheet; parses one step per non-empty row.
+router.post('/recipes/migrate-prep-steps', asyncHandler(async (req: Request, res: Response) => {
+  const sheets = getSheetsClient();
+  if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
+
+  const dryRun = req.query.dryRun === 'true';
+  const overwrite = req.query.overwrite === 'true';
+
+  const legacy = await prisma.recipeIndex.findMany({
+    select: { id: true, name: true, recipeSheetId: true },
+  });
+  const v2Recipes = await prisma.recipe.findMany({
+    select: { id: true, name: true, prepSteps: true },
+  });
+  const v2ByName = new Map(v2Recipes.map(r => [r.name.toLowerCase().trim(), r]));
+
+  const report: Array<{ legacy: string; v2?: string; steps?: number; status: string; sample?: string[] }> = [];
+  let migrated = 0;
+
+  for (const l of legacy) {
+    if (!l.recipeSheetId) {
+      report.push({ legacy: l.name, status: 'no-sheet-id' });
+      continue;
+    }
+    const v2 = v2ByName.get(l.name.toLowerCase().trim());
+    if (!v2) {
+      report.push({ legacy: l.name, status: 'no-v2-match' });
+      continue;
+    }
+    if (!overwrite && Array.isArray(v2.prepSteps) && (v2.prepSteps as unknown[]).length > 0) {
+      report.push({ legacy: l.name, v2: v2.id, status: 'already-has-steps' });
+      continue;
+    }
+
+    try {
+      const r = await sheets.spreadsheets.values.get({
+        spreadsheetId: l.recipeSheetId,
+        range: 'A28:H46',
+      });
+      const rows = (r.data.values || []) as string[][];
+      const steps: { step: number; text: string }[] = [];
+      let stepNum = 1;
+      for (const row of rows) {
+        const cells = (row || []).map(c => (c == null ? '' : String(c)).trim()).filter(Boolean);
+        if (cells.length === 0) continue;
+        const text = cells.join(' ').replace(/\s+/g, ' ').trim();
+        if (!text) continue;
+        steps.push({ step: stepNum++, text });
+      }
+
+      if (steps.length === 0) {
+        report.push({ legacy: l.name, v2: v2.id, status: 'empty-range' });
+        continue;
+      }
+
+      if (!dryRun) {
+        await prisma.recipe.update({
+          where: { id: v2.id },
+          data: { prepSteps: steps as unknown as Prisma.InputJsonValue },
+        });
+      }
+      migrated++;
+      report.push({
+        legacy: l.name,
+        v2: v2.id,
+        steps: steps.length,
+        status: dryRun ? 'would-migrate' : 'migrated',
+        sample: steps.slice(0, 2).map(s => s.text.slice(0, 80)),
+      });
+    } catch (e: unknown) {
+      report.push({ legacy: l.name, v2: v2.id, status: `error: ${errMsg(e)}` });
+    }
+  }
+
+  res.json({ ok: true, dryRun, overwrite, migrated, total: legacy.length, report });
+}));
+
 // Update recipe metadata and/or ingredients
 router.patch('/recipes/:id', asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
