@@ -110,6 +110,7 @@ export interface AppState {
   guests: GuestsData;
   batches: Batch[];
   expandedBatches: Set<string>;
+  expandedBreakdowns: Set<string>;
   assigningBatchId: string | null;
   draggingBatchId: string | null;
   showAllBatches: boolean;
@@ -161,6 +162,7 @@ export let S: AppState = {
   },
   batches:[],
   expandedBatches: new Set(),
+  expandedBreakdowns: new Set(),
   assigningBatchId: null,
   draggingBatchId: null,
   showAllBatches: false,

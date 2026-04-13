@@ -224,9 +224,33 @@ export function toggleBatchExpand(id: string) {
   rerenderCurrentView();
 }
 
-export function renderBatchTile(d: Batch, showAssign?: boolean) {
+export interface BatchTileOptions {
+  showAssign?: boolean;
+  showActions?: boolean;
+  showRecipe?: boolean;
+  compact?: boolean;
+}
+
+export function toggleBreakdown(id: string) {
+  if (S.expandedBreakdowns.has(id)) S.expandedBreakdowns.delete(id);
+  else S.expandedBreakdowns.add(id);
+  rerenderCurrentView();
+}
+
+export function showNoteInput(id: string) {
+  const b = S.batches.find(b => b.id === id);
+  if (b) { b.note = ''; rerenderCurrentView(); }
+}
+
+export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTileOptions) {
+  const opts: BatchTileOptions = typeof showAssignOrOpts === 'boolean'
+    ? { showAssign: showAssignOrOpts }
+    : (showAssignOrOpts || {});
+  const showActions = opts.showActions !== false;
+  const showRecipe = opts.showRecipe !== false;
+
   const { str, cls } = diffStr(d);
-  const isExpanded = S.expandedBatches.has(d.id);
+  const isExpanded = !opts.compact && S.expandedBatches.has(d.id);
   const isSel = S.selected.has(d.id);
   const isStale = isDishStale(d);
   const isAssigning = S.assigningBatchId === d.id;
@@ -245,84 +269,154 @@ export function renderBatchTile(d: Batch, showAssign?: boolean) {
       <div class="sel-box${isSel ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelect('${d.id}')"></div>
       <span class="batch-type-dot batch-type-${(d.type||'Soup').toLowerCase().replace(/ /g,'-')}"></span>
       <span class="batch-tile-name">${esc(d.name)}</span>
+      <span class="batch-status ${isBatchCooked(d) ? (isDishStale(d) ? 'status-stale' : 'status-cooked') : 'status-tocook'}">${isBatchCooked(d) ? (isDishStale(d) ? 'Stale' : 'Cooked') : 'To cook'}</span>
       <span class="batch-tile-cook">${batchCookLabel(d)}</span>
       <span class="batch-tile-stock ${cls}">${d.stock || 0}L <small>${str}</small></span>
       <span class="batch-tile-logistics ${logisticsBadgeClass(d)}" style="font-size:10px;">${logisticsShort(d)}</span>
       ${d.inTransit ? '<span class="batch-transit-badge">In transit</span>' : ''}
-      ${showAssign && !S.assigningBatchId ? `<button class="batch-assign-btn" onclick="event.stopPropagation();startAssignMode('${d.id}')">Assign</button>` : ''}
+      ${opts.showAssign && !S.assigningBatchId ? `<button class="batch-assign-btn" onclick="event.stopPropagation();startAssignMode('${d.id}')">Assign</button>` : ''}
       <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
     </div>`;
 
   // Expanded detail panel
   if (isExpanded) {
     const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
-    const svcLbls = (d.services || []).map(s => {
-      const ml = s.meal === 'lunch' ? 'L' : 'D';
-      const lc = s.loc === 'west' ? 'SW' : 'SC';
-      const past = isServicePast(s) ? ' served' : '';
-      return `<span class="batch-svc-label${past}"><strong>${dateToDayName(s.date)}</strong> ${ml} ${lc}</span>`;
-    }).join(' ');
     const cookHtml = getCookCellHtml(d);
-    const breakdown = calcRequiredBreakdown(d);
 
-    html += `<div class="batch-tile-expanded">
-      <div class="batch-detail-grid">
-        <div class="batch-detail-section">
-          <label>Name</label>
-          <input class="inline-edit" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
+    // Build structured service data split by location
+    interface SvcLine { day: string; meal: string; liters: string; served: boolean }
+    const westSvcs: SvcLine[] = [];
+    const centraalSvcs: SvcLine[] = [];
+    const fullDayNames: Record<string, string> = { Mon:'Monday', Tue:'Tuesday', Wed:'Wednesday', Thu:'Thursday', Fri:'Friday', Sat:'Saturday', Sun:'Sunday' };
+    (d.services || []).forEach(svc => {
+      const meal = svc.meal === 'lunch' ? 'Lunch' : 'Dinner';
+      const past = isServicePast(svc);
+      // Services always show day names (Monday, Tuesday, etc.)
+      const short = dateToDayName(svc.date);
+      const dayLabel = fullDayNames[short] || short;
+      let liters = '';
+      if (!past) {
+        const g = getGuests(svc.loc, svc.date, svc.meal);
+        const k = `${svc.loc}-${svc.date}-${svc.meal}`;
+        const peers = (S.planner[k] || []).filter((p: Batch) => p.type === d.type);
+        const count = Math.max(peers.length, 1);
+        const l = Math.round((g / count) * ((d.serving || 280) / 1000) * 10) / 10;
+        liters = `${l}L`;
+      }
+      const line = { day: dayLabel, meal, liters, served: past };
+      if (svc.loc === 'west') westSvcs.push(line); else centraalSvcs.push(line);
+    });
+
+    // Catering lines (go into a separate list)
+    const cateringLines: string[] = [];
+    (S.caterings || []).forEach(c => {
+      const cd = (c.dishes || []).find(cd => cd.dishId === d.id);
+      if (cd) {
+        const peers = (c.dishes || []).filter(dd => dd.type === d.type).length;
+        const l = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * ((d.serving || 280) / 1000) * 10) / 10;
+        if (l > 0) cateringLines.push(`${l}L — ${esc(c.name)}`);
+      }
+    });
+
+    const renderSvcCol = (lines: SvcLine[]) => lines.length === 0
+      ? '<div class="bx-svc-empty">—</div>'
+      : lines.map(l => `<div class="bx-svc-line${l.served ? ' served' : ''}"><span class="bx-svc-day">${l.day}</span><span class="bx-svc-meal">${l.meal}</span>${l.served ? '<span class="bx-svc-liters">✓</span>' : `<span class="bx-svc-liters">${l.liters}</span>`}</div>`).join('');
+
+    const hasServices = westSvcs.length > 0 || centraalSvcs.length > 0;
+    const hasBothLocs = westSvcs.length > 0 && centraalSvcs.length > 0;
+
+    // Single- or dual-column service grid
+    let servicesHtml = '';
+    if (!hasServices) {
+      servicesHtml = '<span style="color:var(--red);font-weight:600;">No services assigned</span>';
+    } else if (hasBothLocs) {
+      servicesHtml = `<div class="bx-svc-grid">
+        <div class="bx-svc-col"><div class="bx-svc-col-title loc-west-text">Sering West</div>${renderSvcCol(westSvcs)}</div>
+        <div class="bx-svc-col"><div class="bx-svc-col-title loc-centraal-text">Sering Centraal</div>${renderSvcCol(centraalSvcs)}</div>
+      </div>`;
+    } else {
+      // Only one location — no columns needed
+      const lines = westSvcs.length > 0 ? westSvcs : centraalSvcs;
+      const locName = westSvcs.length > 0 ? 'Sering West' : 'Sering Centraal';
+      const locCls2 = westSvcs.length > 0 ? 'loc-west-text' : 'loc-centraal-text';
+      servicesHtml = `<div class="bx-svc-single"><div class="bx-svc-col-title ${locCls2}">${locName}</div>${renderSvcCol(lines)}</div>`;
+    }
+
+    // Recipe row
+    let recipeHtml = '';
+    if (showRecipe) {
+      if (d.recipeId) {
+        recipeHtml = `<div class="bx-row bx-recipe">
+          <button class="bx-recipe-btn bx-recipe-app" onclick="event.stopPropagation();openBatchRecipe('${d.id}')">${hasUnresolvedFlexible(d) ? '&#x26A0; Resolve &amp; edit' : 'Open batch recipe'}</button>
+          ${d.recipeSheetId ? `<a class="bx-recipe-link-secondary" href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()">Sheets recipe &#8599;</a>` : ''}
+          <span class="bx-serving">${d.serving || 280} ml/guest</span>
+        </div>`;
+      } else if (d.recipeSheetId) {
+        recipeHtml = `<div class="bx-row bx-recipe">
+          <a class="bx-recipe-btn" href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" onclick="event.stopPropagation()">Open recipe &#8599;</a>
+          <span class="bx-serving">${d.serving || 280} ml/guest</span>
+        </div>`;
+      } else {
+        recipeHtml = `<div class="bx-row bx-recipe bx-recipe-empty">
+          <span class="bx-no-recipe">No recipe linked</span>
+          <span class="bx-serving">${d.serving || 280} ml/guest</span>
+        </div>`;
+      }
+    }
+
+    // Note row
+    const hasNote = d.note !== undefined && d.note !== '';
+    const noteHtml = hasNote
+      ? `<div class="bx-row bx-note"><input class="bx-note-input" value="${esc(d.note || '')}" placeholder="Add a note..." onchange="inlineEdit('${d.id}','note',this.value)" onclick="event.stopPropagation()" /></div>`
+      : `<div class="bx-row bx-note bx-note-empty"><button class="bx-add-note" onclick="event.stopPropagation();showNoteInput('${d.id}')">+ Add note</button></div>`;
+
+    html += `<div class="batch-expanded">
+      <div class="bx-header">
+        <div class="bx-row bx-name">
+          <input class="bx-name-input" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
         </div>
-        <div class="batch-detail-section">
-          <label>Stock</label>
-          <div style="display:flex;align-items:center;gap:6px;">
-            <input class="inline-edit" type="number" value="${d.stock || 0}" step="0.5" min="0" style="width:70px;" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" />
-            <span style="color:var(--text2);">L</span>
-            <span class="${cls}" style="font-weight:600;">${str}</span>
-          </div>
-          ${breakdown.length ? `<div class="batch-breakdown">${breakdown.map(l => `<div>${l}</div>`).join('')}</div>` : ''}
-        </div>
-        <div class="batch-detail-section">
-          <label>Cook date</label>
-          ${cookHtml}
-        </div>
-        <div class="batch-detail-section">
-          <label>Type</label>
-          <span class="${typeBadgeClass(d.type)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleType('${d.id}')">${d.type}</span>
-        </div>
-        <div class="batch-detail-section">
-          <label>Storage</label>
-          <span class="${storageBadgeClass(d.storage || 'Gastro')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleStorage('${d.id}')">${d.storage || 'Gastro'}</span>
-        </div>
-        <div class="batch-detail-section">
-          <label>Location</label>
-          <span class="${logisticsBadgeClass(d)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLocation('${d.id}')">${logisticsShort(d)}</span>
-        </div>
-        <div class="batch-detail-section">
-          <label>Serving</label>
-          <span>${d.serving || 280} ml/guest</span>
-        </div>
-        ${d.recipeSheetId ? `<div class="batch-detail-section"><label>Recipe</label><a href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}/edit" target="_blank" rel="noopener" class="recipe-btn" onclick="event.stopPropagation()">Open recipe &#8599;</a></div>` : ''}
-        ${d.recipeId ? `<div class="batch-detail-section"><label>Batch recipe</label><button class="btn btn-sm" onclick="event.stopPropagation();openBatchRecipe('${d.id}')">${hasUnresolvedFlexible(d) ? '&#x26A0; Resolve &amp; edit' : '&#x1F4CB; Open batch recipe'}</button></div>` : ''}
-        <div class="batch-detail-section">
-          <label>Services</label>
-          <div>${svcLbls || '<span style="color:var(--red);font-weight:600;">No services assigned</span>'}</div>
-        </div>
-        <div class="batch-detail-section">
-          <label>Allergens</label>
-          <div class="allergen-inline" id="ag-inline-${d.id}">
-            ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
-            <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}',event)" title="Add allergen">+</button>
-          </div>
-        </div>
-        ${d.note !== undefined ? `<div class="batch-detail-section"><label>Note</label><input class="inline-edit" value="${esc(d.note || '')}" placeholder="Add a note..." onchange="inlineEdit('${d.id}','note',this.value)" onclick="event.stopPropagation()" /></div>` : ''}
+        ${recipeHtml}
       </div>
-      <div class="batch-tile-actions">
+      <div class="bx-columns">
+        <div class="bx-section bx-col-main">
+          <div class="bx-section-title">Stock & services</div>
+          <div class="bx-row bx-stock">
+            <input class="bx-stock-input" type="number" value="${d.stock || 0}" step="0.5" min="0" onchange="inlineEdit('${d.id}','stock',this.value)" onclick="event.stopPropagation();this.select()" />
+            <span class="bx-stock-unit">L in stock</span>
+            <span class="bx-diff ${cls}">${str}</span>
+          </div>
+          ${servicesHtml}
+          ${cateringLines.length ? `<div class="bx-catering-lines">${cateringLines.map(l => `<div class="bx-svc-line">${l}</div>`).join('')}</div>` : ''}
+        </div>
+        <div class="bx-section bx-col-side">
+          <div class="bx-section-title">Properties</div>
+          <div class="bx-row bx-schedule">
+            <div class="bx-cook">${cookHtml}</div>
+            <div class="bx-badges">
+              <span class="${typeBadgeClass(d.type)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleType('${d.id}')">${d.type}</span>
+              <span class="${storageBadgeClass(d.storage || 'Gastro')}" style="cursor:pointer;" onclick="event.stopPropagation();cycleStorage('${d.id}')">${d.storage || 'Gastro'}</span>
+              <span class="${logisticsBadgeClass(d)}" style="cursor:pointer;" onclick="event.stopPropagation();cycleLocation('${d.id}')">${logisticsShort(d)}</span>
+            </div>
+          </div>
+          <div class="bx-row bx-allergens">
+            <div class="allergen-inline" id="ag-inline-${d.id}">
+              ${allAg.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')}
+              <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}',event)" title="Add allergen">+</button>
+            </div>
+          </div>
+          ${noteHtml}
+        </div>
+      </div>
+      ${showActions ? `<div class="bx-row bx-actions">
         <button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button>
-        ${isBatchCooked(d)
-          ? `<button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button>`
-          : `${(d.services || []).length > 0 ? `<button class="btn btn-sm" style="background:var(--blue);color:white;" onclick="event.stopPropagation();openReplaceBatch('${d.id}')">Replace</button>` : ''}
-             <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteBatch('${d.id}')">Delete</button>`
-        }
-      </div>
+        <div class="bx-actions-right">
+          ${isBatchCooked(d)
+            ? `<button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button>`
+            : `${(d.services || []).length > 0 ? `<button class="btn btn-sm" style="background:var(--blue);color:white;" onclick="event.stopPropagation();openReplaceBatch('${d.id}')">Replace</button>` : ''}
+               <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteBatch('${d.id}')">Delete</button>`
+          }
+        </div>
+      </div>` : ''}
     </div>`;
   }
 
@@ -510,21 +604,27 @@ export function daysSinceCooked(d: Batch) {
 // Short cook date label for the compact batch tile row
 export function batchCookLabel(d: Batch) {
   if (isBatchCooked(d) && d.cookDate) {
-    // Already cooked — show "Cooked DD/M"
+    // Already cooked — show date with cooked status
     const iso = cookDateToISO(d.cookDate);
     const dt = new Date(iso);
     if (!isNaN(dt.getTime())) {
       const stale = isDishStale(d);
-      return `<span class="cook-label cooked${stale ? ' stale' : ''}" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Click to change cook date">${dt.getDate()}/${dt.getMonth()+1}</span>`;
+      const days = daysSinceCooked(d);
+      const dateStr = `${dt.getDate()}/${dt.getMonth()+1}`;
+      if (stale) {
+        return `<span class="cook-label stale" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="${days}d ago — serve or freeze">${dateStr}</span>`;
+      }
+      return `<span class="cook-label cooked" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Cooked on ${dateStr}">${dateStr}</span>`;
     }
     return '';
   }
   if (d.cookDate) {
-    // Planned cook date — show "Cook DD/M"
+    // Planned cook date — show day name (Tue, Wed, etc.)
     const iso = cookDateToISO(d.cookDate);
     const dt = new Date(iso);
     if (!isNaN(dt.getTime())) {
-      return `<span class="cook-label planned" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Click to change cook date">${dt.getDate()}/${dt.getMonth()+1}</span>`;
+      const dayShort = dateToDayName(iso);
+      return `<span class="cook-label planned" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Planned: ${dt.getDate()}/${dt.getMonth()+1}">${dayShort}</span>`;
     }
   }
   // No cook date set
@@ -556,11 +656,11 @@ export function tileEditCookDate(id: string) {
 export function getCookCellHtml(d: Batch) {
   const opts = getCookDayOptions();
 
-  // Already cooked (stock > 0) — show date + stale warning + editable date
+  // Already cooked (stock > 0) — show "Cooked on" + date
   if (isBatchCooked(d) && d.cookDate) {
     const stale = isDishStale(d);
     const days = daysSinceCooked(d);
-    let html = `<input type="date" class="cook-date-input" value="${cookDateToISO(d.cookDate)}" onchange="setCookDateDirect('${d.id}',this.value)" onclick="event.stopPropagation()" title="Change cooked date" />`;
+    let html = `<div class="bx-cook-wrap"><span class="bx-cook-label">Cooked on</span><input type="date" class="cook-date-input" value="${cookDateToISO(d.cookDate)}" onchange="setCookDateDirect('${d.id}',this.value)" onclick="event.stopPropagation()" title="Change cooked date" /></div>`;
     if (stale) {
       html += `<div class="cook-stale">${days}d ago — serve or freeze</div>`;
     }
@@ -568,22 +668,22 @@ export function getCookCellHtml(d: Batch) {
   }
   // Planned for today — show confirm button
   if (isCookDayToday(d)) {
-    return `<button class="cook-today-btn" onclick="event.stopPropagation();confirmCooked('${d.id}')">Click to mark as cooked</button>`;
+    return `<div class="bx-cook-wrap"><span class="bx-cook-label">Cook</span><button class="cook-today-btn" onclick="event.stopPropagation();confirmCooked('${d.id}')">Today — mark as cooked</button></div>`;
   }
-  // Has a planned future day — show dropdown (with option to switch to date)
+  // Has a planned future day — show "Cook on" + dropdown
   if (d.cookDate && !isBatchCooked(d)) {
-    return `<select class="cook-select has-date" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
-      <option value="">Select day/date</option>
+    return `<div class="bx-cook-wrap"><span class="bx-cook-label">Cook on</span><select class="cook-select has-date" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
+      <option value="">Select day</option>
       ${opts.map(o => `<option value="${o.value}"${d.cookDate === o.value ? ' selected' : ''}>${o.label}</option>`).join('')}
       <option value="__date">Pick a date...</option>
-    </select>`;
+    </select></div>`;
   }
-  // No plan yet — show dropdown with red warning style
-  return `<select class="cook-select no-date" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
-    <option value="">Select day/date</option>
+  // No plan yet — show "Cook on" + dropdown with red warning style
+  return `<div class="bx-cook-wrap"><span class="bx-cook-label">Cook on</span><select class="cook-select no-date" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
+    <option value="">Select day</option>
     ${opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
     <option value="__date">Pick a date...</option>
-  </select>`;
+  </select></div>`;
 }
 
 export function cookDateToISO(ddmmyyyy: string) {

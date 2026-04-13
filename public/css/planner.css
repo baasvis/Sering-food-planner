@@ -170,10 +170,14 @@
   .batch-type-dot.batch-type-main-course{background:var(--blue);}
   .batch-type-dot.batch-type-dessert{background:var(--purple);}
   .batch-tile-name{font-weight:500;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .batch-status{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 6px;border-radius:3px;flex-shrink:0;white-space:nowrap;}
+  .status-cooked{background:var(--green-light,#e8f5e9);color:var(--green,#388e3c);}
+  .status-tocook{background:var(--amber-bg,#fff3e0);color:var(--amber,#e65100);}
+  .status-stale{background:var(--red-bg,#fce4ec);color:var(--red,#c62828);}
   .batch-tile-cook{flex-shrink:0;}
   .cook-label{font-size:10px;font-weight:600;padding:2px 6px;border-radius:3px;cursor:pointer;white-space:nowrap;}
   .cook-label.cooked{background:var(--green-light,#e8f5e9);color:var(--green,#388e3c);}
-  .cook-label.cooked.stale{background:#fff3e0;color:var(--amber,#e65100);}
+  .cook-label.stale{background:var(--red-bg,#fce4ec);color:var(--red,#c62828);}
   .cook-label.planned{background:#e3f2fd;color:var(--blue,#1565c0);}
   .cook-label.none{background:var(--bg2);color:var(--text3);font-style:italic;font-weight:400;}
   .cook-label:hover{opacity:.8;text-decoration:underline;}
@@ -186,15 +190,56 @@
   .batch-tile-grid .batch-tile:not(.expanded) .batch-assign-btn{display:none;}
 
   /* Expanded panel */
-  .batch-tile-expanded{padding:8px 12px 12px;border-top:1px solid var(--border);}
-  .batch-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;}
-  .batch-detail-section{font-size:13px;}
-  .batch-detail-section label{display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);margin-bottom:2px;}
-  .batch-detail-section .inline-edit{font-size:13px;width:100%;padding:4px 6px;}
-  .batch-breakdown{font-size:11px;color:var(--text2);margin-top:4px;line-height:1.5;}
-  .batch-svc-label{display:inline-block;font-size:11px;padding:2px 6px;background:var(--bg2);border-radius:3px;margin:1px 2px;}
-  .batch-svc-label.served{opacity:.5;text-decoration:line-through;}
-  .batch-tile-actions{display:flex;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);}
+  .batch-expanded{padding:8px 12px 10px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px;}
+  .bx-header{display:flex;flex-direction:column;gap:6px;}
+  .bx-columns{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:start;}
+  .bx-section{padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);display:flex;flex-direction:column;gap:4px;}
+  .bx-col-main{min-width:0;}
+  .bx-col-side{min-width:0;}
+  .bx-section-title{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);margin-bottom:2px;}
+  @media(max-width:768px){.bx-columns{grid-template-columns:1fr;}}
+  .bx-row{display:flex;align-items:center;gap:8px;font-size:13px;min-height:28px;}
+  .bx-name-input{flex:1;font-size:14px;font-weight:600;border:1px solid transparent;border-radius:4px;padding:4px 6px;background:transparent;color:var(--text);transition:border-color .15s;}
+  .bx-name-input:hover{border-color:var(--border);background:var(--bg2);}
+  .bx-name-input:focus{border-color:var(--blue);outline:none;background:var(--bg);}
+  .bx-recipe{gap:8px;}
+  .bx-recipe-btn{font-size:12px;font-weight:600;padding:4px 10px;border-radius:4px;border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;text-decoration:none;white-space:nowrap;}
+  .bx-recipe-btn:hover{background:var(--blue);color:#fff;}
+  .bx-recipe-app{border-color:var(--green);background:var(--green-bg);color:var(--green);}
+  .bx-recipe-app:hover{background:var(--green);color:#fff;}
+  .bx-recipe-link-secondary{font-size:11px;color:var(--text3);text-decoration:underline;}
+  .bx-serving{margin-left:auto;font-size:11px;color:var(--text3);white-space:nowrap;}
+  .bx-no-recipe{font-size:12px;color:var(--text3);font-style:italic;}
+  .bx-label{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.03em;flex-shrink:0;}
+  .bx-stock-input{width:60px;font-size:13px;font-weight:600;height:28px;border:1px solid var(--border);border-radius:4px;padding:0 6px;background:var(--bg);color:var(--text);text-align:right;}
+  .bx-stock-unit{font-size:12px;color:var(--text2);}
+  .bx-diff{font-weight:600;font-size:13px;}
+  .bx-schedule{gap:8px;flex-wrap:wrap;}
+  .bx-cook{flex-shrink:0;}
+  .bx-cook-wrap{display:flex;align-items:center;gap:6px;}
+  .bx-cook-label{font-size:11px;font-weight:600;color:var(--text3);white-space:nowrap;}
+  .bx-badges{display:flex;gap:4px;align-items:center;margin-left:auto;}
+  .bx-allergens{min-height:24px;}
+
+  /* Service grid: two-column West | Centraal */
+  .bx-svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px;margin-top:4px;}
+  .bx-svc-single{margin-top:4px;}
+  .bx-svc-col-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;padding-bottom:3px;border-bottom:1px solid var(--border);}
+  .loc-west-text{color:#BA7517;}
+  .loc-centraal-text{color:#0F6E56;}
+  .bx-svc-line{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;min-height:22px;}
+  .bx-svc-line.served{opacity:.45;text-decoration:line-through;}
+  .bx-svc-day{font-weight:600;min-width:70px;}
+  .bx-svc-meal{color:var(--text2);min-width:42px;}
+  .bx-svc-liters{margin-left:auto;font-weight:600;font-size:11px;color:var(--text2);}
+  .bx-svc-empty{font-size:11px;color:var(--text3);font-style:italic;padding:2px 0;}
+  .bx-catering-lines{margin-top:4px;padding-top:4px;border-top:1px dashed var(--border);font-size:11px;color:var(--text2);}
+  .bx-note-input{flex:1;font-size:12px;border:1px solid transparent;border-radius:4px;padding:4px 6px;background:var(--bg2);color:var(--text2);}
+  .bx-note-input:focus{border-color:var(--blue);outline:none;background:var(--bg);color:var(--text);}
+  .bx-add-note{font-size:11px;color:var(--text3);background:none;border:none;cursor:pointer;padding:2px 0;}
+  .bx-add-note:hover{color:var(--text2);text-decoration:underline;}
+  .bx-actions{padding-top:6px;border-top:1px solid var(--border);margin-top:2px;}
+  .bx-actions-right{margin-left:auto;display:flex;gap:6px;}
   .batch-tile.assigning{border-color:var(--blue);background:var(--blue-bg);box-shadow:0 0 0 2px var(--blue);}
 
   /* ═══════════ BATCH POOL ═══════════ */
