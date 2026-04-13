@@ -619,12 +619,30 @@ export function batchCookLabel(d: Batch) {
     return '';
   }
   if (d.cookDate) {
-    // Planned cook date — show day name (Tue, Wed, etc.)
+    // Planned cook date — show day name (Tue, Wed, etc.), prefixed with "Next" if beyond this week
     const iso = cookDateToISO(d.cookDate);
     const dt = new Date(iso);
     if (!isNaN(dt.getTime())) {
       const dayShort = dateToDayName(iso);
-      return `<span class="cook-label planned" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Planned: ${dt.getDate()}/${dt.getMonth()+1}">${dayShort}</span>`;
+      // Determine if cook date is beyond the current week (Mon–Sun)
+      const today = getToday();
+      const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon, ...
+      const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      const thisMonday = new Date(today);
+      thisMonday.setDate(today.getDate() + mondayOffset);
+      thisMonday.setHours(0, 0, 0, 0);
+      const nextMonday = new Date(thisMonday);
+      nextMonday.setDate(thisMonday.getDate() + 7);
+      const weekAfterNext = new Date(nextMonday);
+      weekAfterNext.setDate(nextMonday.getDate() + 7);
+      let label = dayShort;
+      if (dt >= weekAfterNext) {
+        // 2+ weeks out — show date instead of day name
+        label = `${dt.getDate()}/${dt.getMonth()+1}`;
+      } else if (dt >= nextMonday) {
+        label = `Next ${dayShort}`;
+      }
+      return `<span class="cook-label planned" onclick="event.stopPropagation();tileEditCookDate('${d.id}')" title="Planned: ${dt.getDate()}/${dt.getMonth()+1}">${label}</span>`;
     }
   }
   // No cook date set
