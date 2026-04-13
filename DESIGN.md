@@ -76,6 +76,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - **Auth**: Google Sign-In with allowed email list
 
 **Completed features:**
+- Global location chooser: after login, users pick their kitchen (Sering West / Sering Centraal). Choice persists in localStorage. The app title ("Sering West" / "Sering Centraal") acts as a toggle to switch location. Dashboard, Orders, and Ingredient DB use the global location — no per-screen toggles. Finance keeps its own filter pills (has "all" + "testtafel") but defaults to global location. Planner and Guests retain their own location handling (sub-tabs / side-by-side). Planner defaults to the user's location tab and only shows DO INVENTORY on the user's current location.
 - Dashboard with today's menu, guests, guest flow chart, stock alerts, week overview
 - Guest flow chart on dashboard: canvas line chart showing estimated guest arrivals per 5-minute interval. Uses real per-5-min arrival distributions extracted from POS timestamps (Tebi Invoice ID + Lightspeed Creation Date), grouped by location/meal/day-of-week. Falls back to gaussian curve when no historical data exists. Lunch/Dinner toggle (amber/purple), "Now" time indicator with remaining guest count during service, peak label. Dark mode + HiDPI aware. Distributions stored in GuestHistoryMeta as normalized JSON fractions.
 - Guest count tables per location (West + Centraal) with live totals, day-by-day navigation (today ±14 days), editable for current and future weeks
