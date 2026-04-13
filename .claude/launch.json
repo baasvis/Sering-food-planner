@@ -22,6 +22,13 @@
       "port": 5173
     },
     {
+      "name": "preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "preview"],
+      "port": 3000,
+      "autoPort": true
+    },
+    {
       "name": "prod",
       "runtimeExecutable": "node",
       "runtimeArgs": ["dist/server/server.js"],

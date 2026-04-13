@@ -83,6 +83,7 @@ vite.config.ts         — Vite config (root: public/, proxy /api to :3000, @sha
 ```bash
 npm run dev            # Vite on :5173 (frontend HMR) + tsx on :3000 (backend)
 npm run build          # Vite build + tsc backend → dist/
+npm run preview        # Build + serve on :3000 (single port, for Claude preview)
 npm start              # node dist/server/server.js (production)
 npm test               # Jest with @swc/jest (74 API tests)
 npm run typecheck      # tsc --noEmit on backend
@@ -90,6 +91,12 @@ npm run typecheck      # tsc --noEmit on backend
 
 Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
+
+## Preview (for Claude Code verification)
+Use `preview_start` with `name: "preview"` (not `"dev"`). The `dev` script runs two
+servers via `concurrently` which breaks the preview tool. The `preview` config builds
+the full app and serves everything on one port — no cookie issues, no dual-server
+confusion. After the page loads, click the "Dev mode login" button to bypass auth.
 
 ## Conventions
 - Frontend uses ES module imports/exports, bundled by Vite
