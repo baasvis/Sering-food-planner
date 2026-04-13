@@ -119,7 +119,6 @@ export interface AppState {
   ingredientDb: Ingredient[];
   planner: Record<string, Batch[]>;
   user: AppUser | null;
-  dashboardLoc: Location;
   dashVegMode: string;
   dashVegModeTomorrow: string;
   prepChecklist: Record<string, Set<string>>;
@@ -171,7 +170,6 @@ export let S: AppState = {
   ingredientDb:[],
   planner:{},
   user:null,
-  dashboardLoc:'west',
   dashVegMode:'combined',
   dashVegModeTomorrow:'combined',
   prepChecklist: {},
@@ -191,5 +189,23 @@ export let S: AppState = {
   financeProductMeal: 'all',
   financeProductLoc: 'all',
 };
+
+// ── Global location helpers ──────────────────────────────────────
+const LOC_STORAGE_KEY = 'sering-location';
+
+export function setGlobalLocation(loc: Location): void {
+  S.currentLoc = loc;
+  localStorage.setItem(LOC_STORAGE_KEY, loc);
+}
+
+/** Restore location from localStorage. Returns true if a saved value was found. */
+export function restoreGlobalLocation(): boolean {
+  const saved = localStorage.getItem(LOC_STORAGE_KEY);
+  if (saved === 'west' || saved === 'centraal') {
+    S.currentLoc = saved;
+    return true;
+  }
+  return false;
+}
 
 // ═══════════════════════════════════════════════════════════════════

@@ -1,10 +1,11 @@
 // AUTH
 // ═══════════════════════════════════════════════════════════════════
 
-import { S } from './state';
+import { S, setGlobalLocation, restoreGlobalLocation } from './state';
+import type { Location } from '@shared/types';
 import { showFeedbackFab } from './feedback';
 import { disconnectLiveSync } from './utils';
-import { initApp } from './init';
+import { initApp, buildNav } from './init';
 import { initTelemetry } from './telemetry';
 
 declare const google: any;
@@ -129,6 +130,50 @@ export function showApp() {
     img.style.display = 'block';
   }
   initTelemetry(S.user?.email);
+
+  // If no saved location, show location chooser before entering the app
+  if (!restoreGlobalLocation()) {
+    showLocationChooser();
+    return;
+  }
+
+  initApp();
+  if (typeof showFeedbackFab === 'function') showFeedbackFab();
+}
+
+export function showLocationChooser() {
+  const content = document.getElementById('content')!;
+  content.innerHTML = `
+    <div class="location-chooser">
+      <div class="location-chooser-card">
+        <h2>Welke locatie?</h2>
+        <p>In welke keuken werk je vandaag?</p>
+        <div class="location-chooser-buttons">
+          <button onclick="selectLocation('west')" class="loc-choose-btn loc-choose-west">
+            <span class="loc-choose-icon">W</span>
+            <span class="loc-choose-label">Sering West</span>
+          </button>
+          <button onclick="selectLocation('centraal')" class="loc-choose-btn loc-choose-centraal">
+            <span class="loc-choose-icon">C</span>
+            <span class="loc-choose-label">Sering Centraal</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+export function selectLocation(loc: Location) {
+  setGlobalLocation(loc);
+  // Rebuild nav because showLocationChooser() replaced the screen containers
+  buildNav();
+  // Re-populate user menu after nav rebuild
+  document.getElementById('user-name')!.textContent = S.user?.name || '';
+  if (S.user?.picture) {
+    const img = document.getElementById('user-avatar') as HTMLImageElement;
+    img.src = S.user.picture;
+    img.style.display = 'block';
+  }
   initApp();
   if (typeof showFeedbackFab === 'function') showFeedbackFab();
 }

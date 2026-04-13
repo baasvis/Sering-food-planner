@@ -228,28 +228,17 @@ export function renderDashboard() {
   const userName = S.user?.name ? ', ' + S.user.name.split(' ')[0] : '';
   const dateStr = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 
-  const loc = S.dashboardLoc;
+  const loc = S.currentLoc;
 
   document.getElementById('screen-dashboard').innerHTML = `
     <div class="dash-greeting">${greeting}${esc(userName)}</div>
     <div class="dash-date">${dateStr}</div>
-    <div class="dash-tab-bar">
-      <button class="dash-tab${loc === 'west' ? ' active' : ''}" onclick="setDashboardLoc('west')">Sering West</button>
-      <button class="dash-tab${loc === 'centraal' ? ' active' : ''}" onclick="setDashboardLoc('centraal')">Sering Centraal</button>
-    </div>
     <div id="dash-content"></div>
     <div id="dash-team-float" class="dash-team-float"></div>
   `;
 
   // Load persisted state then render
   loadDayTodos();
-  loadPrepChecklist(loc).then(() => { renderDashboardContent(); renderTeamTodos(); });
-}
-
-export function setDashboardLoc(loc: Location) {
-  S.dashboardLoc = loc;
-  document.querySelectorAll('.dash-tab').forEach(t => t.classList.remove('active'));
-  document.querySelector(`.dash-tab[onclick="setDashboardLoc('${loc}')"]`).classList.add('active');
   loadPrepChecklist(loc).then(() => { renderDashboardContent(); renderTeamTodos(); });
 }
 
@@ -348,7 +337,7 @@ export function drawGuestFlowChart() {
   canvas.height = h * dpr;
   ctx.scale(dpr, dpr);
 
-  const loc = S.dashboardLoc;
+  const loc = S.currentLoc;
   const todayIso = dateToIso(getToday());
   const totalGuests = getGuests(loc, todayIso, _guestFlowMeal);
   const data = buildGuestFlowData(totalGuests, _guestFlowMeal, loc);
@@ -603,7 +592,7 @@ export function renderDashboardContent() {
   if (!el) return;
 
   rebuildPlanner(); // always ensure fresh planner state
-  const loc = S.dashboardLoc;
+  const loc = S.currentLoc;
   const today = getToday();
   const todayIso = dateToIso(today);
   const tomorrow = new Date(today);
@@ -835,7 +824,7 @@ export function renderPrepChecklist() {
   if (!el) return;
 
   rebuildPlanner();
-  const loc = S.dashboardLoc;
+  const loc = S.currentLoc;
   const today = getToday();
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);

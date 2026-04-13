@@ -12,7 +12,13 @@ import { trackEvent } from './telemetry';
 
 // ── WEEK PLAN (UNIFIED) ──────────────────────────────────
 
+let _plannerInitialLocApplied = false;
 export function renderWeekPlan() {
+  // On first render, default to the user's global location
+  if (!_plannerInitialLocApplied) {
+    _plannerInitialLocApplied = true;
+    S.plannerSubTab = S.currentLoc;
+  }
   const tab = S.plannerSubTab;
   const el = document.getElementById('screen-planner');
   const tabs = [
@@ -75,7 +81,8 @@ export function renderLocationPlan(loc: string) {
   const assigning = S.assigningBatchId;
   const assignBatch = assigning ? S.batches.find(b => b.id === assigning) : null;
 
-  const invBtn = getInventoryButton(loc);
+  // Only show inventory button on the user's current location
+  const invBtn = loc === S.currentLoc ? getInventoryButton(loc) : '';
   let html = renderDayNav(_plannerDayOffset, -14, 14, 'changePlannerDay', '');
 
   // Assign mode banner

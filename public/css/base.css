@@ -146,6 +146,26 @@
   .data-error-banner button{font-size:12px;font-weight:600;padding:4px 12px;border:1px solid var(--red);border-radius:var(--radius);background:transparent;color:var(--red);cursor:pointer;white-space:nowrap;flex-shrink:0;}
   .data-error-banner button:hover{background:var(--red);color:#fff;}
 
+  /* ── Location chooser (post-login) ── */
+  .location-chooser{display:flex;align-items:center;justify-content:center;min-height:60vh;padding:20px;}
+  .location-chooser-card{text-align:center;max-width:420px;width:100%;}
+  .location-chooser-card h2{font-size:1.5rem;margin-bottom:4px;color:var(--text);}
+  .location-chooser-card p{font-size:0.95rem;color:var(--text2);margin-bottom:24px;}
+  .location-chooser-buttons{display:flex;gap:16px;justify-content:center;}
+  .loc-choose-btn{display:flex;flex-direction:column;align-items:center;gap:12px;padding:28px 36px;border:2px solid var(--border2);border-radius:var(--radius-lg);background:var(--bg2);cursor:pointer;transition:all .15s;min-width:150px;}
+  .loc-choose-btn:hover{border-color:var(--green);background:var(--green-bg);transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,0.08);}
+  .loc-choose-icon{display:flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;font-size:1.3rem;font-weight:700;color:#fff;}
+  .loc-choose-west .loc-choose-icon{background:var(--green);}
+  .loc-choose-centraal .loc-choose-icon{background:var(--blue);}
+  .loc-choose-label{font-size:1rem;font-weight:600;color:var(--text);}
+
+  /* ── Top-bar title as location switcher ── */
+  .app-title{cursor:pointer;transition:color .15s;user-select:none;}
+  .app-title:hover{opacity:0.8;}
+  .app-title-loc{font-weight:700;}
+  .app-title.loc-west .app-title-loc{color:var(--green);}
+  .app-title.loc-centraal .app-title-loc{color:var(--blue);}
+
   /* ── Bottom nav (hidden by default, shown on mobile via .active) ── */
   .bottom-nav{display:none;}
   /* ── Sticky top bar (all sizes) ── */

@@ -3,7 +3,7 @@ import { S, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORI
 import { toast, toastError, apiGet, apiPost, saveStorageConfig, loadIngredientDb } from './utils';
 import { chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
-import { renderOrders, currentOrdersLoc } from './orders';
+import { renderOrders } from './orders';
 
 // ── INGREDIENT DATABASE TAB ──────────────────────────────────
 
@@ -878,7 +878,7 @@ export async function hanosLookupProduct() {
   status.innerHTML = '<span style="color:var(--blue);">Looking up...</span>';
 
   try {
-    const loc = (typeof currentOrdersLoc !== 'undefined' && currentOrdersLoc) || 'west';
+    const loc = S.currentLoc;
     const resp = await fetch(`/api/hanos/product/${encodeURIComponent(code)}?location=${loc}`);
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -1125,7 +1125,7 @@ export function openStoragePopover(ingredientId: string, anchorEl: HTMLElement) 
   const storLocs = ing.storageLocations || {};
   const rect = anchorEl.getBoundingClientRect();
   const catNames = Object.keys(STORAGE_CATEGORIES);
-  const curLoc = currentOrdersLoc || S.currentLoc || 'west';
+  const curLoc = S.currentLoc;
   const locLabel = curLoc === 'west' ? 'Sering West' : 'Sering Centraal';
 
   const s = storLocs[curLoc] || {};
@@ -1179,7 +1179,7 @@ export function updatePopStorageLoc(building: string) {
 }
 
 export async function saveStorageFromPopover(ingredientId: string) {
-  const curLoc = currentOrdersLoc || S.currentLoc || 'west';
+  const curLoc = S.currentLoc;
   const catEl = document.getElementById('pop-storage-' + curLoc + '-cat') as HTMLSelectElement | null;
   const locEl = document.getElementById('pop-storage-' + curLoc + '-loc') as HTMLSelectElement | null;
   if (!catEl || !locEl) return;
@@ -1312,7 +1312,7 @@ export let storageModalLoc = 'west';
 export let storageModalDragIdx: number | null = null;
 
 export function openStorageLocationsModal() {
-  storageModalLoc = currentOrdersLoc || S.currentLoc || 'west';
+  storageModalLoc = S.currentLoc;
   renderStorageModal();
 }
 

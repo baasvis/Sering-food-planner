@@ -86,7 +86,6 @@ interface StocktakeOrderInfo {
 export let orderInventory = {};        // in-stock amounts for dish ingredients (keyed by name lowercase)
 export let combinedOrderStock = {};   // in-stock amounts for combined order tab (grams, keyed by name lowercase)
 export let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'batches' | 'ingredientDb'
-export let currentOrdersLoc = '';  // set on first render from S.currentLoc
 export let siSearchQuery = '';
 export let hanosStatus = { configured: false, west: false, centraal: false };
 export let hanosStatusChecked = false;
@@ -182,7 +181,7 @@ export function getStorageCategory(db: IngredientRuntime | null | undefined, bui
 
 export function renderStorageBadge(db: IngredientRuntime | null | undefined, loc?: string) {
   if (!db || !db.storageLocations) return '';
-  const building = loc || currentOrdersLoc || 'west';
+  const building = loc || S.currentLoc;
   const s = db.storageLocations[building];
   const label = formatStorageLoc(s);
   if (!label) return `<span class="stock-badge" style="cursor:pointer;font-size:10px;color:var(--text2);border:1px dashed var(--border2);" onclick="openStoragePopover('${esc(db.id)}',this)" title="Click to set">No location set</span>`;
@@ -212,7 +211,7 @@ export function updateSiSearch(val: string) {
   const sugContainer = document.getElementById('si-suggestions');
   if (!sugContainer) return;
   const query = val.toLowerCase().trim();
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const addedIds = new Set(getStandardInventoryItems(loc).map(i => i.id));
   const suggestions = query.length >= 2
     ? ingredientDb().filter(i => i.name.toLowerCase().includes(query) || (i.orderCode && i.orderCode.toLowerCase().includes(query))).slice(0, 8)
@@ -240,7 +239,7 @@ export function hideSiSuggestions() {
 }
 
 export async function addToStandardInventory(ingredientId: string) {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const ing = ingredientDb().find(i => i.id === ingredientId);
   if (!ing) return;
   // Set a default target of 0 (user will edit)
@@ -254,7 +253,7 @@ export async function addToStandardInventory(ingredientId: string) {
 }
 
 export async function removeSiItem(ingredientId: string) {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const ing = ingredientDb().find(i => i.id === ingredientId);
   if (ing && ing.targetStock) delete ing.targetStock[loc];
   try {
@@ -265,7 +264,7 @@ export async function removeSiItem(ingredientId: string) {
 
 export let siTargetTimeout: ReturnType<typeof setTimeout> | null = null;
 export function updateSiTarget(ingredientId: string, val: string) {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const ing = ingredientDb().find(i => i.id === ingredientId);
   if (!ing) return;
   if (!ing.targetStock) ing.targetStock = {};
@@ -284,7 +283,7 @@ export function updateSiTarget(ingredientId: string, val: string) {
 
 export let siStockTimeout: ReturnType<typeof setTimeout> | null = null;
 export function updateSiStock(ingredientId: string, val: string) {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const ing = ingredientDb().find(i => i.id === ingredientId);
   if (!ing) return;
   if (!ing.stock) ing.stock = {};
@@ -303,7 +302,7 @@ export function updateSiStock(ingredientId: string, val: string) {
 
 /** Inline update the to-order cell for a standard inventory row */
 export function _updateSiToOrder(ingredientId: string, ing: IngredientRuntime) {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const row = document.querySelector(`tr[data-si-id="${ingredientId}"]`);
   if (!row) return;
   const toOrderCell = row.querySelector('.si-to-order');
@@ -338,20 +337,6 @@ export function resetBatchToggles() {
   batchIngredientTogglesInitialized = false;
 }
 
-export function switchOrdersLoc(loc: string) {
-  // If stocktake is active and user switches location, exit stocktake first
-  // to prevent cross-location contamination (#161)
-  if (stocktakeActive) {
-    stocktakeActive = false;
-    stocktakeArea = null;
-    stocktakeValues = {};
-    stocktakeSavedAreas = [];
-  }
-  currentOrdersLoc = loc;
-  batchIngredientTogglesInitialized = false; // reset toggles for new location
-  renderOrders();
-}
-
 // ── Main render ────────────────────────────────────────────
 
 export function renderOrders() {
@@ -361,14 +346,8 @@ export function renderOrders() {
     return;
   }
 
-  if (!currentOrdersLoc) currentOrdersLoc = S.currentLoc || 'west';
-  rebuildStorageCategories(currentOrdersLoc);
+  rebuildStorageCategories(S.currentLoc);
   checkHanosStatus();
-
-  const locBar = `<div class="order-loc-bar">
-    <button class="order-loc-btn${currentOrdersLoc === 'west' ? ' active' : ''}" onclick="switchOrdersLoc('west')">Sering West</button>
-    <button class="order-loc-btn${currentOrdersLoc === 'centraal' ? ' active' : ''}" onclick="switchOrdersLoc('centraal')">Sering Centraal</button>
-  </div>`;
 
   const tabBar = `<div class="order-tab-bar">
     <button class="order-tab-btn${currentOrdersTab === 'combined' ? ' active' : ''}" onclick="switchOrdersTab('combined')">🛒 Combined Order</button>
@@ -384,7 +363,7 @@ export function renderOrders() {
   else content = renderCombinedOrderTab();
 
   const screenEl = document.getElementById('screen-orders');
-  screenEl.innerHTML = locBar + tabBar + content;
+  screenEl.innerHTML = tabBar + content;
   // UX: prevent scroll-wheel from changing number inputs, Enter moves to next input
   setupOrderInputUX(screenEl);
   // Delegated click handler for individual Hanos add-to-cart buttons (avoids esc/quote issues in onclick)
@@ -418,7 +397,7 @@ function setupOrderInputUX(container: HTMLElement) {
 // ── Standard Inventory tab ────────────────────────────────
 
 export function renderStandardInventoryTab() {
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   const siItems = getStandardInventoryItems(curLoc);
 
   // Build enriched list with stock, target, deficit, and order calculations
@@ -596,7 +575,7 @@ export function toggleBatchIngredient(batchId: string) {
     if (sw) sw.classList.toggle('on', isOn);
   }
   // Update header count
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
   const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
   const header = document.querySelector('.section-title span');
@@ -618,7 +597,7 @@ export function toggleCombinedIncludeDishes() {
 
 /** Toggle all batches on or off */
 export function toggleAllBatchIngredients(on: boolean) {
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
   eligible.forEach(b => {
     batchIngredientToggles[b.id] = on;
@@ -641,7 +620,7 @@ export function toggleAllBatchIngredients(on: boolean) {
 }
 
 export function renderDishesTab() {
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
 
   // Uncooked batches at this location with recipe data
   const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
@@ -703,7 +682,7 @@ export function renderDishesTab() {
 
 /** Render just the ingredient aggregation table for toggled-on batches */
 export function renderBatchIngredientTable() {
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
 
   // Assign colors (same stable order as toggle list)
@@ -870,7 +849,7 @@ export function renderBatchIngredientTable() {
 // ── Combined Order tab ────────────────────────────────────
 
 export function renderCombinedOrderTab() {
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   const combined: Record<string, CombinedOrderEntry> = {};
 
   // Use the same per-batch toggles as the Batch Ingredients tab (initialized from localStorage)
@@ -1105,7 +1084,7 @@ export function renderCombinedOrderTab() {
 
 export function copyOrderCodes(supplier: string) {
   trackEvent('order_copy', supplier);
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   ensureBatchTogglesInitialized(curLoc);
   const items = [];
   S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
@@ -1120,7 +1099,7 @@ export function copyOrderCodes(supplier: string) {
 }
 
 export function copyDishOrderCodes(storageCat: string) {
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   ensureBatchTogglesInitialized(curLoc);
   const items = new Set();
   S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
@@ -1137,7 +1116,7 @@ export function copyDishOrderCodes(storageCat: string) {
 }
 
 export function copySiOrderCodes(storageCat: string) {
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   const items = new Set();
   getStandardInventoryItems(curLoc).forEach(ing => {
     if (ing.orderCode && !ing.orderCode.startsWith('http')) {
@@ -1150,7 +1129,7 @@ export function copySiOrderCodes(storageCat: string) {
 }
 
 export function copyCombinedOrderCodes(supplier: string) {
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   ensureBatchTogglesInitialized(curLoc);
   const items = new Set();
   S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
@@ -1161,7 +1140,7 @@ export function copyCombinedOrderCodes(supplier: string) {
       }
     });
   });
-  getStandardInventoryItems(currentOrdersLoc || 'west').forEach(ing => {
+  getStandardInventoryItems(S.currentLoc).forEach(ing => {
     if (ing.orderCode && !ing.orderCode.startsWith('http') && normalizeSupplier(ing.supplier || '').toLowerCase().includes(supplier.toLowerCase())) {
       items.add(ing.orderCode);
     }
@@ -1187,7 +1166,7 @@ export async function checkHanosStatus() {
 }
 
 export function isHanosEnabled() {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   return hanosStatus[loc] || false;
 }
 
@@ -1256,7 +1235,7 @@ export async function hanosAddSingle(orderCode: string | undefined, name: string
 
   toast(`Adding ${name} to Hanos cart...`);
   try {
-    const resp = await apiPost('/api/hanos/add-to-cart', { items: [{ orderCode, quantity, unit: 'ST' }], location: currentOrdersLoc || 'west' });
+    const resp = await apiPost('/api/hanos/add-to-cart', { items: [{ orderCode, quantity, unit: 'ST' }], location: S.currentLoc });
     if (resp.ok > 0) {
       toast(`Added ${quantity}x ${name} to Hanos cart`);
       if (row) (row as HTMLElement).classList.add('hanos-sent');
@@ -1405,7 +1384,7 @@ export async function hanosExecuteFromModal(source: string, storageCat: string) 
   try {
     const resp = await apiPost('/api/hanos/add-to-cart', {
       items: items.map(i => ({ orderCode: i.orderCode, quantity: i.quantity, unit: i.unit })),
-      location: currentOrdersLoc || 'west',
+      location: S.currentLoc,
     });
 
     const progEl = document.getElementById('hanos-progress');
@@ -1567,7 +1546,7 @@ export function updateOrderStock(key: string, val: string) {
 }
 
 export async function refreshAllRecipes() {
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
   ensureBatchTogglesInitialized(curLoc);
   const dishes = S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id] && d.recipeSheetId);
   if (!dishes.length) { toast('No batches with recipe sheets to refresh'); return; }
@@ -1598,7 +1577,7 @@ export let stocktakeSavedAreas = [];   // area names that have been saved alread
 /** Build combined order data (shared between render and stocktake) */
 export function buildCombinedOrderData() {
   const combined: Record<string, CombinedOrderEntry> = {};
-  const curLoc = currentOrdersLoc || 'west';
+  const curLoc = S.currentLoc;
 
   // Use the same per-batch toggles as the Batch Ingredients tab
   ensureBatchTogglesInitialized(curLoc);
@@ -1641,7 +1620,7 @@ export function buildCombinedOrderData() {
 
 /** Get all ingredients for a given storage area at the current location */
 export function getIngredientsForArea(areaName: string) {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const combinedData = buildCombinedOrderData();
   const combinedByKey: Record<string, (typeof combinedData)[number]> = {};
   combinedData.forEach(c => { combinedByKey[c.name.toLowerCase().trim()] = c; });
@@ -1697,7 +1676,7 @@ export function startStocktake() {
 }
 
 export function renderStocktakeAreaPicker() {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const areas = getStorageConfigForLoc(loc);
   const container = document.getElementById('screen-orders');
 
@@ -1735,7 +1714,7 @@ export function enterStocktakeArea(areaName: string) {
 }
 
 export function renderStocktakeArea() {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const items = getIngredientsForArea(stocktakeArea);
   const areaConfig = getStorageConfigForLoc(loc).find(a => a.name === stocktakeArea);
   const areaColor = areaConfig ? areaConfig.color : '#999';
@@ -1882,7 +1861,7 @@ export function updateStocktakeToOrder(input: HTMLInputElement) {
 
 /** Save stocktake for current area — persist stock to DB */
 export async function saveStocktakeArea(goToNext: boolean) {
-  const loc = currentOrdersLoc || 'west';
+  const loc = S.currentLoc;
   const items = getIngredientsForArea(stocktakeArea);
   let saved = 0;
 

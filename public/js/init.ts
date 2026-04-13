@@ -1,4 +1,5 @@
-import { S, NAV_SCREENS } from './state';
+import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories } from './state';
+import type { Location } from '@shared/types';
 import { loadData, connectLiveSync, saveState } from './utils';
 import { rebuildPlanner } from './core';
 import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
@@ -21,6 +22,28 @@ export function toggleTheme() {
   if (btn) btn.innerHTML = isDark ? '&#9788;' : '&#9790;';
 }
 
+// ── GLOBAL LOCATION SWITCH ───────────────────────────────
+export function switchGlobalLocation() {
+  const newLoc: Location = S.currentLoc === 'west' ? 'centraal' : 'west';
+  setGlobalLocation(newLoc);
+
+  // Update title
+  const title = document.getElementById('app-title');
+  if (title) {
+    title.className = 'app-title ' + (newLoc === 'west' ? 'loc-west' : 'loc-centraal');
+    title.innerHTML = `Sering <span class="app-title-loc">${newLoc === 'west' ? 'West' : 'Centraal'}</span>`;
+  }
+
+  // Sync finance filter to new location
+  S.financeProductLoc = newLoc;
+
+  // Rebuild storage categories for new location
+  rebuildStorageCategories(newLoc);
+
+  // Re-render active screen
+  rerenderCurrentView();
+}
+
 // ── NAV GENERATION ────────────────────────────────────────
 // Builds top bar, bottom nav, and screen containers from NAV_SCREENS
 export function buildNav() {
@@ -30,7 +53,7 @@ export function buildNav() {
 
   // Top bar: title + nav buttons + save indicator + user menu
   topBar.innerHTML = `
-    <h1>De Sering</h1>
+    <h1 class="app-title ${S.currentLoc === 'west' ? 'loc-west' : 'loc-centraal'}" id="app-title" onclick="switchGlobalLocation()" title="Click to switch location">Sering <span class="app-title-loc">${S.currentLoc === 'west' ? 'West' : 'Centraal'}</span></h1>
     ${NAV_SCREENS.map((s: any, i: any) =>
       `<button class="nav-btn${i === 0 ? ' active' : ''}" data-screen="${s.id}" onclick="showScreen('${s.id}')">${s.topLabel}</button>`
     ).join('')}
