@@ -343,3 +343,37 @@ model RecipePhoto {
 
   @@map("recipe_photos")
 }
+
+// ── Telemetry & AI Insights ──
+
+model TelemetryEvent {
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now())
+  source    String   // 'frontend' | 'backend'
+  type      String   // 'error' | 'screen_view' | 'feature_use' | 'api_call'
+  name      String
+  data      Json?
+  userId    String?  @map("user_id")
+  sessionId String?  @map("session_id")
+
+  @@index([timestamp])
+  @@index([type, timestamp])
+  @@index([source, type])
+  @@map("telemetry_event")
+}
+
+model AiInsight {
+  id         Int       @id @default(autoincrement())
+  timestamp  DateTime  @default(now())
+  category   String    // 'bug' | 'ux' | 'data_quality' | 'performance' | 'suggestion'
+  severity   String    // 'critical' | 'warning' | 'info'
+  title      String
+  body       String
+  data       Json?
+  status     String    @default("new") // 'new' | 'reviewed' | 'resolved' | 'dismissed'
+  resolvedAt DateTime? @map("resolved_at")
+
+  @@index([status, timestamp])
+  @@index([category])
+  @@map("ai_insight")
+}

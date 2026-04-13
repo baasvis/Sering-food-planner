@@ -33,7 +33,10 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["dist/server/server.js"],
       "port": 3000,
-      "autoPort": true
+      "autoPort": true,
+      "env": {
+        "NODE_ENV": "production"
+      }
     }
   ]
 }

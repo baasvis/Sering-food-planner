@@ -3,6 +3,7 @@ import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ing
 import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { ingredientDbFull, openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
+import { trackEvent } from './telemetry';
 import type { Ingredient, Batch, Location } from '@shared/types';
 
 // ── Local type aliases for order data ──
@@ -1103,6 +1104,7 @@ export function renderCombinedOrderTab() {
 // ── Copy helpers ──────────────────────────────────────────
 
 export function copyOrderCodes(supplier: string) {
+  trackEvent('order_copy', supplier);
   const curLoc = currentOrdersLoc || 'west';
   ensureBatchTogglesInitialized(curLoc);
   const items = [];
@@ -1277,6 +1279,7 @@ export async function hanosAddSingle(orderCode: string | undefined, name: string
 
 /** Show confirmation modal for bulk Hanos add (combined order) */
 export function hanosConfirmBulk(storageCat?: string) {
+  trackEvent('hanos_send_bulk');
   const items = collectHanosItems(storageCat);
   if (!items.length) {
     toast('No items with order codes and quantities to send');
@@ -1685,6 +1688,7 @@ export function getIngredientsForArea(areaName: string) {
 
 /** Start stocktake — show area picker */
 export function startStocktake() {
+  trackEvent('stocktake_start');
   stocktakeActive = true;
   stocktakeArea = null;
   stocktakeValues = {};

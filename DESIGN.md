@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-04-09*
+*Last updated: 2026-04-13*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -118,6 +118,7 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 - Finance v1: Tebi POS scraper (Playwright browser automation) pulls daily revenue data via Tebi's internal JSON API. Sync worker stores data in PostgreSQL DailyRevenue table. Finance screen shows weekly revenue table (per location per day), monthly summary cards (gross/net revenue, sales, covers), CSS bar chart of daily gross revenue, and week navigation. "Sync from Tebi" button triggers the scraper as a child process.
 - Finance v2 — Product-level revenue breakdown: scraper parses Tebi invoice line items to extract per-product revenue. Classifies each invoice by service period (morning 09–12, lunch 12–14, afternoon 14–18, dinner 18–21, bar 21–06). Data stored in PostgreSQL ProductRevenue table. Finance screen shows horizontal category bar chart, sortable product table (top 50), and filter pills for 5 service periods + 4 locations. API: GET /api/finance/products with optional location, meal, groupBy=category filters. Discovery flag: `--dump-invoices` on scraper to inspect raw Tebi invoice structure.
 - Live sync via Server-Sent Events (SSE): when any user saves changes, all other connected users receive the patch instantly and their UI updates automatically. Uses native browser EventSource (auto-reconnects on connection loss). Server broadcasts patches to all clients except the sender (matched by email). No polling, no WebSocket library needed. Concurrent save safety (fixed 2026-04-13): incoming SSE patches update the snapshot only for remote items (not the full state), preserving any unsaved local changes so they aren't silently dropped. Server-side patch endpoint uses targeted upserts/deletes instead of delete-all/create-all, and merges incoming batches field-by-field with existing DB rows to prevent stale-field overwrites.
+- AI monitoring system (added 2026-04-13): developer-facing tool for automated app maintenance. Frontend telemetry collects errors, screen views, feature usage, and API performance via `navigator.sendBeacon`. Backend middleware tracks API response times and error rates. Events buffered in-memory, flushed to PostgreSQL every 60s. Daily cron sends telemetry + data quality report to Claude API (Sonnet), which generates structured insights (bugs, UX issues, data quality, performance, suggestions) stored in AiInsight table. Admin API: `POST /api/admin/analyze` (trigger analysis), `GET /api/admin/insights` (list insights with filters), `PATCH /api/admin/insights/:id` (update status), `GET /api/admin/telemetry/summary` (raw aggregation). Telemetry auto-cleanup removes events older than 90 days. Requires `ANTHROPIC_API_KEY` env var; optional `AI_ANALYSIS_CRON` and `AI_ANALYSIS_MODEL`.
 - TypeScript strict typing (refactored 2026-03-31, cleaned 2026-04-09): `any` types nearly eliminated across both backend and frontend. Backend has 6 remaining (XLSX parsing in ingredients-import.ts); frontend's 5 largest files (orders, dishes, planner, dashboard, ingredient-db) are `any`-free with proper Ingredient/Batch/Service/Location types. Domain types (`Location`, `Meal`, `DishType`, `StorageType`) enforce valid values at compile time. Global state object `S` typed as `AppState`. All catch blocks use `catch (e: unknown)` with `errMsg()` helper. Prisma JSON boundary uses explicit casts with `AppError` class for typed HTTP errors. Single shared Prisma client instance. Cross-module `(window as any)` pattern eliminated — replaced with direct ES imports via `modal.ts` and `navigate.ts` registry pattern. All async route handlers wrapped in `asyncHandler()` with centralized error handling. 74 API integration tests.
 
 **File structure:**
@@ -136,6 +137,7 @@ lib/
   recipe-sheets.ts     — Google Sheets client (external recipe reading only)
   hanos-parser.ts      — Hanos quantity parser
   hanos-client.ts      — HanosClient class, OAuth login, cart management, product formatting
+  ai-analyzer.ts       — Data quality checks, telemetry aggregation, Claude API insights
 routes/
   auth.ts              — Login, logout, session, requireAuth middleware
   data.ts              — GET/POST /api/data + POST /api/data/patch (main planner state)
@@ -149,6 +151,8 @@ routes/
   hanos.ts             — Hanos API routes (imports client from lib/hanos-client.ts)
   events.ts            — SSE live sync: client registry, broadcast patches to other users
   finance.ts           — Finance revenue endpoints (GET revenue, POST sync, GET sync-status)
+  telemetry.ts         — Telemetry event ingestion (no auth, buffered writes)
+  admin.ts             — AI insights & telemetry admin endpoints
   health.ts            — Health check endpoint
 public/
   index.html           — Shell HTML + login screen (single module entry point)
@@ -172,6 +176,7 @@ public/
     finance.ts         — Finance screen (revenue dashboard, sync, week nav)
     feedback.ts        — Feedback button and form
     feedback-admin.ts  — Feedback admin screen (view, filter, export)
+    telemetry.ts       — Frontend telemetry (errors, screen views, feature usage, API perf)
     tutorial.ts        — Interactive guided tutorial system
     modal.ts           — Standalone modal utilities (showModal, closeModal, esc)
     navigate.ts        — Screen renderer registry, rerenderCurrentView()
@@ -214,6 +219,8 @@ SETUP_GUIDE.md         — Installation instructions
 | Guests Next Weeks | mondayKey, location, day, meal, count | GuestsNextWeeks |
 | Daily Revenue | date, location, grossRevenue, netRevenue, sales, covers, invoiceCount, syncedAt | DailyRevenue |
 | Product Revenue | date, location, meal, productName, productCategory, quantity, grossRevenue, netRevenue, syncedAt | ProductRevenue |
+| Telemetry Event | timestamp, source, type, name, data (JSON), userId, sessionId | TelemetryEvent / telemetry_event |
+| AI Insight | timestamp, category, severity, title, body, data (JSON), status, resolvedAt | AiInsight / ai_insight |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure

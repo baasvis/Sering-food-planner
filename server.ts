@@ -8,6 +8,7 @@ import fs from 'fs';
 import { CONFIG, INGREDIENTS_SEED, STD_INV_SEED, errMsg } from './lib/config';
 import { prisma } from './lib/db';
 import app from './app';
+import { startFlushTimer, stopFlushTimer } from './routes/telemetry';
 
 // ── Seed — on first deploy, write seed data to Postgres ──
 
@@ -44,11 +45,46 @@ app.listen(PORT, () => {
   console.log('  DATABASE_URL:', process.env.DATABASE_URL ? 'set' : 'NOT SET');
   console.log('  GOOGLE_CREDENTIALS:', CONFIG.GOOGLE_CREDENTIALS !== '{}' ? 'set' : 'NOT SET');
   console.log('  ALLOWED_EMAILS:', CONFIG.ALLOWED_EMAILS.length ? CONFIG.ALLOWED_EMAILS.join(', ') : 'NOT SET (anyone can log in)');
+  console.log('  ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? 'set' : 'NOT SET');
   seedIfNeeded();
+
+  // Start telemetry buffer flushing (writes buffered events to DB every 60s)
+  startFlushTimer();
+
+  // Scheduled AI analysis + telemetry cleanup
+  if (process.env.ANTHROPIC_API_KEY) {
+    import('node-cron').then(cron => {
+      const schedule = process.env.AI_ANALYSIS_CRON || '0 7 * * *';
+      cron.schedule(schedule, async () => {
+        try {
+          const { generateInsights } = await import('./lib/ai-analyzer');
+          const count = await generateInsights();
+          console.log(`Scheduled AI analysis complete: ${count} insights`);
+        } catch (e: unknown) {
+          console.error('Scheduled AI analysis failed:', errMsg(e));
+        }
+      });
+      console.log('  AI analysis scheduled:', schedule);
+    }).catch(() => { console.log('  node-cron not available, skipping scheduled analysis'); });
+  }
+
+  // Telemetry cleanup: delete events older than 90 days (daily at 3am)
+  import('node-cron').then(cron => {
+    cron.schedule('0 3 * * *', async () => {
+      try {
+        const { cleanupOldTelemetry } = await import('./lib/ai-analyzer');
+        const count = await cleanupOldTelemetry();
+        if (count > 0) console.log(`Cleaned up ${count} telemetry events older than 90 days`);
+      } catch (e: unknown) {
+        console.error('Telemetry cleanup failed:', errMsg(e));
+      }
+    });
+  }).catch(() => {});
 });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
+  stopFlushTimer();
   await prisma.$disconnect();
   process.exit(0);
 });

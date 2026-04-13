@@ -5,6 +5,7 @@ import { S } from './state';
 import { showFeedbackFab } from './feedback';
 import { disconnectLiveSync } from './utils';
 import { initApp } from './init';
+import { initTelemetry } from './telemetry';
 
 declare const google: any;
 
@@ -127,6 +128,7 @@ export function showApp() {
     img.src = S.user.picture;
     img.style.display = 'block';
   }
+  initTelemetry(S.user?.email);
   initApp();
   if (typeof showFeedbackFab === 'function') showFeedbackFab();
 }

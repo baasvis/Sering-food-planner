@@ -19,12 +19,14 @@
     "seed": "node prisma/seed.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.88.0",
     "@prisma/client": "^6.19.2",
     "dotenv": "^17.3.1",
     "express": "^4.18.2",
     "google-auth-library": "^9.6.0",
     "googleapis": "^128.0.0",
     "multer": "^2.1.1",
+    "node-cron": "^4.2.1",
     "playwright": "^1.58.2",
     "prisma": "^6.19.2",
     "xlsx": "^0.18.5"
@@ -47,6 +49,7 @@
     "@swc/jest": "^0.2.39",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
+    "@types/node-cron": "^3.0.11",
     "@types/supertest": "^7.2.0",
     "concurrently": "^9.2.1",
     "jest": "^30.3.0",

@@ -1,6 +1,7 @@
 import { S } from './state';
 import { apiPost, toast, toastError } from './utils';
 import { showModal, closeModal, esc } from './modal';
+import { trackEvent } from './telemetry';
 
 // ── FEEDBACK ──────────────────────────────────────────────
 
@@ -67,6 +68,7 @@ export function selectFeedbackType(key: any) {
 }
 
 export async function submitFeedback(screen: any) {
+  trackEvent('feedback_submit');
   const text = document.getElementById('feedback-text')?.value?.trim();
   if (!text) { alert('Please write something before submitting'); return; }
 

@@ -22,6 +22,7 @@ lib/
   db.ts                — Prisma client, row transformers, dbReadAll/dbWriteAll, validators
   recipe-sheets.ts     — Google Sheets client (external recipe reading only)
   hanos-parser.ts      — Hanos quantity parser (hoeveelheid → grams)
+  ai-analyzer.ts       — Data quality checks, telemetry aggregation, Claude API insights
 routes/
   auth.ts              — Login, logout, session, requireAuth middleware
   data.ts              — GET/POST /api/data + POST /api/data/patch (main planner state)
@@ -36,6 +37,8 @@ routes/
   health.ts            — Health check endpoint
   hanos.ts             — Hanos OCC v2 API client (OAuth, cart, product lookup)
   finance.ts           — Finance revenue endpoints
+  telemetry.ts         — Telemetry event ingestion (no auth, buffered writes)
+  admin.ts             — AI insights & telemetry admin endpoints
 public/
   index.html           — Shell HTML + login screen (single module entry point)
   css/
@@ -69,6 +72,7 @@ public/
     finance.ts         — Finance screen (revenue dashboard, sync, week nav)
     feedback.ts        — Feedback form
     feedback-admin.ts  — Feedback admin screen
+    telemetry.ts       — Frontend telemetry collection (errors, screen views, feature usage)
     tutorial.ts        — Guided tutorial system
     init.ts            — Modal system, esc helper, buildNav(), beforeunload guard, initApp
 test/
@@ -91,6 +95,7 @@ npm run typecheck      # tsc --noEmit on backend
 
 Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
+Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`).
 
 ## Preview (for Claude Code verification)
 Use `preview_start` with `name: "preview"` (not `"dev"`). The `dev` script runs two

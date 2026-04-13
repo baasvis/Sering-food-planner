@@ -3,6 +3,7 @@ import { newId, scheduleSave, toast, toastError, apiPost, apiGet } from './utils
 import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
+import { trackEvent } from './telemetry';
 import { addDishFromRecipe } from './recipes';
 import { openPostCookRecording, openBatchRecipe } from './recipe-editor';
 import { batchDragStart, batchDragEnd, startAssignMode, openReplaceBatch } from './planner';
@@ -347,6 +348,7 @@ export function cleanCateringRefs(oldId: string, newId: string | null) {
 }
 
 export function deleteBatch(id: string) {
+  trackEvent('batch_delete');
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   if (isBatchCooked(d)) {
@@ -640,6 +642,7 @@ export function setCookDateDirect(id: string, isoDate: string) {
 }
 
 export function confirmCooked(id: string) {
+  trackEvent('batch_confirm_cooked');
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   d.cookDate = dateToStr(getToday());
@@ -832,6 +835,7 @@ export function openNewDishScratch() {
 }
 
 export async function saveNewDish() {
+  trackEvent('batch_create');
   const name = (document.getElementById('nd-name') as HTMLInputElement).value.trim();
   if (!name) { alert('Please enter a batch name'); return; }
   const sheetId = (document.getElementById('nd-sheetid') as HTMLInputElement).value.trim();

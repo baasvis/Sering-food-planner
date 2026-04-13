@@ -3,6 +3,7 @@ import { scheduleSave, toast, apiGet, apiPost, scheduleNextWeeksSave, toastError
 import { getGuests, calcTotalGuests, getToday } from './core';
 import { parseCSV, categorizeUploadedFiles, predictGuests, getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav } from './predictions';
 import { esc } from './modal';
+import { trackEvent } from './telemetry';
 
 // ── GUESTS ────────────────────────────────────────────────
 
@@ -280,6 +281,7 @@ export async function saveUploadedHistory() {
 
 // ── Apply Predictions ─────────────────────────────────────
 export function applyPredictions() {
+  trackEvent('predictions_apply');
   if (!S.predictions) return;
   const days = getVisibleDays(_guestsDayOffset);
 

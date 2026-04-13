@@ -15,11 +15,13 @@ import { renderGuests } from './guests';
 import { renderOrders } from './orders';
 import { renderRecipeIndex } from './recipes';
 import { renderWeekPlan } from './planner';
+import { trackScreenView } from './telemetry';
 
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
 
 export function showScreen(name: string, pushState = true) {
+  trackScreenView(name);
   setCurrentScreen(name);
   // Switch active screen
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));

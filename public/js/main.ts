@@ -22,6 +22,7 @@ import { openFeedback, selectFeedbackType, submitFeedback, showFeedbackFab, feed
 import { renderFeedbackAdmin, setFeedbackFilter, copyFeedbackForClaude, formatFeedbackDate, feedbackData, feedbackFilter, toggleFeedbackItemProcessed, toggleFeedbackProcessed } from './feedback-admin';
 import { TUTORIALS, startTutorial, tutNext, tutPrev, tutSkip } from './tutorial';
 import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap } from './init';
+import { initTelemetry, trackScreenView, trackEvent, trackError } from './telemetry';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -86,6 +87,9 @@ Object.assign(window, {
 
   // init
   toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap,
+
+  // telemetry
+  initTelemetry, trackScreenView, trackEvent, trackError,
 });
 
 // ═══════════════════════════════════════════════════════════════════

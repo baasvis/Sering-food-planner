@@ -7,6 +7,7 @@ import { apiGet, apiPost, toast, toastError, loadIngredientDb } from './utils';
 import { typeBadge, TYPES } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
+import { trackEvent } from './telemetry';
 import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType } from '@shared/types';
 
 // ── Editor state ──
@@ -732,6 +733,7 @@ export function reRemoveExtraAllergen(allergen: string) {
 // ── Save recipe ──
 
 export async function reSaveRecipe(markComplete: boolean) {
+  trackEvent('recipe_save', markComplete ? 'complete' : 'draft');
   if (!ed) return;
   if (!ed.name.trim()) { toastError('Recipe name is required'); return; }
   if (ed.servingSize <= 0) { toastError('Serving size must be positive'); return; }

@@ -299,3 +299,33 @@ export interface SaveSnapshot {
   caterings: Map<string, string>;
   transportItems: Map<string, string>;
 }
+
+// ── Telemetry & AI Insights ──
+
+export type TelemetrySource = 'frontend' | 'backend';
+export type TelemetryType = 'error' | 'screen_view' | 'feature_use' | 'api_call';
+export type InsightCategory = 'bug' | 'ux' | 'data_quality' | 'performance' | 'suggestion';
+export type InsightSeverity = 'critical' | 'warning' | 'info';
+export type InsightStatus = 'new' | 'reviewed' | 'resolved' | 'dismissed';
+
+export interface TelemetryPayload {
+  source: TelemetrySource;
+  type: TelemetryType;
+  name: string;
+  data?: Record<string, unknown>;
+  userId?: string;
+  sessionId?: string;
+  timestamp?: string;
+}
+
+export interface AiInsightRecord {
+  id: number;
+  timestamp: string;
+  category: InsightCategory;
+  severity: InsightSeverity;
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+  status: InsightStatus;
+  resolvedAt?: string;
+}

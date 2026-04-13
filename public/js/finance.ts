@@ -1,6 +1,7 @@
 import { S, LOCATIONS, DAYS } from './state';
 import { apiGet, apiPost, toast, toastError } from './utils';
 import { esc } from './modal';
+import { trackEvent } from './telemetry';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FINANCE — Revenue overview from Tebi POS
@@ -103,6 +104,7 @@ export async function checkSyncStatus() {
 }
 
 export async function triggerSync() {
+  trackEvent('finance_sync');
   if (S.financeSyncing) return;
 
   // Sync the last 7 days by default

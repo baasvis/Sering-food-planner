@@ -8,6 +8,7 @@ import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboar
 import { showModal, closeModal, esc, setOpenInventoryFn } from './modal';
 import { renderCaterings } from './caterings';
 import { rerenderCurrentView } from './navigate';
+import { trackEvent } from './telemetry';
 
 // ── WEEK PLAN (UNIFIED) ──────────────────────────────────
 
@@ -283,6 +284,7 @@ export function slotDragLeave(e: DragEvent) {
 }
 
 export function slotDrop(e: DragEvent, loc: string, date: string, meal: string) {
+  trackEvent('batch_assign_drag');
   e.preventDefault();
   (e.currentTarget as HTMLElement)?.classList.remove('slot-drag-over');
   const batchId = S.draggingBatchId || e.dataTransfer?.getData('text/plain');
@@ -638,6 +640,7 @@ export function searchAddModal() {
 }
 
 export function confirmAddDish(dishId: string, loc: string, date: string, meal: string) {
+  trackEvent('batch_assign_modal');
   const dish = S.batches.find(d => d.id === dishId);
   if (dish) { if (!dish.services) dish.services = []; dish.services.push({ loc, date, meal }); }
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();

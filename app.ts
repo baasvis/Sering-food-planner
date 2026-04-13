@@ -18,7 +18,28 @@ const clientDir = process.env.NODE_ENV === 'production'
   : path.join(__dirname, 'public');
 app.use(express.static(clientDir));
 
+// ── API response time telemetry ──
+
+import telemetryRouter, { addBackendEvent } from './routes/telemetry';
+
+app.use('/api', (req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    // Skip telemetry's own endpoint to avoid recursion
+    if (req.path === '/telemetry' || req.path === '/telemetry/') return;
+    addBackendEvent('api_call', req.path, {
+      method: req.method,
+      statusCode: res.statusCode,
+      duration: Date.now() - start,
+    });
+  });
+  next();
+});
+
 // ── Mount routes ──
+
+// Telemetry endpoint — no auth required (must work even if auth is broken)
+app.use('/api/telemetry', telemetryRouter);
 
 import authRouter, { requireAuth } from './routes/auth';
 app.use('/api/auth', authRouter);
@@ -48,6 +69,9 @@ app.use('/api/finance',           financeRouter);
 app.use('/api/events',            eventsRouter);
 app.use('/api/health',            healthRouter);
 
+import adminRouter from './routes/admin';
+app.use('/api/admin',             adminRouter);
+
 // ── Global error handler ──
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
@@ -55,6 +79,13 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   // Only log stack traces for unexpected server errors, not client errors (4xx)
   if (status >= 500) {
     console.error('Unhandled error:', err.stack || err.message);
+    // Track backend errors in telemetry
+    addBackendEvent('error', err.message, {
+      stack: err.stack?.slice(0, 1000),
+      status,
+      path: _req.path,
+      method: _req.method,
+    });
   }
   // In production, don't leak internal error messages for 500s
   const message = status >= 500 && process.env.NODE_ENV === 'production'
