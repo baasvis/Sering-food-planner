@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateBatches, validateGuests, withWriteLock, dbWriteBatches, dbWriteGuests, dbWriteCaterings, dbWriteTransportItems } from '../lib/db';
+import { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateBatches, validateGuests, withWriteLock, dbWriteGuests, dbUpsertBatches, dbDeleteBatchIds, dbUpsertCaterings, dbDeleteCateringIds, dbUpsertTransportItems, dbDeleteTransportItemIds } from '../lib/db';
 import { broadcast } from './events';
 import { asyncHandler, AppError } from '../lib/config';
 import type { Batch, Catering, TransportItem } from '../shared/types';
@@ -51,24 +51,25 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
           transportItems, deletedTransportItems } = req.body;
 
   await withWriteLock(async () => {
-    const current = await dbReadAll();
-
-    // Merge batches
+    // Batches: targeted upsert/delete (no more delete-all/create-all)
     if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
-      const batchMap = new Map(current.batches.map((b: Batch) => [b.id, b]));
-      if (deletedBatches) deletedBatches.forEach((id: string) => batchMap.delete(id));
+      if (deletedBatches && deletedBatches.length) {
+        await dbDeleteBatchIds(deletedBatches);
+      }
       if (batches && batches.length) {
         const batchErr = validateBatches(batches);
         if (batchErr) throw new AppError(400, batchErr);
-        batches.forEach((b: Batch) => batchMap.set(b.id, b));
+        // Field-level merge: upsert reads existing row and merges,
+        // so stale fields from one client don't overwrite fresh changes
+        await dbUpsertBatches(batches);
       }
-      await dbWriteBatches([...batchMap.values()]);
     }
 
-    // Merge guests
+    // Guests: read current, merge changed days, write back
     if (guests) {
       const guestErr = validateGuests(guests);
       if (guestErr) throw new AppError(400, guestErr);
+      const current = await dbReadAll();
       const merged = current.guests;
       for (const loc of ['west', 'centraal']) {
         if (!guests[loc]) continue;
@@ -80,20 +81,24 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
       await dbWriteGuests(merged);
     }
 
-    // Merge caterings
+    // Caterings: targeted upsert/delete
     if ((caterings && caterings.length) || (deletedCaterings && deletedCaterings.length)) {
-      const catMap = new Map(current.caterings.map((c: Catering) => [c.id, c]));
-      if (deletedCaterings) deletedCaterings.forEach((id: string) => catMap.delete(id));
-      if (caterings) caterings.forEach((c: Catering) => catMap.set(c.id, c));
-      await dbWriteCaterings([...catMap.values()]);
+      if (deletedCaterings && deletedCaterings.length) {
+        await dbDeleteCateringIds(deletedCaterings);
+      }
+      if (caterings && caterings.length) {
+        await dbUpsertCaterings(caterings);
+      }
     }
 
-    // Merge transport items
+    // Transport items: targeted upsert/delete
     if ((transportItems && transportItems.length) || (deletedTransportItems && deletedTransportItems.length)) {
-      const trMap = new Map(current.transportItems.map((t: TransportItem) => [t.id, t]));
-      if (deletedTransportItems) deletedTransportItems.forEach((id: string) => trMap.delete(id));
-      if (transportItems) transportItems.forEach((t: TransportItem) => trMap.set(t.id, t));
-      await dbWriteTransportItems([...trMap.values()]);
+      if (deletedTransportItems && deletedTransportItems.length) {
+        await dbDeleteTransportItemIds(deletedTransportItems);
+      }
+      if (transportItems && transportItems.length) {
+        await dbUpsertTransportItems(transportItems);
+      }
     }
   });
 

@@ -277,7 +277,7 @@ export async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   finally { writeLock = null; resolve!(); }
 }
 
-// ── Per-entity write helpers (for patch saves) ──
+// ── Per-entity write helpers (for full saves) ──
 
 export async function dbWriteBatches(batches: Batch[]): Promise<void> {
   await prisma.$transaction(async (tx) => writeBatches(tx, batches));
@@ -293,6 +293,68 @@ export async function dbWriteCaterings(caterings: Catering[]): Promise<void> {
 
 export async function dbWriteTransportItems(items: TransportItem[]): Promise<void> {
   await prisma.$transaction(async (tx) => writeTransport(tx, items));
+}
+
+// ── Targeted patch helpers (upsert/delete only changed items) ──
+
+/** Upsert batches: merge field-by-field with existing DB rows to prevent stale overwrites */
+export async function dbUpsertBatches(batches: Batch[]): Promise<void> {
+  for (const b of batches) {
+    const existing = await prisma.batch.findUnique({ where: { id: b.id } });
+    if (existing) {
+      // Merge: incoming fields overwrite existing, but fields not sent by client
+      // are preserved from the DB (protects against stale-field overwrites)
+      const merged = toBatchRow({ ...existing as unknown as Batch, ...b });
+      await prisma.batch.update({ where: { id: b.id }, data: merged });
+    } else {
+      await prisma.batch.create({ data: toBatchRow(b) });
+    }
+  }
+}
+
+/** Delete specific batches by ID */
+export async function dbDeleteBatchIds(ids: string[]): Promise<void> {
+  if (ids.length > 0) {
+    await prisma.batch.deleteMany({ where: { id: { in: ids } } });
+  }
+}
+
+/** Upsert caterings by ID */
+export async function dbUpsertCaterings(caterings: Catering[]): Promise<void> {
+  for (const c of caterings) {
+    const row = toCateringRow(c);
+    await prisma.catering.upsert({
+      where: { id: c.id },
+      create: row,
+      update: row,
+    });
+  }
+}
+
+/** Delete specific caterings by ID */
+export async function dbDeleteCateringIds(ids: string[]): Promise<void> {
+  if (ids.length > 0) {
+    await prisma.catering.deleteMany({ where: { id: { in: ids } } });
+  }
+}
+
+/** Upsert transport items by ID */
+export async function dbUpsertTransportItems(items: TransportItem[]): Promise<void> {
+  for (const t of items) {
+    const row = toTransportRow(t);
+    await prisma.transportItem.upsert({
+      where: { id: t.id },
+      create: row,
+      update: row,
+    });
+  }
+}
+
+/** Delete specific transport items by ID */
+export async function dbDeleteTransportItemIds(ids: string[]): Promise<void> {
+  if (ids.length > 0) {
+    await prisma.transportItem.deleteMany({ where: { id: { in: ids } } });
+  }
 }
 
 export async function dbAppendLog(userEmail: string, userName: string, action: string, details: string): Promise<void> {

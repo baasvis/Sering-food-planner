@@ -126,7 +126,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 ## Key Data Flow
 - `GET /api/data` returns `{batches, guests, recipeIndex, caterings, transportItems}`
 - `POST /api/data` saves `{batches, guests, caterings, transportItems}`
-- `POST /api/data/patch` merges `{batches, deletedBatches, guests, caterings, ...}`
+- `POST /api/data/patch` merges `{batches, deletedBatches, guests, caterings, ...}` — uses targeted upserts/deletes (not delete-all/create-all), merges batch fields with existing DB rows
 - Batch CRUD: `GET/POST /api/batches`, `GET/PATCH/DELETE /api/batches/:id`
 - Batch = physical container of food. Lifecycle: PLANNED → COOKED → SERVING → DONE
 - Key batch fields: `location` ("west"/"centraal"), `inTransit` (bool), `services` (embedded JSON), `cookDate`, `note`
@@ -140,7 +140,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - `STORAGE_CATEGORIES` is dynamically rebuilt from `S.storageConfig` via `rebuildStorageCategories(loc)`
 - Standard inventory: `GET/POST /api/standard-inventory?location=west|centraal` — per-location weekly base order
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
-- Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.ts sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders.
+- Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.ts sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders. Snapshot updates are targeted (only remote items), so unsaved local changes survive incoming patches.
 
 ## Don't
 - Don't change the Prisma schema without creating a migration (`npx prisma migrate dev`)

@@ -475,12 +475,60 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   }
 
   if (changed) {
-    // Update snapshot so our next save won't re-send these changes
-    takeSnapshot();
+    // Only update the snapshot for items that came FROM the remote patch.
+    // A full takeSnapshot() would absorb unsaved local changes into the snapshot,
+    // causing computePatch() to miss them and silently drop them.
+    updateSnapshotForRemote(msg);
     // Re-render current view
     rebuildPlanner();
     rerenderCurrentView();
     toast(`${user || 'Someone'} made changes — updated live`);
+  }
+}
+
+// Update snapshot only for items received from a remote patch.
+// Preserves local diffs so pending saves still detect unsaved changes.
+function updateSnapshotForRemote(msg: RemotePatchMessage): void {
+  if (msg.batches) {
+    for (const b of msg.batches) {
+      _lastSaved.batches.set(b.id, JSON.stringify(b));
+    }
+  }
+  if (msg.deletedBatches) {
+    for (const id of msg.deletedBatches) {
+      _lastSaved.batches.delete(id);
+    }
+  }
+  if (msg.guests) {
+    const snapshotGuests = JSON.parse(_lastSaved.guests);
+    for (const loc of ['west', 'centraal']) {
+      if (!msg.guests[loc]) continue;
+      if (!snapshotGuests[loc]) snapshotGuests[loc] = {};
+      for (const day of Object.keys(msg.guests[loc])) {
+        snapshotGuests[loc][day] = msg.guests[loc][day];
+      }
+    }
+    _lastSaved.guests = JSON.stringify(snapshotGuests);
+  }
+  if (msg.caterings) {
+    for (const c of msg.caterings) {
+      _lastSaved.caterings.set(c.id, JSON.stringify(c));
+    }
+  }
+  if (msg.deletedCaterings) {
+    for (const id of msg.deletedCaterings) {
+      _lastSaved.caterings.delete(id);
+    }
+  }
+  if (msg.transportItems) {
+    for (const t of msg.transportItems) {
+      _lastSaved.transportItems.set(t.id, JSON.stringify(t));
+    }
+  }
+  if (msg.deletedTransportItems) {
+    for (const id of msg.deletedTransportItems) {
+      _lastSaved.transportItems.delete(id);
+    }
   }
 }
 
