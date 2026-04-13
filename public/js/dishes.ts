@@ -801,15 +801,15 @@ export function renderSplitBar() {
   const hasWest = selD.some(d => d.location === 'west' && !d.inTransit);
   const hasCentraal = selD.some(d => d.location === 'centraal' && !d.inTransit);
 
-  // Calculate smart amounts for transport splits (capped at surplus)
+  // Calculate smart amounts for transport splits
+  // Centraal is preferred: send what Centraal needs even if it dips below West's local need
   let smartCentraalAmt = 0;
   let smartWestAmt = 0;
   selD.forEach(d => {
     if (d.location === 'west' && !d.inTransit) {
-      const neededHere = calcRequiredForLoc(d, 'west');
-      const surplus = Math.max(0, d.stock - neededHere);
       const neededThere = calcRequiredForLoc(d, 'centraal');
-      smartCentraalAmt += Math.min(neededThere, surplus);
+      // Centraal preferred: cap at stock (can't send more than we have), not at surplus
+      smartCentraalAmt += Math.min(neededThere, d.stock);
     }
     if (d.location === 'centraal' && !d.inTransit) {
       const neededHere = calcRequiredForLoc(d, 'centraal');
@@ -848,8 +848,12 @@ export function doSplit(isTransport: boolean, targetLoc?: string, smartAmounts?:
     // Calculate how much is needed at the current location
     const currentLoc = d.location || 'west';
     const neededHere = calcRequiredForLoc(d, currentLoc);
-    // Surplus = what can be split off (never more than stock minus local need)
-    const surplus = Math.max(0, Math.round((d.stock - neededHere) * 10) / 10);
+    // Centraal is preferred: when splitting TO centraal, allow dipping below local need
+    const centraalPreferred = splitLocation === 'centraal' && currentLoc === 'west';
+    // Max amount we can split off
+    const maxSplit = centraalPreferred
+      ? d.stock  // can send everything to centraal if needed
+      : Math.max(0, Math.round((d.stock - neededHere) * 10) / 10);
     // For transport splits, calculate per-dish amount based on target location needs
     let amt;
     if (isTransport && smartAmounts) {
@@ -860,10 +864,10 @@ export function doSplit(isTransport: boolean, targetLoc?: string, smartAmounts?:
       amt = manualAmt;
     }
     if (!amt || amt <= 0) return;
-    // Cap at surplus — can't split off more than what's not needed here
-    if (amt > surplus) {
-      if (surplus <= 0) { errors.push(`"${d.name}" needs all ${d.stock}L at ${d.location === 'centraal' ? 'Sering Centraal' : 'Sering West'} (${neededHere}L required)`); return; }
-      amt = surplus;
+    // Cap at max split amount
+    if (amt > maxSplit) {
+      if (maxSplit <= 0) { errors.push(`"${d.name}" needs all ${d.stock}L at ${d.location === 'centraal' ? 'Sering Centraal' : 'Sering West'} (${neededHere}L required)`); return; }
+      amt = maxSplit;
     }
     d.stock = Math.round((d.stock - amt) * 10) / 10;
     const targetLocName = targetLoc === 'centraal' ? 'centraal' : 'west';
