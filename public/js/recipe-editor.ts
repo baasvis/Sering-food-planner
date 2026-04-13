@@ -803,11 +803,26 @@ export async function reSaveRecipe(markComplete: boolean) {
   }
 }
 
-// ── Read-only detail modal ──
+// ── Read-only detail modal with scaling ──
+
+let _detailRecipe: RecipeFull | null = null;
+let _detailScale = 1;
 
 function renderDetailModal(r: RecipeFull) {
+  _detailRecipe = r;
+  _detailScale = 1;
+  _renderDetailContent();
+}
+
+function _renderDetailContent() {
+  const r = _detailRecipe;
+  if (!r) return;
+  const scale = _detailScale;
+
   const allAllergens = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
-  const servings = r.recipeVolume && r.servingSize ? Math.round((r.recipeVolume * 1000) / r.servingSize) : null;
+  const baseServings = r.recipeVolume && r.servingSize ? Math.round((r.recipeVolume * 1000) / r.servingSize) : null;
+  const scaledLiters = r.recipeVolume ? r.recipeVolume * scale : null;
+  const scaledServings = baseServings ? Math.round(baseServings * scale) : null;
 
   let nutritionHtml = '';
   if (r.nutrition) {
@@ -828,7 +843,24 @@ function renderDetailModal(r: RecipeFull) {
     </div>`;
   }
 
-  showModal(`
+  const canScale = r.recipeVolume != null && r.recipeVolume > 0 && r.ingredients.length > 0;
+  const scaleRowHtml = canScale ? `
+    <div class="br-scale-row" style="margin-bottom:12px;">
+      <label>Volume:</label>
+      <input type="number" class="re-inline-input re-inline-num" value="${scaledLiters!.toFixed(1)}" min="0.1" step="0.5"
+        onchange="detailUpdateLiters(+this.value)" style="width:70px;" />
+      <span>L</span>
+      ${scaledServings !== null ? `
+        <span style="color:var(--text2);">&nbsp;|&nbsp;</span>
+        <label>Portions:</label>
+        <input type="number" class="re-inline-input re-inline-num" value="${scaledServings}" min="1" step="1"
+          onchange="detailUpdatePortions(+this.value)" style="width:70px;" />
+      ` : ''}
+      <span class="br-scale-info">(recipe: ${r.recipeVolume!.toFixed(1)}L${scale !== 1 ? `, scale: ${scale.toFixed(1)}x` : ''})</span>
+      ${scale !== 1 ? `<button class="btn btn-sm" onclick="detailResetScale()" style="margin-left:4px;font-size:11px;">Reset</button>` : ''}
+    </div>` : '';
+
+  const content = `
     <div style="width:600px;max-width:90vw;">
       <div style="display:flex;gap:16px;margin-bottom:16px;">
         ${r.photoUrl ? `<img src="${r.photoUrl}" style="width:120px;height:120px;object-fit:cover;border-radius:var(--radius);" />` : ''}
@@ -838,7 +870,7 @@ function renderDetailModal(r: RecipeFull) {
             ${typeBadge((r.type || 'Soup') as DishType)}
             ${r.structure ? `<span class="badge" style="background:var(--bg2);color:var(--text2);">${esc(r.structure)}</span>` : ''}
             ${r.seasonality ? `<span class="badge" style="background:var(--bg2);color:var(--text2);">${esc(r.seasonality)}</span>` : ''}
-            ${servings ? `<span class="badge" style="background:var(--blue-bg);color:var(--blue);">${servings} servings</span>` : ''}
+            ${scaledServings ? `<span class="badge" style="background:var(--blue-bg);color:var(--blue);">${scaledServings} servings</span>` : ''}
             ${r.costPerServing != null ? `<span class="badge" style="background:var(--green-bg);color:var(--green);">&euro;${r.costPerServing.toFixed(2)}/serving</span>` : ''}
             ${r.isComplete ? '<span class="badge" style="background:var(--green-bg);color:var(--green);">Complete</span>' : '<span class="badge" style="background:var(--amber-bg);color:var(--amber);">In progress</span>'}
           </div>
@@ -846,23 +878,27 @@ function renderDetailModal(r: RecipeFull) {
         </div>
       </div>
 
+      ${scaleRowHtml}
+
       ${r.ingredients.length > 0 ? `
         <div class="re-review-section">
           <strong>Ingredients (${r.ingredients.length})</strong>
           <table class="re-detail-table">
             <thead><tr><th>Ingredient</th><th>Raw</th><th>Cooked</th><th>Unit</th></tr></thead>
             <tbody>
-              ${r.ingredients.map(ing => `<tr${ing.isFlexible ? ' style="font-style:italic;color:var(--purple);"' : ''}>
+              ${r.ingredients.map(ing => {
+                const scaledRaw = scale !== 1 ? Math.round(ing.rawAmount * scale) : ing.rawAmount;
+                const scaledCooked = ing.cookedAmount != null ? (scale !== 1 ? Math.round(ing.cookedAmount * scale) : ing.cookedAmount) : null;
+                return `<tr${ing.isFlexible ? ' style="font-style:italic;color:var(--purple);"' : ''}>
                 <td>${ing.isFlexible ? esc(ing.flexLabel || 'Flexible') + ' (' + esc(ing.flexCategory || '') + ')' : esc(ing.ingredientName || 'Unknown')}</td>
-                <td>${ing.rawAmount}</td>
-                <td>${ing.cookedAmount ?? '—'}</td>
+                <td>${scaledRaw}</td>
+                <td>${scaledCooked ?? '—'}</td>
                 <td>${esc(ing.unit)}</td>
-              </tr>`).join('')}
+              </tr>`;
+              }).join('')}
             </tbody>
           </table>
         </div>` : ''}
-
-      ${nutritionHtml}
 
       ${r.prepSteps.length > 0 ? `
         <div class="re-review-section">
@@ -886,6 +922,8 @@ function renderDetailModal(r: RecipeFull) {
           </div>
         </div>` : ''}
 
+      ${nutritionHtml}
+
       <div class="modal-actions">
         <button class="btn" onclick="closeModal()">Close</button>
         <button class="btn" onclick="rePrintRecipe('${esc(r.id)}')">Print A4</button>
@@ -893,15 +931,43 @@ function renderDetailModal(r: RecipeFull) {
         <button class="btn btn-primary" onclick="openRecipeEditor('${esc(r.id)}')">Edit</button>
       </div>
     </div>
-  `);
+  `;
+
+  // Update modal content in-place if already open, otherwise show new modal
+  const existingModal = document.querySelector('.modal');
+  if (existingModal) {
+    existingModal.innerHTML = content;
+  } else {
+    showModal(content);
+  }
   const modal = document.querySelector('.modal') as HTMLElement;
   if (modal) { modal.style.width = '640px'; modal.style.maxWidth = '95vw'; }
+}
+
+export function detailUpdateLiters(newLiters: number) {
+  if (!_detailRecipe || newLiters <= 0 || !_detailRecipe.recipeVolume) return;
+  _detailScale = newLiters / _detailRecipe.recipeVolume;
+  _renderDetailContent();
+}
+
+export function detailUpdatePortions(portions: number) {
+  if (!_detailRecipe || portions <= 0 || !_detailRecipe.servingSize || !_detailRecipe.recipeVolume) return;
+  const targetLiters = (portions * _detailRecipe.servingSize) / 1000;
+  _detailScale = targetLiters / _detailRecipe.recipeVolume;
+  _renderDetailContent();
+}
+
+export function detailResetScale() {
+  _detailScale = 1;
+  _renderDetailContent();
 }
 
 // ── Print ──
 
 export function rePrintRecipe(recipeId: string) {
-  window.open(`/api/recipes/${recipeId}/print`, '_blank');
+  const scaleParam = _detailRecipe && _detailRecipe.id === recipeId && _detailScale !== 1
+    ? `?scale=${_detailScale}` : '';
+  window.open(`/api/recipes/${recipeId}/print${scaleParam}`, '_blank');
 }
 
 // ── Version snapshot ──
@@ -944,6 +1010,9 @@ interface BatchRecipeState {
   cookNotes: string;
   deductStock: boolean;
   isFullscreen: boolean;
+  targetLiters: number;
+  recipeVolume: number;
+  servingSize: number;
 }
 
 let _brState: BatchRecipeState | null = null;
@@ -955,10 +1024,11 @@ export function openBatchRecipe(batchId: string) {
   const recipe = S.recipes.find(r => r.id === batch.recipeId);
   if (!recipe) return;
 
+  const recipeVolume = recipe.recipeVolume || 0;
+  const batchLiters = (batch.stock || 0) > 0 ? batch.stock : recipeVolume;
   let scaleFactor = 1;
-  if (recipe.recipeVolume && recipe.recipeVolume > 0) {
-    const batchLiters = (batch.stock || 0) > 0 ? batch.stock : recipe.recipeVolume;
-    scaleFactor = batchLiters / recipe.recipeVolume;
+  if (recipeVolume > 0) {
+    scaleFactor = batchLiters / recipeVolume;
   }
 
   // Pre-fill from existing actualIngredients if available
@@ -973,6 +1043,9 @@ export function openBatchRecipe(batchId: string) {
     cookNotes: batch.cookNotes || '',
     deductStock: false,
     isFullscreen: false,
+    targetLiters: batchLiters,
+    recipeVolume,
+    servingSize: recipe.servingSize || 280,
     ingredients: recipe.ingredients.map(ing => {
       // Try to match pre-resolved flexible slots
       if (ing.isFlexible && existing) {
@@ -1123,6 +1196,10 @@ function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock
       <div class="re-ing-suggestions" id="br-add-sug"></div>
     </div>`;
 
+  const portions = br.recipeVolume > 0 && br.servingSize > 0 ? Math.round((br.targetLiters * 1000) / br.servingSize) : null;
+  const scaleFactor = br.recipeVolume > 0 ? (br.targetLiters / br.recipeVolume) : 1;
+  const canScale = br.recipeVolume > 0;
+
   return `
     <div class="br-header">
       <div style="flex:1;">
@@ -1138,6 +1215,19 @@ function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock
         </button>
       </div>
     </div>
+    ${canScale ? `<div class="br-scale-row">
+      <label>Volume:</label>
+      <input type="number" class="re-inline-input re-inline-num" value="${br.targetLiters}" min="0.1" step="0.5"
+        onchange="brUpdateTargetLiters(+this.value)" style="width:70px;" />
+      <span>L</span>
+      ${portions !== null ? `
+        <span style="color:var(--text2);">&nbsp;|&nbsp;</span>
+        <label>Portions:</label>
+        <input type="number" class="re-inline-input re-inline-num" value="${portions}" min="1" step="1"
+          onchange="brUpdateTargetPortions(+this.value)" style="width:70px;" />
+      ` : ''}
+      <span class="br-scale-info">(recipe: ${br.recipeVolume}L, scale: ${scaleFactor.toFixed(1)}x)</span>
+    </div>` : `<div class="br-scale-row"><span style="color:var(--text2);font-size:12px;">Set recipe volume to enable scaling</span></div>`}
     <div class="br-body">
       <div class="re-section">
         <div class="re-section-title">Ingredients</div>
@@ -1179,6 +1269,30 @@ export function brToggleFullscreen() {
   if (!_brState) return;
   _brState.isFullscreen = !_brState.isFullscreen;
   renderBatchRecipe();
+}
+
+export function brUpdateTargetLiters(newLiters: number) {
+  if (!_brState || newLiters <= 0 || !_brState.recipeVolume) return;
+  const recipe = S.recipes.find(r => r.id === _brState!.recipeId);
+  if (!recipe) return;
+
+  const newScale = newLiters / _brState.recipeVolume;
+  _brState.targetLiters = newLiters;
+
+  // Rescale from base recipe amounts (not current displayed amounts) to avoid rounding drift
+  recipe.ingredients.forEach((baseIng, i) => {
+    if (i < _brState!.ingredients.length && !_brState!.ingredients[i].removed) {
+      _brState!.ingredients[i].amount = Math.round(baseIng.rawAmount * newScale);
+    }
+  });
+
+  renderBatchRecipe();
+}
+
+export function brUpdateTargetPortions(portions: number) {
+  if (!_brState || portions <= 0 || !_brState.servingSize) return;
+  const liters = (portions * _brState.servingSize) / 1000;
+  brUpdateTargetLiters(liters);
 }
 
 export function brIngSearch(idx: number, query: string) {

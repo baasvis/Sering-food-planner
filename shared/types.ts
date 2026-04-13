@@ -15,6 +15,8 @@ export type SaveState = 'saved' | 'unsaved' | 'saving' | 'error';
 export interface RecipeIngredient {
   name: string;
   amount: number;
+  rawAmount?: number;
+  cookedAmount?: number | null;
   unit: string;
   source?: string;
   cost?: number;

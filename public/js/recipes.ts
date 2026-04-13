@@ -50,6 +50,8 @@ export function renderRecipeIndex() {
   <div class="btn-row" style="margin-bottom:12px;">
     <button class="btn btn-primary" onclick="openRecipeEditor()">+ Create recipe</button>
     <button class="btn" onclick="openAddRecipe()">Import from Sheet</button>
+    <button class="btn" onclick="recalcAllCosts()" title="Recalculate all recipe costs from current ingredient prices">Recalculate costs</button>
+    <button class="btn" onclick="importCookedAmounts()" title="Re-import cooked amounts from Google Sheets for all recipes">Import cooked amounts</button>
     <span style="font-size:12px;color:var(--text2);margin-left:8px;">${v2Count} recipe${v2Count !== 1 ? 's' : ''} + ${S.recipeIndex.length} legacy</span>
   </div>
   <input class="ri-search" id="ri-search-input" placeholder="Search recipes..." value="${esc(riSearch)}" oninput="updateRiSearch(this)" />
@@ -462,6 +464,34 @@ export async function deleteRecipeIndex(id: any) {
 }
 
 // Add a dish to the menu planner from a recipe in the index
+export async function importCookedAmounts() {
+  try {
+    toast('Importing cooked amounts from Google Sheets... this may take a while');
+    const result = await apiPost('/api/recipes/import-cooked-amounts', {}) as { updated: number; skipped: number; failed: number; total: number };
+    // Refresh the recipe list from server
+    const freshRecipes = await apiGet('/api/recipes') as typeof S.recipes;
+    S.recipes = freshRecipes;
+    updateRecipeResults();
+    toast(`Cooked amounts imported: ${result.updated} updated, ${result.failed} failed, ${result.skipped} skipped out of ${result.total}`);
+  } catch (e: unknown) {
+    toastError('Could not import cooked amounts: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+export async function recalcAllCosts() {
+  try {
+    toast('Recalculating all recipe costs...');
+    const updated = await apiPost('/api/recipes/recalculate-costs', {}) as { updated: number };
+    // Refresh the recipe list from server
+    const freshRecipes = await apiGet('/api/recipes') as typeof S.recipes;
+    S.recipes = freshRecipes;
+    updateRecipeResults();
+    toast(`Costs recalculated (${updated.updated} updated)`);
+  } catch (e: unknown) {
+    toastError('Could not recalculate costs: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
 export async function addDishFromRecipe(recipeId: any) {
   const r = S.recipeIndex.find(x => x.id === recipeId);
   if (!r) return;

@@ -112,7 +112,7 @@ router.get('/recipe', asyncHandler(async (req: Request, res: Response) => {
   const ingRows     = vals[9].values || [];
   const sourceRows  = vals[10].values || [];
   const unitRows    = vals[11].values || [];
-  const ingredients: Array<{ name: string; amount: number; unit: string; source: string }> = [];
+  const ingredients: Array<{ name: string; amount: number; rawAmount: number; cookedAmount: number | null; unit: string; source: string }> = [];
   const seen = new Set<string>();
   ingRows.forEach((row: (string | undefined)[], i: number) => {
     if (!row[0]) return;
@@ -120,8 +120,8 @@ router.get('/recipe', asyncHandler(async (req: Request, res: Response) => {
     const cookedStr = row[3] ? String(row[3]).replace(',','.') : '';
     const rawAmt = parseFloat(rawStr) || 0;
     const cookedAmt = parseFloat(cookedStr) || 0;
+    if (rawAmt <= 0 && cookedAmt <= 0) return;
     const amount = rawAmt > 0 ? rawAmt : cookedAmt;
-    if (!amount || amount <= 0) return;
     if (row[0].length > 80) return;
     const key = row[0].toLowerCase().trim();
     if (seen.has(key)) return;
@@ -130,6 +130,8 @@ router.get('/recipe', asyncHandler(async (req: Request, res: Response) => {
     ingredients.push({
       name: row[0],
       amount,
+      rawAmount: rawAmt,
+      cookedAmount: cookedAmt > 0 ? cookedAmt : null,
       unit,
       source: (sourceRows[i] && sourceRows[i][0]) || '',
     });
@@ -181,6 +183,13 @@ router.get('/recipes/:id', asyncHandler(async (req: Request, res: Response) => {
         }
       }
     }
+  }
+
+  // Recalculate cost from current ingredient prices and update if changed
+  const freshCost = await calcRecipeCost(recipe.ingredients, recipe.servingSize, recipe.recipeVolume);
+  if (freshCost !== recipe.costPerServing) {
+    await prisma.recipe.update({ where: { id }, data: { costPerServing: freshCost } });
+    recipe.costPerServing = freshCost;
   }
 
   // Calculate nutrition
@@ -276,6 +285,112 @@ router.post('/recipes/recalculate-costs', asyncHandler(async (_req: Request, res
   }
 
   res.json({ ok: true, updated, total: recipes.length });
+}));
+
+// Bulk re-import cooked amounts from Google Sheets for all v2 recipes with legacySheetId
+router.post('/recipes/import-cooked-amounts', asyncHandler(async (_req: Request, res: Response) => {
+  const sheets = getSheetsClient();
+  if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
+
+  const recipes = await prisma.recipe.findMany({
+    where: { legacySheetId: { not: null } },
+    include: { ingredients: { orderBy: { sortOrder: 'asc' } } },
+  });
+
+  let updated = 0;
+  let skipped = 0;
+  let failed = 0;
+  const details: Array<{ name: string; status: string; count?: number }> = [];
+
+  for (const recipe of recipes) {
+    if (!recipe.legacySheetId || recipe.ingredients.length === 0) {
+      skipped++;
+      details.push({ name: recipe.name, status: 'skipped' });
+      continue;
+    }
+
+    try {
+      const response = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: recipe.legacySheetId,
+        ranges: ['J6:N80', 'K6:K80'],
+      });
+      const ingRows = response.data.valueRanges?.[0]?.values || [];
+      const unitRows = response.data.valueRanges?.[1]?.values || [];
+
+      // Build a list of sheet ingredients with cooked amounts
+      const sheetIngredients: Array<{ name: string; rawAmount: number; cookedAmount: number | null; unit: string }> = [];
+      ingRows.forEach((row: (string | undefined)[], i: number) => {
+        if (!row[0]) return;
+        const rawStr = row[2] ? String(row[2]).replace(',', '.') : '';
+        const cookedStr = row[3] ? String(row[3]).replace(',', '.') : '';
+        const rawAmt = parseFloat(rawStr) || 0;
+        const cookedAmt = parseFloat(cookedStr) || 0;
+        if (rawAmt <= 0 && cookedAmt <= 0) return;
+        const unit = (unitRows[i] && unitRows[i][0]) || 'Grams';
+        sheetIngredients.push({
+          name: row[0].toLowerCase().trim(),
+          rawAmount: rawAmt,
+          cookedAmount: cookedAmt > 0 ? cookedAmt : null,
+          unit,
+        });
+      });
+
+      // Match DB ingredients to sheet rows by name and update cookedAmount
+      let rowsUpdated = 0;
+      for (const dbIng of recipe.ingredients) {
+        const dbIngRecord = dbIng.ingredientId
+          ? await prisma.ingredient.findUnique({ where: { id: dbIng.ingredientId }, select: { name: true } })
+          : null;
+        const dbName = (dbIngRecord?.name || '').toLowerCase().trim();
+        if (!dbName) continue;
+
+        const match = sheetIngredients.find(si =>
+          si.name === dbName ||
+          si.name.includes(dbName) ||
+          dbName.includes(si.name)
+        );
+
+        if (match && match.cookedAmount != null && dbIng.cookedAmount == null) {
+          await prisma.recipeIngredientRow.update({
+            where: { id: dbIng.id },
+            data: { cookedAmount: match.cookedAmount },
+          });
+          rowsUpdated++;
+        }
+      }
+
+      if (rowsUpdated > 0) {
+        // Recalculate recipe volume from cooked amounts
+        const updatedIngs = await prisma.recipeIngredientRow.findMany({
+          where: { recipeId: recipe.id },
+          orderBy: { sortOrder: 'asc' },
+        });
+        let totalML = 0;
+        for (const ing of updatedIngs) {
+          const cooked = ing.cookedAmount ?? ing.rawAmount;
+          if (!cooked) continue;
+          switch (ing.unit) {
+            case 'Kilos': case 'Liters': totalML += cooked * 1000; break;
+            case 'ML': case 'Grams': default: totalML += cooked; break;
+          }
+        }
+        const newVolume = Math.round(totalML) / 1000;
+        if (newVolume > 0) {
+          await prisma.recipe.update({ where: { id: recipe.id }, data: { recipeVolume: newVolume } });
+        }
+
+        updated++;
+        details.push({ name: recipe.name, status: 'updated', count: rowsUpdated });
+      } else {
+        details.push({ name: recipe.name, status: 'no-matches' });
+      }
+    } catch (e: unknown) {
+      failed++;
+      details.push({ name: recipe.name, status: `error: ${errMsg(e)}` });
+    }
+  }
+
+  res.json({ ok: true, updated, skipped, failed, total: recipes.length, details });
 }));
 
 // Update recipe metadata and/or ingredients
@@ -511,21 +626,26 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
   });
   if (!recipe) return res.status(404).send('Recipe not found');
 
-  // Optional batch scaling
+  // Optional scaling — via batchId or direct scale/liters param
   const batchId = req.query.batchId as string | undefined;
+  const scaleParam = req.query.scale ? parseFloat(req.query.scale as string) : null;
+  const litersParam = req.query.liters ? parseFloat(req.query.liters as string) : null;
   let scaleFactor = 1;
   let batchLabel = '';
   if (batchId) {
     const batch = await prisma.batch.findUnique({ where: { id: batchId } });
     if (batch && recipe.recipeVolume && recipe.servingSize) {
       const recipeLiters = recipe.recipeVolume;
-      // Use batch stock if > 0, otherwise use the recipe volume (uncooked batch = 1:1 scale)
       const batchLiters = (batch.stock || 0) > 0 ? batch.stock : recipeLiters;
       if (recipeLiters > 0 && batchLiters > 0) {
         scaleFactor = batchLiters / recipeLiters;
       }
       batchLabel = batch.name || '';
     }
+  } else if (litersParam && litersParam > 0 && recipe.recipeVolume && recipe.recipeVolume > 0) {
+    scaleFactor = litersParam / recipe.recipeVolume;
+  } else if (scaleParam && scaleParam > 0) {
+    scaleFactor = scaleParam;
   }
 
   const ingredients = recipe.ingredients.map(ing => {

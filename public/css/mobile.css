@@ -180,4 +180,9 @@
     /* Guest table scroll */
     .guest-loc-section{position:relative;overflow-x:auto;-webkit-overflow-scrolling:touch;}
     .guest-table .gt-input{width:48px;height:30px;font-size:13px;}
+
+    /* Recipe scale row */
+    .br-scale-row{flex-wrap:wrap;gap:6px;font-size:12px;}
+    .br-scale-row input[type="number"]{width:60px;}
+    .br-scale-info{width:100%;margin-left:0;}
   }

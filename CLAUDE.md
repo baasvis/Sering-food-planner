@@ -66,7 +66,7 @@ public/
     dishes.ts          — Dish list + cook workflow + CRUD
     caterings.ts       — Catering events
     recipes.ts         — Recipe index/library (legacy + v2 unified list)
-    recipe-editor.ts   — Recipe v2 editor (multi-step modal), detail view, post-cook recording
+    recipe-editor.ts   — Recipe v2 editor (multi-step modal), detail view with scaling, batch recipe editor with scaling, post-cook recording
     orders.ts          — Order overview (combined, standard inventory, dish ingredients tabs)
     ingredient-db.ts   — Ingredient database editor + supplier import
     finance.ts         — Finance screen (revenue dashboard, sync, week nav)
