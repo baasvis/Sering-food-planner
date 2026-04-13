@@ -698,7 +698,7 @@ export function addPlaceholderDish() {
     extraAllergens: [],
     orderFor: false,
     parentId: null,
-    cookDate: null,
+    cookDate: dateToStr(new Date(date)),
     services: [{ loc, date, meal }],
     createdAt: new Date().toISOString(),
     recipeId: null, actualIngredients: null, cookNotes: '', stockDeducted: false,
@@ -842,6 +842,11 @@ export function confirmReplaceBatch(newBatchId: string) {
   const replacement = S.batches.find(d => d.id === newBatchId);
   if (!old || !replacement) return;
 
+  // Transfer cook date if replacement doesn't have one
+  if (old.cookDate && !replacement.cookDate) {
+    replacement.cookDate = old.cookDate;
+  }
+
   // Transfer services, deduplicating
   const existing = replacement.services || [];
   (old.services || []).forEach(svc => {
@@ -890,7 +895,7 @@ export function replaceWithRecipe(recipeId: string) {
     extraAllergens: [],
     orderFor: false,
     parentId: null,
-    cookDate: null,
+    cookDate: old.cookDate || null,
     note: '',
     services: [...(old.services || [])],
     createdAt: new Date().toISOString(),
