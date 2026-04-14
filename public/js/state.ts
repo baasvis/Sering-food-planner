@@ -99,6 +99,7 @@ export interface CustomTodo {
 
 export interface AppState {
   currentLoc: Location;
+  dashMeal: Meal;
   plannerSubTab: string;
   filters: { loc: string; storage: string; inTransit: string };
   selected: Set<string>;
@@ -147,6 +148,7 @@ export interface AppState {
 
 export let S: AppState = {
   currentLoc:'west',
+  dashMeal:'lunch',
   plannerSubTab:'west',
   filters:{loc:'all',storage:'all',inTransit:'all'},
   selected:new Set(),

@@ -14,9 +14,18 @@
     .user-menu{order:11;width:100%;justify-content:center;border-left:none;padding:4px 0 6px;margin-left:0;}
 
     /* Dashboard */
-    .dash-greeting{font-size:17px;}
-    .dash-grid{grid-template-columns:1fr;gap:10px;}
-    .dash-action-btn{flex:1;min-width:0;padding:8px 10px;font-size:12px;justify-content:center;}
+    .dash-meal-toggle{padding:6px 0 10px;gap:4px;}
+    .dash-meal-btn{padding:10px 6px;font-size:14px;}
+    .dash-date-label{display:none;}
+    .dash-service-cols{grid-template-columns:1fr;gap:8px;}
+    .dash-guest-big{flex-direction:row;gap:8px;width:100%;justify-content:center;padding:6px 8px;min-width:0;}
+    .dash-guest-big .dash-guest-num{font-size:24px;}
+    .dash-columns{grid-template-columns:1fr;gap:8px;}
+    .dash-inv-btn,.dash-st-btn{font-size:9px;padding:4px 6px;width:100%;}
+    .dash-stock-total{width:100%;}
+    .dash-chip-name{font-size:11px;}
+    .dash-chip-expand{padding-left:16px;}
+    .dash-st-input{font-size:13px;}
 
     /* Guest counts: scroll wrapper */
     .guest-table th,.guest-table td{padding:3px 2px;font-size:11px;}

@@ -12,10 +12,12 @@ import { registerRenderer, setCurrentScreen } from './navigate';
 import { renderFeedbackAdmin } from './feedback-admin';
 import { renderFinance } from './finance';
 import { renderGuests } from './guests';
-import { renderOrders } from './orders';
+import { renderOrders, startStocktake, renderStocktakeAreaPicker, enterStocktakeArea, renderStocktakeArea, saveStocktakeArea, exitStocktake, getIngredientsForArea } from './orders';
 import { renderRecipeIndex } from './recipes';
 import { renderWeekPlan } from './planner';
 import { trackScreenView } from './telemetry';
+import { showModal, closeModal } from './modal';
+import { getStorageConfigForLoc } from './state';
 
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
@@ -23,21 +25,17 @@ import { trackScreenView } from './telemetry';
 export function showScreen(name: string, pushState = true) {
   trackScreenView(name);
   setCurrentScreen(name);
-  // Switch active screen
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + name)?.classList.add('active');
-  // Sync both navs using data-screen attribute
   document.querySelectorAll('.nav-btn, .bnav-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.screen === name);
+    b.classList.toggle('active', (b as HTMLElement).dataset.screen === name);
   });
-  // Update URL hash so refresh/back button works
   if (pushState) {
     const hash = name === 'dashboard' ? '' : '#' + name;
     if (window.location.hash !== hash && !(name === 'dashboard' && !window.location.hash)) {
       history.pushState({ screen: name }, '', hash || window.location.pathname);
     }
   }
-  // Rebuild planner data when viewing planner, dashboard, or orders (peer splitting needs it)
   if (name === 'planner' || name === 'dashboard' || name === 'orders') rebuildPlanner();
   if (name === 'dashboard') renderDashboard();
   if (name === 'guests') renderGuests();
@@ -48,23 +46,19 @@ export function showScreen(name: string, pushState = true) {
   if (name === 'feedback-admin') renderFeedbackAdmin();
 }
 
-/** Get the screen name from the current URL hash, or 'dashboard' as default */
 export function getScreenFromHash(): string {
   const hash = window.location.hash.replace('#', '');
   const validScreens = NAV_SCREENS.map(s => s.id);
   return validScreens.includes(hash) ? hash : 'dashboard';
 }
 
-// ── DASHBOARD ────────────────────────────────────────────
-// Categories from ingredient DB that need chopping/prep
+// ── CHOPPABLE INGREDIENT LOGIC ───────────────────────────────
 export const CHOPPABLE_CATEGORIES = [
-  'vegetables & fruit',       // production DB
-  'herbs & spices',           // fresh herbs (dried spices caught by PANTRY_KEYWORDS)
-  'vegetables', 'fruits', 'mushrooms', 'herbs', 'beans and legumes',  // seed DB fallback
+  'vegetables & fruit',
+  'herbs & spices',
+  'vegetables', 'fruits', 'mushrooms', 'herbs', 'beans and legumes',
 ];
 
-// Fallback keywords for ingredients not found in DB — these are NOT choppable
-// NOTE: fresh herbs removed (parsley, basil, cilantro, thyme, rosemary) — herbs ARE choppable
 export const PANTRY_KEYWORDS = [
   'oil','olie','salt','zout','sugar','suiker','pepper','peper',
   'vinegar','azijn','soy sauce','sojasaus','ketjap','tamari',
@@ -96,9 +90,20 @@ export const PANTRY_KEYWORDS = [
   'noten','nuts','nibs','flakes','vlokken',
   'agar','xanthan','xanthana','lecithin','inulin','isomalt','pectin','gelespessa',
   'msg','maggi','liquid smoke',
+  // Proteins (not choppable)
+  'tofu','tempeh','seitan','tvp','soy protein','soja eiwit',
+  // Canned/preserved
+  'canned','blik','ingeblikt','conserven',
+  // Dry legumes/grains (not choppable)
+  'lentil','linzen','chickpea','kikkererwt','bean','boon','bonen',
+  'beluga','split pea','kapucijner',
+  // Frozen items (not choppable prep)
+  'frozen','bevroren','diepvries',
+  // Spice blends
+  'garam masala','curry powder','kerrie','five spice','ras el hanout',
+  'za\'atar','zaatar','berbere','harissa','jerk',
 ];
 
-// Build a lookup cache from ingredient DB (name/supplierName → category)
 export let _ingredientCategoryCache: Map<string, string> | null = null;
 export function invalidateCategoryCache() { _ingredientCategoryCache = null; }
 export function getIngredientCategoryCache() {
@@ -107,22 +112,18 @@ export function getIngredientCategoryCache() {
   (S.ingredientDb || []).forEach(ing => {
     const cat = (ing.category || '').toLowerCase().trim();
     if (!cat) return;
-    if (ing.name) _ingredientCategoryCache.set(ing.name.toLowerCase().trim(), cat);
-    if (ing.supplierName) _ingredientCategoryCache.set(ing.supplierName.toLowerCase().trim(), cat);
+    if (ing.name) _ingredientCategoryCache!.set(ing.name.toLowerCase().trim(), cat);
+    if (ing.supplierName) _ingredientCategoryCache!.set(ing.supplierName.toLowerCase().trim(), cat);
   });
   return _ingredientCategoryCache;
 }
 
 export function isChoppableIngredient(name: string) {
   const lower = name.toLowerCase().trim();
-  // Hard exclusion: pantry staples are never choppable regardless of DB category
   if (PANTRY_KEYWORDS.some(kw => lower.includes(kw))) return false;
-  // Check ingredient DB categories
   const cache = getIngredientCategoryCache();
-  // Exact match
   const exact = cache.get(lower);
   if (exact) return CHOPPABLE_CATEGORIES.includes(exact);
-  // Word-level fuzzy: "red onion" contains word "onion", "carrot (purple)" contains "carrot"
   const wordBoundary = (haystack: string, needle: string) => {
     const i = haystack.indexOf(needle);
     if (i === -1) return false;
@@ -130,7 +131,7 @@ export function isChoppableIngredient(name: string) {
     const after = i + needle.length >= haystack.length || /\W/.test(haystack[i + needle.length]);
     return before && after;
   };
-  const matchedCats = [];
+  const matchedCats: string[] = [];
   for (const [dbName, cat] of cache) {
     if (dbName === lower) continue;
     if (wordBoundary(dbName, lower) || wordBoundary(lower, dbName)) {
@@ -140,9 +141,11 @@ export function isChoppableIngredient(name: string) {
   if (matchedCats.length > 0) {
     return matchedCats.some(cat => CHOPPABLE_CATEGORIES.includes(cat));
   }
-  // Not found in DB and not a pantry keyword — include it
-  return true;
+  // Not found in DB and not a pantry keyword — exclude by default
+  return false;
 }
+
+// ── HELPERS ──────────────────────────────────────────────────
 
 export function isDishAtLocation(dish: Batch, loc: Location) {
   return dish.location === loc;
@@ -157,7 +160,6 @@ export function getCookDateDishes(loc: Location, date: Date) {
   );
 }
 
-// Get all unique dishes in the menu for a given location + ISO date string
 export function getMenuDishes(loc: Location, dateStr: string) {
   const seen = new Set<string>();
   const dishes: Batch[] = [];
@@ -168,6 +170,11 @@ export function getMenuDishes(loc: Location, dateStr: string) {
     });
   });
   return dishes;
+}
+
+export function getMenuDishesForMeal(loc: Location, dateStr: string, meal: Meal) {
+  const k = `${loc}-${dateStr}-${meal}`;
+  return S.planner[k] || [];
 }
 
 export function calcLitersForService(dish: Batch, loc: Location, dateStr: string, meal: Meal) {
@@ -181,7 +188,6 @@ export function calcLitersForService(dish: Batch, loc: Location, dateStr: string
 interface VegIngredient { name: string; amount: number; unit: string }
 
 export function getVegIngredients(dishes: Batch[]) {
-  // Returns array of { name, amount, unit }  aggregated across dishes
   const combined: Record<string, VegIngredient> = {};
   dishes.forEach(dish => {
     const ings = calcIngredientsFromRecipe(dish);
@@ -195,7 +201,8 @@ export function getVegIngredients(dishes: Batch[]) {
   return Object.values(combined).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// Per-dish starch selector (Rice or Pasta)
+// ── Starch picker ────────────────────────────────────────────
+
 export function setDishStarch(dishId: string, starch: string) {
   const d = S.batches.find(x => x.id === dishId) as DashBatch | undefined;
   if (!d) return;
@@ -204,7 +211,6 @@ export function setDishStarch(dishId: string, starch: string) {
   renderDashboardContent();
 }
 
-// Meal-level starch summary — aggregates all mains in a meal
 export function starchSummaryHtml(dishes: DashBatch[], gc: number) {
   const mains = dishes.filter(d => d.type === 'Main course' && d.starch);
   if (!mains.length) return '';
@@ -221,55 +227,200 @@ export function starchSummaryHtml(dishes: DashBatch[], gc: number) {
   return `<div class="dash-starch-meal-summary">${parts.join('<span class="dash-starch-sep">+</span>')}</div>`;
 }
 
-export function renderDashboard() {
-  const now = new Date();
-  const hour = now.getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const userName = S.user?.name ? ', ' + S.user.name.split(' ')[0] : '';
-  const dateStr = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+// ── MEAL TOGGLE ──────────────────────────────────────────────
 
-  const loc = S.currentLoc;
-
-  document.getElementById('screen-dashboard').innerHTML = `
-    <div class="dash-greeting">${greeting}${esc(userName)}</div>
-    <div class="dash-date">${dateStr}</div>
-    <div id="dash-content"></div>
-    <div id="dash-team-float" class="dash-team-float"></div>
-  `;
-
-  // Load persisted state then render
-  loadDayTodos();
-  loadPrepChecklist(loc).then(() => { renderDashboardContent(); renderTeamTodos(); });
+export function setDashMeal(meal: Meal) {
+  S.dashMeal = meal;
+  renderDashboardContent();
 }
 
-// ── Guest Flow Chart ─────────────────────────────────────
-// Shows estimated guest arrivals per 5-minute interval as a line chart.
-// Uses a gaussian distribution applied to the expected total guest count.
+// Auto-detect meal based on time of day
+function autoDetectMeal(): Meal {
+  const hour = getAmsterdamNow().getHours();
+  return hour < 15 ? 'lunch' : 'dinner';
+}
 
-export let _guestFlowMeal = 'lunch'; // current toggle state
+// ── DISH CHIP COMPONENT ──────────────────────────────────────
+
+const _expandedChips = new Set<string>();
+
+export function toggleDashChipExpand(dishId: string) {
+  if (_expandedChips.has(dishId)) _expandedChips.delete(dishId);
+  else _expandedChips.add(dishId);
+  renderDashboardContent();
+}
+
+interface ChipContext {
+  meal?: Meal;
+  dateStr?: string;
+  liters?: number;
+  note?: string;
+  showAllergens?: boolean;
+  showStarch?: boolean;
+  showRecipe?: boolean;
+  showStock?: boolean;
+  checkable?: boolean;
+  checked?: boolean;
+  toggleFn?: string;
+}
+
+const TYPE_ICONS: Record<string, string> = { 'Soup': '🥣', 'Main course': '🍛', 'Dessert': '🍨' };
+
+function renderGroupedByType(batches: Batch[], chipFn: (b: Batch) => string): string {
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  const sorted = [...batches].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
+  let html = '';
+  let lastType = '';
+  sorted.forEach(b => {
+    if (b.type !== lastType) {
+      lastType = b.type;
+      const icon = TYPE_ICONS[b.type] || '🍽️';
+      html += `<div class="dash-section-hdr">${icon} ${b.type}</div>`;
+    }
+    html += chipFn(b);
+  });
+  return html;
+}
+
+function renderDashChip(dish: Batch, ctx: ChipContext): string {
+  const d = dish as DashBatch;
+  const loc = S.currentLoc;
+  const expanded = _expandedChips.has(dish.id);
+  const typeColors: Record<string, string> = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
+  const col = typeColors[dish.type] || 'gray';
+
+  // Compact row
+  let html = `<div class="dash-chip ${expanded ? 'expanded' : ''} ${ctx.checked ? 'checked' : ''}">
+    <div class="dash-chip-row" onclick="${ctx.checkable && ctx.toggleFn ? ctx.toggleFn + "('" + esc(dish.id) + "')" : "toggleDashChipExpand('" + esc(dish.id) + "')"}">`;
+
+  if (ctx.checkable) {
+    html += `<div class="dash-prep-check">${ctx.checked ? '✓' : ''}</div>`;
+  }
+
+  html += `<span class="dash-chip-dot" style="background:var(--${col})"></span>
+    <span class="dash-chip-name">${esc(dish.name)}</span>`;
+
+  // Inline allergens on the chip row
+  if (ctx.showAllergens) {
+    const allergens = [...(dish.allergens || []), ...(dish.extraAllergens || [])];
+    if (allergens.length) {
+      html += `<span class="dash-chip-allergens">${allergens.map(a => `<span class="dash-chip-ag">${esc(a)}</span>`).join('')}</span>`;
+    }
+  }
+
+  if (ctx.note) {
+    const noteClass = ctx.note === 'frozen' ? 'note-blue' : ctx.note.includes('cook') ? 'note-amber' : 'note-gray';
+    html += `<span class="dash-chip-note ${noteClass}">${ctx.note === 'frozen' ? '❄️' : ''} ${esc(ctx.note)}</span>`;
+  }
+
+  if (ctx.liters !== undefined) {
+    html += `<span class="dash-chip-liters">${ctx.liters} L</span>`;
+  } else if (ctx.showStock && (dish.stock || 0) > 0) {
+    html += `<span class="dash-chip-liters">${dish.stock} L</span>`;
+  }
+
+  html += `<span class="dash-chip-arrow">${expanded ? '▾' : '›'}</span>
+    </div>`;
+
+  // Expanded foldout
+  if (expanded) {
+    html += `<div class="dash-chip-expand" onclick="event.stopPropagation()">`;
+
+    // Allergens
+    const allergens = [...(dish.allergens || []), ...(dish.extraAllergens || [])];
+    html += `<div class="dash-chip-detail-row">
+      <span class="dash-chip-detail-label">Allergens</span>
+      <div class="dash-allergen-row allergen-inline" id="ag-inline-${dish.id}">
+        ${allergens.length ? allergens.map(a =>
+          `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${dish.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`
+        ).join('') : '<span class="dash-chip-empty">None</span>'}
+        <button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${dish.id}',event)" title="Add allergen">+</button>
+      </div>
+    </div>`;
+
+    // Starch picker for mains
+    if (dish.type === 'Main course') {
+      html += `<div class="dash-chip-detail-row">
+        <span class="dash-chip-detail-label">Starch</span>
+        <div class="dash-starch-picker">
+          <button class="dash-starch-opt${d.starch === 'Rice' ? ' selected' : ''}" onclick="setDishStarch('${esc(dish.id)}','Rice');event.stopPropagation()">🍚 Rice</button>
+          <button class="dash-starch-opt${d.starch === 'Pasta' ? ' selected' : ''}" onclick="setDishStarch('${esc(dish.id)}','Pasta');event.stopPropagation()">🍝 Pasta</button>
+        </div>
+      </div>`;
+    }
+
+    // Stock + cook date
+    const cooked = isBatchCooked(dish);
+    html += `<div class="dash-chip-detail-row">
+      <span class="dash-chip-detail-label">Stock</span>
+      <span>${dish.stock || 0} L ${cooked ? '<span class="dash-chip-badge-ok">cooked</span>' : '<span class="dash-chip-badge-warn">uncooked</span>'}</span>
+    </div>`;
+    if (dish.cookDate) {
+      html += `<div class="dash-chip-detail-row">
+        <span class="dash-chip-detail-label">Cook date</span>
+        <span>${esc(dish.cookDate)}</span>
+      </div>`;
+    }
+
+    // Recipe link
+    if (dish.recipeSheetId) {
+      html += `<div class="dash-chip-detail-row">
+        <a class="dash-recipe-btn" href="https://docs.google.com/spreadsheets/d/${esc(dish.recipeSheetId)}" target="_blank" onclick="event.stopPropagation()">📄 Open Recipe</a>
+      </div>`;
+    } else if ((dish as Record<string, unknown>).recipeId) {
+      html += `<div class="dash-chip-detail-row">
+        <button class="dash-recipe-btn" onclick="event.stopPropagation();openRecipeDetail('${esc((dish as Record<string, unknown>).recipeId as string)}')">📄 View Recipe</button>
+      </div>`;
+    }
+
+    // Per-service breakdown
+    const breakdown = calcRequiredBreakdown(dish);
+    if (breakdown.length > 0) {
+      html += `<div class="dash-chip-detail-row">
+        <span class="dash-chip-detail-label">Services</span>
+        <div class="dash-chip-services">${breakdown.map(l => `<div class="dash-chip-svc-line">${l}</div>`).join('')}</div>
+      </div>`;
+    }
+
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+// ── DASHBOARD RENDER ─────────────────────────────────────────
+
+export function renderDashboard() {
+  S.dashMeal = autoDetectMeal();
+  const loc = S.currentLoc;
+
+  document.getElementById('screen-dashboard')!.innerHTML = `
+    <div id="dash-content"></div>
+  `;
+
+  loadDayTodos();
+  loadPrepChecklist(loc).then(() => { renderDashboardContent(); });
+}
+
+// ── Guest Flow Chart ─────────────────────────────────────────
+
+export let _guestFlowMeal = 'lunch';
 
 export function setGuestFlowMeal(meal: Meal) {
   _guestFlowMeal = meal;
-  document.querySelectorAll('.dash-flow-toggle').forEach(b => b.classList.toggle('active', b.dataset.meal === meal));
-  drawGuestFlowChart();
 }
 
-// Gaussian bell curve: returns value 0-1 centered at `center` with spread `sigma`
 export function gaussian(x: number, center: number, sigma: number) {
   return Math.exp(-0.5 * Math.pow((x - center) / sigma, 2));
 }
 
-// Build a distribution of guest arrivals per 5-min slot for a meal.
-// Uses real historical distribution if available, falls back to gaussian.
-// Returns array of { time: "HH:MM", guests: number }
 export function buildGuestFlowData(totalGuests: number, meal: string, loc: string) {
-  // Check for real distribution data
   const today = getToday();
   const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const dow = DAY_NAMES[today.getDay()];
   const dist = S.guestFlowDistribution;
 
-  // Service windows: only show data within actual service hours
   const SERVICE_WINDOWS = {
     lunch:  { start: 12 * 60, end: 14 * 60 },
     dinner: { start: 18 * 60, end: 21 * 60 },
@@ -278,13 +429,11 @@ export function buildGuestFlowData(totalGuests: number, meal: string, loc: strin
 
   if (dist && dist[loc] && (dist[loc] as Record<string, Record<string, Record<string, number>>>)[meal] && (dist[loc] as Record<string, Record<string, Record<string, number>>>)[meal][dow]) {
     const buckets = (dist[loc] as Record<string, Record<string, Record<string, number>>>)[meal][dow];
-    // Convert bucket map to sorted array, filter to service window
     const entries = Object.entries(buckets)
       .map(([minStr, frac]) => ({ min: parseInt(minStr), frac: frac as number }))
       .filter(e => e.min >= win.start && e.min < win.end)
       .sort((a, b) => a.min - b.min);
     if (entries.length >= 3) {
-      // Re-normalize fractions after filtering so they sum to 1
       const fracSum = entries.reduce((s, e) => s + e.frac, 0);
       const scale = fracSum > 0 ? 1 / fracSum : 1;
       return entries.map(e => {
@@ -298,12 +447,11 @@ export function buildGuestFlowData(totalGuests: number, meal: string, loc: strin
     }
   }
 
-  // Fallback: gaussian distribution
   const LUNCH = { start: 12 * 60, end: 14 * 60, peak: 12 * 60 + 35, sigma: 22 };
   const DINNER = { start: 18 * 60, end: 21 * 60, peak: 19 * 60 + 10, sigma: 30 };
   const cfg = meal === 'lunch' ? LUNCH : DINNER;
 
-  const slots = [];
+  const slots: Array<{ min: number; weight: number }> = [];
   let totalWeight = 0;
   for (let t = cfg.start; t < cfg.end; t += 5) {
     const w = gaussian(t, cfg.peak, cfg.sigma);
@@ -326,11 +474,10 @@ export function drawGuestFlowChart() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d')!;
 
-  // HiDPI support
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.parentElement!.getBoundingClientRect();
   const w = rect.width;
-  const h = 180;
+  const h = 140;
   canvas.style.width = w + 'px';
   canvas.style.height = h + 'px';
   canvas.width = w * dpr;
@@ -338,19 +485,18 @@ export function drawGuestFlowChart() {
   ctx.scale(dpr, dpr);
 
   const loc = S.currentLoc;
-  const todayIso = dateToIso(getToday());
-  const totalGuests = getGuests(loc, todayIso, _guestFlowMeal);
-  const data = buildGuestFlowData(totalGuests, _guestFlowMeal, loc);
+  const todayStr = dateToIso(getToday());
+  const meal = S.dashMeal;
+  const totalGuests = getGuests(loc, todayStr, meal);
+  const data = buildGuestFlowData(totalGuests, meal, loc);
 
-  // Detect dark mode
-  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDark = document.documentElement.classList.contains('dark') || window.matchMedia('(prefers-color-scheme: dark)').matches;
   const textColor = isDark ? '#a0a09a' : '#6b6b66';
   const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
-  const lineColor = _guestFlowMeal === 'lunch' ? (isDark ? '#E4A84D' : '#BA7517') : (isDark ? '#8B82E0' : '#534AB7');
-  const fillColor = _guestFlowMeal === 'lunch' ? (isDark ? 'rgba(228,168,77,0.12)' : 'rgba(186,117,23,0.08)') : (isDark ? 'rgba(139,130,224,0.12)' : 'rgba(83,74,183,0.08)');
+  const lineColor = meal === 'lunch' ? (isDark ? '#E4A84D' : '#BA7517') : (isDark ? '#8B82E0' : '#534AB7');
+  const fillColor = meal === 'lunch' ? (isDark ? 'rgba(228,168,77,0.12)' : 'rgba(186,117,23,0.08)') : (isDark ? 'rgba(139,130,224,0.12)' : 'rgba(83,74,183,0.08)');
 
-  // Chart padding
-  const pad = { top: 16, right: 16, bottom: 28, left: 36 };
+  const pad = { top: 14, right: 12, bottom: 24, left: 32 };
   const cw = w - pad.left - pad.right;
   const ch = h - pad.top - pad.bottom;
 
@@ -358,21 +504,18 @@ export function drawGuestFlowChart() {
 
   if (totalGuests === 0) {
     ctx.fillStyle = textColor;
-    ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('No guest data for today', w / 2, h / 2);
     return;
   }
 
   const maxGuests = Math.max(...data.map(d => d.guests), 1);
-  // Round up to nice number for y-axis
   const yMax = Math.ceil(maxGuests / 2) * 2 || 2;
 
-  // X/Y mappers
-  const xOf = i => pad.left + (i / (data.length - 1)) * cw;
-  const yOf = v => pad.top + ch - (v / yMax) * ch;
+  const xOf = (i: number) => pad.left + (i / (data.length - 1)) * cw;
+  const yOf = (v: number) => pad.top + ch - (v / yMax) * ch;
 
-  // Grid lines (3 horizontal)
   ctx.strokeStyle = gridColor;
   ctx.lineWidth = 1;
   for (let i = 0; i <= 3; i++) {
@@ -382,25 +525,22 @@ export function drawGuestFlowChart() {
     ctx.moveTo(pad.left, y);
     ctx.lineTo(w - pad.right, y);
     ctx.stroke();
-    // Y labels
     ctx.fillStyle = textColor;
-    ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(Math.round(yVal), pad.left - 6, y + 3);
+    ctx.fillText(String(Math.round(yVal)), pad.left - 5, y + 3);
   }
 
-  // X labels (every 30 minutes)
   ctx.fillStyle = textColor;
-  ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   ctx.textAlign = 'center';
   data.forEach((d, i) => {
     const mins = parseInt(d.time.split(':')[1]);
     if (mins === 0 || mins === 30) {
-      ctx.fillText(d.time, xOf(i), h - 6);
+      ctx.fillText(d.time, xOf(i), h - 4);
     }
   });
 
-  // Fill area under curve
   ctx.beginPath();
   ctx.moveTo(xOf(0), yOf(0));
   data.forEach((d, i) => ctx.lineTo(xOf(i), yOf(d.guests)));
@@ -409,18 +549,17 @@ export function drawGuestFlowChart() {
   ctx.fillStyle = fillColor;
   ctx.fill();
 
-  // Line
   ctx.beginPath();
   data.forEach((d, i) => {
     if (i === 0) ctx.moveTo(xOf(i), yOf(d.guests));
     else ctx.lineTo(xOf(i), yOf(d.guests));
   });
   ctx.strokeStyle = lineColor;
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.stroke();
 
-  // Current time indicator (vertical line if within service window)
+  // Current time indicator
   const now = new Date();
   const nowMins = now.getHours() * 60 + now.getMinutes();
   const startMins = parseInt(data[0].time.split(':')[0]) * 60 + parseInt(data[0].time.split(':')[1]);
@@ -436,18 +575,15 @@ export function drawGuestFlowChart() {
     ctx.lineTo(nowX, pad.top + ch);
     ctx.stroke();
     ctx.setLineDash([]);
-    // "Now" label
     ctx.fillStyle = isDark ? '#E86B5A' : '#993C1D';
     ctx.font = 'bold 9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Now', nowX, pad.top - 4);
+    ctx.fillText('Now', nowX, pad.top - 3);
 
-    // Remaining guests: sum all slots after current time
     const remaining = Math.round(data.reduce((sum: number, d) => {
       const slotMins = parseInt(d.time.split(':')[0]) * 60 + parseInt(d.time.split(':')[1]);
       return sum + (slotMins >= nowMins ? d.guests : 0);
     }, 0));
-    // Interpolate Y value at the "Now" position for label placement
     const slotWidth = (endMins - startMins) / (data.length - 1);
     const floatIdx = (nowMins - startMins) / slotWidth;
     const loIdx = Math.floor(floatIdx);
@@ -455,7 +591,6 @@ export function drawGuestFlowChart() {
     const frac = floatIdx - loIdx;
     const nowGuests = data[loIdx].guests + (data[hiIdx].guests - data[loIdx].guests) * frac;
     const labelY = yOf(nowGuests);
-    // Draw remaining label below the intersection point
     ctx.fillStyle = isDark ? '#E86B5A' : '#993C1D';
     ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
@@ -466,12 +601,13 @@ export function drawGuestFlowChart() {
   const peakIdx = data.reduce((best: number, d, i) => d.guests > data[best].guests ? i : best, 0);
   const peakD = data[peakIdx];
   ctx.fillStyle = lineColor;
-  ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(`~${Math.round(peakD.guests)}/5min`, xOf(peakIdx), yOf(peakD.guests) - 8);
+  ctx.fillText(`~${Math.round(peakD.guests)}/5min`, xOf(peakIdx), yOf(peakD.guests) - 6);
 }
 
-// ── Day todos (heat/cook checkboxes + custom notes) ───
+// ── Day todos persistence ────────────────────────────────────
+
 export function _dayTodosKey() { return `sering-todos-${todayIso()}`; }
 
 export function loadDayTodos() {
@@ -504,76 +640,44 @@ export function toggleHeatItem(dishId: string) {
 export function toggleCookItem(dishId: string) {
   const d = S.batches.find(x => x.id === dishId);
   if (d && !isBatchCooked(d)) {
-    // Actually mark the dish as cooked (same as "click to mark as cooked" on the tile)
     confirmCooked(dishId);
-    // Also tick off the local checkbox
     S.cookChecked.add(dishId);
     saveDayTodos();
     renderDashboardContent();
     return;
   }
-  // Already cooked or not found — just toggle the local checkbox
   S.cookChecked.has(dishId) ? S.cookChecked.delete(dishId) : S.cookChecked.add(dishId);
   saveDayTodos();
   renderDashboardContent();
 }
 
+// ── Team todos (inline) ──────────────────────────────────────
+
 export function addCustomTodo(text: string) {
   if (!text.trim()) return;
   S.customTodos.push({ id: newId(), text: text.trim(), done: false });
   saveDayTodos();
-  renderTeamTodos();
-  setTimeout(() => document.getElementById('custom-todo-input')?.focus(), 0);
+  renderDashboardContent();
+  setTimeout(() => (document.getElementById('custom-todo-input') as HTMLInputElement)?.focus(), 0);
 }
 
 export function toggleCustomTodo(id: string) {
   const t = S.customTodos.find(x => x.id === id);
-  if (t) { t.done = !t.done; saveDayTodos(); renderTeamTodos(); }
+  if (t) { t.done = !t.done; saveDayTodos(); renderDashboardContent(); }
 }
 
 export function deleteCustomTodo(id: string) {
   S.customTodos = S.customTodos.filter(x => x.id !== id);
   saveDayTodos();
-  renderTeamTodos();
+  renderDashboardContent();
 }
 
-export function toggleTeamTodos() {
-  S.teamTodosOpen = !S.teamTodosOpen;
-  renderTeamTodos();
-}
+// Keep legacy exports but no-op
+export function toggleTeamTodos() { S.teamTodosOpen = !S.teamTodosOpen; renderDashboardContent(); }
+export function renderTeamTodos() {}
 
-export function renderTeamTodos() {
-  const el = document.getElementById('dash-team-float');
-  if (!el) return;
-  const open = S.teamTodosOpen;
-  const undone = S.customTodos.filter(t => !t.done).length;
-  el.innerHTML = `
-    ${open ? `
-    <div class="dash-team-panel">
-      <div class="dash-custom-input-row">
-        <input class="dash-custom-input" id="custom-todo-input" type="text" placeholder="e.g. Clean walk-in fridge..."
-          onkeydown="if(event.key==='Enter')addCustomTodo(this.value)">
-        <button class="dash-custom-add-btn" onclick="addCustomTodo(document.getElementById('custom-todo-input').value)">Add</button>
-      </div>
-      ${S.customTodos.length === 0
-        ? `<div class="dash-empty">No todos yet — add one above</div>`
-        : S.customTodos.map(t => `
-          <div class="dash-prep-item${t.done ? ' checked' : ''}" onclick="toggleCustomTodo('${esc(t.id)}')">
-            <div class="dash-prep-check">${t.done ? '✓' : ''}</div>
-            <span class="dash-prep-name">${esc(t.text)}</span>
-            <button class="dash-todo-del" onclick="event.stopPropagation();deleteCustomTodo('${esc(t.id)}')">✕</button>
-          </div>`).join('')
-      }
-    </div>` : ''}
-    <button class="dash-team-fab" onclick="toggleTeamTodos()">
-      📝 Team Todo's
-      ${undone > 0 ? `<span class="dash-team-badge">${undone}</span>` : ''}
-    </button>
-  `;
-  if (open) setTimeout(() => document.getElementById('custom-todo-input')?.focus(), 0);
-}
+// ── Prep checklist ───────────────────────────────────────────
 
-// ── Prep checklist toggle ──────────────────────────────
 export function togglePrepItem(loc: string, key: string) {
   if (!S.prepChecklist[loc]) S.prepChecklist[loc] = new Set();
   if (S.prepChecklist[loc].has(key)) {
@@ -582,242 +686,358 @@ export function togglePrepItem(loc: string, key: string) {
     S.prepChecklist[loc].add(key);
   }
   schedulePrepSave(loc);
-  // Re-render just the checklist section to avoid full page re-render
   renderPrepChecklist();
 }
 
-// ── Main content render ────────────────────────────────
+// ── Stocktake modal ──────────────────────────────────────────
+
+let _stocktakeActive = false;
+let _stocktakeArea: string | null = null;
+let _stocktakeValues: Record<string, number | undefined> = {};
+let _stocktakeSavedAreas: string[] = [];
+
+export function openStocktakeModal() {
+  _stocktakeActive = true;
+  _stocktakeArea = null;
+  _stocktakeValues = {};
+  _stocktakeSavedAreas = [];
+  renderStocktakeModal();
+}
+
+// Type for stocktake items (returned by getIngredientsForArea which spreads ...ing)
+type StocktakeItem = ReturnType<typeof getIngredientsForArea>[number];
+
+function renderStocktakeModal() {
+  const loc = S.currentLoc;
+  const areas = getStorageConfigForLoc(loc);
+
+  if (!_stocktakeArea) {
+    // Area picker
+    let html = `<div class="dash-stocktake-modal">
+      <h3 style="margin:0 0 4px;">📋 Stocktake</h3>
+      <p style="color:var(--text2);margin:0 0 16px;font-size:12px;">${esc(loc === 'west' ? 'Sering West' : 'Sering Centraal')} — Select a storage area</p>
+      <div style="display:grid;gap:8px;">`;
+
+    areas.forEach(area => {
+      const items = getIngredientsForArea(area.name);
+      const isSaved = _stocktakeSavedAreas.includes(area.name);
+      html += `<button class="btn" style="display:flex;align-items:center;gap:10px;padding:12px 16px;font-size:14px;border-left:4px solid ${area.color || '#999'};text-align:left;background:${isSaved ? 'var(--bg2)' : 'var(--bg)'};" onclick="dashStocktakeEnterArea('${esc(area.name)}')">
+        <span style="flex:1;"><span style="font-weight:600;">${isSaved ? '✅ ' : ''}${esc(area.name)}</span>
+        <span style="font-size:12px;color:var(--text2);margin-left:6px;">${items.length} items</span></span>
+        <span style="font-size:18px;">→</span>
+      </button>`;
+    });
+
+    html += `</div>
+      <div style="margin-top:16px;display:flex;gap:10px;">
+        <button class="btn btn-sm" onclick="closeModal()">Close</button>
+        ${_stocktakeSavedAreas.length ? `<button class="btn btn-sm" style="background:var(--green);color:white;" onclick="closeModal()">Done</button>` : ''}
+      </div>
+    </div>`;
+
+    showModal(html);
+  } else {
+    // Area stocktake
+    const items = getIngredientsForArea(_stocktakeArea) as StocktakeItem[];
+    const areaConfig = areas.find(a => a.name === _stocktakeArea);
+    const areaColor = areaConfig ? areaConfig.color : '#999';
+
+    // Group by spot
+    const bySpot: Record<string, StocktakeItem[]> = {};
+    items.forEach(ing => {
+      const spot = ing.spot || 'No spot assigned';
+      if (!bySpot[spot]) bySpot[spot] = [];
+      bySpot[spot].push(ing);
+    });
+
+    let html = `<div class="dash-stocktake-modal">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;border-left:4px solid ${areaColor};padding-left:10px;">
+        <div>
+          <h3 style="margin:0;font-size:16px;">📋 ${esc(_stocktakeArea)}</h3>
+          <p style="color:var(--text2);margin:2px 0 0;font-size:11px;">${items.length} items</p>
+        </div>
+      </div>`;
+
+    if (!items.length) {
+      html += `<div class="dash-empty">No items in this area.</div>`;
+    } else {
+      Object.keys(bySpot).forEach(spot => {
+        const spotItems = bySpot[spot];
+        html += `<div style="margin-bottom:12px;">
+          <div style="font-weight:600;font-size:12px;padding:3px 0;border-bottom:2px solid ${areaColor};margin-bottom:3px;">📍 ${esc(spot)}</div>`;
+
+        spotItems.forEach((ing: StocktakeItem) => {
+          const prefill = _stocktakeValues[ing.id] !== undefined ? _stocktakeValues[ing.id] : '';
+          const unitLabel = ing.orderUnit || ing.unit || 'units';
+          html += `<div class="dash-st-row">
+            <span class="dash-st-name">${esc(ing.name)}</span>
+            <input class="dash-st-input" type="number" min="0" step="0.5" value="${prefill !== '' ? prefill : ''}" placeholder="—"
+              data-ing-id="${esc(ing.id)}" oninput="dashStocktakeUpdate(this)" />
+            <span class="dash-st-unit">${esc(unitLabel)}</span>
+          </div>`;
+        });
+
+        html += `</div>`;
+      });
+    }
+
+    html += `<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+      <button class="btn btn-sm" onclick="dashStocktakeBack()">← Back</button>
+      <button class="btn btn-sm" style="background:var(--green);color:white;flex:1;" onclick="dashStocktakeSave(true)">Save & next →</button>
+      <button class="btn btn-sm" style="flex:1;" onclick="dashStocktakeSave(false)">Save & done</button>
+    </div>
+    </div>`;
+
+    showModal(html);
+    // Focus first empty input
+    setTimeout(() => {
+      const first = document.querySelector('.dash-st-input[value=""]') as HTMLInputElement;
+      if (first) first.focus();
+    }, 50);
+  }
+}
+
+export function dashStocktakeEnterArea(areaName: string) {
+  _stocktakeArea = areaName;
+  renderStocktakeModal();
+}
+
+export function dashStocktakeBack() {
+  _stocktakeArea = null;
+  renderStocktakeModal();
+}
+
+export function dashStocktakeUpdate(input: HTMLInputElement) {
+  const ingId = input.dataset.ingId;
+  if (ingId) _stocktakeValues[ingId] = input.value === '' ? undefined : parseFloat(input.value);
+}
+
+export async function dashStocktakeSave(goToNext: boolean) {
+  const loc = S.currentLoc;
+  const items = getIngredientsForArea(_stocktakeArea!) as StocktakeItem[];
+
+  // Collect values from DOM
+  document.querySelectorAll('.dash-st-input').forEach((input: Element) => {
+    const el = input as HTMLInputElement;
+    const ingId = el.dataset.ingId;
+    if (ingId) _stocktakeValues[ingId] = el.value === '' ? undefined : parseFloat(el.value);
+  });
+
+  const updates: Array<{ ingredientId: string; location: string; amount: number }> = [];
+  items.forEach((ing: StocktakeItem) => {
+    const val = _stocktakeValues[ing.id];
+    if (val === undefined) return;
+    const baseAmount = ing.orderUnitSize > 0 ? val * ing.orderUnitSize : val;
+    updates.push({ ingredientId: ing.id, location: loc, amount: baseAmount });
+  });
+
+  if (updates.length) {
+    try {
+      await apiPost('/api/ingredients/stock/bulk', updates);
+    } catch (e: unknown) {
+      toastError('Failed to save stock: ' + (e instanceof Error ? e.message : 'Unknown error'));
+      return;
+    }
+    updates.forEach(u => {
+      const dbIng = S.ingredientDb.find(i => i.id === u.ingredientId);
+      if (dbIng) {
+        if (!dbIng.stock) dbIng.stock = {};
+        (dbIng.stock as Record<string, unknown>)[u.location] = { amount: u.amount, date: new Date().toISOString().slice(0, 10) };
+      }
+    });
+  }
+
+  _stocktakeSavedAreas.push(_stocktakeArea!);
+  toast(`${_stocktakeArea}: ${updates.length} items saved`);
+
+  if (goToNext) {
+    _stocktakeArea = null;
+    renderStocktakeModal();
+  } else {
+    closeModal();
+    renderDashboardContent();
+  }
+}
+
+// ── MAIN CONTENT RENDER ──────────────────────────────────────
+
 export function renderDashboardContent() {
   const el = document.getElementById('dash-content');
   if (!el) return;
 
-  rebuildPlanner(); // always ensure fresh planner state
+  rebuildPlanner();
   const loc = S.currentLoc;
   const today = getToday();
-  const todayIso = dateToIso(today);
+  const todayStr = dateToIso(today);
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowIso = dateToIso(tomorrow);
+  const tomorrowStr = dateToIso(tomorrow);
+  const meal = S.dashMeal;
+  const dateLabel = today.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
-  // ── Guest counts ──
-  const lunchGuests = getGuests(loc, todayIso, 'lunch');
-  const dinnerGuests = getGuests(loc, todayIso, 'dinner');
+  // ── Guest counts for toggle buttons ──
+  const lunchGuests = getGuests(loc, todayStr, 'lunch');
+  const dinnerGuests = getGuests(loc, todayStr, 'dinner');
+  const mealGuests = meal === 'lunch' ? lunchGuests : dinnerGuests;
 
-  // ── Today's menu ──
-  let menuHtml = '';
-  MEALS.forEach(meal => {
-    const k = `${loc}-${todayIso}-${meal}`;
-    const dishes = S.planner[k] || [];
-    const gc = getGuests(loc, todayIso, meal);
-    const mealLabel = meal.charAt(0).toUpperCase() + meal.slice(1);
-    menuHtml += `<div class="dash-section">
-      <div class="dash-section-hdr">${mealLabel} <span class="dash-section-guests">${gc} guests</span></div>`;
-    if (dishes.length === 0) {
-      menuHtml += `<div class="dash-empty">No batches planned</div>`;
-    } else {
-      const typeOrder = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
-      const sorted = ([...dishes] as DashBatch[]).sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
-      sorted.forEach(d => {
-        const liters = calcLitersForService(d, loc, todayIso, meal);
-        const isMain = d.type === 'Main course';
+  // ── Menu dishes for selected meal ──
+  const menuDishes = getMenuDishesForMeal(loc, todayStr, meal) as DashBatch[];
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  const sortedMenu = [...menuDishes].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
 
-        // Allergens (combine dish + extra)
-        const allergens = [...(d.allergens || []), ...(d.extraAllergens || [])];
-        const allergenHtml = allergens.length
-          ? allergens.map(a => `<span class="allergen-pill" onclick="event.stopPropagation();inlineRemoveAllergen('${d.id}','${esc(a)}')" title="Click to remove">${esc(a)}</span>`).join('')
-          : '';
+  // ── Stock overview ──
+  const stockBatches = S.batches
+    .filter(b => b.location === loc && (b.stock || 0) > 0 && !b.inTransit)
+    .sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
+  const totalStock = Math.round(stockBatches.reduce((s, b) => s + (b.stock || 0), 0) * 10) / 10;
 
-        // Recipe link
-        const recipeLink = d.recipeSheetId
-          ? `<a class="dash-recipe-btn" href="https://docs.google.com/spreadsheets/d/${esc(d.recipeSheetId)}" target="_blank" onclick="event.stopPropagation()">📄 Recipe</a>`
-          : '';
+  // ── Cook: uncooked batches for selected meal today ──
+  const cookDishes = (S.planner[`${loc}-${todayStr}-${meal}`] || []).filter(d => !isBatchCooked(d));
 
-        // Starch picker for main courses — tap Rice or Pasta (tap again to deselect)
-        const starchHtml = isMain ? `
-          <div class="dash-starch-picker">
-            <button class="dash-starch-opt${d.starch === 'Rice' ? ' selected' : ''}" onclick="setDishStarch('${esc(d.id)}','Rice');event.stopPropagation()">🍚 Rice</button>
-            <button class="dash-starch-opt${d.starch === 'Pasta' ? ' selected' : ''}" onclick="setDishStarch('${esc(d.id)}','Pasta');event.stopPropagation()">🍝 Pasta</button>
-          </div>` : '';
-
-        menuHtml += `
-          <div class="dash-menu-row">
-            <div class="dash-menu-main">
-              <span class="dash-type-dot dash-type-${(d.type||'').toLowerCase().replace(/ /g,'-')}"></span>
-              <span class="dash-menu-name">${esc(d.name)}</span>
-              <span class="dash-menu-liters">${liters} L</span>
-              ${recipeLink}
-            </div>
-            <div class="dash-menu-meta">
-              <div class="dash-allergen-row allergen-inline" id="ag-inline-${d.id}">${allergenHtml}<button class="allergen-add-btn" onclick="event.stopPropagation();inlineAddAllergenStart('${d.id}',event)" title="Add allergen">+</button></div>
-              ${starchHtml}
-            </div>
-          </div>`;
-      });
-
-      // Starch cook summary — shows totals once mains are assigned
-      menuHtml += starchSummaryHtml(sorted, gc);
-    }
-    menuHtml += '</div>';
-  });
-
-  // ── Todo data ──
-  const menuToday    = getMenuDishes(loc, todayIso);
-  const menuTomorrow = getMenuDishes(loc, tomorrowIso);
-
-  // Heat up: split by lunch and dinner service
-  const heatUpLunch  = (S.planner[`${loc}-${todayIso}-lunch`]  || []).filter(d => isBatchCooked(d));
-  const heatUpDinner = (S.planner[`${loc}-${todayIso}-dinner`] || []).filter(d => isBatchCooked(d));
-  const hasHeatUp = heatUpLunch.length > 0 || heatUpDinner.length > 0;
-
-  // Cook: split into today lunch, today dinner, tomorrow
-  const cookLunch    = (S.planner[`${loc}-${todayIso}-lunch`]  || []).filter(d => !isBatchCooked(d));
-  const cookDinner   = (S.planner[`${loc}-${todayIso}-dinner`] || []).filter(d => !isBatchCooked(d));
-  const cookTomorrow = menuTomorrow.filter(d => !isBatchCooked(d));
-  const hasCook = cookLunch.length > 0 || cookDinner.length > 0 || cookTomorrow.length > 0;
-
-  const vegToday    = getVegIngredients(menuToday);
-  const vegTomorrow = getVegIngredients(menuTomorrow);
-  const prepToday    = vegToday.map(i => ({ ...i, dayTag: 'today',    key: `today-${i.name.toLowerCase().trim()}` }));
+  // ── Chop: ingredients for selected meal today + tomorrow ──
+  const vegToday = getVegIngredients(getMenuDishesForMeal(loc, todayStr, meal));
+  const vegTomorrow = getVegIngredients(getMenuDishesForMeal(loc, tomorrowStr, meal));
+  const prepToday = vegToday.map(i => ({ ...i, dayTag: 'today', key: `today-${i.name.toLowerCase().trim()}` }));
   const prepTomorrow = vegTomorrow.map(i => ({ ...i, dayTag: 'tomorrow', key: `tomorrow-${i.name.toLowerCase().trim()}` }));
-  const allPrep = [...prepToday, ...prepTomorrow].sort((a, b) => a.name.localeCompare(b.name));
+  const allPrep = [...prepToday, ...prepTomorrow];
   const checkedSet = S.prepChecklist[loc] || new Set();
-  const doneCount  = allPrep.filter(i => checkedSet.has(i.key)).length;
+  const doneCount = allPrep.filter(i => checkedSet.has(i.key)).length;
 
-  // ── Stock overview helper — what's in the fridge ──
-  function renderStockOverview(loc: string) {
-    const stockBatches = S.batches
-      .filter(b => b.location === loc && (b.stock || 0) > 0 && !b.inTransit)
-      .sort((a, b) => {
-        const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
-        return (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name);
-      });
-    if (stockBatches.length === 0) {
-      return `<div class="dash-empty">No cooked food in stock — time to cook!</div>`;
-    }
-    const totalL = Math.round(stockBatches.reduce((s, b) => s + (b.stock || 0), 0) * 10) / 10;
-    const typeColors: Record<string, string> = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
-    let html = `<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${stockBatches.length} batches — ${totalL} L total</div>`;
-    stockBatches.forEach(b => {
-      const col = typeColors[b.type] || 'gray';
-      const storageIcon = b.storage === 'Frozen' ? ' ❄️' : '';
-      const cookInfo = isBatchCooked(b) ? '' : ' <span style="color:var(--amber);font-size:10px;">uncooked</span>';
-      html += `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);">
-        <span class="dash-cook-dot" style="background:var(--${col})"></span>
-        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;">${esc(b.name)}${storageIcon}${cookInfo}</span>
-        <span style="font-weight:600;font-size:13px;white-space:nowrap;">${b.stock} L</span>
-      </div>`;
-    });
-    return html;
-  }
-
-  // ── Cook dish row helper — tappable checkbox ──
-  function cookDishRow(d: Batch, note: string, checkedSet: Set<string>, toggleFn: string, dateStr?: string, meal?: Meal) {
-    const checked = checkedSet && checkedSet.has(d.id);
-    const req = (dateStr && meal) ? calcLitersForService(d, loc, dateStr, meal) : calcRequiredForLoc(d, loc);
-    const typeColors: Record<string, string> = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
-    const col = typeColors[d.type] || 'gray';
-    return `<div class="dash-cook-item${checked ? ' checked' : ''}" onclick="${toggleFn}('${esc(d.id)}')">
-      <div class="dash-prep-check">${checked ? '✓' : ''}</div>
-      <span class="dash-cook-dot" style="background:var(--${col})"></span>
-      <span class="dash-cook-name">${esc(d.name)}</span>
-      <span class="dash-cook-meta">${note}</span>
-      <span class="dash-cook-liters">${Math.round(req * 10) / 10} L</span>
-    </div>`;
-  }
+  // ── Team todos ──
+  const undone = S.customTodos.filter(t => !t.done).length;
 
   el.innerHTML = `
-    <!-- ══ SECTION 1: TODAY'S OVERVIEW ══ -->
-    <h2 class="dash-section-heading">Today's Overview</h2>
-
-    <div class="dash-card" id="dash-guests-card">
-      <div class="dash-card-title"><span class="dash-card-icon">👥</span> Guests today
-        <span class="dash-card-subtitle">Expected headcount for today's service</span>
-      </div>
-      <div class="dash-guest-grid">
-        <div class="dash-guest-box"><div class="dash-guest-num">${lunchGuests}</div><div class="dash-guest-label">Lunch</div></div>
-        <div class="dash-guest-box"><div class="dash-guest-num">${dinnerGuests}</div><div class="dash-guest-label">Dinner</div></div>
-      </div>
+    <!-- ═══ MEAL TOGGLE ═══ -->
+    <div class="dash-meal-toggle">
+      <button class="dash-meal-btn ${meal === 'lunch' ? 'active lunch' : 'lunch'}" onclick="setDashMeal('lunch')">
+        ☀️ Lunch <span class="dash-meal-count">${lunchGuests}</span>
+      </button>
+      <button class="dash-meal-btn ${meal === 'dinner' ? 'active dinner' : 'dinner'}" onclick="setDashMeal('dinner')">
+        🌙 Dinner <span class="dash-meal-count">${dinnerGuests}</span>
+      </button>
     </div>
 
-    <div class="dash-card" id="dash-flow-card">
-      <div class="dash-card-title">
-        <span class="dash-card-icon">📈</span> Guest flow
-        <span class="dash-card-subtitle">Estimated arrivals per 5 min</span>
-        <div class="dash-flow-toggles" style="margin-left:auto;">
-          <button class="dash-flow-toggle${_guestFlowMeal === 'lunch' ? ' active' : ''}" data-meal="lunch" onclick="setGuestFlowMeal('lunch')">Lunch</button>
-          <button class="dash-flow-toggle${_guestFlowMeal === 'dinner' ? ' active' : ''}" data-meal="dinner" onclick="setGuestFlowMeal('dinner')">Dinner</button>
+    <!-- ═══ SERVICE BLOCK ═══ -->
+    <div class="dash-service-cols">
+      <div class="dash-card">
+        <div class="dash-card-title">${meal === 'lunch' ? '☀️' : '🌙'} ${meal.charAt(0).toUpperCase() + meal.slice(1)} Menu</div>
+        ${sortedMenu.length === 0
+          ? `<div class="dash-empty">No batches planned for ${meal}</div>`
+          : renderGroupedByType(sortedMenu, d => renderDashChip(d, {
+              meal,
+              dateStr: todayStr,
+              liters: calcLitersForService(d, loc, todayStr, meal),
+              showAllergens: true,
+              showStarch: true,
+              showRecipe: true,
+            }))
+        }
+        ${starchSummaryHtml(sortedMenu, mealGuests)}
+      </div>
+      <div class="dash-card">
+        <div class="dash-card-title">👥 Guests Expected</div>
+        <div class="dash-guest-big">
+          <span class="dash-guest-num">${mealGuests}</span>
+          <span class="dash-guest-label">guests expected</span>
+        </div>
+        <div class="dash-flow-wrap">
+          <div class="dash-flow-canvas-wrap"><canvas id="guest-flow-canvas"></canvas></div>
         </div>
       </div>
-      <div class="dash-flow-canvas-wrap"><canvas id="guest-flow-canvas"></canvas></div>
     </div>
 
-    <div class="dash-card" id="dash-menu-card">
-      <div class="dash-card-title"><span class="dash-card-icon">🍲</span> Today's menu
-        <span class="dash-card-subtitle">Pick Rice or Pasta for each main — totals appear below each meal</span>
-      </div>
-      ${menuHtml}
-    </div>
+    <!-- ═══ TWO-COLUMN LAYOUT ═══ -->
+    <div class="dash-columns">
 
-    <!-- 📦 WHAT'S IN STOCK -->
-    <div class="dash-card" id="dash-stock-card">
-      <div class="dash-card-title"><span class="dash-card-icon">📦</span> What's in stock
-        <span class="dash-card-subtitle">Cooked food on hand at this location right now</span>
+      <!-- LEFT: STOCK -->
+      <div class="dash-col">
+        <div class="dash-card">
+          <div class="dash-card-title">
+            <span class="dash-card-icon">📦</span> Stock
+            <span class="dash-stock-total">${stockBatches.length} batches — ${totalStock} L</span>
+            <button class="btn btn-sm dash-inv-btn" onclick="openInventory('${loc}')">🍽️ Cooked Food Inventory</button>
+            <button class="btn btn-sm dash-st-btn" onclick="openStocktakeModal()">📋 Ingredient Stocktake</button>
+          </div>
+          ${stockBatches.length === 0
+            ? `<div class="dash-empty">No food in stock</div>`
+            : (() => {
+                const fresh = stockBatches.filter(b => b.storage !== 'Frozen');
+                const frozen = stockBatches.filter(b => b.storage === 'Frozen');
+                let h = renderGroupedByType(fresh, b => renderDashChip(b, {
+                  showStock: true,
+                  note: !isBatchCooked(b) ? 'uncooked' : undefined,
+                }));
+                if (frozen.length) {
+                  h += `<div class="dash-section-hdr" style="margin-top:8px;">❄️ Frozen</div>`;
+                  h += frozen.map(b => renderDashChip(b, {
+                    showStock: true,
+                    note: 'frozen',
+                  })).join('');
+                }
+                return h;
+              })()
+          }
+        </div>
       </div>
-      ${renderStockOverview(loc)}
-    </div>
 
-    <!-- ══ SECTION 2: CHEF TODOS ══ -->
-    <h2 class="dash-section-heading">Chef To-Dos</h2>
+      <!-- RIGHT: CHEF TO-DOS -->
+      <div class="dash-col">
+        <!-- WHAT TO COOK -->
+        <div class="dash-card">
+          <div class="dash-card-title"><span class="dash-card-icon">👨‍🍳</span> What to Cook</div>
+          ${cookDishes.length === 0
+            ? `<div class="dash-empty">All cooked for ${meal} 🎉</div>`
+            : cookDishes.map(d => renderDashChip(d, {
+                meal,
+                dateStr: todayStr,
+                liters: calcLitersForService(d, loc, todayStr, meal),
+                note: 'cook today',
+                checkable: true,
+                checked: S.cookChecked.has(d.id),
+                toggleFn: 'toggleCookItem',
+              })).join('')
+          }
+        </div>
 
-    <!-- 🔥 HEAT UP -->
-    <div class="dash-card" id="dash-heatup-card">
-      <div class="dash-card-title"><span class="dash-card-icon">🔥</span> What to heat up
-        <span class="dash-card-subtitle">Already cooked — just needs reheating for today's service</span>
+        <!-- WHAT TO CHOP -->
+        <div class="dash-card">
+          <div class="dash-card-title">
+            <span class="dash-card-icon">🔪</span> What to Chop
+            ${allPrep.length > 0 ? `<span class="dash-prep-progress">${doneCount}/${allPrep.length}</span>` : ''}
+          </div>
+          <div id="dash-prep-list"></div>
+        </div>
+
+        <!-- TEAM TODOS (inline) -->
+        <div class="dash-card">
+          <div class="dash-card-title">
+            <span class="dash-card-icon">📝</span> Team To-Dos
+            ${undone > 0 ? `<span class="dash-prep-progress" style="background:var(--amber-bg);color:var(--amber);">${undone}</span>` : ''}
+          </div>
+          <div class="dash-custom-input-row">
+            <input class="dash-custom-input" id="custom-todo-input" type="text" placeholder="e.g. Clean walk-in fridge..."
+              onkeydown="if(event.key==='Enter')addCustomTodo(this.value)">
+            <button class="dash-custom-add-btn" onclick="addCustomTodo(document.getElementById('custom-todo-input').value)">Add</button>
+          </div>
+          ${S.customTodos.length === 0
+            ? `<div class="dash-empty">No todos yet</div>`
+            : S.customTodos.map(t => `
+              <div class="dash-prep-item${t.done ? ' checked' : ''}" onclick="toggleCustomTodo('${esc(t.id)}')">
+                <div class="dash-prep-check">${t.done ? '✓' : ''}</div>
+                <span class="dash-prep-name">${esc(t.text)}</span>
+                <button class="dash-todo-del" onclick="event.stopPropagation();deleteCustomTodo('${esc(t.id)}')">✕</button>
+              </div>`).join('')
+          }
+        </div>
       </div>
-      ${!hasHeatUp
-        ? `<div class="dash-empty">Nothing marked as cooked yet — check the cook list below</div>`
-        : `${heatUpLunch.length > 0 ? `
-          <div class="dash-todo-group-hdr">🍴 Lunch service</div>
-          ${heatUpLunch.map(d => cookDishRow(d, 'reheat', S.heatChecked, 'toggleHeatItem', todayIso, 'lunch')).join('')}` : ''}
-        ${heatUpDinner.length > 0 ? `
-          <div class="dash-todo-group-hdr"${heatUpLunch.length > 0 ? ' style="margin-top:10px;"' : ''}>🌙 Dinner service</div>
-          ${heatUpDinner.map(d => cookDishRow(d, 'reheat', S.heatChecked, 'toggleHeatItem', todayIso, 'dinner')).join('')}` : ''}`
-      }
-    </div>
-
-    <!-- 👨‍🍳 WHAT TO COOK -->
-    <div class="dash-card" id="dash-cook-card">
-      <div class="dash-card-title"><span class="dash-card-icon">👨‍🍳</span> What to cook
-        <span class="dash-card-subtitle">Batches that still need to be cooked — stay 1 day ahead!</span>
-      </div>
-      ${!hasCook
-        ? `<div class="dash-empty">All batches are cooked — great job! 🎉</div>`
-        : `${cookLunch.length > 0 ? `
-          <div class="dash-todo-group-hdr">🍴 Today — Lunch service</div>
-          ${cookLunch.map(d => cookDishRow(d, 'cook today', S.cookChecked, 'toggleCookItem', todayIso, 'lunch')).join('')}` : ''}
-        ${cookDinner.length > 0 ? `
-          <div class="dash-todo-group-hdr"${cookLunch.length > 0 ? ' style="margin-top:10px;"' : ''}>🌙 Today — Dinner service</div>
-          ${cookDinner.map(d => cookDishRow(d, 'cook today', S.cookChecked, 'toggleCookItem', todayIso, 'dinner')).join('')}` : ''}
-        ${cookTomorrow.length > 0 ? `
-          <div class="dash-todo-group-hdr"${(cookLunch.length + cookDinner.length) > 0 ? ' style="margin-top:10px;"' : ''}>📅 Future service</div>
-          <div class="dash-todo-group-sub">Cook the full batch now — these batches are on the plan for upcoming slots</div>
-          ${cookTomorrow.map(d => cookDishRow(d, 'upcoming', S.cookChecked, 'toggleCookItem')).join('')}` : ''}`
-      }
-    </div>
-
-    <!-- 🔪 WHAT TO CHOP -->
-    <div class="dash-card" id="dash-prep-card">
-      <div class="dash-card-title"><span class="dash-card-icon">🔪</span> What to chop
-        <span class="dash-card-subtitle">Fresh ingredients to prep — tap each to tick off as you go</span>
-        ${allPrep.length > 0 ? `<span class="dash-prep-progress" style="margin-left:auto;">${doneCount}/${allPrep.length}</span>` : ''}
-      </div>
-      <div id="dash-prep-list"></div>
     </div>
   `;
 
   renderPrepChecklist();
   drawGuestFlowChart();
 }
+
+// ── Prep checklist render (partial) ──────────────────────────
 
 export function renderPrepChecklist() {
   const el = document.getElementById('dash-prep-list');
@@ -828,21 +1048,19 @@ export function renderPrepChecklist() {
   const today = getToday();
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
+  const todayStr = dateToIso(today);
+  const tomorrowStr = dateToIso(tomorrow);
+  const meal = S.dashMeal;
 
-  const todayIso2 = dateToIso(getToday());
-  const tmrw2 = new Date(getToday()); tmrw2.setDate(tmrw2.getDate() + 1);
-  const tomorrowIso2 = dateToIso(tmrw2);
-  const cookToday = getMenuDishes(loc, todayIso2);
-  const cookTomorrow = getMenuDishes(loc, tomorrowIso2);
-  const vegToday = getVegIngredients(cookToday);
-  const vegTomorrow = getVegIngredients(cookTomorrow);
+  const vegToday = getVegIngredients(getMenuDishesForMeal(loc, todayStr, meal));
+  const vegTomorrow = getVegIngredients(getMenuDishesForMeal(loc, tomorrowStr, meal));
 
   const prepToday = vegToday.map(i => ({ ...i, dayTag: 'today', key: `today-${i.name.toLowerCase().trim()}` }));
   const prepTomorrow = vegTomorrow.map(i => ({ ...i, dayTag: 'tomorrow', key: `tomorrow-${i.name.toLowerCase().trim()}` }));
   const checkedSet = S.prepChecklist[loc] || new Set();
 
   if (prepToday.length === 0 && prepTomorrow.length === 0) {
-    el.innerHTML = `<div class="dash-empty">No fresh ingredients to prep — all clear! 🎉</div>`;
+    el.innerHTML = `<div class="dash-empty">No fresh ingredients to prep 🎉</div>`;
     return;
   }
 
@@ -858,24 +1076,21 @@ export function renderPrepChecklist() {
       </div>`;
   }
 
-  // Always show split: Today first, then Tomorrow
-  const todayItems   = prepToday.sort((a, b) => a.name.localeCompare(b.name));
+  const todayItems = prepToday.sort((a, b) => a.name.localeCompare(b.name));
   const tomorrowItems = prepTomorrow.sort((a, b) => a.name.localeCompare(b.name));
   let html = '';
   if (todayItems.length > 0) {
     const doneCt = todayItems.filter(i => checkedSet.has(i.key)).length;
     html += `<div class="dash-prep-group-hdr">
-      🔥 Today's menu
-      <span class="dash-prep-group-sub">Prep for today's service</span>
+      🔥 Today
       <span class="dash-prep-group-count">${doneCt}/${todayItems.length}</span>
     </div>`;
     html += todayItems.map(renderItem).join('');
   }
   if (tomorrowItems.length > 0) {
     const doneCt = tomorrowItems.filter(i => checkedSet.has(i.key)).length;
-    html += `<div class="dash-prep-group-hdr"${todayItems.length > 0 ? ' style="margin-top:12px;"' : ''}>
-      📅 Tomorrow's menu
-      <span class="dash-prep-group-sub">Prep ahead so tomorrow is smooth</span>
+    html += `<div class="dash-prep-group-hdr"${todayItems.length > 0 ? ' style="margin-top:8px;"' : ''}>
+      📅 Tomorrow
       <span class="dash-prep-group-count">${doneCt}/${tomorrowItems.length}</span>
     </div>`;
     html += tomorrowItems.map(renderItem).join('');
@@ -888,7 +1103,7 @@ export function navTo(screen: string, subTab: string) {
   showScreen(screen);
 }
 
-// ── Register screen renderers for rerenderCurrentView() ──
+// ── Register screen renderers ────────────────────────────────
 registerRenderer('dashboard', renderDashboard);
 registerRenderer('guests', renderGuests);
 registerRenderer('planner', renderWeekPlan);

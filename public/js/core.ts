@@ -223,21 +223,24 @@ export function calcIngredientsFromRecipe(dish: Batch): Array<{ name: string; am
   let recipeVolume = dish.recipeVolume;
   let serving = dish.serving || 280;
 
-  if (dish.recipeIngredients && dish.recipeVolume) {
-    ingredients = dish.recipeIngredients.map((ing: RecipeIngredient) => ({
-      name: ing.name, amount: ing.amount, unit: ing.unit || 'g', source: ing.source || '',
-    }));
-  } else if (dish.recipeId) {
+  if (dish.recipeId) {
     // Look up v2 recipe
     const recipe = (S.recipes || []).find(r => r.id === dish.recipeId);
     if (!recipe || !recipe.recipeVolume) return [];
     recipeVolume = recipe.recipeVolume;
     serving = recipe.servingSize || serving;
-    ingredients = recipe.ingredients.map(ing => ({
-      name: ing.ingredientName || ing.flexLabel || '(unnamed)',
-      amount: ing.rawAmount,
-      unit: ing.unit || 'Grams',
-      source: '',
+    ingredients = recipe.ingredients.map(ing => {
+      let name = ing.ingredientName || ing.flexLabel || '';
+      if (!name && ing.ingredientId) {
+        const dbIng = (S.ingredientDb || []).find(i => i.id === ing.ingredientId);
+        if (dbIng) name = dbIng.name;
+      }
+      return { name: name || '(unnamed)', amount: ing.rawAmount, unit: ing.unit || 'Grams', source: '' };
+    });
+  } else if (dish.recipeIngredients && dish.recipeVolume) {
+    // Legacy denormalized ingredients (no recipeId)
+    ingredients = dish.recipeIngredients.map((ing: RecipeIngredient) => ({
+      name: ing.name, amount: ing.amount, unit: ing.unit || 'g', source: ing.source || '',
     }));
   }
 

@@ -987,19 +987,13 @@ export function openInventory(loc: string) {
   html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Update stock for each batch, or mark as served.</div>`;
   html += `<div class="inv-list">`;
 
-  const sorted = [...dishes].sort((a: Batch, b: Batch) => {
-    const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
-    return (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0);
-  });
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  const fresh = dishes.filter(d => d.storage !== 'Frozen').sort((a, b) => (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0));
+  const frozen = dishes.filter(d => d.storage === 'Frozen').sort((a, b) => (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0));
 
-  let lastType = '';
-  sorted.forEach(d => {
-    if (d.type !== lastType) {
-      lastType = d.type;
-      html += `<div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text2);padding:8px 0 4px;border-bottom:1px solid var(--border);">${d.type}</div>`;
-    }
+  const renderInvRow = (d: Batch) => {
     const { str, cls } = diffStr(d);
-    html += `<div class="inv-row" id="inv-row-${d.id}">
+    return `<div class="inv-row" id="inv-row-${d.id}">
       <div class="inv-name">
         <span style="font-weight:500;">${esc(d.name)}</span>
         ${storageBadge(d.storage || 'Gastro')}
@@ -1012,7 +1006,28 @@ export function openInventory(loc: string) {
         <button class="btn btn-sm inv-served-btn" style="background:var(--red);color:#fff;border-color:var(--red);" onclick="openServedFromInventory('${d.id}','${loc}')">Served</button>
       </div>
     </div>`;
+  };
+
+  let lastType = '';
+  fresh.forEach(d => {
+    if (d.type !== lastType) {
+      lastType = d.type;
+      html += `<div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text2);padding:8px 0 4px;border-bottom:1px solid var(--border);">${d.type}</div>`;
+    }
+    html += renderInvRow(d);
   });
+
+  if (frozen.length) {
+    html += `<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--blue);padding:12px 0 4px;border-bottom:2px solid var(--blue);margin-top:8px;">❄️ Frozen</div>`;
+    lastType = '';
+    frozen.forEach(d => {
+      if (d.type !== lastType) {
+        lastType = d.type;
+        html += `<div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);padding:6px 0 2px;">${d.type}</div>`;
+      }
+      html += renderInvRow(d);
+    });
+  }
 
   html += `</div>`;
   html += `<div class="modal-actions">
