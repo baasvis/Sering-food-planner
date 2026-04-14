@@ -212,20 +212,48 @@ export function calcTotalGuests(dish: Batch): number {
   return Math.round(g);
 }
 
+/** Check if a batch has recipe data (either legacy recipeIngredients or v2 recipeId) */
+export function batchHasRecipe(b: Batch): boolean {
+  return !!(b.recipeIngredients && b.recipeVolume) || !!b.recipeId;
+}
+
 export function calcIngredientsFromRecipe(dish: Batch): Array<{ name: string; amount: number; unit: string; source: string }> {
-  if (!dish.recipeIngredients || !dish.recipeVolume) return [];
+  // Try legacy denormalized ingredients first
+  let ingredients: Array<{ name: string; amount: number; unit: string; source: string }> = [];
+  let recipeVolume = dish.recipeVolume;
+  let serving = dish.serving || 280;
+
+  if (dish.recipeIngredients && dish.recipeVolume) {
+    ingredients = dish.recipeIngredients.map((ing: RecipeIngredient) => ({
+      name: ing.name, amount: ing.amount, unit: ing.unit || 'g', source: ing.source || '',
+    }));
+  } else if (dish.recipeId) {
+    // Look up v2 recipe
+    const recipe = (S.recipes || []).find(r => r.id === dish.recipeId);
+    if (!recipe || !recipe.recipeVolume) return [];
+    recipeVolume = recipe.recipeVolume;
+    serving = recipe.servingSize || serving;
+    ingredients = recipe.ingredients.map(ing => ({
+      name: ing.ingredientName || ing.flexLabel || '(unnamed)',
+      amount: ing.rawAmount,
+      unit: ing.unit || 'Grams',
+      source: '',
+    }));
+  }
+
+  if (ingredients.length === 0 || !recipeVolume) return [];
   const totalGuests = calcTotalGuests(dish);
   if (totalGuests === 0) return [];
   // recipeVolume is in liters (e.g. 10.78), serving is in ml (e.g. 240)
   // Convert recipe volume to ml to match serving size units
-  const recipeVolumeMl = dish.recipeVolume * 1000;
-  const guestsPerRecipe = recipeVolumeMl / (dish.serving || 280);
+  const recipeVolumeMl = recipeVolume * 1000;
+  const guestsPerRecipe = recipeVolumeMl / serving;
   const mult = totalGuests / guestsPerRecipe;
-  return dish.recipeIngredients.map((ing: RecipeIngredient) => ({
+  return ingredients.map(ing => ({
     name: ing.name,
     amount: Math.round(ing.amount * mult),
-    unit: ing.unit || 'g',
-    source: ing.source || '',
+    unit: ing.unit,
+    source: ing.source,
   }));
 }
 
@@ -334,8 +362,20 @@ export function archiveDish(id: string, withRating: boolean): void {
     archivedDate: dateToStr(getToday()),
     rating,
   });
-  // Update recipe index with running average of ratings
-  if (rating && d.recipeSheetId) {
+  // Update recipe ratings (v2 recipe or legacy recipe index)
+  if (rating && d.recipeId) {
+    const recipe = (S.recipes || []).find(r => r.id === d.recipeId);
+    if (recipe) {
+      const n = recipe.timesServed || 0;
+      const newN = n + 1;
+      recipe.avgSkill = ((recipe.avgSkill || 0) * n + (rating.skill || 0)) / newN;
+      recipe.avgSpeed = ((recipe.avgSpeed || 0) * n + (rating.speed || 0)) / newN;
+      recipe.avgBanger = ((recipe.avgBanger || 0) * n + (rating.banger || 0)) / newN;
+      recipe.timesServed = newN;
+      apiPost(`/api/recipes/${recipe.id}`, { avgSkill: recipe.avgSkill, avgSpeed: recipe.avgSpeed, avgBanger: recipe.avgBanger, timesServed: recipe.timesServed }, 'PATCH')
+        .catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
+    }
+  } else if (rating && d.recipeSheetId) {
     const ri = S.recipeIndex.find((r: RecipeEntry) => r.recipeSheetId === d.recipeSheetId);
     if (ri) {
       const n = ri.timesServed || 0;
@@ -344,7 +384,6 @@ export function archiveDish(id: string, withRating: boolean): void {
       ri.avgSpeed = ((ri.avgSpeed || 0) * n + (rating.speed || 0)) / newN;
       ri.avgBanger = ((ri.avgBanger || 0) * n + (rating.banger || 0)) / newN;
       ri.timesServed = newN;
-      // Save updated recipe index entry
       apiPost('/api/recipe-index', ri).catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
     }
   }

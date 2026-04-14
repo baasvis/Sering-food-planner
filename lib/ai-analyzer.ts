@@ -58,7 +58,7 @@ export async function runDataQualityChecks(): Promise<DataQualityReport> {
   }).map(({ services: _s, ...rest }) => rest);
 
   // Recipes with timesServed=0 older than 30 days
-  const unusedRecipes = await prisma.recipeIndex.findMany({
+  const unusedRecipes = await prisma.recipe.findMany({
     where: { timesServed: 0, createdAt: { lt: thirtyDaysAgo } },
     select: { id: true, name: true, createdAt: true },
     take: 20,

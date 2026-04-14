@@ -172,10 +172,10 @@ async function writeTransport(tx: TxClient, items: TransportItem[]): Promise<voi
 
 export async function dbReadAll(): Promise<DataResponse> {
   try {
-    const [batchRows, guestRows, recipeRows, cateringRows, transportRows, recipeV2Rows] = await Promise.all([
+    const [batchRows, guestRows, cateringRows, transportRows, recipeV2Rows] = await Promise.all([
       prisma.batch.findMany(),
       prisma.guest.findMany(),
-      prisma.recipeIndex.findMany(),
+      // Legacy recipeIndex table kept in DB as backup but no longer served to frontend
       prisma.catering.findMany(),
       prisma.transportItem.findMany(),
       prisma.recipe.findMany({ include: { ingredients: { orderBy: { sortOrder: 'asc' } } } }),
@@ -215,25 +215,8 @@ export async function dbReadAll(): Promise<DataResponse> {
       }
     }
 
-    const recipeIndex: RecipeEntry[] = recipeRows.map(r => ({
-      id: r.id,
-      name: r.name,
-      type: r.type,
-      recipeSheetId: r.recipeSheetId,
-      allergens: r.allergens,
-      costPerServing: r.costPerServing,
-      structure: r.structure,
-      seasonality: r.seasonality,
-      servingTemp: r.servingTemp,
-      servingSize: r.servingSize,
-      recipeVolume: r.recipeVolume,
-      recipeIngredients: r.recipeIngredients as RecipeEntry['recipeIngredients'],
-      createdAt: r.createdAt,
-      avgSkill: r.avgSkill,
-      avgSpeed: r.avgSpeed,
-      avgBanger: r.avgBanger,
-      timesServed: r.timesServed,
-    }));
+    // Legacy recipeIndex no longer served — all recipes are v2 now
+    const recipeIndex: RecipeEntry[] = [];
 
     const caterings: Catering[] = cateringRows.map(c => ({
       id: c.id,
@@ -463,12 +446,17 @@ export async function calcRecipeCost(
   const baseServings = (recipeVolume * 1000) / servingSize;
   if (baseServings <= 0) return null;
 
+  const FLEX_PRICE_PER_100G = 0.15; // €1.50/kg default for flex ingredients
+
   let totalCost = 0;
   for (const ing of ingredients) {
-    if (!ing.ingredientId || ing.isFlexible) continue;
-    const pricePer100 = priceMap.get(ing.ingredientId) || 0;
-    // Convert rawAmount to grams for cost calc (amounts stored in recipe unit)
     const amountGrams = toGrams(ing.rawAmount, ing.unit);
+    if (ing.isFlexible) {
+      totalCost += (amountGrams / 100) * FLEX_PRICE_PER_100G;
+      continue;
+    }
+    if (!ing.ingredientId) continue;
+    const pricePer100 = priceMap.get(ing.ingredientId) || 0;
     totalCost += (amountGrams / 100) * pricePer100;
   }
 

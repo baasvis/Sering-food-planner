@@ -1,6 +1,6 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS, rebuildStorageCategories } from './state';
 import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ingredientDbLoaded, ingredientDbError } from './utils';
-import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
+import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, batchHasRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { ingredientDbFull, openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
 import { trackEvent } from './telemetry';
@@ -542,7 +542,7 @@ export function renderStandardInventoryTab() {
 /** Initialise batchIngredientToggles from batch.orderFor (server state) — idempotent */
 function ensureBatchTogglesInitialized(loc: string) {
   if (batchIngredientTogglesInitialized) return;
-  const eligible = S.batches.filter(b => b.location === loc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
+  const eligible = S.batches.filter(b => b.location === loc && !isBatchCooked(b) && batchHasRecipe(b));
   batchIngredientToggles = {};
   eligible.forEach(b => {
     batchIngredientToggles[b.id] = !!b.orderFor;
@@ -576,7 +576,7 @@ export function toggleBatchIngredient(batchId: string) {
   }
   // Update header count
   const curLoc = S.currentLoc;
-  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
+  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
   const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
   const header = document.querySelector('.section-title span');
   if (header && header.textContent.includes('selected')) {
@@ -598,7 +598,7 @@ export function toggleCombinedIncludeDishes() {
 /** Toggle all batches on or off */
 export function toggleAllBatchIngredients(on: boolean) {
   const curLoc = S.currentLoc;
-  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
+  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
   eligible.forEach(b => {
     batchIngredientToggles[b.id] = on;
     persistBatchOrderFor(b.id, !!on);
@@ -623,7 +623,7 @@ export function renderDishesTab() {
   const curLoc = S.currentLoc;
 
   // Uncooked batches at this location with recipe data
-  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
+  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
 
   // Initialize toggles from localStorage (or fall back to orderFor for new batches)
   ensureBatchTogglesInitialized(curLoc);
@@ -683,7 +683,7 @@ export function renderDishesTab() {
 /** Render just the ingredient aggregation table for toggled-on batches */
 export function renderBatchIngredientTable() {
   const curLoc = S.currentLoc;
-  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && b.recipeSheetId && b.recipeIngredients);
+  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
 
   // Assign colors (same stable order as toggle list)
   const batchColorMap: Record<string, string> = {};
