@@ -14,54 +14,44 @@ export const TUTORIALS = {
   // ── DASHBOARD ──────────────────────────────────────────────────────────────
   dashboard: [
     {
-      selector: '.dash-tab-bar',
+      selector: '#app-title',
       title: 'Your kitchen',
-      body: "You're looking at one location at a time. Tap here to switch between Sering West and Sering Centraal.",
+      body: "You're looking at one location at a time. Tap the title to switch between Sering West and Sering Centraal.",
     },
     {
-      selector: '#dash-guests-card',
-      title: 'Guests today',
-      body: "How many people are eating lunch and dinner today. You set these numbers in the Guests tab — they update here automatically.",
-    },
-    {
-      selector: '#dash-flow-card',
-      title: 'Guest flow',
-      body: "A graph showing the estimated number of guests arriving per 5 minutes. Toggle between Lunch and Dinner to see each service. The peak label shows the busiest moment — plan your plating around it.",
+      selector: '.dash-meal-toggle',
+      title: 'Lunch or dinner',
+      body: "The dashboard shows one service at a time. Tap Lunch or Dinner to flip between them — the menu, guest count, flow chart, and cook list all update together.",
     },
     {
       selector: '#dash-menu-card',
       title: "Today's menu",
-      body: "Every batch planned for today. Allergens are listed so front-of-house always knows what's in each batch.",
+      body: "Every batch planned for the selected service. Allergens sit right on each chip so front-of-house always knows what's in the pot. Tap a chip to expand it for stock, cook date, recipe link and a starch picker for mains.",
     },
     {
-      selector: '.dash-starch-picker',
-      title: 'Pick a starch',
-      body: "For each main batch, tap Rice or Pasta. The total kilos to cook will appear below the meal — no guessing or mental maths needed.",
+      selector: '#dash-guests-card',
+      title: 'Guests & flow',
+      body: "The big number is how many people are expected for this service. The chart below shows the estimated arrival flow in 5-minute buckets — the dashed line marks the current time so you can plan plating around the peak.",
     },
     {
       selector: '#dash-stock-card',
       title: "What's in stock",
-      body: "A snapshot of all cooked food on hand at this location. Shows each batch with its type, liters in stock, and whether it's frozen. Handy for arriving at a location and seeing what's available at a glance.",
-    },
-    {
-      selector: '#dash-heatup-card',
-      title: 'What to heat up',
-      body: "These batches are already fully cooked. Your only job here is to reheat them in time for service — no cooking needed.",
+      body: "A snapshot of all cooked food on hand at this location, grouped by type with frozen batches at the bottom. Use the two buttons up top to start a cooked-food inventory or walk through an ingredient stocktake.",
     },
     {
       selector: '#dash-cook-card',
       title: 'What to cook',
-      body: "These batches still need cooking. They're split into today's lunch, today's dinner, and anything being batch-cooked for upcoming days. Tick each off when done.",
+      body: "Batches that still need cooking for the selected service. Tap each row to tick it off when it's done — it saves automatically and resets at midnight.",
     },
     {
       selector: '#dash-prep-card',
       title: 'What to chop',
-      body: "Fresh ingredients that need prepping today (and tomorrow). Tap each one to tick it off — it saves automatically and resets at midnight.",
+      body: "Fresh ingredients that need prepping for today and tomorrow. Tap each one to tick it off — it saves automatically and resets at midnight.",
     },
     {
-      selector: '.dash-team-float',
+      selector: '#dash-team-card',
       title: "Team todo's",
-      body: "Tap this button to jot down extra tasks for the team — like 'clean walk-in' or 'fix label printer'. Tick them off when done.",
+      body: "Jot down extra tasks for the team — like 'clean walk-in' or 'fix label printer'. Type into the box, hit Add, and tick them off when done.",
     },
   ],
 
@@ -112,33 +102,33 @@ export const TUTORIALS = {
       body: "Tap + to add a batch to this meal. You'll pick from your recipe library. A batch can appear on multiple days.",
     },
     {
-      selector: '.type-dish-list',
-      title: 'Unscheduled batches',
-      body: "Batches that aren't on the plan yet live here. Drag them into the grid — or use the + button on any slot.",
+      selector: '.type-section',
+      title: 'Batches by type',
+      body: "Below the grid, batches are grouped by type — soups, mains, desserts. Tap a batch to expand it, split it across locations, or adjust its cook date.",
     },
   ],
 
   // ── RECIPES ────────────────────────────────────────────────────────────────
   'recipe-index': [
     {
-      selector: '.ri-filter-bar',
-      title: 'Filter by type',
-      body: "Quickly narrow the list to just soups, mains, or desserts. Use the search box to find a recipe by name.",
+      selector: '#ri-search-input',
+      title: 'Find a recipe',
+      body: "Type here to search every recipe by name or allergen. The table below filters as you type.",
     },
     {
-      selector: '.ri-btn-group',
+      selector: '.ri-filter-bar',
+      title: 'Filter by type',
+      body: "Quickly narrow the list to just soups, mains, or desserts.",
+    },
+    {
+      selector: '.btn-row',
       title: 'Create or import',
       body: "'Create recipe' opens the guided editor where you build a recipe step by step — ingredients, method, storage. 'Import from Sheet' pulls in a recipe from the old Google Sheets format.",
     },
     {
-      selector: '.re-card',
-      title: 'Recipe cards',
-      body: "New recipes show as cards with cost, allergens, and quick actions: View (read-only detail), Edit (open the editor), Menu (add to this week's plan), Delete.",
-    },
-    {
       selector: '.ri-table',
-      title: 'Legacy recipes',
-      body: "Recipes imported from Google Sheets appear in this table. They still work for batch planning. Over time, recreate them with 'Create recipe' for full features.",
+      title: 'Recipe list',
+      body: "Every recipe shows here with type, structure, cost, season, allergens and ratings. Click a name to open it, or use the sortable column headers to find cheap, seasonal, or crowd-favourite dishes fast.",
     },
     {
       selector: '.allergen-pill',

@@ -919,7 +919,7 @@ export function renderDashboardContent() {
 
     <!-- ═══ SERVICE BLOCK ═══ -->
     <div class="dash-service-cols">
-      <div class="dash-card">
+      <div class="dash-card" id="dash-menu-card">
         <div class="dash-card-title">${meal === 'lunch' ? '☀️' : '🌙'} ${meal.charAt(0).toUpperCase() + meal.slice(1)} Menu</div>
         ${sortedMenu.length === 0
           ? `<div class="dash-empty">No batches planned for ${meal}</div>`
@@ -934,7 +934,7 @@ export function renderDashboardContent() {
         }
         ${starchSummaryHtml(sortedMenu, mealGuests)}
       </div>
-      <div class="dash-card">
+      <div class="dash-card" id="dash-guests-card">
         <div class="dash-card-title">👥 Guests Expected</div>
         <div class="dash-guest-big">
           <span class="dash-guest-num">${mealGuests}</span>
@@ -951,7 +951,7 @@ export function renderDashboardContent() {
 
       <!-- LEFT: STOCK -->
       <div class="dash-col">
-        <div class="dash-card">
+        <div class="dash-card" id="dash-stock-card">
           <div class="dash-card-title">
             <span class="dash-card-icon">📦</span> Stock
             <span class="dash-stock-total">${stockBatches.length} batches — ${totalStock} L</span>
@@ -983,7 +983,7 @@ export function renderDashboardContent() {
       <!-- RIGHT: CHEF TO-DOS -->
       <div class="dash-col">
         <!-- WHAT TO COOK -->
-        <div class="dash-card">
+        <div class="dash-card" id="dash-cook-card">
           <div class="dash-card-title"><span class="dash-card-icon">👨‍🍳</span> What to Cook</div>
           ${cookDishes.length === 0
             ? `<div class="dash-empty">All cooked for ${meal} 🎉</div>`
@@ -1000,7 +1000,7 @@ export function renderDashboardContent() {
         </div>
 
         <!-- WHAT TO CHOP -->
-        <div class="dash-card">
+        <div class="dash-card" id="dash-prep-card">
           <div class="dash-card-title">
             <span class="dash-card-icon">🔪</span> What to Chop
             ${allPrep.length > 0 ? `<span class="dash-prep-progress">${doneCount}/${allPrep.length}</span>` : ''}
@@ -1009,7 +1009,7 @@ export function renderDashboardContent() {
         </div>
 
         <!-- TEAM TODOS (inline) -->
-        <div class="dash-card">
+        <div class="dash-card" id="dash-team-card">
           <div class="dash-card-title">
             <span class="dash-card-icon">📝</span> Team To-Dos
             ${undone > 0 ? `<span class="dash-prep-progress" style="background:var(--amber-bg);color:var(--amber);">${undone}</span>` : ''}
