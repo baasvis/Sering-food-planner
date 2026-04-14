@@ -18,6 +18,10 @@ export function newId(): string {
 let _onBatchesChanged: (() => void) | null = null;
 export function setOnBatchesChanged(fn: () => void) { _onBatchesChanged = fn; }
 
+// Callback to flush pending undo before remote patch (avoids circular import with undo.ts)
+let _flushUndo: (() => void) | null = null;
+export function setFlushUndo(fn: () => void) { _flushUndo = fn; }
+
 // ═══════════════════════════════════════════════════════════════════
 // API + SAVE SYSTEM
 // ═══════════════════════════════════════════════════════════════════
@@ -375,6 +379,25 @@ export function toastError(msg: string): void {
   setTimeout(() => t.className = 'toast', 4000);
 }
 
+export function showUndoToast(msg: string, onUndo: () => void): void {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.innerHTML = `<span>${msg}</span><button class="toast-undo-btn" type="button">Undo</button>`;
+  t.querySelector('.toast-undo-btn')!.addEventListener('click', onUndo);
+  t.className = 'toast undo show';
+}
+
+export function hideToast(): void {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.className = 'toast';
+  t.innerHTML = '';
+}
+
+export function cancelPendingSave(): void {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // LIVE SYNC (Server-Sent Events)
 // ═══════════════════════════════════════════════════════════════════
@@ -427,6 +450,7 @@ interface RemotePatchMessage {
 
 // Merge a patch from another user into local state
 export function applyRemotePatch(msg: RemotePatchMessage): void {
+  if (_flushUndo) _flushUndo();
   const { user, batches, deletedBatches, guests,
           caterings, deletedCaterings,
           transportItems, deletedTransportItems } = msg;

@@ -1,5 +1,6 @@
 import { S, ALLERGENS, INGREDIENT_TYPES, PRICE_LEVELS } from './state';
 import { newId, scheduleSave, toast, toastError, apiGet, apiPost } from './utils';
+import { pushUndo } from './undo';
 import { rebuildPlanner, typeBadge, typeBadgeClass, TYPES, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { doLogout } from './auth';
@@ -450,17 +451,26 @@ export async function saveEditRecipe(id: any) {
   } catch (e: unknown) { toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error')); }
 }
 
-export async function deleteRecipeIndex(id: any) {
+export function deleteRecipeIndex(id: any) {
   const entry = S.recipeIndex.find(x => x.id === id);
-  const name = entry ? entry.name : 'this recipe';
-  if (!confirm('Remove "' + name + '" from the recipe index?')) return;
-  try {
-    const r = await fetch('/api/recipe-index/' + id, { method: 'DELETE' });
-    if (r.status === 401) { doLogout(); return; }
-    S.recipeIndex = S.recipeIndex.filter(x => x.id !== id);
-    renderRecipeIndex();
-    toast('Recipe removed from index');
-  } catch (e: unknown) { toastError('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error')); }
+  if (!entry) return;
+  const deleted = structuredClone(entry);
+  S.recipeIndex = S.recipeIndex.filter(x => x.id !== id);
+  renderRecipeIndex();
+  pushUndo({
+    label: esc(deleted.name) + ' removed',
+    restore: () => { S.recipeIndex.push(deleted); renderRecipeIndex(); },
+    commit: async () => {
+      try {
+        const r = await fetch('/api/recipe-index/' + id, { method: 'DELETE' });
+        if (r.status === 401) { doLogout(); return; }
+      } catch (e: unknown) {
+        toastError('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error'));
+        S.recipeIndex.push(deleted);
+        renderRecipeIndex();
+      }
+    },
+  });
 }
 
 // Add a dish to the menu planner from a recipe in the index
@@ -567,16 +577,23 @@ export function addDishFromV2Recipe(recipeId: string) {
 }
 
 // Delete a v2 recipe
-export async function deleteV2Recipe(recipeId: string) {
+export function deleteV2Recipe(recipeId: string) {
   const r = S.recipes.find(x => x.id === recipeId);
-  const name = r ? r.name : 'this recipe';
-  if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
-  try {
-    await apiPost(`/api/recipes/${recipeId}`, {}, 'DELETE');
-    S.recipes = S.recipes.filter(x => x.id !== recipeId);
-    renderRecipeIndex();
-    toast('Recipe deleted');
-  } catch (e: unknown) {
-    toastError('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error'));
-  }
+  if (!r) return;
+  const deleted = structuredClone(r);
+  S.recipes = S.recipes.filter(x => x.id !== recipeId);
+  renderRecipeIndex();
+  pushUndo({
+    label: esc(r.name) + ' deleted',
+    restore: () => { S.recipes.push(deleted); renderRecipeIndex(); },
+    commit: async () => {
+      try {
+        await apiPost(`/api/recipes/${recipeId}`, {}, 'DELETE');
+      } catch (e: unknown) {
+        toastError('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error'));
+        S.recipes.push(deleted);
+        renderRecipeIndex();
+      }
+    },
+  });
 }

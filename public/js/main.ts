@@ -5,7 +5,7 @@
 
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, rebuildStorageCategories, getStorageConfigForLoc, getStorageColor, DEFAULT_STORAGE_CONFIG, NAV_SCREENS, ACCOMPANIMENTS, setGlobalLocation, restoreGlobalLocation } from './state';
 import { handleGoogleLogin, devLogin, doLogout, initGoogleSignIn, checkSession, showApp, showLocationChooser, selectLocation } from './auth';
-import { newId, apiGet, apiPost, setSaveState, takeSnapshot, computePatch, patchIsEmpty, scheduleSave, doSave, retrySave, loadData, showDataError, hideDataError, retryLoad, loadIngredientDb, loadStorageConfig, saveStorageConfig, loadGuestHistory, loadGuestsNextWeeks, scheduleNextWeeksSave, toast, toastError, connectLiveSync, disconnectLiveSync, applyRemotePatch, todayIso, loadPrepChecklist, schedulePrepSave, saveState, ingredientDbLoaded, ingredientDbError, setOnBatchesChanged } from './utils';
+import { newId, apiGet, apiPost, setSaveState, takeSnapshot, computePatch, patchIsEmpty, scheduleSave, doSave, retrySave, loadData, showDataError, hideDataError, retryLoad, loadIngredientDb, loadStorageConfig, saveStorageConfig, loadGuestHistory, loadGuestsNextWeeks, scheduleNextWeeksSave, toast, toastError, connectLiveSync, disconnectLiveSync, applyRemotePatch, todayIso, loadPrepChecklist, schedulePrepSave, saveState, ingredientDbLoaded, ingredientDbError, setOnBatchesChanged, setFlushUndo } from './utils';
 import { isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, rebuildPlanner, renderDishListSplit, sortByCookDate, getGuests, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, openServedDialog, pendingRatings, ratingButtons, setRating, archiveDish, typeBadge, typeBadgeClass, TYPES, cycleType, toggleOrder, chipClass, getToday, dateToStr, strToDate } from './core';
 import { parseCSV, categorizeUploadedFiles, predictGuests, buildFlowDistribution, averageLayers, detectFormat, parseSemicolonCSV, mergeAggregated, categorizeProfitCenterData, categorizeLightspeedData, parseLightspeedMinuteOfDay, parseLightspeedHour, parseLightspeedDate, categorizeTebiData, extractMinuteOfDayFromTebiRow, extractHourFromTebiRow, extractDeviceId, winsorize, percentile, getDayOfWeek, getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, emptyAggregated, AGG_MEALS } from './predictions';
 import { showScreen, renderDashboard, setGuestFlowMeal, drawGuestFlowChart, buildGuestFlowData, gaussian, loadDayTodos, saveDayTodos, toggleHeatItem, toggleCookItem, addCustomTodo, toggleCustomTodo, deleteCustomTodo, toggleTeamTodos, renderTeamTodos, togglePrepItem, renderDashboardContent, renderPrepChecklist, navTo, getMenuDishes, calcLitersForService, getVegIngredients, setDishStarch, starchSummaryHtml, isChoppableIngredient, isDishAtLocation, getCookDateDishes, getIngredientCategoryCache, _ingredientCategoryCache, CHOPPABLE_CATEGORIES, PANTRY_KEYWORDS, _guestFlowMeal } from './dashboard';
@@ -23,10 +23,12 @@ import { renderFeedbackAdmin, setFeedbackFilter, copyFeedbackForClaude, formatFe
 import { TUTORIALS, startTutorial, tutNext, tutPrev, tutSkip } from './tutorial';
 import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, switchGlobalLocation } from './init';
 import { initTelemetry, trackScreenView, trackEvent, trackError } from './telemetry';
+import { executeUndo, flushUndo } from './undo';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
 setOnBatchesChanged(resetBatchToggles);
+setFlushUndo(flushUndo);
 
 // Assign all functions called from onclick="" to window
 // ═══════════════════════════════════════════════════════════════════
@@ -39,6 +41,9 @@ Object.assign(window, {
 
   // utils
   newId, apiGet, apiPost, setSaveState, takeSnapshot, computePatch, patchIsEmpty, scheduleSave, doSave, retrySave, loadData, showDataError, hideDataError, retryLoad, loadIngredientDb, loadStorageConfig, saveStorageConfig, loadGuestHistory, loadGuestsNextWeeks, scheduleNextWeeksSave, toast, toastError, connectLiveSync, disconnectLiveSync, applyRemotePatch, todayIso, loadPrepChecklist, schedulePrepSave,
+
+  // undo
+  executeUndo,
 
   // core
   isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, rebuildPlanner, renderDishListSplit, sortByCookDate, getGuests, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, openServedDialog, ratingButtons, setRating, archiveDish, typeBadge, typeBadgeClass, TYPES, cycleType, toggleOrder, chipClass, getToday, dateToStr, strToDate,

@@ -1,5 +1,6 @@
 import { S, DAYS, MEALS, LOCATIONS, ALLERGENS } from './state';
 import { newId, scheduleSave, toast } from './utils';
+import { pushUndo } from './undo';
 import { rebuildPlanner, calcRequired, locationBadge, typeBadge, typeBadgeClass, TYPES, getToday, isBatchCooked, diffStr, logisticsBadgeClass, logisticsShort, storageBadge, strToDate } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { cookDateToISO, isoToCookDate } from './dishes';
@@ -227,8 +228,14 @@ export function saveEditCatering(id: any) {
 }
 
 export function deleteCatering(id: any) {
-  if (!confirm('Delete this catering?')) return;
-  S.caterings = S.caterings.filter(c => c.id !== id);
-  closeModal(); renderCaterings(); scheduleSave();
-  toast('Catering deleted');
+  const c = S.caterings.find(x => x.id === id);
+  if (!c) return;
+  const deleted = structuredClone(c);
+  S.caterings = S.caterings.filter(x => x.id !== id);
+  closeModal(); renderCaterings();
+  pushUndo({
+    label: esc(c.name || 'Catering') + ' deleted',
+    restore: () => { S.caterings.push(deleted); renderCaterings(); },
+    commit: () => { scheduleSave(); },
+  });
 }

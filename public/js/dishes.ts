@@ -1,5 +1,6 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet } from './utils';
+import { pushUndo } from './undo';
 import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
@@ -7,7 +8,7 @@ import { trackEvent } from './telemetry';
 import { addDishFromRecipe } from './recipes';
 import { openPostCookRecording, openBatchRecipe } from './recipe-editor';
 import { batchDragStart, batchDragEnd, startAssignMode, openReplaceBatch } from './planner';
-import type { Batch, DishType, Location, StorageType, Service, RecipeIngredient } from '@shared/types';
+import type { Batch, CateringDish, DishType, Location, StorageType, Service, RecipeIngredient } from '@shared/types';
 
 /** Check if a batch has a v2 recipe with unresolved flexible ingredient slots */
 function hasUnresolvedFlexible(d: Batch): boolean {
@@ -449,14 +450,34 @@ export function deleteBatch(id: string) {
     toast('Cannot delete a cooked batch — serve it first');
     return;
   }
+  // Capture state for undo
+  const deletedBatch = structuredClone(d);
+  const savedCateringDishes: { id: string; dishes: CateringDish[] }[] = [];
+  for (const c of S.caterings) {
+    if (c.dishes?.some(cd => cd.dishId === id)) {
+      savedCateringDishes.push({ id: c.id, dishes: structuredClone(c.dishes) });
+    }
+  }
+  // Perform deletion
   S.batches = S.batches.filter(x => x.id !== id);
   cleanCateringRefs(id, null);
   S.expandedBatches.delete(id);
   S.selected.delete(id);
   rebuildPlanner();
-  scheduleSave();
   rerenderCurrentView();
-  toast(esc(d.name) + ' deleted');
+  pushUndo({
+    label: esc(d.name) + ' deleted',
+    restore: () => {
+      S.batches.push(deletedBatch);
+      for (const snap of savedCateringDishes) {
+        const c = S.caterings.find(x => x.id === snap.id);
+        if (c) c.dishes = snap.dishes;
+      }
+      rebuildPlanner();
+      rerenderCurrentView();
+    },
+    commit: () => { scheduleSave(); },
+  });
 }
 
 export function inlineEdit(id: string, field: string, value: string) {
@@ -1109,8 +1130,14 @@ export function saveEditDish(id: string) {
 }
 
 export function deleteDish(id: string) {
-  if (!confirm('Delete this batch? This cannot be undone.')) return;
-  S.batches = S.batches.filter(d => d.id !== id);
-  closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-  toast('Batch deleted');
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  const deletedBatch = structuredClone(d);
+  S.batches = S.batches.filter(x => x.id !== id);
+  closeModal(); rebuildPlanner(); rerenderCurrentView();
+  pushUndo({
+    label: 'Batch deleted',
+    restore: () => { S.batches.push(deletedBatch); rebuildPlanner(); rerenderCurrentView(); },
+    commit: () => { scheduleSave(); },
+  });
 }

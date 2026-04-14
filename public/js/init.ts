@@ -1,6 +1,7 @@
 import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories } from './state';
 import type { Location } from '@shared/types';
 import { loadData, connectLiveSync, saveState } from './utils';
+import { flushUndo } from './undo';
 import { rebuildPlanner } from './core';
 import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
 import { checkSession, initGoogleSignIn } from './auth';
@@ -122,6 +123,7 @@ document.addEventListener('keydown', function(e: any) {
 
 // ── BEFOREUNLOAD GUARD ────────────────────────────────────
 window.addEventListener('beforeunload', function(e: any) {
+  flushUndo();
   if (saveState !== 'saved') {
     e.preventDefault();
     e.returnValue = '';
