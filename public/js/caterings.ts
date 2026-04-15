@@ -154,8 +154,11 @@ export function renderCateringDishPicker(cateringId: any, query: any) {
 
   let list = '';
 
+  const SHOW_LIMIT = 100;
+  const truncated = available.length > SHOW_LIMIT;
+
   if (available.length > 0) {
-    list += available.slice(0, 20).map(d => {
+    list += available.slice(0, SHOW_LIMIT).map(d => {
       const { str, cls } = diffStr(d);
       const stockLoc = logisticsShort(d);
       const cookStatus = isBatchCooked(d) ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
@@ -175,6 +178,9 @@ export function renderCateringDishPicker(cateringId: any, query: any) {
         </div>
       </div>`;
     }).join('');
+    if (truncated) {
+      list += `<div style="padding:8px 12px;font-size:12px;color:var(--text3);text-align:center;">Showing first ${SHOW_LIMIT} of ${available.length} — type to search for more…</div>`;
+    }
   }
 
   if (!list) list = `<div class="empty">No planned batches found${q ? ' matching "' + esc(q) + '"' : ''}</div>`;

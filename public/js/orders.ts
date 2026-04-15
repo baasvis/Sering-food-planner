@@ -339,10 +339,29 @@ export function resetBatchToggles() {
 
 // ── Main render ────────────────────────────────────────────
 
+// One-time listener: if ingredient DB finishes loading while the user is on the
+// Orders screen (or arrived there before load completed), auto re-render so the
+// combined order and standard inventory populate immediately. Previously this
+// was a setTimeout polling loop, which could leave stale "Loading…" placeholders
+// or keep rerunning after the user navigated away.
+let _ordersIngDbListenerAttached = false;
+function attachIngDbReadyListener() {
+  if (_ordersIngDbListenerAttached) return;
+  _ordersIngDbListenerAttached = true;
+  window.addEventListener('ingredientDbReady', () => {
+    const screenEl = document.getElementById('screen-orders');
+    // offsetParent is null when the element is display:none (current screen is elsewhere)
+    if (screenEl && screenEl.offsetParent !== null) {
+      renderOrders();
+    }
+  });
+}
+
 export function renderOrders() {
+  attachIngDbReadyListener();
   if (!ingredientDbLoaded) {
-    document.getElementById('screen-orders').innerHTML = '<div class="empty">Loading ingredient database...</div>';
-    setTimeout(renderOrders, 500);
+    const screenEl = document.getElementById('screen-orders');
+    if (screenEl) screenEl.innerHTML = '<div class="empty">Loading ingredient database\u2026</div>';
     return;
   }
 

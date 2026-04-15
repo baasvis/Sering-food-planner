@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import multer from 'multer';
-import { prisma, dbAppendLog, toRecipeFull, toRecipeIngredientFull, calcRecipeAllergens, calcRecipeCost, calcRecipeNutrition, validateRecipe, withWriteLock } from '../lib/db';
+import { prisma, dbAppendLog, toRecipeFull, toRecipeIngredientFull, calcRecipeAllergens, calcRecipeCost, calcRecipeNutrition, validateRecipe, withWriteLock, denormalizeRecipeIngredients } from '../lib/db';
 import { getSheetsClient } from '../lib/recipe-sheets';
 import { asyncHandler, errMsg } from '../lib/config';
 import { broadcast } from './events';
@@ -151,7 +151,9 @@ router.get('/recipes', asyncHandler(async (_req: Request, res: Response) => {
     include: includeIngredients,
     orderBy: { name: 'asc' },
   });
-  res.json(rows.map(toRecipeFull));
+  const recipes = rows.map(toRecipeFull);
+  await denormalizeRecipeIngredients(recipes);
+  res.json(recipes);
 }));
 
 // Get single recipe with full detail + nutrition
@@ -165,25 +167,8 @@ router.get('/recipes/:id', asyncHandler(async (req: Request, res: Response) => {
 
   const recipe = toRecipeFull(row);
 
-  // Denormalize ingredient names and allergens
-  const linkedIds = recipe.ingredients.filter(i => i.ingredientId).map(i => i.ingredientId!);
-  if (linkedIds.length > 0) {
-    const dbIngs = await prisma.ingredient.findMany({
-      where: { id: { in: linkedIds } },
-      select: { id: true, name: true, allergens: true, pricePer100g: true, pricePer100: true },
-    });
-    const ingMap = new Map(dbIngs.map(i => [i.id, i]));
-    for (const ing of recipe.ingredients) {
-      if (ing.ingredientId) {
-        const dbIng = ingMap.get(ing.ingredientId);
-        if (dbIng) {
-          ing.ingredientName = dbIng.name;
-          ing.ingredientAllergens = dbIng.allergens;
-          ing.costPer100 = dbIng.pricePer100g || dbIng.pricePer100 || 0;
-        }
-      }
-    }
-  }
+  // Denormalize ingredient names, allergens, and cost in one batched query
+  await denormalizeRecipeIngredients([recipe]);
 
   // Recalculate cost from current ingredient prices and update if changed
   const freshCost = await calcRecipeCost(recipe.ingredients, recipe.servingSize, recipe.recipeVolume);

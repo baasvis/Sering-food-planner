@@ -231,6 +231,9 @@ export async function dbReadAll(): Promise<DataResponse> {
     const transportItems: TransportItem[] = transportRows.map(t => ({ id: t.id, text: t.text }));
 
     const recipes: RecipeFull[] = recipeV2Rows.map(toRecipeFull);
+    // Denormalize ingredient names/allergens/cost so S.recipes on the frontend
+    // has usable display data (otherwise batch recipe editor shows "Unknown").
+    await denormalizeRecipeIngredients(recipes);
 
     return { batches, guests, recipeIndex, recipes, caterings, transportItems };
   } catch (e: unknown) {
@@ -280,17 +283,70 @@ export async function dbWriteTransportItems(items: TransportItem[]): Promise<voi
 
 // ── Targeted patch helpers (upsert/delete only changed items) ──
 
+/**
+ * Sanitize a proposed parentId value: if it references a batch that does not
+ * exist in the DB (and is not being created in the same save), return null
+ * instead to avoid FK constraint violations.
+ *
+ * Fixes AI insight #20: `batches_parent_id_fkey` errors caused silent save
+ * failures when a user had stale local state referencing a batch another user
+ * had already deleted. onDelete: SetNull nulls the column on delete, but a
+ * client update with the stale parentId would reintroduce the bad reference.
+ */
+export async function sanitizeParentId(
+  parentId: string | null | undefined,
+  siblingIds: Set<string> = new Set(),
+): Promise<string | null> {
+  if (!parentId) return null;
+  if (siblingIds.has(parentId)) return parentId;
+  const exists = await prisma.batch.findUnique({ where: { id: parentId }, select: { id: true } });
+  if (!exists) {
+    console.warn(`[dbUpsertBatches] dropping stale parentId ${parentId} (referenced batch no longer exists)`);
+    return null;
+  }
+  return parentId;
+}
+
 /** Upsert batches: merge field-by-field with existing DB rows to prevent stale overwrites */
 export async function dbUpsertBatches(batches: Batch[]): Promise<void> {
-  for (const b of batches) {
+  // Process parents before children so a newly-created parent exists when its
+  // child's insert references it. Batches without parentId go first.
+  const sorted = [...batches].sort((a, b) => (a.parentId ? 1 : 0) - (b.parentId ? 1 : 0));
+  const siblingIds = new Set(sorted.map(b => b.id));
+
+  for (const b of sorted) {
+    // Sanitize parentId against DB reality before writing
+    const safeParentId = await sanitizeParentId(b.parentId, siblingIds);
+    const bSafe: Batch = { ...b, parentId: safeParentId };
+
     const existing = await prisma.batch.findUnique({ where: { id: b.id } });
-    if (existing) {
-      // Merge: incoming fields overwrite existing, but fields not sent by client
-      // are preserved from the DB (protects against stale-field overwrites)
-      const merged = toBatchRow({ ...existing as unknown as Batch, ...b });
-      await prisma.batch.update({ where: { id: b.id }, data: merged });
-    } else {
-      await prisma.batch.create({ data: toBatchRow(b) });
+    try {
+      if (existing) {
+        // Merge: incoming fields overwrite existing, but fields not sent by client
+        // are preserved from the DB (protects against stale-field overwrites).
+        // Force the sanitized parentId so a stale client value can't reintroduce
+        // a dangling FK.
+        const merged = toBatchRow({ ...existing as unknown as Batch, ...bSafe, parentId: safeParentId });
+        await prisma.batch.update({ where: { id: b.id }, data: merged });
+      } else {
+        await prisma.batch.create({ data: toBatchRow(bSafe) });
+      }
+    } catch (e: unknown) {
+      // Last-resort retry: if Prisma still raises a FK error (P2003), retry
+      // with parentId cleared. Avoids dropping user edits for an obscure race.
+      const code = (e as { code?: string })?.code;
+      if (code === 'P2003') {
+        console.warn(`[dbUpsertBatches] retrying batch ${b.id} with parentId=null after P2003`);
+        const retryBatch: Batch = { ...bSafe, parentId: null };
+        if (existing) {
+          const merged = toBatchRow({ ...existing as unknown as Batch, ...retryBatch, parentId: null });
+          await prisma.batch.update({ where: { id: b.id }, data: merged });
+        } else {
+          await prisma.batch.create({ data: toBatchRow(retryBatch) });
+        }
+      } else {
+        throw e;
+      }
     }
   }
 }
@@ -406,6 +462,41 @@ export function toRecipeFull(r: NonNullable<RecipeWithIngredients>): RecipeFull 
     legacySheetId: r.legacySheetId,
     ingredients: (r.ingredients || []).map(toRecipeIngredientFull),
   };
+}
+
+/**
+ * Populate denormalized ingredient fields (ingredientName, ingredientAllergens, costPer100)
+ * on a batch of recipes. Uses a single batched findMany across all linked ingredient IDs
+ * to avoid N+1 queries. Mutates the recipes in place.
+ *
+ * Extracted so the same logic runs for dbReadAll(), GET /recipes list, and GET /recipes/:id.
+ */
+export async function denormalizeRecipeIngredients(recipes: RecipeFull[]): Promise<void> {
+  if (recipes.length === 0) return;
+  const idSet = new Set<string>();
+  for (const r of recipes) {
+    for (const ing of r.ingredients) {
+      if (ing.ingredientId) idSet.add(ing.ingredientId);
+    }
+  }
+  if (idSet.size === 0) return;
+  const dbIngs = await prisma.ingredient.findMany({
+    where: { id: { in: Array.from(idSet) } },
+    select: { id: true, name: true, allergens: true, pricePer100g: true, pricePer100: true },
+  });
+  const ingMap = new Map(dbIngs.map(i => [i.id, i]));
+  for (const r of recipes) {
+    for (const ing of r.ingredients) {
+      if (ing.ingredientId) {
+        const dbIng = ingMap.get(ing.ingredientId);
+        if (dbIng) {
+          ing.ingredientName = dbIng.name;
+          ing.ingredientAllergens = dbIng.allergens;
+          ing.costPer100 = dbIng.pricePer100g || dbIng.pricePer100 || 0;
+        }
+      }
+    }
+  }
 }
 
 /** Compute auto-allergens by looking up each linked ingredient's allergens */

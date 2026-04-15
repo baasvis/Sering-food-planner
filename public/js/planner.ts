@@ -21,10 +21,19 @@ export function renderWeekPlan() {
   }
   const tab = S.plannerSubTab;
   const el = document.getElementById('screen-planner');
+  // Visible count of items currently in transport, shown as a badge on the
+  // sub-tab so users can immediately see when there's something to move
+  // (addresses feedback #351 — "I can't see the items set to transport").
+  const transportCount =
+    S.batches.filter(d => d.inTransit === true).length +
+    (S.transportItems || []).length;
+  const transportLabel = transportCount > 0
+    ? `To Transport <span class="sub-tab-badge">${transportCount}</span>`
+    : 'To Transport';
   const tabs = [
     { id: 'west', label: 'Sering West' },
     { id: 'centraal', label: 'Sering Centraal' },
-    { id: 'transport', label: 'To Transport' },
+    { id: 'transport', label: transportLabel },
     { id: 'caterings', label: 'Caterings' },
     { id: 'overview', label: 'Overview' },
   ];

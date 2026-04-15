@@ -41,10 +41,13 @@
 .dash-chip.checked{opacity:.55;}
 .dash-chip.checked .dash-chip-name{text-decoration:line-through;color:var(--text3);}
 .dash-chip.checked .dash-prep-check{background:var(--green);border-color:var(--green);color:#fff;}
-.dash-chip-row{display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent;}
+.dash-chip-row{display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent;min-width:0;}
 .dash-chip-row:active{opacity:.7;}
 .dash-chip-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
-.dash-chip-name{font-size:12px;font-weight:500;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* min-width:0 is required so the flex:1 name can shrink below its intrinsic
+   content width; without it, long dish names prevent ellipsis and push the
+   row wider than the viewport (see feedback #152/#153/#182 for prior repros). */
+.dash-chip-name{font-size:12px;font-weight:500;color:var(--text);flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dash-chip-note{font-size:9px;font-weight:600;padding:2px 6px;border-radius:6px;white-space:nowrap;text-transform:uppercase;letter-spacing:.03em;}
 .dash-chip-note.note-amber{background:var(--amber-bg);color:var(--amber);}
 .dash-chip-note.note-blue{background:var(--blue-bg);color:var(--blue);}
@@ -72,8 +75,10 @@
 .dash-starch-sep{font-size:11px;color:var(--amber);opacity:.5;}
 
 /* ── Allergens on chips ── */
-.dash-chip-allergens{display:flex;gap:2px;align-items:center;flex-shrink:0;}
-.dash-chip-ag{font-size:8px;font-weight:700;padding:1px 4px;border-radius:4px;background:var(--red-bg, rgba(220,38,38,.1));color:var(--red, #dc2626);text-transform:uppercase;white-space:nowrap;letter-spacing:.02em;}
+/* Allow shrinking + hidden overflow so an unusually long allergen list
+   cannot push the chip row past the viewport edge. */
+.dash-chip-allergens{display:flex;gap:2px;align-items:center;flex-shrink:1;min-width:0;overflow:hidden;}
+.dash-chip-ag{font-size:8px;font-weight:700;padding:1px 4px;border-radius:4px;background:var(--red-bg, rgba(220,38,38,.1));color:var(--red, #dc2626);text-transform:uppercase;white-space:nowrap;letter-spacing:.02em;flex-shrink:0;}
 .dash-allergen-row{display:flex;flex-wrap:wrap;gap:3px;align-items:center;}
 
 /* ── Recipe button ── */

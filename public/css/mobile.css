@@ -14,13 +14,18 @@
     .user-menu{order:11;width:100%;justify-content:center;border-left:none;padding:4px 0 6px;margin-left:0;}
 
     /* Dashboard */
-    .dash-meal-toggle{padding:6px 0 10px;gap:4px;}
-    .dash-meal-btn{padding:10px 6px;font-size:14px;}
+    .dash-meal-toggle{padding:6px 0 10px;gap:4px;max-width:100%;}
+    .dash-meal-btn{padding:10px 6px;font-size:14px;min-width:0;}
     .dash-date-label{display:none;}
+    /* min-width:0 on grid children so cards can shrink inside a 1fr column */
     .dash-service-cols{grid-template-columns:1fr;gap:8px;}
-    .dash-guest-big{flex-direction:row;gap:8px;width:100%;justify-content:center;padding:6px 8px;min-width:0;}
-    .dash-guest-big .dash-guest-num{font-size:24px;}
+    .dash-service-cols > *{min-width:0;max-width:100%;}
     .dash-columns{grid-template-columns:1fr;gap:8px;}
+    .dash-columns > *{min-width:0;max-width:100%;}
+    .dash-card{min-width:0;max-width:100%;overflow:hidden;}
+    .dash-guest-big{flex-direction:row;gap:8px;width:100%;justify-content:center;padding:6px 8px;min-width:0;overflow:hidden;}
+    .dash-guest-big .dash-guest-num{font-size:24px;}
+    .dash-flow-wrap,.dash-flow-canvas-wrap{min-width:0;}
     .dash-inv-btn,.dash-st-btn{font-size:9px;padding:4px 6px;width:100%;}
     .dash-stock-total{width:100%;}
     .dash-chip-name{font-size:11px;}

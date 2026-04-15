@@ -291,11 +291,15 @@ export async function loadIngredientDb(): Promise<void> {
       ingredientDbError = 'Unexpected response format';
     }
     ingredientDbLoaded = true;
+    // Notify screens that need ingredient data (e.g. Orders) so they can re-render
+    // if they happened to mount before the async load completed.
+    window.dispatchEvent(new CustomEvent('ingredientDbReady'));
   } catch (e: unknown) {
     console.error('Failed to load ingredient DB:', e);
     S.ingredientDb = [];
     ingredientDbLoaded = true;
     ingredientDbError = e instanceof Error ? e.message : 'Unknown error';
+    window.dispatchEvent(new CustomEvent('ingredientDbReady'));
   }
 }
 

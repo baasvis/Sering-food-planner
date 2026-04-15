@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import express, { Request, Response } from 'express';
-import { prisma, validateBatch, withWriteLock, dbAppendLog, toBatchRow } from '../lib/db';
+import { prisma, validateBatch, withWriteLock, dbAppendLog, toBatchRow, sanitizeParentId } from '../lib/db';
 import { asyncHandler, AppError } from '../lib/config';
 import { broadcast } from './events';
 import type { Batch } from '../shared/types';
@@ -73,9 +73,13 @@ router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
     const err = validateBatch(merged as Batch);
     if (err) throw new AppError(400, err);
 
+    // Drop stale parentId references that point at a batch another user has
+    // since deleted (fixes AI insight #20 — silent P2003 FK failures).
+    const safeParentId = await sanitizeParentId((merged as Batch).parentId);
+
     return prisma.batch.update({
       where: { id: req.params.id as string },
-      data: toBatchRow(merged as Batch),
+      data: toBatchRow({ ...(merged as Batch), parentId: safeParentId }),
     });
   });
 
