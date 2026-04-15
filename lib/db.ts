@@ -307,48 +307,73 @@ export async function sanitizeParentId(
   return parentId;
 }
 
-/** Upsert batches: merge field-by-field with existing DB rows to prevent stale overwrites */
+/** Upsert batches: merge field-by-field with existing DB rows to prevent stale overwrites.
+ *
+ * Fixes AI insight #23 (/patch avg 706ms, max 3278ms): the previous implementation
+ * did 3 sequential DB roundtrips per batch (sanitizeParentId + findUnique + update).
+ * For a typical 20-batch save over transatlantic latency that's ~2.4s. This version
+ * batches all reads into two queries and does all writes inside a single transaction,
+ * collapsing network roundtrips from O(3N) to ~O(1 + N/tx).
+ *
+ * Also fixes #20 at write time: stale parentId references are sanitized in-memory
+ * against the pre-fetched parent set rather than re-querying per batch.
+ */
 export async function dbUpsertBatches(batches: Batch[]): Promise<void> {
+  if (batches.length === 0) return;
+
   // Process parents before children so a newly-created parent exists when its
   // child's insert references it. Batches without parentId go first.
   const sorted = [...batches].sort((a, b) => (a.parentId ? 1 : 0) - (b.parentId ? 1 : 0));
   const siblingIds = new Set(sorted.map(b => b.id));
 
-  for (const b of sorted) {
-    // Sanitize parentId against DB reality before writing
-    const safeParentId = await sanitizeParentId(b.parentId, siblingIds);
-    const bSafe: Batch = { ...b, parentId: safeParentId };
+  // 1 roundtrip: fetch all existing rows for the batches being upserted.
+  const existingRows = await prisma.batch.findMany({ where: { id: { in: sorted.map(b => b.id) } } });
+  const existingMap = new Map<string, typeof existingRows[number]>(existingRows.map(r => [r.id, r]));
 
-    const existing = await prisma.batch.findUnique({ where: { id: b.id } });
-    try {
+  // 1 roundtrip: fetch every parentId we'll reference that isn't already in
+  // `siblingIds` (a sibling in this same save will be created/updated before
+  // any child that references it, so it counts as "exists" for our purposes).
+  const parentIdsToCheck = Array.from(new Set(
+    sorted
+      .map(b => b.parentId)
+      .filter((pid): pid is string => !!pid && !siblingIds.has(pid))
+  ));
+  const existingParentIds = new Set<string>();
+  if (parentIdsToCheck.length > 0) {
+    const rows = await prisma.batch.findMany({
+      where: { id: { in: parentIdsToCheck } },
+      select: { id: true },
+    });
+    for (const r of rows) existingParentIds.add(r.id);
+  }
+
+  // Resolve parentId for each batch against the pre-fetched sets — no more
+  // per-batch queries. A parentId is valid iff it's in siblingIds OR the DB.
+  const resolveParentId = (pid: string | null | undefined): string | null => {
+    if (!pid) return null;
+    if (siblingIds.has(pid) || existingParentIds.has(pid)) return pid;
+    console.warn(`[dbUpsertBatches] dropping stale parentId ${pid} (referenced batch no longer exists)`);
+    return null;
+  };
+
+  // All writes in a single transaction: one network roundtrip to begin, one to
+  // commit, and Prisma pipelines the individual statements in between.
+  await prisma.$transaction(async (tx) => {
+    for (const b of sorted) {
+      const safeParentId = resolveParentId(b.parentId);
+      const bSafe: Batch = { ...b, parentId: safeParentId };
+      const existing = existingMap.get(b.id);
+
       if (existing) {
         // Merge: incoming fields overwrite existing, but fields not sent by client
         // are preserved from the DB (protects against stale-field overwrites).
-        // Force the sanitized parentId so a stale client value can't reintroduce
-        // a dangling FK.
         const merged = toBatchRow({ ...existing as unknown as Batch, ...bSafe, parentId: safeParentId });
-        await prisma.batch.update({ where: { id: b.id }, data: merged });
+        await tx.batch.update({ where: { id: b.id }, data: merged });
       } else {
-        await prisma.batch.create({ data: toBatchRow(bSafe) });
-      }
-    } catch (e: unknown) {
-      // Last-resort retry: if Prisma still raises a FK error (P2003), retry
-      // with parentId cleared. Avoids dropping user edits for an obscure race.
-      const code = (e as { code?: string })?.code;
-      if (code === 'P2003') {
-        console.warn(`[dbUpsertBatches] retrying batch ${b.id} with parentId=null after P2003`);
-        const retryBatch: Batch = { ...bSafe, parentId: null };
-        if (existing) {
-          const merged = toBatchRow({ ...existing as unknown as Batch, ...retryBatch, parentId: null });
-          await prisma.batch.update({ where: { id: b.id }, data: merged });
-        } else {
-          await prisma.batch.create({ data: toBatchRow(retryBatch) });
-        }
-      } else {
-        throw e;
+        await tx.batch.create({ data: toBatchRow(bSafe) });
       }
     }
-  }
+  });
 }
 
 /** Delete specific batches by ID */

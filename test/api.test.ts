@@ -726,6 +726,87 @@ describe('Data Patch API', () => {
     const gone = checkRes.body.batches.find((b: any) => b.id === patchBatchId);
     expect(gone).toBeUndefined();
   }, 15000);
+
+  // Regression test for AI insight #20: stale parentId references must be
+  // silently dropped, not throw a foreign-key constraint violation that
+  // silently fails the user's save.
+  it('POST /api/data/patch — drops stale parentId instead of failing with FK error', async () => {
+    const orphanId = T + 'orphan-child';
+    const deadParentId = T + 'never-existed-parent';
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({
+        batches: [{
+          id: orphanId,
+          name: 'Orphan Split Child',
+          type: 'Main course',
+          stock: 0,
+          serving: 280,
+          storage: 'Gastro',
+          location: 'west',
+          parentId: deadParentId, // points at a batch that does not exist
+          services: [],
+        }],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const check = await request(app).get('/api/batches/' + orphanId);
+    expect(check.status).toBe(200);
+    expect(check.body.parentId).toBeNull(); // sanitized away
+
+    // Cleanup
+    await request(app).post('/api/data/patch').send({ deletedBatches: [orphanId] });
+  }, 15000);
+
+  it('POST /api/batches — drops stale parentId instead of failing with FK error', async () => {
+    const orphanId = T + 'orphan-create';
+    const res = await request(app)
+      .post('/api/batches')
+      .send({
+        id: orphanId,
+        name: 'Orphan Create Child',
+        type: 'Main course',
+        stock: 0,
+        serving: 280,
+        storage: 'Gastro',
+        location: 'west',
+        parentId: T + 'also-never-existed',
+        services: [],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.parentId).toBeNull();
+
+    await request(app).delete('/api/batches/' + orphanId);
+  }, 15000);
+
+  // Regression test for AI insight #23: bulk patches of many batches must
+  // complete quickly. The previous impl did 3 sequential DB roundtrips per
+  // batch; the new impl batches reads and wraps writes in a transaction.
+  // We assert correctness for a 10-batch payload (perf is measured in prod).
+  it('POST /api/data/patch — handles 10-batch bulk save correctly', async () => {
+    const ids = Array.from({ length: 10 }, (_, i) => T + 'bulk-' + i);
+    const batches = ids.map((id, i) => ({
+      id,
+      name: 'Bulk Test ' + i,
+      type: 'Soup',
+      stock: 0,
+      serving: 280,
+      storage: 'Gastro',
+      location: 'west',
+      services: [],
+    }));
+    const res = await request(app).post('/api/data/patch').send({ batches });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const data = await request(app).get('/api/data');
+    const found = data.body.batches.filter((b: any) => ids.includes(b.id));
+    expect(found.length).toBe(10);
+
+    // Cleanup
+    await request(app).post('/api/data/patch').send({ deletedBatches: ids });
+  }, 15000);
 });
 
 // ── Recipe v2 CRUD ──

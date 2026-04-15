@@ -44,7 +44,13 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const created = await withWriteLock(async () => {
     const existing = await prisma.batch.findUnique({ where: { id: b.id } });
     if (existing) throw new AppError(409, `Batch "${b.id}" already exists`);
-    return prisma.batch.create({ data: toBatchRow(b as Batch) });
+    // Drop stale parentId references that point at a batch another user has
+    // since deleted (fixes AI insight #20 — the bulk patch and PATCH paths
+    // already did this; this closes the single-create gap for split-batch
+    // workflows where the client posts a new batch referencing a now-deleted
+    // parent).
+    const safeParentId = await sanitizeParentId((b as Batch).parentId);
+    return prisma.batch.create({ data: toBatchRow({ ...(b as Batch), parentId: safeParentId }) });
   });
 
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
