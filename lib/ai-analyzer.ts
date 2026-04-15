@@ -41,11 +41,13 @@ export async function runDataQualityChecks(): Promise<DataQualityReport> {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
 
-  // Batches with cook date in the past and stock > 0 (possibly forgotten)
+  // Batches with cook date in the past and stock > 0 (possibly forgotten).
+  // Frozen batches are excluded — they legitimately sit in stock for weeks.
   const staleBatches = await prisma.batch.findMany({
     where: {
       cookDate: { lt: today, not: null },
       stock: { gt: 0 },
+      storage: { not: 'Frozen' },
     },
     select: { id: true, name: true, cookDate: true, stock: true, services: true },
     take: 20,

@@ -4,9 +4,24 @@
 
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
+import compression from 'compression';
 
 const app = express();
 app.set('trust proxy', 1);
+
+// gzip compression for JSON + static assets. Skip SSE (text/event-stream
+// must stream un-buffered, otherwise clients never see events until the
+// response buffer flushes). /api/data in particular is the single most
+// frequently called endpoint (352 calls/day, 888ms avg) and has a JSON
+// payload with large ingredient/recipe arrays — compression is the single
+// biggest win available here without redesigning the endpoint.
+app.use(compression({
+  filter: (req, res) => {
+    if (req.path.startsWith('/api/events')) return false;
+    return compression.filter(req, res);
+  },
+}));
+
 app.use(express.json({ limit: '2mb' }));
 
 // Static files — serve built client in production, public/ in dev

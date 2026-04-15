@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import multer from 'multer';
-import { prisma, dbAppendLog, toRecipeFull, toRecipeIngredientFull, calcRecipeAllergens, calcRecipeCost, calcRecipeNutrition, validateRecipe, withWriteLock, denormalizeRecipeIngredients } from '../lib/db';
+import { prisma, dbAppendLog, toRecipeFull, toRecipeIngredientFull, calcRecipeAllergens, calcRecipeCost, validateRecipe, withWriteLock, denormalizeRecipeIngredients, hydrateRecipeForDetail } from '../lib/db';
 import { getSheetsClient } from '../lib/recipe-sheets';
 import { asyncHandler, errMsg } from '../lib/config';
 import { broadcast } from './events';
@@ -167,22 +167,12 @@ router.get('/recipes/:id', asyncHandler(async (req: Request, res: Response) => {
 
   const recipe = toRecipeFull(row);
 
-  // Denormalize ingredient names, allergens, and cost in one batched query
-  await denormalizeRecipeIngredients([recipe]);
-
-  // Recalculate cost from current ingredient prices and update if changed
-  const freshCost = await calcRecipeCost(recipe.ingredients, recipe.servingSize, recipe.recipeVolume);
-  if (freshCost !== recipe.costPerServing) {
-    await prisma.recipe.update({ where: { id }, data: { costPerServing: freshCost } });
-    recipe.costPerServing = freshCost;
-  }
-
-  // Calculate nutrition
-  recipe.nutrition = await calcRecipeNutrition(
-    recipe.ingredients,
-    recipe.servingSize,
-    recipe.recipeVolume,
-  ) ?? undefined;
+  // Single-query hydrate: denormalize names/allergens + compute cost +
+  // compute nutrition from ONE ingredient.findMany. Does not write back —
+  // cost is recalculated by /recipes/recalc-costs and when ingredient
+  // prices change. See hydrateRecipeForDetail() docs in lib/db.ts for
+  // the reasoning (fix for "recipe endpoints >1000ms" AI insight).
+  await hydrateRecipeForDetail(recipe);
 
   res.json(recipe);
 }));
@@ -282,27 +272,42 @@ router.post('/recipes/import-cooked-amounts', asyncHandler(async (_req: Request,
     include: { ingredients: { orderBy: { sortOrder: 'asc' } } },
   });
 
+  // Pre-fetch all referenced ingredient names in ONE query, rather than doing
+  // a per-row findUnique inside a nested loop. This was the N+1 hotspot —
+  // previous runs took ~258s synchronously for 55 recipes with ~618 ingredient
+  // rows between them, mostly because each row triggered its own DB roundtrip
+  // AND each recipe's Google Sheets fetch ran sequentially.
+  const allIngredientIds = Array.from(new Set(
+    recipes.flatMap(r => r.ingredients.map(i => i.ingredientId).filter((id): id is string => !!id)),
+  ));
+  const ingredientNameRows = allIngredientIds.length > 0
+    ? await prisma.ingredient.findMany({
+        where: { id: { in: allIngredientIds } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const nameById = new Map(ingredientNameRows.map(i => [i.id, i.name.toLowerCase().trim()]));
+
   let updated = 0;
   let skipped = 0;
   let failed = 0;
   const details: Array<{ name: string; status: string; count?: number }> = [];
 
-  for (const recipe of recipes) {
+  async function processRecipe(recipe: typeof recipes[number]): Promise<void> {
     if (!recipe.legacySheetId || recipe.ingredients.length === 0) {
       skipped++;
       details.push({ name: recipe.name, status: 'skipped' });
-      continue;
+      return;
     }
 
     try {
-      const response = await sheets.spreadsheets.values.batchGet({
+      const response = await sheets!.spreadsheets.values.batchGet({
         spreadsheetId: recipe.legacySheetId,
         ranges: ['J6:N80', 'K6:K80'],
       });
       const ingRows = response.data.valueRanges?.[0]?.values || [];
       const unitRows = response.data.valueRanges?.[1]?.values || [];
 
-      // Build a list of sheet ingredients with cooked amounts
       const sheetIngredients: Array<{ name: string; rawAmount: number; cookedAmount: number | null; unit: string }> = [];
       ingRows.forEach((row: (string | undefined)[], i: number) => {
         if (!row[0]) return;
@@ -320,13 +325,11 @@ router.post('/recipes/import-cooked-amounts', asyncHandler(async (_req: Request,
         });
       });
 
-      // Match DB ingredients to sheet rows by name and update cookedAmount
-      let rowsUpdated = 0;
+      // Match DB ingredients to sheet rows using the pre-fetched name map
+      const updateOps: Array<{ id: string; cookedAmount: number }> = [];
       for (const dbIng of recipe.ingredients) {
-        const dbIngRecord = dbIng.ingredientId
-          ? await prisma.ingredient.findUnique({ where: { id: dbIng.ingredientId }, select: { name: true } })
-          : null;
-        const dbName = (dbIngRecord?.name || '').toLowerCase().trim();
+        if (!dbIng.ingredientId) continue;
+        const dbName = nameById.get(dbIng.ingredientId);
         if (!dbName) continue;
 
         const match = sheetIngredients.find(si =>
@@ -336,23 +339,26 @@ router.post('/recipes/import-cooked-amounts', asyncHandler(async (_req: Request,
         );
 
         if (match && match.cookedAmount != null && dbIng.cookedAmount == null) {
-          await prisma.recipeIngredientRow.update({
-            where: { id: dbIng.id },
-            data: { cookedAmount: match.cookedAmount },
-          });
-          rowsUpdated++;
+          updateOps.push({ id: dbIng.id, cookedAmount: match.cookedAmount });
         }
       }
 
-      if (rowsUpdated > 0) {
-        // Recalculate recipe volume from cooked amounts
-        const updatedIngs = await prisma.recipeIngredientRow.findMany({
-          where: { recipeId: recipe.id },
-          orderBy: { sortOrder: 'asc' },
-        });
+      if (updateOps.length > 0) {
+        // Apply all per-row updates in parallel
+        await Promise.all(updateOps.map(op =>
+          prisma.recipeIngredientRow.update({
+            where: { id: op.id },
+            data: { cookedAmount: op.cookedAmount },
+          }),
+        ));
+
+        // Recompute volume directly from the in-memory rows (no extra query).
+        // The ingredient rows we already have are stale for the just-updated
+        // ones, so merge the new cooked amounts in.
+        const cookedById = new Map(updateOps.map(op => [op.id, op.cookedAmount]));
         let totalML = 0;
-        for (const ing of updatedIngs) {
-          const cooked = ing.cookedAmount ?? ing.rawAmount;
+        for (const ing of recipe.ingredients) {
+          const cooked = cookedById.get(ing.id) ?? ing.cookedAmount ?? ing.rawAmount;
           if (!cooked) continue;
           switch (ing.unit) {
             case 'Kilos': case 'Liters': totalML += cooked * 1000; break;
@@ -365,7 +371,7 @@ router.post('/recipes/import-cooked-amounts', asyncHandler(async (_req: Request,
         }
 
         updated++;
-        details.push({ name: recipe.name, status: 'updated', count: rowsUpdated });
+        details.push({ name: recipe.name, status: 'updated', count: updateOps.length });
       } else {
         details.push({ name: recipe.name, status: 'no-matches' });
       }
@@ -373,6 +379,15 @@ router.post('/recipes/import-cooked-amounts', asyncHandler(async (_req: Request,
       failed++;
       details.push({ name: recipe.name, status: `error: ${errMsg(e)}` });
     }
+  }
+
+  // Process recipes with bounded concurrency. Google Sheets API has per-minute
+  // quota limits, so 5 in flight at once is a safe ceiling — enough to hide
+  // network latency without triggering 429s.
+  const CONCURRENCY = 5;
+  for (let i = 0; i < recipes.length; i += CONCURRENCY) {
+    const chunk = recipes.slice(i, i + CONCURRENCY);
+    await Promise.all(chunk.map(processRecipe));
   }
 
   res.json({ ok: true, updated, skipped, failed, total: recipes.length, details });

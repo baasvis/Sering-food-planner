@@ -519,6 +519,111 @@ export async function calcRecipeAllergens(ingredientIds: string[]): Promise<stri
   return [...allergenSet].sort();
 }
 
+/**
+ * Hydrate a single recipe for the detail view: denormalize ingredient
+ * names/allergens/price, compute cost per serving, and compute nutrition —
+ * all with a SINGLE `ingredient.findMany` query instead of three.
+ *
+ * Also explicitly does NOT write-back the recomputed cost. The previous
+ * `/recipes/:id` handler updated the row on every GET if the floating-point
+ * cost differed, causing unnecessary write contention on a read-heavy path.
+ * Recipe costs are recalculated via the explicit "Recalculate costs" button
+ * and via `recalcRecipeCostsForIngredient()` when a price changes.
+ *
+ * Fix for AI insight: "All recipe endpoints exceed 1000ms avg — likely N+1".
+ */
+export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> {
+  const linkedIds = Array.from(new Set(
+    recipe.ingredients
+      .filter(i => i.ingredientId && !i.isFlexible)
+      .map(i => i.ingredientId!),
+  ));
+
+  if (linkedIds.length === 0 || !recipe.recipeVolume) {
+    // Nothing to hydrate beyond what's already on the row
+    return;
+  }
+
+  const dbIngs = await prisma.ingredient.findMany({
+    where: { id: { in: linkedIds } },
+    select: {
+      id: true,
+      name: true,
+      allergens: true,
+      pricePer100g: true,
+      pricePer100: true,
+      nutrition: true,
+    },
+  });
+  const ingMap = new Map(dbIngs.map(i => [i.id, i]));
+
+  // Denormalize name / allergens / cost per row
+  for (const ing of recipe.ingredients) {
+    if (!ing.ingredientId) continue;
+    const dbIng = ingMap.get(ing.ingredientId);
+    if (!dbIng) continue;
+    ing.ingredientName = dbIng.name;
+    ing.ingredientAllergens = dbIng.allergens;
+    ing.costPer100 = dbIng.pricePer100g || dbIng.pricePer100 || 0;
+  }
+
+  // Compute cost and nutrition from the same map
+  const baseServings = (recipe.recipeVolume * 1000) / recipe.servingSize;
+  if (baseServings <= 0) return;
+
+  const FLEX_PRICE_PER_100G = 0.15;
+  let totalCost = 0;
+
+  const totals = { energyKcal: 0, energyKj: 0, fat: 0, saturatedFat: 0, carbs: 0, sugar: 0, fiber: 0, protein: 0, salt: 0 };
+  let withData = 0;
+  let totalLinked = 0;
+
+  for (const ing of recipe.ingredients) {
+    const amountGrams = toGrams(ing.rawAmount, ing.unit);
+    if (ing.isFlexible) {
+      totalCost += (amountGrams / 100) * FLEX_PRICE_PER_100G;
+      continue;
+    }
+    if (!ing.ingredientId) continue;
+    const dbIng = ingMap.get(ing.ingredientId);
+    if (!dbIng) continue;
+    const pricePer100 = dbIng.pricePer100g || dbIng.pricePer100 || 0;
+    totalCost += (amountGrams / 100) * pricePer100;
+
+    totalLinked++;
+    const nutr = dbIng.nutrition as Record<string, number> | null;
+    if (!nutr || Object.keys(nutr).length === 0) continue;
+    withData++;
+    const factor = amountGrams / 100;
+    totals.energyKcal += (nutr.energyKcal || 0) * factor;
+    totals.energyKj += (nutr.energyKj || 0) * factor;
+    totals.fat += (nutr.fat || 0) * factor;
+    totals.saturatedFat += (nutr.saturatedFat || 0) * factor;
+    totals.carbs += (nutr.carbs || 0) * factor;
+    totals.sugar += (nutr.sugar || 0) * factor;
+    totals.fiber += (nutr.fiber || 0) * factor;
+    totals.protein += (nutr.protein || 0) * factor;
+    totals.salt += (nutr.salt || 0) * factor;
+  }
+
+  recipe.costPerServing = Math.round((totalCost / baseServings) * 100) / 100;
+
+  if (totalLinked > 0) {
+    recipe.nutrition = {
+      energyKcal: Math.round(totals.energyKcal / baseServings),
+      energyKj: Math.round(totals.energyKj / baseServings),
+      fat: Math.round(totals.fat / baseServings * 10) / 10,
+      saturatedFat: Math.round(totals.saturatedFat / baseServings * 10) / 10,
+      carbs: Math.round(totals.carbs / baseServings * 10) / 10,
+      sugar: Math.round(totals.sugar / baseServings * 10) / 10,
+      fiber: Math.round(totals.fiber / baseServings * 10) / 10,
+      protein: Math.round(totals.protein / baseServings * 10) / 10,
+      salt: Math.round(totals.salt / baseServings * 100) / 100,
+      completeness: totalLinked > 0 ? withData / totalLinked : 0,
+    };
+  }
+}
+
 /** Compute cost per serving from ingredient prices and amounts */
 export async function calcRecipeCost(
   ingredients: Array<{ ingredientId: string | null; rawAmount: number; unit: string; isFlexible: boolean }>,

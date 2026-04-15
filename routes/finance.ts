@@ -101,7 +101,11 @@ router.post('/sync', (req: Request, res: Response) => {
   const start = startDate || defaultDate;
   const end = endDate || start;
 
-  const workerPath = path.join(__dirname, '..', 'scripts', 'tebi-sync-worker.js');
+  // Scripts/ lives at project root in both dev and production. __dirname
+  // resolves differently in dev (tsx) vs production (dist/server/routes/),
+  // so process.cwd() is the only reliable anchor — Railway always starts
+  // `node dist/server/server.js` from the project root.
+  const workerPath = path.join(process.cwd(), 'scripts', 'tebi-sync-worker.js');
   const args = [workerPath, start, end];
 
   console.log(`[finance] Starting sync: ${start} → ${end}`);
