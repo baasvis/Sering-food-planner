@@ -17,8 +17,8 @@
     },
     {
       "name": "preview",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "preview"],
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set NODE_ENV=production&& npm run build && node dist/server/server.js"],
       "port": 3000,
       "autoPort": true
     }

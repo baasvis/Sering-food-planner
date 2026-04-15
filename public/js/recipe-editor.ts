@@ -1017,6 +1017,22 @@ interface BatchRecipeState {
 
 let _brState: BatchRecipeState | null = null;
 
+/** Round a scaled ingredient amount to a precision appropriate for its unit.
+ * Math.round() on Kilos/Liters truncates small values to zero (e.g. 0.25 kg
+ * onion → 0). For weight/volume big-units we keep 3 decimals (1g / 1ml
+ * precision). For small units we round to whole integers. */
+function roundForUnit(amount: number, unit: string): number {
+  const u = (unit || '').toLowerCase();
+  if (u === 'kilos' || u === 'kilo' || u === 'kg' || u === 'liters' || u === 'liter' || u === 'l') {
+    return Math.round(amount * 1000) / 1000;
+  }
+  if (u === 'grams' || u === 'gram' || u === 'g' || u === 'ml' || u === 'milliliters') {
+    return Math.round(amount);
+  }
+  // Unknown unit: keep 2 decimals as a safe default
+  return Math.round(amount * 100) / 100;
+}
+
 /** Open batch recipe editor — used for pre-cook flex resolution AND post-cook recording */
 export function openBatchRecipe(batchId: string) {
   const batch = S.batches.find(b => b.id === batchId);
@@ -1069,7 +1085,7 @@ export function openBatchRecipe(batchId: string) {
       return {
         ingredientId: ing.isFlexible ? null : ing.ingredientId,
         name: ing.isFlexible ? (ing.flexLabel || 'Flexible') : (ing.ingredientName || 'Unknown'),
-        amount: Math.round(ing.rawAmount * scaleFactor),
+        amount: roundForUnit(ing.rawAmount * scaleFactor, ing.unit),
         unit: ing.unit,
         isFlexible: ing.isFlexible,
         flexLabel: ing.isFlexible ? (ing.flexLabel || 'Flexible') : null,
@@ -1282,7 +1298,7 @@ export function brUpdateTargetLiters(newLiters: number) {
   // Rescale from base recipe amounts (not current displayed amounts) to avoid rounding drift
   recipe.ingredients.forEach((baseIng, i) => {
     if (i < _brState!.ingredients.length && !_brState!.ingredients[i].removed) {
-      _brState!.ingredients[i].amount = Math.round(baseIng.rawAmount * newScale);
+      _brState!.ingredients[i].amount = roundForUnit(baseIng.rawAmount * newScale, baseIng.unit);
     }
   });
 

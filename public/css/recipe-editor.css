@@ -143,17 +143,25 @@
 .br-overlay{position:fixed;inset:0;z-index:2000;background:var(--bg);overflow-y:auto;padding:20px;}
 .br-fullscreen-inner{max-width:800px;margin:0 auto;}
 
-/* Editor */
-.br-editor{width:720px;max-width:90vw;}
+/* Editor — fills its parent (.modal or .br-fullscreen-inner). The modal
+   wrapper is widened via .modal:has(.br-editor) below so the content no
+   longer overflows the white background on the right. */
+.br-editor{width:100%;}
 .br-header{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
 .br-body{max-height:calc(80vh - 80px);overflow-y:auto;padding-right:4px;}
 .br-overlay .br-body{max-height:none;overflow:visible;}
 .br-prep-list{padding-left:20px;font-size:13px;margin:0;}
 .br-prep-list li{margin-bottom:6px;}
 
+/* Widen the generic .modal wrapper when it hosts the batch recipe editor.
+   Default .modal is 440px which is too narrow for the ingredient table +
+   header buttons (previously caused them to visibly overflow the white
+   background). Scoped via :has() so other modals keep their default size. */
+.modal:has(.br-editor){width:760px;max-width:96vw;}
+
 /* Mobile: stack price bar */
 @media(max-width:600px){
   .re-price-bar{flex-direction:column;align-items:flex-start;}
   .re-grid-2{grid-template-columns:1fr;}
-  .br-editor{width:100%;}
+  .modal:has(.br-editor){width:100%;}
 }
