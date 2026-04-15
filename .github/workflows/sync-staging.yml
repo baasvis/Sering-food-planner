@@ -1,0 +1,68 @@
+name: Sync staging with main
+
+# Whenever main advances, fast-forward the staging branch to match.
+# Staging deploys from the staging branch (Railway), so this makes
+# staging automatically track main for code — while still letting us
+# push to staging directly (or disable this workflow) when we want to
+# test risky changes in isolation before merging to main.
+#
+# Fast-forward only: if staging has diverged (someone pushed a
+# staging-only commit), the job fails loudly rather than clobbering
+# that work. To recover, either merge staging back into main, or
+# temporarily reset staging to main manually.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # allow manual trigger from the Actions tab
+
+concurrency:
+  group: sync-staging
+  cancel-in-progress: false
+
+jobs:
+  fast-forward:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Default GITHUB_TOKEN can push to the same repo.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fast-forward staging to main
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main staging
+
+          # If staging doesn't exist yet (first run), create it at main.
+          if ! git rev-parse --verify origin/staging >/dev/null 2>&1; then
+            echo "staging branch missing — creating from main"
+            git push origin "refs/remotes/origin/main:refs/heads/staging"
+            exit 0
+          fi
+
+          git checkout -B staging origin/staging
+
+          # Already up to date? No-op.
+          if git merge-base --is-ancestor origin/main origin/staging; then
+            echo "staging already contains main — nothing to do"
+            exit 0
+          fi
+
+          # Fast-forward only. If staging has diverged, fail loudly.
+          if ! git merge --ff-only origin/main; then
+            echo "::error::staging has diverged from main — fast-forward refused."
+            echo "Resolve manually: either merge staging into main, or reset staging to main."
+            exit 1
+          fi
+
+          git push origin staging
+          echo "staging fast-forwarded to $(git rev-parse --short HEAD)"
