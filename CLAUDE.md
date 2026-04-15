@@ -89,7 +89,9 @@ npm run dev            # Vite on :5173 (frontend HMR) + tsx on :3000 (backend)
 npm run build          # Vite build + tsc backend → dist/
 npm run preview        # Build + serve on :3000 (single port, for Claude preview)
 npm start              # node dist/server/server.js (production)
-npm test               # Jest with @swc/jest (74 API tests)
+npm test               # Jest with @swc/jest (74 API tests). Requires DATABASE_URL_TEST
+                       # pointing at a scratch DB — test/setup-env.ts refuses to run
+                       # against production. See "Testing" section below.
 npm run typecheck      # tsc --noEmit on backend
 ```
 
@@ -154,7 +156,14 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
 - Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.ts sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders. Snapshot updates are targeted (only remote items), so unsaved local changes survive incoming patches.
 
+## Testing
+- `npm test` runs against **`DATABASE_URL_TEST`**, not `DATABASE_URL`. The planner is live in production — the test suite's `afterAll` block issues `deleteMany` calls that would mutate real records.
+- `test/setup-env.ts` enforces this: if `DATABASE_URL_TEST` is set it overrides `DATABASE_URL`; if `DATABASE_URL` points at a known production host and `DATABASE_URL_TEST` is not set, jest refuses to start.
+- Point `DATABASE_URL_TEST` at a scratch local Postgres, or at staging (`shuttle.proxy.rlwy.net:52350`). Tests use `test-<timestamp>-` prefixed IDs so they can share a DB with other data, but the DB must not be production.
+- To add a new prod host fragment to the guard, edit `PROD_HOST_FRAGMENTS` in `test/setup-env.ts`.
+
 ## Don't
 - Don't change the Prisma schema without creating a migration (`npx prisma migrate dev`)
 - After any migration, always verify `prisma/schema.prisma` matches the DB: run `npx prisma db pull` then `npx prisma generate`, and ensure all fields use camelCase with `@map("snake_case")`. Commit the updated schema in the same PR.
 - Don't remove withWriteLock from write endpoints
+- Don't run `npm test` against production — use `DATABASE_URL_TEST`

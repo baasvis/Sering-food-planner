@@ -39,6 +39,9 @@
     },
     "testMatch": [
       "**/test/**/*.test.ts"
+    ],
+    "setupFiles": [
+      "<rootDir>/test/setup-env.ts"
     ]
   },
   "engines": {
