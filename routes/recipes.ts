@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
+import crypto from 'crypto';
 import multer from 'multer';
 import { prisma, dbAppendLog, toRecipeFull, toRecipeIngredientFull, calcRecipeAllergens, calcRecipeCost, validateRecipe, withWriteLock, denormalizeRecipeIngredients, hydrateRecipeForDetail } from '../lib/db';
 import { getSheetsClient } from '../lib/recipe-sheets';
@@ -409,57 +410,61 @@ router.patch('/recipes/:id', asyncHandler(async (req: Request, res: Response) =>
   }
 
   const recipe = await withWriteLock(async () => {
-    // If ingredients are provided, replace them all
-    if (body.ingredients) {
-      await prisma.recipeIngredientRow.deleteMany({ where: { recipeId: id } });
-      const ingredients: RecipeIngredientFull[] = body.ingredients;
-      if (ingredients.length > 0) {
-        await prisma.recipeIngredientRow.createMany({
-          data: ingredients.map((ing, i) => ({
-            id: ing.id,
-            recipeId: id,
-            ingredientId: ing.ingredientId || null,
-            sortOrder: ing.sortOrder ?? i,
-            rawAmount: ing.rawAmount,
-            cookedAmount: ing.cookedAmount ?? null,
-            unit: ing.unit || 'Grams',
-            isFlexible: !!ing.isFlexible,
-            flexCategory: ing.flexCategory || null,
-            flexLabel: ing.flexLabel || null,
-            suggestedNames: ing.suggestedNames || [],
-          })),
-        });
+    // Wrap ingredient replacement + recipe update in a transaction so a
+    // failed createMany cannot leave the recipe with zero ingredients.
+    return prisma.$transaction(async (tx) => {
+      // If ingredients are provided, replace them all
+      if (body.ingredients) {
+        const ingredients: RecipeIngredientFull[] = body.ingredients;
+        await tx.recipeIngredientRow.deleteMany({ where: { recipeId: id } });
+        if (ingredients.length > 0) {
+          await tx.recipeIngredientRow.createMany({
+            data: ingredients.map((ing, i) => ({
+              id: ing.id || crypto.randomUUID(),
+              recipeId: id,
+              ingredientId: ing.ingredientId || null,
+              sortOrder: ing.sortOrder ?? i,
+              rawAmount: ing.rawAmount,
+              cookedAmount: ing.cookedAmount ?? null,
+              unit: ing.unit || 'Grams',
+              isFlexible: !!ing.isFlexible,
+              flexCategory: ing.flexCategory || null,
+              flexLabel: ing.flexLabel || null,
+              suggestedNames: ing.suggestedNames || [],
+            })),
+          });
+        }
       }
-    }
 
-    // Recalculate auto-allergens and cost from current ingredients
-    const currentIngs = await prisma.recipeIngredientRow.findMany({ where: { recipeId: id } });
-    const ingredientIds = currentIngs.filter(i => i.ingredientId).map(i => i.ingredientId!);
-    const autoAllergens = await calcRecipeAllergens(ingredientIds);
-    const servingSize = body.servingSize ?? existing.servingSize;
-    const recipeVolume = body.recipeVolume !== undefined ? body.recipeVolume : existing.recipeVolume;
-    const costPerServing = await calcRecipeCost(currentIngs, servingSize, recipeVolume);
+      // Recalculate auto-allergens and cost from current ingredients
+      const currentIngs = await tx.recipeIngredientRow.findMany({ where: { recipeId: id } });
+      const ingredientIds = currentIngs.filter(i => i.ingredientId).map(i => i.ingredientId!);
+      const autoAllergens = await calcRecipeAllergens(ingredientIds);
+      const servingSize = body.servingSize ?? existing.servingSize;
+      const recipeVolume = body.recipeVolume !== undefined ? body.recipeVolume : existing.recipeVolume;
+      const costPerServing = await calcRecipeCost(currentIngs, servingSize, recipeVolume);
 
-    // Build update data (only provided fields)
-    const updateData: Record<string, unknown> = {
-      autoAllergens,
-      costPerServing,
-      updatedAt: now,
-    };
-    const allowedFields = ['name', 'type', 'structure', 'seasonality', 'servingTemp', 'servingSize',
-      'recipeVolume', 'extraAllergens', 'coolingMethod', 'storageMethod', 'isComplete', 'legacySheetId',
-      'avgSkill', 'avgSpeed', 'avgBanger', 'timesServed'] as const;
-    for (const field of allowedFields) {
-      if (body[field] !== undefined) updateData[field] = body[field];
-    }
-    if (body.prepSteps !== undefined) {
-      updateData.prepSteps = body.prepSteps as Prisma.InputJsonValue;
-    }
+      // Build update data (only provided fields)
+      const updateData: Record<string, unknown> = {
+        autoAllergens,
+        costPerServing,
+        updatedAt: now,
+      };
+      const allowedFields = ['name', 'type', 'structure', 'seasonality', 'servingTemp', 'servingSize',
+        'recipeVolume', 'extraAllergens', 'coolingMethod', 'storageMethod', 'isComplete', 'legacySheetId',
+        'avgSkill', 'avgSpeed', 'avgBanger', 'timesServed'] as const;
+      for (const field of allowedFields) {
+        if (body[field] !== undefined) updateData[field] = body[field];
+      }
+      if (body.prepSteps !== undefined) {
+        updateData.prepSteps = body.prepSteps as Prisma.InputJsonValue;
+      }
 
-    return prisma.recipe.update({
-      where: { id },
-      data: updateData,
-      include: includeIngredients,
+      return tx.recipe.update({
+        where: { id },
+        data: updateData,
+        include: includeIngredients,
+      });
     });
   });
 
