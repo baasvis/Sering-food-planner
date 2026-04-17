@@ -175,6 +175,12 @@ router.get('/recipes/:id', asyncHandler(async (req: Request, res: Response) => {
   // the reasoning (fix for "recipe endpoints >1000ms" AI insight).
   await hydrateRecipeForDetail(recipe);
 
+  // Short browser cache: users often bounce between the recipe detail and
+  // the index in the same planning session. With 943ms avg per call
+  // (AI insight #47), a 30s window eliminates most repeat round-trips.
+  // PATCH /recipes/:id returns fresh data via broadcast, so staleness
+  // window is ≤ 30s only for viewers who never edit.
+  res.set('Cache-Control', 'private, max-age=30');
   res.json(recipe);
 }));
 

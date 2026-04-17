@@ -395,8 +395,16 @@ export function renderDashboard() {
   S.dashMeal = autoDetectMeal();
   const loc = S.currentLoc;
 
+  // Show a loading placeholder until loadPrepChecklist resolves. On slow
+  // networks this can take 1s+ and the dashboard otherwise appears blank
+  // (user feedback #429 — "u need loading animation when the dashboard
+  // takes forever to load"). The pulse keyframes are defined in base.css.
   document.getElementById('screen-dashboard')!.innerHTML = `
-    <div id="dash-content"></div>
+    <div id="dash-content">
+      <div style="padding:40px 20px;text-align:center;color:var(--text3);animation:pulse 1.2s ease-in-out infinite;">
+        Loading dashboard…
+      </div>
+    </div>
   `;
 
   loadDayTodos();

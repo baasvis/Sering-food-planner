@@ -309,17 +309,40 @@ export async function sanitizeParentId(
 
 /** Upsert batches: merge field-by-field with existing DB rows to prevent stale overwrites */
 export async function dbUpsertBatches(batches: Batch[]): Promise<void> {
+  if (batches.length === 0) return;
+
   // Process parents before children so a newly-created parent exists when its
   // child's insert references it. Batches without parentId go first.
   const sorted = [...batches].sort((a, b) => (a.parentId ? 1 : 0) - (b.parentId ? 1 : 0));
   const siblingIds = new Set(sorted.map(b => b.id));
 
+  // Batch the read queries up front to eliminate 2N sequential round-trips
+  // inside the loop (fix for /patch avg 760ms AI insight #12/#23). Railway
+  // EU→Postgres EU RTT is 10–50ms, so on a 10-batch patch this replaces
+  // 20 sequential queries with 2 parallel ones.
+  const incomingIds = sorted.map(b => b.id);
+  const parentIds = Array.from(new Set(
+    sorted.map(b => b.parentId).filter((p): p is string => !!p && !siblingIds.has(p)),
+  ));
+  const [existingRows, existingParents] = await Promise.all([
+    prisma.batch.findMany({ where: { id: { in: incomingIds } } }),
+    parentIds.length > 0
+      ? prisma.batch.findMany({ where: { id: { in: parentIds } }, select: { id: true } })
+      : Promise.resolve([]),
+  ]);
+  const existingMap = new Map(existingRows.map(r => [r.id, r]));
+  const validParentIds = new Set(existingParents.map(p => p.id));
+
   for (const b of sorted) {
-    // Sanitize parentId against DB reality before writing
-    const safeParentId = await sanitizeParentId(b.parentId, siblingIds);
+    // Resolve parentId against batched parent-existence check (no DB round-trip)
+    const safeParentId = !b.parentId
+      ? null
+      : siblingIds.has(b.parentId) || validParentIds.has(b.parentId)
+        ? b.parentId
+        : (console.warn(`[dbUpsertBatches] dropping stale parentId ${b.parentId} (referenced batch no longer exists)`), null);
     const bSafe: Batch = { ...b, parentId: safeParentId };
 
-    const existing = await prisma.batch.findUnique({ where: { id: b.id } });
+    const existing = existingMap.get(b.id);
     try {
       if (existing) {
         // Merge: incoming fields overwrite existing, but fields not sent by client

@@ -31,7 +31,25 @@ app.use(express.json({ limit: '2mb' }));
 const clientDir = process.env.NODE_ENV === 'production'
   ? path.join(__dirname, '..', 'client')
   : path.join(__dirname, 'public');
-app.use(express.static(clientDir));
+app.use(express.static(clientDir, {
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    // Vite emits hashed, content-addressable assets under /assets/*.
+    // Treat them as immutable — one year cache eliminates revalidation
+    // round-trips that currently cost 600–900ms on / GET (AI insight #21/#13).
+    if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else {
+      // index.html and other non-hashed files: revalidate on every load.
+      // Express's ETag handling means the body is only re-sent when content
+      // actually changed, so there's still no perf loss. The alternative
+      // (max-age > 0) risks serving a cached index.html that points at
+      // hashed asset filenames deleted by a subsequent deploy.
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  },
+}));
 
 // ── API response time telemetry ──
 

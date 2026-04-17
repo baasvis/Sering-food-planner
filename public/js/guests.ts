@@ -315,9 +315,27 @@ export function applyPredictions() {
 }
 
 // ── Update Guest Count ────────────────────────────────────
+
+// Before writing a user-entered value, materialize any predicted meals that
+// were showing as fallbacks in the UI but had never been written. Without
+// this, typing into (say) dinner would save { dinner: X } and the displayed
+// prediction for lunch would silently be lost — both in the guests grid and
+// in downstream planner calculations (core.ts:getGuests returns 0 for a
+// missing meal on a future week). See user feedback 2026-04-17.
+function seedMissingMealsFromPrediction(target: any, loc: any, day: any) {
+  const pred = S.predictions && S.predictions[loc] && S.predictions[loc][day];
+  if (!pred) return;
+  for (const m of MEALS) {
+    if (target[m] === undefined && pred[m] !== undefined) {
+      target[m] = pred[m];
+    }
+  }
+}
+
 export function updateGuests(loc: any, day: any, meal: any, val: any) {
   if (!S.guests[loc]) S.guests[loc] = {};
   if (!S.guests[loc][day]) S.guests[loc][day] = {};
+  seedMissingMealsFromPrediction(S.guests[loc][day], loc, day);
   S.guests[loc][day][meal] = parseInt(val) || 0;
   scheduleSave();
   restoreFocusAfterRender(renderGuests);
@@ -327,6 +345,7 @@ export function updateGuestsNextWeek(mondayKey: any, loc: any, day: any, meal: a
   if (!S.guestsNextWeeks[mondayKey]) S.guestsNextWeeks[mondayKey] = {};
   if (!S.guestsNextWeeks[mondayKey][loc]) S.guestsNextWeeks[mondayKey][loc] = {};
   if (!S.guestsNextWeeks[mondayKey][loc][day]) S.guestsNextWeeks[mondayKey][loc][day] = {};
+  seedMissingMealsFromPrediction(S.guestsNextWeeks[mondayKey][loc][day], loc, day);
   S.guestsNextWeeks[mondayKey][loc][day][meal] = parseInt(val) || 0;
   scheduleNextWeeksSave();
   restoreFocusAfterRender(renderGuests);

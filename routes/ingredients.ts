@@ -55,6 +55,13 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
 // Full ingredient list (for the ingredient DB editor tab)
 router.get('/full', asyncHandler(async (_req: Request, res: Response) => {
   const ingredients = await loadIngredients();
+  // ~2100 rows, large JSON payload, changes rarely — the DB editor screen
+  // is the only consumer. 1424ms avg (AI insight #31) was transfer-dominated
+  // even after gzip. 30s browser cache eliminates repeat fetches when
+  // flipping between tabs. Kept short because ingredient edits do NOT
+  // broadcast via SSE, so other users would see stale prices/stock for
+  // up to this window when they open the DB tab.
+  res.set('Cache-Control', 'private, max-age=30');
   res.json(ingredients);
 }));
 

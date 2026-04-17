@@ -111,6 +111,23 @@ function toGrams(amount: number, unit: string): number {
   }
 }
 
+/** Round a scaled ingredient amount to a precision appropriate for its unit.
+ * Math.round() on Kilos/Liters truncates small values to zero (e.g. 0.25 kg
+ * onion → 0), which made the recipe detail view and batch editor silently
+ * drop sub-kilo ingredients. For weight/volume big-units we keep 3 decimals
+ * (1 g / 1 ml precision). For small units we round to whole integers.
+ * Mirrors the helper in the scale block — keep both in sync if changed. */
+function roundForUnit(amount: number, unit: string): number {
+  const u = (unit || '').toLowerCase();
+  if (u === 'kilos' || u === 'kilo' || u === 'kg' || u === 'liters' || u === 'liter' || u === 'l') {
+    return Math.round(amount * 1000) / 1000;
+  }
+  if (u === 'grams' || u === 'gram' || u === 'g' || u === 'ml' || u === 'milliliters') {
+    return Math.round(amount);
+  }
+  return Math.round(amount * 100) / 100;
+}
+
 /** Render the sticky price bar HTML */
 function renderPriceBar(): string {
   if (!ed) return '';
@@ -887,8 +904,8 @@ function _renderDetailContent() {
             <thead><tr><th>Ingredient</th><th>Raw</th><th>Cooked</th><th>Unit</th></tr></thead>
             <tbody>
               ${r.ingredients.map(ing => {
-                const scaledRaw = scale !== 1 ? Math.round(ing.rawAmount * scale) : ing.rawAmount;
-                const scaledCooked = ing.cookedAmount != null ? (scale !== 1 ? Math.round(ing.cookedAmount * scale) : ing.cookedAmount) : null;
+                const scaledRaw = scale !== 1 ? roundForUnit(ing.rawAmount * scale, ing.unit) : ing.rawAmount;
+                const scaledCooked = ing.cookedAmount != null ? (scale !== 1 ? roundForUnit(ing.cookedAmount * scale, ing.unit) : ing.cookedAmount) : null;
                 return `<tr${ing.isFlexible ? ' style="font-style:italic;color:var(--purple);"' : ''}>
                 <td>${ing.isFlexible ? esc(ing.flexLabel || 'Flexible') + ' (' + esc(ing.flexCategory || '') + ')' : esc(ing.ingredientName || 'Unknown')}</td>
                 <td>${scaledRaw}</td>
@@ -1069,7 +1086,7 @@ export function openBatchRecipe(batchId: string) {
       return {
         ingredientId: ing.isFlexible ? null : ing.ingredientId,
         name: ing.isFlexible ? (ing.flexLabel || 'Flexible') : (ing.ingredientName || 'Unknown'),
-        amount: Math.round(ing.rawAmount * scaleFactor),
+        amount: roundForUnit(ing.rawAmount * scaleFactor, ing.unit),
         unit: ing.unit,
         isFlexible: ing.isFlexible,
         flexLabel: ing.isFlexible ? (ing.flexLabel || 'Flexible') : null,
@@ -1282,7 +1299,7 @@ export function brUpdateTargetLiters(newLiters: number) {
   // Rescale from base recipe amounts (not current displayed amounts) to avoid rounding drift
   recipe.ingredients.forEach((baseIng, i) => {
     if (i < _brState!.ingredients.length && !_brState!.ingredients[i].removed) {
-      _brState!.ingredients[i].amount = Math.round(baseIng.rawAmount * newScale);
+      _brState!.ingredients[i].amount = roundForUnit(baseIng.rawAmount * newScale, baseIng.unit);
     }
   });
 

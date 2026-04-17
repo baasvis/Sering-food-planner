@@ -74,6 +74,10 @@ router.get('/guest-history', asyncHandler(async (_req: Request, res: Response) =
     prisma.guestHistory.findMany(),
     prisma.guestHistoryMeta.findMany(),
   ]);
+  // Cache for 60s: history only changes on POS upload, but dashboard/planner
+  // poll this endpoint (74 calls over 9 screen views — insight #33).
+  // POST /guest-history invalidates implicitly (new data pushes a 200 not 304).
+  res.set('Cache-Control', 'private, max-age=60');
   res.json(guestHistoryToJson(histRows, metaRows));
 }));
 
@@ -175,6 +179,8 @@ router.post('/guest-history', asyncHandler(async (req: Request, res: Response) =
 
 router.get('/guests-next-weeks', asyncHandler(async (_req: Request, res: Response) => {
   const rows = await prisma.guestsNextWeeks.findMany();
+  // Same reasoning as /guest-history above — polled from dashboard/planner.
+  res.set('Cache-Control', 'private, max-age=60');
   res.json(guestsNextWeeksToJson(rows));
 }));
 
