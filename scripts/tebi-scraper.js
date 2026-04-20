@@ -189,23 +189,8 @@ fetchTebiAPI._cookie = null;
 
 // ── Discover Profit Centers ─────────────────────────────────────────────────
 
-// When Account 2 (TestTafel + Centraal) has no profit centers separating the two,
-// fall back to schedule heuristic: TestTafel is open Wed–Sat evenings only.
-// Always returns 'testtafel' or 'centraal', never throws.
-function fallbackLocationForMediamatic(timestamp) {
-  if (!timestamp) return 'centraal';
-  try {
-    const d = new Date(timestamp);
-    const day = d.getDay(); // 0=Sun 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri 6=Sat
-    const hour = d.getHours();
-    if (hour >= 18 && [3, 4, 5, 6].includes(day)) return 'testtafel';
-  } catch (_) {}
-  return 'centraal';
-}
-
 // Discover profit centers for the given ledger, populating the provided profitCenters object.
-// Does NOT fall back to hardcoded UUIDs — callers handle missing profit centers via forceLocation
-// or the fallbackLocationForMediamatic heuristic.
+// Does NOT fall back to hardcoded UUIDs.
 async function discoverProfitCenters(page, ledgerId, profitCenters) {
   log('Discovering profit centers...');
 
@@ -319,12 +304,11 @@ function classifyServicePeriod(timestamp) {
 // ── Invoice Line-Item Parsing ────────────────────────────────────────────────
 
 // Extract product-level revenue from invoice data.
-// options.forceLocation: assign ALL invoices to this location (used for single-location accounts)
-// options.useFallback: when profit center is unrecognised, use time/day heuristic instead of 'unknown'
+// options.forceLocation: assign ALL invoices to this location (useful for accounts with one location)
 function formatProductRevenue(invoices, profitCenters, options = {}) {
   if (!invoices || !Array.isArray(invoices.content)) return [];
 
-  const { forceLocation, useFallback } = options;
+  const { forceLocation } = options;
 
   // Build reverse map: profit center UUID → location name
   const pcToLoc = {};
@@ -338,16 +322,13 @@ function formatProductRevenue(invoices, profitCenters, options = {}) {
   for (const invoice of invoices.content) {
     const timestamp = invoice.createdAt || invoice.date || invoice.closedAt || '';
 
-    // Determine location: forced > profit center > heuristic > 'unknown'
+    // Determine location: forced > profit center lookup > 'unknown'
     let location;
     if (forceLocation) {
       location = forceLocation;
     } else {
       const pcUuid = invoice.profitCenterId || invoice.profitCenter?.id || '';
-      location = pcToLoc[pcUuid];
-      if (!location) {
-        location = useFallback ? fallbackLocationForMediamatic(timestamp) : 'unknown';
-      }
+      location = pcToLoc[pcUuid] || 'unknown';
     }
 
     const meal = classifyServicePeriod(timestamp);
@@ -472,10 +453,10 @@ function formatResults(results, startDate, profitCenters) {
 
 // Run a full scrape for one account. Isolated: resets auth cache, uses local
 // profitCenters object so two accounts never share state.
-// config: { email, password, ledgerId, forceLocation, useFallback, headless }
+// config: { email, password, ledgerId, forceLocation? }
 // Returns { summary, productRows } or throws on hard failure.
 async function runForAccount(config, page, startDate, endDate) {
-  const { email, password, ledgerId, forceLocation, useFallback } = config;
+  const { email, password, ledgerId, forceLocation } = config;
 
   // Reset auth cache so Account 2 doesn't reuse Account 1's token
   fetchTebiAPI._authHeader = null;
@@ -498,12 +479,11 @@ async function runForAccount(config, page, startDate, endDate) {
     });
     await page.waitForTimeout(3000);
 
-    // Discover profit centers (no hardcoded fallbacks — handled by forceLocation/useFallback)
     await discoverProfitCenters(page, ledgerId, profitCenters);
 
     const rawData = await fetchDayData(page, ledgerId, profitCenters, startDate, endDate);
     const summary = formatResults(rawData, startDate, profitCenters);
-    const productRows = formatProductRevenue(rawData.invoices, profitCenters, { forceLocation, useFallback });
+    const productRows = formatProductRevenue(rawData.invoices, profitCenters, { forceLocation });
 
     return { summary, productRows };
   } finally {
@@ -611,4 +591,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, runForAccount, login, fetchTebiAPI, fetchDayData, formatResults, formatProductRevenue, fallbackLocationForMediamatic, classifyServicePeriod, sumMetric, PROFIT_CENTERS, CHART_TYPES };
+module.exports = { main, runForAccount, login, fetchTebiAPI, fetchDayData, formatResults, formatProductRevenue, classifyServicePeriod, sumMetric, PROFIT_CENTERS, CHART_TYPES };

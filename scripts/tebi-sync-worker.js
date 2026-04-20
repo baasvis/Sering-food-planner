@@ -185,9 +185,8 @@ async function main() {
       email: process.env.TEBI_EMAIL,
       password: process.env.TEBI_PASSWORD,
       ledgerId: process.env.TEBI_LEDGER_ID || '723192',
-      // Force all invoices to 'west' — bypasses profit center lookup entirely
-      forceLocation: process.env.TEBI_FORCE_LOCATION || 'west',
-      useFallback: false,
+      // Optional: set TEBI_FORCE_LOCATION=west to skip profit center lookup
+      forceLocation: process.env.TEBI_FORCE_LOCATION || null,
     });
   }
 
@@ -197,9 +196,7 @@ async function main() {
       email: process.env.TEBI_EMAIL_2,
       password: process.env.TEBI_PASSWORD_2,
       ledgerId: process.env.TEBI_LEDGER_ID_2 || '',
-      // No forceLocation — use profit centers if present, heuristic if not
       forceLocation: null,
-      useFallback: true,
     });
   }
 

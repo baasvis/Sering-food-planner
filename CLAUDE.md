@@ -98,6 +98,7 @@ npm run typecheck      # tsc --noEmit on backend
 Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`).
+Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Account 1 (West), `TEBI_EMAIL_2` + `TEBI_PASSWORD_2` + `TEBI_LEDGER_ID_2` for Account 2 (TestTafel + Centraal). Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` on Account 1 to skip discovery if needed.
 
 ## Preview (for Claude Code verification)
 Use `preview_start` with `name: "preview"` (not `"dev"`). The `dev` script runs two
