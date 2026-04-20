@@ -189,20 +189,34 @@ fetchTebiAPI._cookie = null;
 
 // ── Discover Profit Centers ─────────────────────────────────────────────────
 
-async function discoverProfitCenters(page) {
+// When Account 2 (TestTafel + Centraal) has no profit centers separating the two,
+// fall back to schedule heuristic: TestTafel is open Wed–Sat evenings only.
+// Always returns 'testtafel' or 'centraal', never throws.
+function fallbackLocationForMediamatic(timestamp) {
+  if (!timestamp) return 'centraal';
+  try {
+    const d = new Date(timestamp);
+    const day = d.getDay(); // 0=Sun 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri 6=Sat
+    const hour = d.getHours();
+    if (hour >= 18 && [3, 4, 5, 6].includes(day)) return 'testtafel';
+  } catch (_) {}
+  return 'centraal';
+}
+
+// Discover profit centers for the given ledger, populating the provided profitCenters object.
+// Does NOT fall back to hardcoded UUIDs — callers handle missing profit centers via forceLocation
+// or the fallbackLocationForMediamatic heuristic.
+async function discoverProfitCenters(page, ledgerId, profitCenters) {
   log('Discovering profit centers...');
 
-  // Navigate to dashboard to trigger the chart API calls
-  await page.goto(`${TEBI_BASE}/backoffice/ledgers/${LEDGER_ID}/dashboard?start=2026-03-26&end=2026-03-26`, {
+  await page.goto(`${TEBI_BASE}/backoffice/ledgers/${ledgerId}/dashboard?start=2026-03-26&end=2026-03-26`, {
     waitUntil: 'networkidle'
   });
 
-  // Fetch the dashboard config which lists all charts including profit center UUIDs
   const dashboardMain = await fetchTebiAPI(page,
-    `/api/insights/ledgers/${LEDGER_ID}/insights/dashboards/main`
+    `/api/insights/ledgers/${ledgerId}/insights/dashboards/main`
   );
 
-  // Extract profit center UUIDs from dashboard chart config
   const profitCenterCharts = [];
   if (dashboardMain && Array.isArray(dashboardMain.groups)) {
     for (const group of dashboardMain.groups) {
@@ -210,7 +224,7 @@ async function discoverProfitCenters(page) {
         for (const chart of group.charts) {
           if (chart.chartType && chart.chartType.startsWith('revenue_profit_center_')) {
             const uuid = chart.chartType.replace('revenue_profit_center_', '');
-            if (uuid !== PROFIT_CENTERS.all) {
+            if (uuid !== profitCenters.all) {
               profitCenterCharts.push({ uuid, label: chart.label || chart.title || 'unknown' });
             }
           }
@@ -219,42 +233,36 @@ async function discoverProfitCenters(page) {
     }
   }
 
-  // Map UUIDs to location names based on labels
   for (const pc of profitCenterCharts) {
     const label = (pc.label || '').toLowerCase();
     if (label.includes('west')) {
-      PROFIT_CENTERS.west = pc.uuid;
+      profitCenters.west = pc.uuid;
       log(`  Sering West = ${pc.uuid}`);
     } else if (label.includes('centraal')) {
-      PROFIT_CENTERS.centraal = pc.uuid;
+      profitCenters.centraal = pc.uuid;
       log(`  Sering Centraal = ${pc.uuid}`);
     } else if (label.includes('test')) {
-      PROFIT_CENTERS.testtafel = pc.uuid;
+      profitCenters.testtafel = pc.uuid;
       log(`  TestTafel = ${pc.uuid}`);
     } else {
       log(`  Unknown profit center: "${pc.label}" = ${pc.uuid}`);
     }
   }
 
-  // Fallback: use hardcoded UUIDs from our network inspection
-  if (!PROFIT_CENTERS.west) PROFIT_CENTERS.west = 'a904a975-6bd2-413f-8e02-dc457b87a6e3';
-  if (!PROFIT_CENTERS.centraal) PROFIT_CENTERS.centraal = '27c33042-47c1-4650-8e76-37c7bfef86dd';
-
-  return PROFIT_CENTERS;
+  return profitCenters;
 }
 
 // ── Fetch Revenue Data ──────────────────────────────────────────────────────
 
-async function fetchDayData(page, startDate, endDate) {
+async function fetchDayData(page, ledgerId, profitCenters, startDate, endDate) {
   log(`Fetching data for ${startDate} → ${endDate}...`);
 
   const results = {};
 
-  // Fetch overview charts (revenue, orders, covers, avg sale, etc.)
   for (const chartType of CHART_TYPES) {
     try {
       const data = await fetchTebiAPI(page,
-        `/api/insights/ledgers/${LEDGER_ID}/insights/data/charts/${chartType}?startDate=${startDate}&endDate=${endDate}&mock=false&limit=-1`
+        `/api/insights/ledgers/${ledgerId}/insights/data/charts/${chartType}?startDate=${startDate}&endDate=${endDate}&mock=false&limit=-1`
       );
       results[chartType] = data;
       log(`  ✓ ${chartType}`);
@@ -263,12 +271,11 @@ async function fetchDayData(page, startDate, endDate) {
     }
   }
 
-  // Fetch per-location revenue
-  for (const [name, uuid] of Object.entries(PROFIT_CENTERS)) {
+  for (const [name, uuid] of Object.entries(profitCenters)) {
     if (!uuid) continue;
     try {
       const data = await fetchTebiAPI(page,
-        `/api/insights/ledgers/${LEDGER_ID}/insights/data/charts/revenue_profit_center_${uuid}?startDate=${startDate}&endDate=${endDate}&mock=false&limit=-1`
+        `/api/insights/ledgers/${ledgerId}/insights/data/charts/revenue_profit_center_${uuid}?startDate=${startDate}&endDate=${endDate}&mock=false&limit=-1`
       );
       results[`revenue_${name}`] = data;
       log(`  ✓ revenue_${name}`);
@@ -277,10 +284,9 @@ async function fetchDayData(page, startDate, endDate) {
     }
   }
 
-  // Fetch sales invoices for the period
   try {
     const invoices = await fetchTebiAPI(page,
-      `/api/invoicing/ledgers/${LEDGER_ID}/sales/invoices?page=0&pageSize=500&startDate=${startDate}&endDate=${endDate}`
+      `/api/invoicing/ledgers/${ledgerId}/sales/invoices?page=0&pageSize=500&startDate=${startDate}&endDate=${endDate}`
     );
     results.invoices = invoices;
     log(`  ✓ invoices (${Array.isArray(invoices?.content) ? invoices.content.length : '?'} records)`);
@@ -312,9 +318,13 @@ function classifyServicePeriod(timestamp) {
 
 // ── Invoice Line-Item Parsing ────────────────────────────────────────────────
 
-// Extract product-level revenue from invoice data
-function formatProductRevenue(invoices, profitCenters) {
+// Extract product-level revenue from invoice data.
+// options.forceLocation: assign ALL invoices to this location (used for single-location accounts)
+// options.useFallback: when profit center is unrecognised, use time/day heuristic instead of 'unknown'
+function formatProductRevenue(invoices, profitCenters, options = {}) {
   if (!invoices || !Array.isArray(invoices.content)) return [];
+
+  const { forceLocation, useFallback } = options;
 
   // Build reverse map: profit center UUID → location name
   const pcToLoc = {};
@@ -326,12 +336,20 @@ function formatProductRevenue(invoices, profitCenters) {
   const agg = {};
 
   for (const invoice of invoices.content) {
-    // Determine location from profit center
-    const pcUuid = invoice.profitCenterId || invoice.profitCenter?.id || '';
-    const location = pcToLoc[pcUuid] || 'unknown';
-
-    // Determine service period from invoice timestamp
     const timestamp = invoice.createdAt || invoice.date || invoice.closedAt || '';
+
+    // Determine location: forced > profit center > heuristic > 'unknown'
+    let location;
+    if (forceLocation) {
+      location = forceLocation;
+    } else {
+      const pcUuid = invoice.profitCenterId || invoice.profitCenter?.id || '';
+      location = pcToLoc[pcUuid];
+      if (!location) {
+        location = useFallback ? fallbackLocationForMediamatic(timestamp) : 'unknown';
+      }
+    }
+
     const meal = classifyServicePeriod(timestamp);
 
     // Extract the date portion (YYYY-MM-DD)
@@ -419,11 +437,10 @@ function sumMetric(chartData, metricName) {
   return Math.round(total * 100) / 100;
 }
 
-function formatResults(results, startDate) {
+function formatResults(results, startDate, profitCenters) {
   const summary = { date: startDate, locations: {} };
 
-  // Extract revenue per location
-  for (const [name, uuid] of Object.entries(PROFIT_CENTERS)) {
+  for (const [name, uuid] of Object.entries(profitCenters)) {
     if (!uuid) continue;
     const revenueData = results[`revenue_${name}`];
     if (revenueData) {
@@ -449,6 +466,50 @@ function formatResults(results, startDate) {
   }
 
   return summary;
+}
+
+// ── Multi-account entry point ────────────────────────────────────────────────
+
+// Run a full scrape for one account. Isolated: resets auth cache, uses local
+// profitCenters object so two accounts never share state.
+// config: { email, password, ledgerId, forceLocation, useFallback, headless }
+// Returns { summary, productRows } or throws on hard failure.
+async function runForAccount(config, page, startDate, endDate) {
+  const { email, password, ledgerId, forceLocation, useFallback } = config;
+
+  // Reset auth cache so Account 2 doesn't reuse Account 1's token
+  fetchTebiAPI._authHeader = null;
+  fetchTebiAPI._cookie = null;
+
+  // Local profit centers — never leaks between account runs
+  const profitCenters = { all: '00000000-0000-0000-0000-000000000000', west: null, centraal: null, testtafel: null };
+
+  // Override env vars for the login call (login() reads from process.env)
+  const origEmail = process.env.TEBI_EMAIL;
+  const origPass  = process.env.TEBI_PASSWORD;
+  process.env.TEBI_EMAIL    = email;
+  process.env.TEBI_PASSWORD = password;
+
+  try {
+    await login(page);
+
+    await page.goto(`${TEBI_BASE}/backoffice/ledgers/${ledgerId}/dashboard`, {
+      waitUntil: 'networkidle', timeout: 30000,
+    });
+    await page.waitForTimeout(3000);
+
+    // Discover profit centers (no hardcoded fallbacks — handled by forceLocation/useFallback)
+    await discoverProfitCenters(page, ledgerId, profitCenters);
+
+    const rawData = await fetchDayData(page, ledgerId, profitCenters, startDate, endDate);
+    const summary = formatResults(rawData, startDate, profitCenters);
+    const productRows = formatProductRevenue(rawData.invoices, profitCenters, { forceLocation, useFallback });
+
+    return { summary, productRows };
+  } finally {
+    process.env.TEBI_EMAIL    = origEmail;
+    process.env.TEBI_PASSWORD = origPass;
+  }
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -486,13 +547,13 @@ async function main() {
     log('Dashboard loaded: ' + page.url());
 
     // Step 3: Discover profit centers
-    await discoverProfitCenters(page);
+    await discoverProfitCenters(page, LEDGER_ID, PROFIT_CENTERS);
 
     // Step 4: Fetch data
-    const rawData = await fetchDayData(page, startDate, endDate);
+    const rawData = await fetchDayData(page, LEDGER_ID, PROFIT_CENTERS, startDate, endDate);
 
     // Step 5: Format and output
-    const summary = formatResults(rawData, startDate);
+    const summary = formatResults(rawData, startDate, PROFIT_CENTERS);
 
     console.log('\n' + '='.repeat(60));
     console.log('TEBI DATA SUMMARY');
@@ -518,8 +579,8 @@ async function main() {
       }
     }
 
-    // Parse product-level revenue from invoices
-    const productRevenue = formatProductRevenue(rawData.invoices, PROFIT_CENTERS);
+    const forceLocation = process.env.TEBI_FORCE_LOCATION || null;
+    const productRevenue = formatProductRevenue(rawData.invoices, PROFIT_CENTERS, { forceLocation });
     summary.productRevenue = productRevenue;
 
     // Also output raw data for debugging
@@ -550,4 +611,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, login, fetchTebiAPI, fetchDayData, formatResults, formatProductRevenue, classifyServicePeriod, sumMetric, PROFIT_CENTERS, CHART_TYPES };
+module.exports = { main, runForAccount, login, fetchTebiAPI, fetchDayData, formatResults, formatProductRevenue, fallbackLocationForMediamatic, classifyServicePeriod, sumMetric, PROFIT_CENTERS, CHART_TYPES };

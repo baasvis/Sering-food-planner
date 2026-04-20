@@ -1,25 +1,25 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────────────
-// Tebi Sync Worker — runs the scraper and writes results to PostgreSQL
+// Tebi Sync Worker — runs the scraper for all configured accounts and writes
+// results to PostgreSQL.
 //
-// Called as a child process from routes/finance.js
+// Supports two Tebi accounts:
+//   Account 1 (West):             TEBI_EMAIL + TEBI_PASSWORD + TEBI_LEDGER_ID
+//                                 Set TEBI_FORCE_LOCATION=west to bypass profit
+//                                 center lookup (recommended for single-location accounts).
+//   Account 2 (TestTafel+Centraal): TEBI_EMAIL_2 + TEBI_PASSWORD_2 + TEBI_LEDGER_ID_2
+//                                 Uses profit center labels when available; falls
+//                                 back to Wed–Sat evening → testtafel, else → centraal.
+//
 // Usage: node scripts/tebi-sync-worker.js <startDate> [endDate]
 // ─────────────────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
 const { chromium } = require('playwright');
+const { runForAccount } = require('./tebi-scraper');
 
 const prisma = new PrismaClient();
-
-const TEBI_BASE = 'https://live.tebi.co';
-const LEDGER_ID = process.env.TEBI_LEDGER_ID || '723192';
-
-// Reuse scraper functions
-const {
-  login, fetchTebiAPI, fetchDayData, formatResults, formatProductRevenue,
-  PROFIT_CENTERS, CHART_TYPES,
-} = require('./tebi-scraper');
 
 function log(msg) { console.log(`[sync] ${msg}`); }
 function err(msg) { console.error(`[sync] ERROR: ${msg}`); }
@@ -67,10 +67,8 @@ async function upsertRevenue(date, location, data) {
 
 async function upsertProductRevenue(rows) {
   if (!rows || rows.length === 0) return 0;
-
   const now = new Date().toISOString();
   let count = 0;
-
   for (const row of rows) {
     if (!row.date || !row.productName) continue;
     try {
@@ -104,11 +102,69 @@ async function upsertProductRevenue(rows) {
       });
       count++;
     } catch (e) {
-      err(`  Failed to upsert product: ${row.productName}: ${e.message}`);
+      err(`  Failed to upsert product ${row.productName}: ${e.message}`);
     }
   }
-
   return count;
+}
+
+// Save results from one account run for a single date
+async function saveResults(date, summary, productRows) {
+  // 'all' row — only written by Account 1 (West) to avoid double-counting totals
+  if (summary.grossRevenue != null) {
+    await upsertRevenue(date, 'all', {
+      grossRevenue: summary.grossRevenue,
+      netRevenue: summary.netRevenue,
+      sales: summary.sales,
+      covers: summary.covers,
+      invoiceCount: summary.invoiceCount,
+    });
+  }
+
+  // Per-location rows from profit center data
+  for (const [loc, data] of Object.entries(summary.locations || {})) {
+    if (loc === 'all') continue;
+    await upsertRevenue(date, loc, {
+      grossRevenue: data.grossRevenue || 0,
+      netRevenue: data.netRevenue || 0,
+      sales: 0,
+      covers: 0,
+      invoiceCount: 0,
+    });
+  }
+
+  // Product-level rows
+  if (productRows && productRows.length > 0) {
+    const count = await upsertProductRevenue(productRows);
+    log(`  Saved ${count} product rows for ${date}`);
+  }
+}
+
+async function runAccount(accountConfig, dates) {
+  const { label } = accountConfig;
+  log(`Starting ${label}...`);
+
+  const browser = await chromium.launch({ headless: true, executablePath: chromium.executablePath() });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  try {
+    for (const date of dates) {
+      log(`[${label}] Fetching ${date}...`);
+      const apiEndDate = nextDay(date);
+      try {
+        const { summary, productRows } = await runForAccount(accountConfig, page, date, apiEndDate);
+        await saveResults(date, summary, productRows);
+        log(`[${label}] Saved ${date}`);
+      } catch (e) {
+        // Log but continue to next date — one failed day doesn't abort the whole sync
+        err(`[${label}] Failed for ${date}: ${e.message}`);
+      }
+    }
+    log(`${label} complete`);
+  } finally {
+    await browser.close();
+  }
 }
 
 async function main() {
@@ -120,73 +176,55 @@ async function main() {
     process.exit(1);
   }
 
-  log(`Syncing ${startDate} to ${endDate}`);
+  // Build list of configured accounts
+  const accounts = [];
 
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: chromium.executablePath(),
-  });
-  const context = await browser.newContext();
-  const page = await context.newPage();
-
-  try {
-    await login(page);
-
-    // Navigate to dashboard to establish context
-    await page.goto(`${TEBI_BASE}/backoffice/ledgers/${LEDGER_ID}/dashboard`, {
-      waitUntil: 'networkidle',
-      timeout: 30000,
+  if (process.env.TEBI_EMAIL && process.env.TEBI_PASSWORD) {
+    accounts.push({
+      label: 'Account 1 (West)',
+      email: process.env.TEBI_EMAIL,
+      password: process.env.TEBI_PASSWORD,
+      ledgerId: process.env.TEBI_LEDGER_ID || '723192',
+      // Force all invoices to 'west' — bypasses profit center lookup entirely
+      forceLocation: process.env.TEBI_FORCE_LOCATION || 'west',
+      useFallback: false,
     });
-    await page.waitForTimeout(3000);
-
-    // Fetch data for each date
-    const dates = dateRange(startDate, endDate);
-    for (const date of dates) {
-      log(`Fetching ${date}...`);
-      const apiEndDate = nextDay(date);
-      const rawData = await fetchDayData(page, date, apiEndDate);
-      const summary = formatResults(rawData, date);
-
-      // Upsert "all" row (totals)
-      await upsertRevenue(date, 'all', {
-        grossRevenue: summary.grossRevenue,
-        netRevenue: summary.netRevenue,
-        sales: summary.sales,
-        covers: summary.covers,
-        invoiceCount: summary.invoiceCount,
-      });
-
-      // Upsert per-location rows
-      for (const [loc, data] of Object.entries(summary.locations)) {
-        if (loc === 'all') continue;
-        await upsertRevenue(date, loc, {
-          grossRevenue: data.grossRevenue || 0,
-          netRevenue: data.netRevenue || 0,
-          sales: 0,
-          covers: 0,
-          invoiceCount: 0,
-        });
-      }
-
-      // Upsert product-level revenue from invoice line items
-      const productRows = formatProductRevenue(rawData.invoices, PROFIT_CENTERS);
-      if (productRows.length > 0) {
-        const prodCount = await upsertProductRevenue(productRows);
-        log(`  Saved ${prodCount} product revenue rows for ${date}`);
-      }
-
-      log(`  Saved ${date}`);
-    }
-
-    log('Sync complete!');
-  } catch (e) {
-    err(e.message);
-    await page.screenshot({ path: 'tebi-sync-error.png' }).catch(() => {});
-    process.exit(1);
-  } finally {
-    await browser.close();
-    await prisma.$disconnect();
   }
+
+  if (process.env.TEBI_EMAIL_2 && process.env.TEBI_PASSWORD_2) {
+    accounts.push({
+      label: 'Account 2 (TestTafel + Centraal)',
+      email: process.env.TEBI_EMAIL_2,
+      password: process.env.TEBI_PASSWORD_2,
+      ledgerId: process.env.TEBI_LEDGER_ID_2 || '',
+      // No forceLocation — use profit centers if present, heuristic if not
+      forceLocation: null,
+      useFallback: true,
+    });
+  }
+
+  if (accounts.length === 0) {
+    err('No Tebi credentials configured. Set TEBI_EMAIL + TEBI_PASSWORD (and optionally TEBI_EMAIL_2 + TEBI_PASSWORD_2).');
+    process.exit(1);
+  }
+
+  log(`Syncing ${startDate} to ${endDate} across ${accounts.length} account(s)`);
+  const dates = dateRange(startDate, endDate);
+
+  // Run accounts sequentially — avoids browser resource contention
+  for (const account of accounts) {
+    try {
+      await runAccount(account, dates);
+    } catch (e) {
+      // One account failing doesn't abort the other
+      err(`${account.label} failed entirely: ${e.message}`);
+    }
+  }
+
+  log('All accounts synced');
 }
 
-main();
+main().catch(e => {
+  err(e.message);
+  process.exit(1);
+}).finally(() => prisma.$disconnect());
