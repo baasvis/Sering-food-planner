@@ -3,13 +3,12 @@
 // Tebi Sync Worker — runs the scraper for all configured accounts and writes
 // results to PostgreSQL.
 //
-// Supports two Tebi accounts:
-//   Account 1 (West):             TEBI_EMAIL + TEBI_PASSWORD + TEBI_LEDGER_ID
-//                                 Set TEBI_FORCE_LOCATION=west to bypass profit
-//                                 center lookup (recommended for single-location accounts).
-//   Account 2 (TestTafel+Centraal): TEBI_EMAIL_2 + TEBI_PASSWORD_2 + TEBI_LEDGER_ID_2
-//                                 Uses profit center labels when available; falls
-//                                 back to Wed–Sat evening → testtafel, else → centraal.
+// One Tebi account can access multiple ledgers. Ledger 1 is always scraped;
+// set TEBI_LEDGER_ID_2 to also scrape a second ledger (e.g. TestTafel + Centraal).
+//   Required: TEBI_EMAIL + TEBI_PASSWORD
+//   Ledger 1: TEBI_LEDGER_ID (default 723192 = De_Sering/West)
+//   Ledger 2: TEBI_LEDGER_ID_2 (e.g. 724466 = TestTafel + Centraal, optional)
+//   Optional: TEBI_FORCE_LOCATION=west to bypass profit center lookup on Ledger 1
 //
 // Usage: node scripts/tebi-sync-worker.js <startDate> [endDate]
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,28 +175,30 @@ async function main() {
     process.exit(1);
   }
 
-  // Build list of configured accounts
+  // Build list of ledgers to scrape — same credentials, different ledger IDs
   const accounts = [];
 
   if (process.env.TEBI_EMAIL && process.env.TEBI_PASSWORD) {
+    const email = process.env.TEBI_EMAIL;
+    const password = process.env.TEBI_PASSWORD;
+
     accounts.push({
-      label: 'Account 1 (West)',
-      email: process.env.TEBI_EMAIL,
-      password: process.env.TEBI_PASSWORD,
+      label: 'Ledger 1 (De_Sering/West)',
+      email,
+      password,
       ledgerId: process.env.TEBI_LEDGER_ID || '723192',
-      // Optional: set TEBI_FORCE_LOCATION=west to skip profit center lookup
       forceLocation: process.env.TEBI_FORCE_LOCATION || null,
     });
-  }
 
-  if (process.env.TEBI_EMAIL_2 && process.env.TEBI_PASSWORD_2) {
-    accounts.push({
-      label: 'Account 2 (TestTafel + Centraal)',
-      email: process.env.TEBI_EMAIL_2,
-      password: process.env.TEBI_PASSWORD_2,
-      ledgerId: process.env.TEBI_LEDGER_ID_2 || '',
-      forceLocation: null,
-    });
+    if (process.env.TEBI_LEDGER_ID_2) {
+      accounts.push({
+        label: 'Ledger 2 (TestTafel + Centraal)',
+        email,
+        password,
+        ledgerId: process.env.TEBI_LEDGER_ID_2,
+        forceLocation: null,
+      });
+    }
   }
 
   if (accounts.length === 0) {

@@ -88,10 +88,8 @@ router.post('/sync', (req: Request, res: Response) => {
     return res.status(409).json({ error: 'Sync already in progress' });
   }
 
-  const account1Ok = !!(process.env.TEBI_EMAIL && process.env.TEBI_PASSWORD);
-  const account2Ok = !!(process.env.TEBI_EMAIL_2 && process.env.TEBI_PASSWORD_2);
-  if (!account1Ok && !account2Ok) {
-    return res.status(500).json({ error: 'No Tebi credentials configured (set TEBI_EMAIL or TEBI_EMAIL_2)' });
+  if (!process.env.TEBI_EMAIL || !process.env.TEBI_PASSWORD) {
+    return res.status(500).json({ error: 'TEBI_EMAIL and TEBI_PASSWORD not configured' });
   }
 
   const { startDate, endDate } = req.body;
@@ -163,7 +161,7 @@ router.get('/sync-status', (_req: Request, res: Response) => {
     syncing: !!syncProcess,
     lastSyncAt,
     lastSyncError,
-    tebiConfigured: !!(process.env.TEBI_EMAIL && process.env.TEBI_PASSWORD) || !!(process.env.TEBI_EMAIL_2 && process.env.TEBI_PASSWORD_2),
+    tebiConfigured: !!(process.env.TEBI_EMAIL && process.env.TEBI_PASSWORD),
   });
 });
 
