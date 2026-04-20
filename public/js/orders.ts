@@ -898,17 +898,13 @@ export function renderCombinedOrderTab() {
     });
   }
 
-  // Add standard inventory items — use target (not deficit) so the combined order's
-  // own stock subtraction (toOrderBase = totalGrams - effectiveStockBase) runs once,
-  // not twice. Passing deficit here caused stock to be subtracted twice:
-  // once in deficit = target - stock, and again in toOrderBase = totalGrams - stock.
-  // Still skip fully-stocked items (currentStock >= target) to keep the list clean.
+  // Add standard inventory items — ingredients with targetStock for current location
   getStandardInventoryItems(curLoc).forEach(ing => {
     const target = ing.targetStock[curLoc] || 0;
-    if (target <= 0) return;
     const currentStock = (ing.stock && ing.stock[curLoc]) ? (ing.stock[curLoc].amount || 0) : 0;
-    if (currentStock >= target) return;
-    addToMap(ing.name, target, true, null);
+    const deficit = Math.max(0, target - currentStock);
+    if (deficit <= 0) return;
+    addToMap(ing.name, deficit, true, null);
   });
 
   if (!Object.keys(combined).length) {
@@ -1629,10 +1625,10 @@ export function buildCombinedOrderData() {
 
   getStandardInventoryItems(curLoc).forEach(ing => {
     const target = ing.targetStock[curLoc] || 0;
-    if (target <= 0) return;
     const currentStock = (ing.stock && ing.stock[curLoc]) ? (ing.stock[curLoc].amount || 0) : 0;
-    if (currentStock >= target) return;
-    addToMap(ing.name, target, true, null);
+    const deficit = Math.max(0, target - currentStock);
+    if (deficit <= 0) return;
+    addToMap(ing.name, deficit, true, null);
   });
 
   return Object.values(combined).map(ing => {
