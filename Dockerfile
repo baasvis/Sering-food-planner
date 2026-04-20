@@ -3,6 +3,7 @@ FROM node:20-bookworm-slim
 WORKDIR /app
 
 COPY package*.json ./
+COPY prisma ./prisma
 
 # Install Chromium and all its system library dependencies via apt (not Nix).
 # playwright install --with-deps downloads the browser binary AND runs
