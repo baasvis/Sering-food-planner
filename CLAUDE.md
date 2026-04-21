@@ -162,6 +162,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - `test/setup-env.ts` enforces this: if `DATABASE_URL_TEST` is set it overrides `DATABASE_URL`; if `DATABASE_URL` points at a known production host and `DATABASE_URL_TEST` is not set, jest refuses to start.
 - Point `DATABASE_URL_TEST` at a scratch local Postgres, or at staging (`shuttle.proxy.rlwy.net:52350`). Tests use `test-<timestamp>-` prefixed IDs so they can share a DB with other data, but the DB must not be production.
 - To add a new prod host fragment to the guard, edit `PROD_HOST_FRAGMENTS` in `test/setup-env.ts`.
+- Frontend state modules (e.g. `public/js/state.ts`) can be unit-tested without a DB by importing them directly. The jest config has a `moduleNameMapper` for `@shared/types` so the Vite alias resolves in Node. Mock `localStorage` in the test file (`Object.defineProperty(global, 'localStorage', ...)`) since Jest runs in Node without browser globals.
 
 ## Don't
 - Don't change the Prisma schema without creating a migration (`npx prisma migrate dev`)
