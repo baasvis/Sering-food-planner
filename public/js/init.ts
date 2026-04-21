@@ -1,4 +1,4 @@
-import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories } from './state';
+import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories, restoreGlobalLocation } from './state';
 import type { Location } from '@shared/types';
 import { loadData, connectLiveSync, saveState } from './utils';
 import { flushUndo } from './undo';
@@ -164,6 +164,7 @@ export async function initApp() {
 
 // On page load: build nav, then check for existing session or show login
 export async function bootstrap() {
+  restoreGlobalLocation(); // must run before buildNav so the label renders the saved location
   buildNav();
 
   const hasSession = await checkSession();
