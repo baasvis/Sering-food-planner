@@ -156,11 +156,24 @@ export function getDbStockTotal(db: IngredientRuntime | null | undefined) {
   return total;
 }
 
+/** Stock for one specific location — use this in order/SI views so we don't mix locations */
+export function getDbStockForLoc(db: IngredientRuntime | null | undefined, loc: string): number {
+  if (!db || !db.stock) return 0;
+  const entry = (db.stock as Record<string, { amount: number }>)[loc];
+  return entry ? (entry.amount || 0) : 0;
+}
+
 /** Check if stock has been explicitly counted (even if amount is 0) */
 export function hasDbStockEntry(db: IngredientRuntime | null | undefined) {
   if (!db || !db.stock) return false;
   // Stock entries have a `date` field when explicitly counted via stocktake
   return !!(db.stock.west?.date || db.stock.centraal?.date);
+}
+
+/** Whether stock for a specific location has been explicitly counted */
+export function hasDbStockEntryForLoc(db: IngredientRuntime | null | undefined, loc: string): boolean {
+  if (!db || !db.stock) return false;
+  return !!(db.stock as Record<string, { date?: string }>)[loc]?.date;
 }
 
 export function formatStorageLoc(s: StorageLocValue | null | undefined) {
@@ -801,8 +814,8 @@ export function renderBatchIngredientTable() {
         ? `<span class="order-amt">${neededCalc.units}x</span> <span class="order-units">${unitSuffix}</span>`
         : (() => { const f = formatAmount(amtNeededBase, db ? db.unit : 'g'); return `<span class="order-amt">${f.amount}</span> <span class="order-units">${f.unit}</span>`; })();
 
-      const dbStock = getDbStockTotal(db);
-      const dbStockExists = hasDbStockEntry(db);
+      const dbStock = getDbStockForLoc(db, curLoc);
+      const dbStockExists = hasDbStockEntryForLoc(db, curLoc);
       const hasManualStock = orderInventory[key] !== undefined;
       const stockDisplayVal = hasManualStock ? orderInventory[key] : (dbStockExists ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
       const stockLabel = (!hasManualStock && dbStockExists) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
@@ -937,12 +950,12 @@ export function renderCombinedOrderTab() {
   let totalValue = 0;
   ingList.forEach(ing => {
     if (!ing.db || !ing.db.orderPrice) return;
-    const dbStock = getDbStockTotal(ing.db);
+    const dbStock = getDbStockForLoc(ing.db, curLoc);
     const key = ing.name.toLowerCase().trim();
     const hasManual = combinedOrderStock[key] !== undefined;
     const effectiveStock = hasManual ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
     const toOrderGrams = Math.max(0, ing.totalGrams - effectiveStock);
-    const orderAmtGrams = (hasManual || hasDbStockEntry(ing.db)) ? toOrderGrams : ing.totalGrams;
+    const orderAmtGrams = (hasManual || hasDbStockEntryForLoc(ing.db, curLoc)) ? toOrderGrams : ing.totalGrams;
     const calc = calcOrderUnits(orderAmtGrams, ing.db);
     if (calc && calc.units > 0) totalValue += calc.units * ing.db.orderPrice;
   });
@@ -1040,8 +1053,8 @@ export function renderCombinedOrderTab() {
       const breakdownHtml = parts.length ? `<div class="breakdown-detail" style="display:none;font-size:11px;margin-top:2px;">${parts.join(' + ')}</div>` : '';
 
       // Stock in order units
-      const dbStock = getDbStockTotal(db);
-      const dbStockExists = hasDbStockEntry(db);
+      const dbStock = getDbStockForLoc(db, curLoc);
+      const dbStockExists = hasDbStockEntryForLoc(db, curLoc);
       const hasManualStock = combinedOrderStock[key] !== undefined;
       const stockDisplayVal = hasManualStock ? combinedOrderStock[key] : (dbStockExists ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
       const stockLabel = (!hasManualStock && dbStockExists) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
@@ -1207,12 +1220,12 @@ export function collectHanosItems(storageCat: string | null | undefined): HanosI
 
     // Calculate order units for this row — stock values are in order units, convert to base
     const neededBase = parseFloat(row.dataset.needed) || 0;
-    const dbStock = getDbStockTotal(db);
+    const dbStock = getDbStockForLoc(db, S.currentLoc);
     const hasManual = combinedOrderStock[key] !== undefined;
     const effectiveStockBase = hasManual
       ? (db.orderUnitSize > 0 ? (parseFloat(combinedOrderStock[key]) || 0) * db.orderUnitSize : (parseFloat(combinedOrderStock[key]) || 0))
       : dbStock;
-    const hasStockValue = hasManual || hasDbStockEntry(db);
+    const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
     const calc = calcOrderUnits(toOrderBase, db);
     if (!calc || calc.units <= 0) return;
@@ -1241,13 +1254,13 @@ export async function hanosAddSingle(orderCode: string | undefined, name: string
   let quantity = 1;
   if (row) {
     const neededBase = parseFloat(row.dataset.needed) || 0;
-    const dbStock = getDbStockTotal(db);
+    const dbStock = getDbStockForLoc(db, S.currentLoc);
     const stockObj = row.dataset.combinedKey ? combinedOrderStock : orderInventory;
     const hasManual = stockObj[key] !== undefined;
     const effectiveStockBase = hasManual
       ? (db.orderUnitSize > 0 ? (parseFloat(stockObj[key]) || 0) * db.orderUnitSize : (parseFloat(stockObj[key]) || 0))
       : dbStock;
-    const hasStockValue = hasManual || hasDbStockEntry(db);
+    const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
     const calc = calcOrderUnits(toOrderBase, db);
     if (calc && calc.units > 0) quantity = calc.units;
@@ -1301,12 +1314,12 @@ export function collectHanosBatchItems(storageCat: string | null | undefined): H
     if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
 
     const neededBase = parseFloat(row.dataset.needed) || 0;
-    const dbStock = getDbStockTotal(db);
+    const dbStock = getDbStockForLoc(db, S.currentLoc);
     const hasManual = orderInventory[key] !== undefined;
     const effectiveStockBase = hasManual
       ? (db.orderUnitSize > 0 ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
       : dbStock;
-    const hasStockValue = hasManual || hasDbStockEntry(db);
+    const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
     const calc = calcOrderUnits(toOrderBase, db);
     if (!calc || calc.units <= 0) return;
