@@ -210,13 +210,20 @@ async function main() {
   const dates = dateRange(startDate, endDate);
 
   // Run accounts sequentially — avoids browser resource contention
+  let anySuccess = false;
   for (const account of accounts) {
     try {
       await runAccount(account, dates);
+      anySuccess = true;
     } catch (e) {
       // One account failing doesn't abort the other
       err(`${account.label} failed entirely: ${e.message}`);
     }
+  }
+
+  if (!anySuccess) {
+    err('All accounts failed — no revenue data was synced');
+    process.exit(1);
   }
 
   log('All accounts synced');

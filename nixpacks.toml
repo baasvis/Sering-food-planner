@@ -1,0 +1,27 @@
+# Playwright's bundled Chromium needs these system libraries at runtime.
+# They must be installed here (setup phase, runs as root before npm install)
+# because the postinstall `playwright install --with-deps` runs without root
+# in Nixpacks and its apt-get invocation silently fails there.
+# Do NOT override [phases.build] — let npm install trigger the postinstall
+# which downloads the Chromium binary into node_modules.
+
+[phases.setup]
+aptPkgs = [
+  "libglib2.0-0",
+  "libnss3",
+  "libnspr4",
+  "libatk1.0-0",
+  "libatk-bridge2.0-0",
+  "libcups2",
+  "libdrm2",
+  "libxkbcommon0",
+  "libxcomposite1",
+  "libxdamage1",
+  "libxfixes3",
+  "libxrandr2",
+  "libgbm1",
+  "libasound2",
+  "libpango-1.0-0",
+  "libcairo2",
+  "libatspi2.0-0",
+]
