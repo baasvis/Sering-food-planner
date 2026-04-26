@@ -365,8 +365,10 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
       }
     }
 
-    // Note row
-    const hasNote = d.note !== undefined && d.note !== '';
+    // Note row. The note may be the empty string after the user clicks
+    // "+ Add note" but before they type — we still need to render the input
+    // in that state, otherwise the click feels like a no-op.
+    const hasNote = d.note !== undefined;
     const noteHtml = hasNote
       ? `<div class="bx-row bx-note"><input class="bx-note-input" value="${esc(d.note || '')}" placeholder="Add a note..." onchange="inlineEdit('${d.id}','note',this.value)" onclick="event.stopPropagation()" /></div>`
       : `<div class="bx-row bx-note bx-note-empty"><button class="bx-add-note" onclick="event.stopPropagation();showNoteInput('${d.id}')">+ Add note</button></div>`;
