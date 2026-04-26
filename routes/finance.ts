@@ -3,30 +3,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import express, { Request, Response } from 'express';
-import { spawn, ChildProcess } from 'child_process';
-import path from 'path';
 import { prisma } from '../lib/db';
 import { asyncHandler } from '../lib/config';
+import { runTebiSync, cancelSync, getStatus, isSyncing } from '../lib/tebi-sync';
 import type { Prisma } from '@prisma/client';
 
 const router = express.Router();
-
-// In-memory sync state
-let syncProcess: ChildProcess | null = null;
-let syncTimeout: ReturnType<typeof setTimeout> | null = null;
-let syncOutput = '';
-let lastSyncAt: string | null = null;
-let lastSyncError: string | null = null;
-
-function killSync(reason: string) {
-  if (syncTimeout) { clearTimeout(syncTimeout); syncTimeout = null; }
-  if (syncProcess) {
-    console.log(`[finance] Killing sync: ${reason}`);
-    lastSyncError = reason + (syncOutput ? '. Output: ' + syncOutput.slice(-300) : '');
-    try { syncProcess.kill('SIGKILL'); } catch (_e) { /* already dead */ }
-    syncProcess = null;
-  }
-}
 
 router.get('/revenue', asyncHandler(async (req: Request, res: Response) => {
   const { start, end } = req.query;
@@ -84,12 +66,8 @@ router.get('/products', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 router.post('/sync', (req: Request, res: Response) => {
-  if (syncProcess) {
+  if (isSyncing()) {
     return res.status(409).json({ error: 'Sync already in progress' });
-  }
-
-  if (!process.env.TEBI_EMAIL || !process.env.TEBI_PASSWORD) {
-    return res.status(500).json({ error: 'TEBI_EMAIL and TEBI_PASSWORD not configured' });
   }
 
   const { startDate, endDate } = req.body;
@@ -101,68 +79,25 @@ router.post('/sync', (req: Request, res: Response) => {
   const start = startDate || defaultDate;
   const end = endDate || start;
 
-  // Scripts/ lives at project root in both dev and production. __dirname
-  // resolves differently in dev (tsx) vs production (dist/server/routes/),
-  // so process.cwd() is the only reliable anchor — Railway always starts
-  // `node dist/server/server.js` from the project root.
-  const workerPath = path.join(process.cwd(), 'scripts', 'tebi-sync-worker.js');
-  const args = [workerPath, start, end];
-
-  console.log(`[finance] Starting sync: ${start} → ${end}`);
-  lastSyncError = null;
-  syncOutput = '';
-
-  syncProcess = spawn('node', args, {
-    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: '0' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  syncProcess.stdout!.on('data', (data: Buffer) => {
-    syncOutput += data.toString();
-    data.toString().trim().split('\n').forEach((line: string) => {
-      if (line) console.log(`[finance] ${line}`);
-    });
-  });
-
-  syncProcess.stderr!.on('data', (data: Buffer) => {
-    syncOutput += data.toString();
-    console.error(`[finance] ${data.toString().trim()}`);
-  });
-
-  syncProcess.on('close', (code: number | null) => {
-    console.log(`[finance] Sync finished with code ${code}`);
-    if (syncTimeout) { clearTimeout(syncTimeout); syncTimeout = null; }
-    if (code === 0) {
-      lastSyncAt = new Date().toISOString();
-      lastSyncError = null;
-    } else if (!lastSyncError) {
-      lastSyncError = `Sync failed (exit code ${code}). ${syncOutput.slice(-500)}`;
-    }
-    syncProcess = null;
-  });
-
-  syncProcess.on('error', (err: Error) => {
-    console.error(`[finance] Sync process error: ${err.message}`);
-    killSync('Sync process error: ' + err.message);
-  });
-
-  syncTimeout = setTimeout(() => killSync('Sync timed out after 2 minutes'), 2 * 60 * 1000);
+  const result = runTebiSync({ start, end, source: 'manual' });
+  if (!result.ok) {
+    // Propagate the refusal reason. The shared helper rejects up front for
+    // missing credentials or an in-flight sync; treat the latter as a 409,
+    // everything else as 500 so the user can tell them apart.
+    const status = result.error === 'Sync already in progress' ? 409 : 500;
+    return res.status(status).json({ error: result.error });
+  }
 
   res.json({ status: 'syncing', startDate: start, endDate: end });
 });
 
 router.post('/sync-cancel', (_req: Request, res: Response) => {
-  killSync('Sync cancelled by user');
-  res.json({ status: 'cancelled' });
+  const cancelled = cancelSync('Sync cancelled by user');
+  res.json({ status: cancelled ? 'cancelled' : 'not-running' });
 });
 
-router.get('/sync-status', (_req: Request, res: Response) => {
-  res.json({
-    syncing: !!syncProcess,
-    lastSyncAt,
-    lastSyncError,
-    tebiConfigured: !!(process.env.TEBI_EMAIL && process.env.TEBI_PASSWORD),
-  });
-});
+router.get('/sync-status', asyncHandler(async (_req: Request, res: Response) => {
+  res.json(await getStatus());
+}));
 
 export default router;

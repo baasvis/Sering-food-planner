@@ -684,6 +684,43 @@ describe('Finance Products API', () => {
   });
 });
 
+// ── Finance Sync Status ──
+//
+// The sync helper used to expose only in-memory state. After 31 days of
+// silent breakage (only 8 DailyRevenue rows in prod, all from 2026-03-26),
+// /sync-status now hydrates from telemetry events so a recent failure is
+// visible after server restart and surfaces in AI insights.
+describe('Finance Sync Status', () => {
+  it('GET /api/finance/sync-status — returns expected shape', async () => {
+    const res = await request(app).get('/api/finance/sync-status');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('syncing');
+    expect(res.body).toHaveProperty('lastSyncAt');
+    expect(res.body).toHaveProperty('lastSyncError');
+    expect(res.body).toHaveProperty('lastSyncErrorDetails');
+    expect(res.body).toHaveProperty('tebiConfigured');
+    expect(typeof res.body.syncing).toBe('boolean');
+  });
+
+  it('POST /api/finance/sync — refuses when TEBI credentials are missing', async () => {
+    // Tests run without TEBI_EMAIL/TEBI_PASSWORD set, so the helper must
+    // refuse with a 500 + clear error message rather than spawning a worker
+    // that would crash on auth.
+    const prevEmail = process.env.TEBI_EMAIL;
+    const prevPass = process.env.TEBI_PASSWORD;
+    delete process.env.TEBI_EMAIL;
+    delete process.env.TEBI_PASSWORD;
+    try {
+      const res = await request(app).post('/api/finance/sync').send({ startDate: '2020-01-01', endDate: '2020-01-01' });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/TEBI_EMAIL/);
+    } finally {
+      if (prevEmail !== undefined) process.env.TEBI_EMAIL = prevEmail;
+      if (prevPass !== undefined) process.env.TEBI_PASSWORD = prevPass;
+    }
+  });
+});
+
 // ── Data Patch ──
 
 describe('Data Patch API', () => {
