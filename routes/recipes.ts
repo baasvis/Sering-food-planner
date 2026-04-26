@@ -202,7 +202,7 @@ router.post('/recipes', asyncHandler(async (req: Request, res: Response) => {
   const recipe = await withWriteLock(async () => {
     return prisma.recipe.create({
       data: {
-        id: body.id,
+        id: body.id || crypto.randomUUID(),
         name: body.name,
         type: body.type || 'Soup',
         structure: body.structure || '',
@@ -224,7 +224,7 @@ router.post('/recipes', asyncHandler(async (req: Request, res: Response) => {
         legacySheetId: body.legacySheetId || null,
         ingredients: {
           create: ingredients.map((ing, i) => ({
-            id: ing.id,
+            id: ing.id || crypto.randomUUID(),
             ingredientId: ing.ingredientId || null,
             sortOrder: ing.sortOrder ?? i,
             rawAmount: ing.rawAmount,

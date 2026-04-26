@@ -852,6 +852,40 @@ describe('Recipe v2 CRUD', () => {
     expect(res.status).toBe(404);
   });
 
+  it('POST /api/recipes — generates id when frontend omits it (regression: triage-2026-04-26 B1)', async () => {
+    // The frontend recipe editor does not send an `id` in the create payload.
+    // Recipe.id has no @default in the Prisma schema, so the server must
+    // generate one — otherwise Prisma rejects the create and the recipe is
+    // silently lost (production incident 2026-04-20: "pupkin veggie stew").
+    const res = await request(app)
+      .post('/api/recipes')
+      .send({
+        name: 'Triage No-Id Recipe ' + T,
+        type: 'Soup',
+        servingSize: 280,
+        recipeVolume: 5,
+        ingredients: [
+          { ingredientId: null, sortOrder: 0, rawAmount: 100, unit: 'Grams', isFlexible: true, flexCategory: 'Vegetables & Fruit', flexLabel: 'Any vegetables', suggestedNames: [] },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(typeof res.body.id).toBe('string');
+    expect(res.body.id.length).toBeGreaterThan(0);
+    expect(res.body.ingredients).toHaveLength(1);
+    expect(typeof res.body.ingredients[0].id).toBe('string');
+    expect(res.body.ingredients[0].id.length).toBeGreaterThan(0);
+    // Clean up — this row was created without a T-prefixed id, so it would
+    // not be cleaned by the suite's afterAll.
+    const { PrismaClient } = require('@prisma/client');
+    const p = new PrismaClient();
+    try {
+      await p.recipeIngredientRow.deleteMany({ where: { recipeId: res.body.id } });
+      await p.recipe.delete({ where: { id: res.body.id } });
+    } finally {
+      await p.$disconnect();
+    }
+  });
+
   it('POST /api/recipes — 400 for invalid data', async () => {
     const res = await request(app).post('/api/recipes').send({ id: T + 'bad', name: '' });
     expect(res.status).toBe(400);
