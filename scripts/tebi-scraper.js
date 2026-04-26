@@ -93,9 +93,15 @@ async function login(page) {
   const emailInput = await page.getByLabel('Email address').waitFor({ timeout: 10000 }).then(() => page.getByLabel('Email address')).catch(() => null);
 
   if (!emailInput) {
-    const content = await page.textContent('body');
-    if (content.includes('Sign out') || content.includes('Dashboard')) {
-      log('Already logged in');
+    const content = await page.textContent('body').catch(() => '') || '';
+    // Around 2026-03-26 Tebi added a "Select location" intermediate page
+    // between login and the ledger dashboard. When the session is still
+    // valid, opening /backoffice/login lands on this picker instead of
+    // showing the email/password form. Treat its body markers as
+    // already-logged-in; the caller navigates to the ledger URL next,
+    // which bypasses the picker.
+    if (content.includes('Sign out') || content.includes('Dashboard') || content.includes('Select location')) {
+      log('Already logged in (Sign out / Dashboard / Select location detected)');
       return true;
     }
     throw new Error('Could not find login form. Page content: ' + content.substring(0, 200));
@@ -120,11 +126,19 @@ async function login(page) {
     throw new Error(`Login failed: ${errorMsg.trim()}`);
   }
 
-  // Check if we're past the login page
+  // Check if we're past the login page. Vue SPA may keep the /login URL
+  // briefly even after a successful submit, and Tebi's new flow lands on
+  // a "Select location" page after login (URL may still read /login).
+  // Trust body markers as well as the URL.
   const currentUrl = page.url();
-  const bodyText = await page.textContent('body').catch(() => '');
-  if (currentUrl.includes('/login') && !bodyText.includes('Daan') && !bodyText.includes('Sign out')) {
-    throw new Error('Login did not succeed. URL: ' + currentUrl);
+  const bodyText = (await page.textContent('body').catch(() => '')) || '';
+  const passedLogin =
+    !currentUrl.includes('/login')
+    || bodyText.includes('Sign out')
+    || bodyText.includes('Dashboard')
+    || bodyText.includes('Select location');
+  if (!passedLogin) {
+    throw new Error('Login did not succeed. URL: ' + currentUrl + '. Body excerpt: ' + bodyText.slice(0, 200));
   }
 
   log('Login successful!');
