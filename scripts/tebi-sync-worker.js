@@ -107,8 +107,12 @@ async function upsertProductRevenue(rows) {
   return count;
 }
 
-// Save results from one account run for a single date
+// Save results from one account run for a single date.
+// Returns the number of rows actually written so the caller can detect a
+// "completed but did nothing" run.
 async function saveResults(date, summary, productRows) {
+  let written = 0;
+
   // 'all' row — only written by Account 1 (West) to avoid double-counting totals
   if (summary.grossRevenue != null) {
     await upsertRevenue(date, 'all', {
@@ -118,6 +122,7 @@ async function saveResults(date, summary, productRows) {
       covers: summary.covers,
       invoiceCount: summary.invoiceCount,
     });
+    written++;
   }
 
   // Per-location rows from profit center data
@@ -130,40 +135,58 @@ async function saveResults(date, summary, productRows) {
       covers: 0,
       invoiceCount: 0,
     });
+    written++;
   }
 
   // Product-level rows
   if (productRows && productRows.length > 0) {
     const count = await upsertProductRevenue(productRows);
     log(`  Saved ${count} product rows for ${date}`);
+    written += count;
   }
+
+  return written;
 }
 
 async function runAccount(accountConfig, dates) {
   const { label } = accountConfig;
   log(`Starting ${label}...`);
 
-  const browser = await chromium.launch({ headless: true, executablePath: chromium.executablePath() });
+  // chromium.launch() failures (missing browser binary on Railway, missing
+  // system libraries) used to throw out of runAccount and get swallowed by
+  // main()'s try/catch — letting the worker exit 0 with no rows written.
+  // Surface them clearly in stderr so the parent helper's stderrTail
+  // captures the real cause.
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true, executablePath: chromium.executablePath() });
+  } catch (e) {
+    err(`[${label}] chromium.launch failed: ${e.message}`);
+    throw e;
+  }
   const context = await browser.newContext();
   const page = await context.newPage();
 
+  let rowsWritten = 0;
   try {
     for (const date of dates) {
       log(`[${label}] Fetching ${date}...`);
       const apiEndDate = nextDay(date);
       try {
         const { summary, productRows } = await runForAccount(accountConfig, page, date, apiEndDate);
-        await saveResults(date, summary, productRows);
-        log(`[${label}] Saved ${date}`);
+        const wrote = await saveResults(date, summary, productRows);
+        rowsWritten += wrote;
+        log(`[${label}] Saved ${date} (${wrote} rows)`);
       } catch (e) {
         // Log but continue to next date — one failed day doesn't abort the whole sync
         err(`[${label}] Failed for ${date}: ${e.message}`);
       }
     }
-    log(`${label} complete`);
+    log(`${label} complete (${rowsWritten} rows written)`);
   } finally {
     await browser.close();
   }
+  return rowsWritten;
 }
 
 async function main() {
@@ -209,17 +232,37 @@ async function main() {
   log(`Syncing ${startDate} to ${endDate} across ${accounts.length} account(s)`);
   const dates = dateRange(startDate, endDate);
 
+  let totalRowsWritten = 0;
+  let failedAccounts = 0;
+
   // Run accounts sequentially — avoids browser resource contention
   for (const account of accounts) {
     try {
-      await runAccount(account, dates);
+      totalRowsWritten += await runAccount(account, dates);
     } catch (e) {
-      // One account failing doesn't abort the other
-      err(`${account.label} failed entirely: ${e.message}`);
+      // One account failing doesn't abort the other, but record it so we can
+      // exit non-zero if every account died.
+      failedAccounts++;
+      err(`${account.label} failed entirely: ${e.message}\n${e.stack || ''}`);
     }
   }
 
-  log('All accounts synced');
+  log(`All accounts synced (${totalRowsWritten} rows written across ${accounts.length} account(s), ${failedAccounts} failed)`);
+
+  // The worker used to exit 0 even when zero rows had been written, because
+  // every per-date and per-account failure was caught and logged. That made
+  // observability lie: routes/finance.ts saw exit code 0, emitted a
+  // `finance_sync_complete` event, and the actual breakage stayed silent for
+  // 31 days. If the run accomplished nothing, exit non-zero so the parent
+  // helper's stderrTail captures the cause.
+  if (totalRowsWritten === 0) {
+    err('No rows were written for any account/date — treating as failure.');
+    process.exit(1);
+  }
+  if (failedAccounts === accounts.length) {
+    err('Every account failed — treating as failure.');
+    process.exit(1);
+  }
 }
 
 main().catch(e => {
