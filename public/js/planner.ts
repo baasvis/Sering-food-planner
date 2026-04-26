@@ -1,5 +1,5 @@
 import type { Batch, RecipeEntry, DishType, Location, Meal, Service } from '@shared/types';
-import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
+import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError } from './utils';
 import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate } from './core';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
@@ -1005,7 +1005,7 @@ export function openInventory(loc: string) {
     return `<div class="inv-row" id="inv-row-${d.id}">
       <div class="inv-name">
         <span style="font-weight:500;">${esc(d.name)}</span>
-        ${storageBadge(d.storage || 'Gastro')}
+        <span class="${storageBadgeClass(d.storage || 'Gastro')}" style="cursor:pointer;" onclick="cycleInventoryStorage('${d.id}','${loc}')" title="Click to change storage">${d.storage || 'Gastro'}</span>
         <span class="${cls}" style="font-size:11px;">${str}</span>
       </div>
       <div class="inv-controls">
@@ -1055,6 +1055,21 @@ export function updateInventoryStock(id: string, value: string) {
   if (!d) return;
   d.stock = parseFloat(value) || 0;
   scheduleSave();
+}
+
+export function cycleInventoryStorage(id: string, loc: string) {
+  // Cycle the storage state (Gastro → Frozen → Vac-packed → ...) for a batch
+  // shown in the dashboard "Cooked Food Inventory" modal, then re-render the
+  // modal so the new label is visible without forcing the user to close and
+  // reopen it. This is the discoverable path for moving stale stock to the
+  // freezer.
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  const idx = STORAGE.indexOf(d.storage || 'Gastro');
+  d.storage = STORAGE[(idx + 1) % STORAGE.length];
+  scheduleSave();
+  // Reopen the modal to refresh the rendered list (cheaper than diffing the DOM).
+  openInventory(loc);
 }
 
 export function openServedFromInventory(id: string, loc: string) {
