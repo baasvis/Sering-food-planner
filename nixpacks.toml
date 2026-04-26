@@ -1,0 +1,38 @@
+# Railway / Nixpacks build configuration.
+#
+# Why this file exists:
+#   The Tebi finance sync runs Playwright Chromium in a child process
+#   (scripts/tebi-sync-worker.js). Around 2026-03-26 the production sync
+#   started silently failing — Chromium was on disk but exited 127 with
+#   "error while loading shared libraries: libglib-2.0.so.0: cannot open
+#   shared object file". `npx playwright install --with-deps chromium` in
+#   the postinstall script installs the apt packages during the build
+#   phase, but Nixpacks does not persist apt-installed packages into the
+#   runtime container layer unless they are listed here.
+#
+#   List sourced from Playwright's official "deps" command output for
+#   Debian/Ubuntu Chromium (stable subset; covers libglib + every other
+#   shared lib Chromium 1217 dlopens at startup). If a future Playwright
+#   bump adds another required lib, the same kind of stderr capture that
+#   surfaced this issue (lib/tebi-sync.ts → telemetry) will surface the
+#   new one.
+
+[phases.setup]
+aptPkgs = [
+  "libglib2.0-0",
+  "libnss3",
+  "libnspr4",
+  "libatk1.0-0",
+  "libatk-bridge2.0-0",
+  "libcups2",
+  "libdrm2",
+  "libxkbcommon0",
+  "libxcomposite1",
+  "libxdamage1",
+  "libxfixes3",
+  "libxrandr2",
+  "libgbm1",
+  "libpango-1.0-0",
+  "libcairo2",
+  "libasound2",
+]
