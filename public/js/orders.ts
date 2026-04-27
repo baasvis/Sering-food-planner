@@ -104,6 +104,15 @@ export function toBaseUnit(amount: number, unit: string) {
   return amount;
 }
 
+// Mirror of toBaseUnit on the unit string side: returns the base-unit name so
+// callers can normalize accumulators and avoid double-converting later.
+export function baseUnitOf(unit: string): string {
+  const u = (unit || '').toLowerCase().replace(/'/g, '');
+  if (u === 'kilos' || u === 'kilo' || u === 'kg' || u === 'grams' || u === 'gram' || u === 'g') return 'g';
+  if (u === 'liters' || u === 'liter' || u === 'litres' || u === 'l' || u === 'ml') return 'ml';
+  return unit || 'g';
+}
+
 export function normalizeSupplier(s: string) {
   if (!s) return 'Unknown';
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
@@ -729,8 +738,8 @@ export function renderBatchIngredientTable() {
     const ings = calcIngredientsFromRecipe(dish);
     ings.forEach(ing => {
       const key = ing.name.toLowerCase().trim();
-      if (!combined[key]) combined[key] = { name: ing.name, amount: 0, unit: ing.unit, source: ing.source, perBatch: [] };
-      combined[key].amount += ing.amount;
+      if (!combined[key]) combined[key] = { name: ing.name, amount: 0, unit: baseUnitOf(ing.unit), source: ing.source, perBatch: [] };
+      combined[key].amount += toBaseUnit(ing.amount, ing.unit);
       combined[key].perBatch.push({ batchId: dish.id, batchName: dish.name, amount: ing.amount, unit: ing.unit });
       if (!combined[key].source && ing.source) combined[key].source = ing.source;
     });
