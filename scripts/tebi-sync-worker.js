@@ -198,34 +198,48 @@ async function main() {
     process.exit(1);
   }
 
-  // Build list of ledgers to scrape — same credentials, different ledger IDs
+  // Build list of ledgers to scrape.
+  //
+  // Two-account layout (current as of 2026-04-26):
+  //   Ledger 1 (Sering West, default 723192) — TEBI_EMAIL  / TEBI_PASSWORD
+  //   Ledger 2 (TestTafel + Centraal, 724466) — TEBI_EMAIL_2 / TEBI_PASSWORD_2
+  //
+  // For backward compatibility with the original single-account setup, if
+  // TEBI_LEDGER_ID_2 is set but the _2 credentials are not, fall back to
+  // the primary credentials. This keeps existing single-account
+  // installations working without env-var churn.
   const accounts = [];
 
   if (process.env.TEBI_EMAIL && process.env.TEBI_PASSWORD) {
-    const email = process.env.TEBI_EMAIL;
-    const password = process.env.TEBI_PASSWORD;
-
     accounts.push({
       label: 'Ledger 1 (De_Sering/West)',
-      email,
-      password,
+      email: process.env.TEBI_EMAIL,
+      password: process.env.TEBI_PASSWORD,
       ledgerId: process.env.TEBI_LEDGER_ID || '723192',
       forceLocation: process.env.TEBI_FORCE_LOCATION || null,
     });
 
     if (process.env.TEBI_LEDGER_ID_2) {
+      const email2 = process.env.TEBI_EMAIL_2 || process.env.TEBI_EMAIL;
+      const pass2 = process.env.TEBI_PASSWORD_2 || process.env.TEBI_PASSWORD;
+      const usingFallback = !process.env.TEBI_EMAIL_2 || !process.env.TEBI_PASSWORD_2;
       accounts.push({
-        label: 'Ledger 2 (TestTafel + Centraal)',
-        email,
-        password,
+        label: usingFallback
+          ? 'Ledger 2 (TestTafel + Centraal) [fallback creds]'
+          : 'Ledger 2 (TestTafel + Centraal)',
+        email: email2,
+        password: pass2,
         ledgerId: process.env.TEBI_LEDGER_ID_2,
         forceLocation: null,
       });
+      if (usingFallback) {
+        log('Ledger 2 is using primary TEBI_EMAIL/PASSWORD as fallback. Set TEBI_EMAIL_2 + TEBI_PASSWORD_2 if Ledger 2 has its own account.');
+      }
     }
   }
 
   if (accounts.length === 0) {
-    err('No Tebi credentials configured. Set TEBI_EMAIL + TEBI_PASSWORD (and optionally TEBI_EMAIL_2 + TEBI_PASSWORD_2).');
+    err('No Tebi credentials configured. Set TEBI_EMAIL + TEBI_PASSWORD (and optionally TEBI_EMAIL_2 + TEBI_PASSWORD_2 for the second account).');
     process.exit(1);
   }
 

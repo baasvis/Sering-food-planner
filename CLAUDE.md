@@ -98,7 +98,7 @@ npm run typecheck      # tsc --noEmit on backend
 Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`).
-Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` (one account covers all ledgers). `TEBI_LEDGER_ID` defaults to `723192` (De_Sering/West). Set `TEBI_LEDGER_ID_2=724466` to also scrape the TestTafel + Centraal ledger. Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` to bypass discovery if needed.
+Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Ledger 1 (Sering West, default ledger `723192`). For the second account/ledger (TestTafel + Centraal, `724466`), set `TEBI_LEDGER_ID_2=724466` and `TEBI_EMAIL_2` + `TEBI_PASSWORD_2`. Backward compatibility: if `TEBI_LEDGER_ID_2` is set but the `_2` credentials are not, the primary `TEBI_EMAIL/PASSWORD` are reused (only valid when one Tebi account spans both ledgers, no longer the case as of 2026-04-26). Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` to bypass discovery if needed.
 
 ## Preview (for Claude Code verification)
 Use `preview_start` with `name: "preview"` (not `"dev"`). The `dev` script runs two
