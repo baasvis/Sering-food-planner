@@ -83,8 +83,13 @@ interface StocktakeOrderInfo {
 // ── ORDER OVERVIEW ────────────────────────────────────────
 
 // State
-export let orderInventory = {};        // in-stock amounts for dish ingredients (keyed by name lowercase)
-export let combinedOrderStock = {};   // in-stock amounts for combined order tab (grams, keyed by name lowercase)
+// User-typed stock values for the Batch Ingredients and Combined Order tabs,
+// shared across both so they don't disagree. Keyed by `<ingredientId>:<loc>`
+// (or `name:<lowercase>:<loc>` for orphans without a DB entry) — see stockKey().
+// Empty input deletes the key, distinguishing "untouched" from "counted zero".
+// Persisted to the DB on every keystroke via persistIngredientStock(); this map
+// is the in-session UX cushion only.
+export let orderStock: Record<string, number> = {};
 export let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'batches' | 'ingredientDb'
 export let siSearchQuery = '';
 export let hanosStatus = { configured: false, west: false, centraal: false };
@@ -163,6 +168,15 @@ export function getDbStockTotal(db: IngredientRuntime | null | undefined) {
   if (db.stock.west) total += (db.stock.west.amount || 0);
   if (db.stock.centraal) total += (db.stock.centraal.amount || 0);
   return total;
+}
+
+/** Storage key for the per-session orderStock cushion.
+ * Includes location so West/Centraal don't shadow each other. Falls back to
+ * name-based keying for ingredients without a DB entry (orphans typed by users). */
+export function stockKey(db: IngredientRuntime | null | undefined, ingName: string, loc: string): string {
+  return db && db.id
+    ? `${db.id}:${loc}`
+    : `name:${(ingName || '').toLowerCase().trim()}:${loc}`;
 }
 
 /** Stock for one specific location — use this in order/SI views so we don't mix locations */
@@ -825,13 +839,14 @@ export function renderBatchIngredientTable() {
 
       const dbStock = getDbStockForLoc(db, curLoc);
       const dbStockExists = hasDbStockEntryForLoc(db, curLoc);
-      const hasManualStock = orderInventory[key] !== undefined;
-      const stockDisplayVal = hasManualStock ? orderInventory[key] : (dbStockExists ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
+      const skey = stockKey(db, ing.name, curLoc);
+      const hasManualStock = orderStock[skey] !== undefined;
+      const stockDisplayVal = hasManualStock ? orderStock[skey] : (dbStockExists ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
       const stockLabel = (!hasManualStock && dbStockExists) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
-      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockDisplayVal}" placeholder="0" oninput="updateOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
+      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockDisplayVal}" placeholder="0" oninput="updateOrderStockInput('${esc(db ? db.id : '')}','${esc(ing.name)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
 
       const effectiveStockBase = hasManualStock
-        ? (hasOrderUnit ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
+        ? (hasOrderUnit ? (parseFloat(String(orderStock[skey])) || 0) * db.orderUnitSize : (parseFloat(String(orderStock[skey])) || 0))
         : dbStock;
       const hasStockValue = hasManualStock || dbStockExists;
       const toOrderBase = Math.max(0, amtNeededBase - effectiveStockBase);
@@ -869,7 +884,7 @@ export function renderBatchIngredientTable() {
         breakdownHtml += `<span class="batch-breakdown-label" style="--batch-color:${color};">● ${label} ${esc(shortName)}</span> `;
       });
 
-      html += `<tr data-stock-key="${esc(key)}" data-needed="${amtNeededBase}" data-unit="${esc(db ? db.unit : 'g')}">
+      html += `<tr data-stock-key="${esc(key)}" data-row-key="${esc(skey)}" data-ing-name="${esc(ing.name)}" data-ing-id="${esc(db ? db.id : '')}" data-needed="${amtNeededBase}" data-unit="${esc(db ? db.unit : 'g')}">
         <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}</td>
         <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
         <td>${renderStorageBadge(db)}</td>
@@ -960,9 +975,9 @@ export function renderCombinedOrderTab() {
   ingList.forEach(ing => {
     if (!ing.db || !ing.db.orderPrice) return;
     const dbStock = getDbStockForLoc(ing.db, curLoc);
-    const key = ing.name.toLowerCase().trim();
-    const hasManual = combinedOrderStock[key] !== undefined;
-    const effectiveStock = hasManual ? (parseFloat(combinedOrderStock[key]) || 0) : dbStock;
+    const skey = stockKey(ing.db, ing.name, curLoc);
+    const hasManual = orderStock[skey] !== undefined;
+    const effectiveStock = hasManual ? (parseFloat(String(orderStock[skey])) || 0) : dbStock;
     const toOrderGrams = Math.max(0, ing.totalGrams - effectiveStock);
     const orderAmtGrams = (hasManual || hasDbStockEntryForLoc(ing.db, curLoc)) ? toOrderGrams : ing.totalGrams;
     const calc = calcOrderUnits(orderAmtGrams, ing.db);
@@ -1064,14 +1079,15 @@ export function renderCombinedOrderTab() {
       // Stock in order units
       const dbStock = getDbStockForLoc(db, curLoc);
       const dbStockExists = hasDbStockEntryForLoc(db, curLoc);
-      const hasManualStock = combinedOrderStock[key] !== undefined;
-      const stockDisplayVal = hasManualStock ? combinedOrderStock[key] : (dbStockExists ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
+      const skey = stockKey(db, ing.name, curLoc);
+      const hasManualStock = orderStock[skey] !== undefined;
+      const stockDisplayVal = hasManualStock ? orderStock[skey] : (dbStockExists ? (hasOrderUnit ? Math.round(dbStock / db.orderUnitSize * 10) / 10 : dbStock) : '');
       const stockLabel = (!hasManualStock && dbStockExists) ? ' <span style="font-size:9px;color:var(--blue);vertical-align:super;">DB</span>' : '';
-      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockDisplayVal}" placeholder="0" oninput="updateCombinedOrderStock('${esc(key)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
+      const stockInput = `<input class="order-stock-input" type="number" min="0" step="1" value="${stockDisplayVal}" placeholder="0" oninput="updateOrderStockInput('${esc(db ? db.id : '')}','${esc(ing.name)}',this.value)" /><span class="order-units" style="margin-left:2px;">${unitSuffix}</span>${stockLabel}`;
 
       // To order
       const effectiveStockBase = hasManualStock
-        ? (hasOrderUnit ? (parseFloat(combinedOrderStock[key]) || 0) * db.orderUnitSize : (parseFloat(combinedOrderStock[key]) || 0))
+        ? (hasOrderUnit ? (parseFloat(String(orderStock[skey])) || 0) * db.orderUnitSize : (parseFloat(String(orderStock[skey])) || 0))
         : dbStock;
       const hasStockValue = hasManualStock || dbStockExists;
       const toOrderBase = Math.max(0, ing.totalGrams - effectiveStockBase);
@@ -1100,7 +1116,7 @@ export function renderCombinedOrderTab() {
 
       const priceAlertIcon = (db && db.priceAlert) ? ' <span style="color:var(--red);font-size:11px;" title="Price increased">\u25B2</span>' : '';
 
-      html += `<tr data-combined-key="${esc(key)}" data-needed="${ing.totalGrams}" data-dbname="${esc(ing.name)}">
+      html += `<tr data-combined-key="${esc(key)}" data-row-key="${esc(skey)}" data-ing-name="${esc(ing.name)}" data-ing-id="${esc(db ? db.id : '')}" data-needed="${ing.totalGrams}" data-dbname="${esc(ing.name)}">
         <td style="font-weight:500;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;" onclick="openIngredientModal('${esc(ing.name)}')">${esc(ing.name)}${priceAlertIcon}</td>
         <td style="font-size:12px;">${db && db.category ? esc(db.category) : '\u2014'}</td>
         <td>${renderStorageBadge(db)}</td>
@@ -1222,7 +1238,6 @@ export function collectHanosItems(storageCat: string | null | undefined): HanosI
       const group = row.closest('.storage-group');
       if (!group || !group.dataset.storageCat || group.dataset.storageCat !== storageCat) return;
     }
-    const key = row.dataset.combinedKey;
     const dbName = row.dataset.dbname;
     const db = dbName ? lookupIngredient(dbName) : null;
     if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
@@ -1230,9 +1245,10 @@ export function collectHanosItems(storageCat: string | null | undefined): HanosI
     // Calculate order units for this row — stock values are in order units, convert to base
     const neededBase = parseFloat(row.dataset.needed) || 0;
     const dbStock = getDbStockForLoc(db, S.currentLoc);
-    const hasManual = combinedOrderStock[key] !== undefined;
+    const skey = row.dataset.rowKey || stockKey(db, dbName, S.currentLoc);
+    const hasManual = orderStock[skey] !== undefined;
     const effectiveStockBase = hasManual
-      ? (db.orderUnitSize > 0 ? (parseFloat(combinedOrderStock[key]) || 0) * db.orderUnitSize : (parseFloat(combinedOrderStock[key]) || 0))
+      ? (db.orderUnitSize > 0 ? (parseFloat(String(orderStock[skey])) || 0) * db.orderUnitSize : (parseFloat(String(orderStock[skey])) || 0))
       : dbStock;
     const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
@@ -1264,10 +1280,10 @@ export async function hanosAddSingle(orderCode: string | undefined, name: string
   if (row) {
     const neededBase = parseFloat(row.dataset.needed) || 0;
     const dbStock = getDbStockForLoc(db, S.currentLoc);
-    const stockObj = row.dataset.combinedKey ? combinedOrderStock : orderInventory;
-    const hasManual = stockObj[key] !== undefined;
+    const skey = row.dataset.rowKey || stockKey(db, name, S.currentLoc);
+    const hasManual = orderStock[skey] !== undefined;
     const effectiveStockBase = hasManual
-      ? (db.orderUnitSize > 0 ? (parseFloat(stockObj[key]) || 0) * db.orderUnitSize : (parseFloat(stockObj[key]) || 0))
+      ? (db.orderUnitSize > 0 ? (parseFloat(String(orderStock[skey])) || 0) * db.orderUnitSize : (parseFloat(String(orderStock[skey])) || 0))
       : dbStock;
     const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
@@ -1319,14 +1335,16 @@ export function collectHanosBatchItems(storageCat: string | null | undefined): H
       if (!group || !group.dataset.storageCat || group.dataset.storageCat !== storageCat) return;
     }
     const key = row.dataset.stockKey;
+    const ingName = row.dataset.ingName || key || '';
     const db = key ? lookupIngredient(key) : null;
     if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
 
     const neededBase = parseFloat(row.dataset.needed) || 0;
     const dbStock = getDbStockForLoc(db, S.currentLoc);
-    const hasManual = orderInventory[key] !== undefined;
+    const skey = row.dataset.rowKey || stockKey(db, ingName, S.currentLoc);
+    const hasManual = orderStock[skey] !== undefined;
     const effectiveStockBase = hasManual
-      ? (db.orderUnitSize > 0 ? (parseFloat(orderInventory[key]) || 0) * db.orderUnitSize : (parseFloat(orderInventory[key]) || 0))
+      ? (db.orderUnitSize > 0 ? (parseFloat(String(orderStock[skey])) || 0) * db.orderUnitSize : (parseFloat(String(orderStock[skey])) || 0))
       : dbStock;
     const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
@@ -1537,24 +1555,29 @@ export function persistIngredientStock(ingredientName: string, amount: number) {
 }
 
 // Shared inline stock update — input is in order units, convert to base for storage
-export function _updateStockInline(storageObj: Record<string, number>, key: string, val: string | null, rowSelector: string, neededAttr: string) {
+export function updateOrderStockInput(ingredientId: string, ingName: string, val: string | null) {
+  const loc = S.currentLoc || 'west';
+  const db = ingredientId
+    ? (ingredientDb().find(i => i.id === ingredientId) || null)
+    : lookupIngredient(ingName);
+  const skey = stockKey(db, ingName, loc);
+
   if (val === '' || val === null) {
-    delete storageObj[key];
+    delete orderStock[skey];
   } else {
-    storageObj[key] = parseFloat(val) || 0;
+    orderStock[skey] = parseFloat(val) || 0;
   }
 
-  const db = lookupIngredient(key);
   // Persist to DB in base units
   if (db) {
-    const baseAmount = (db.orderUnitSize > 0) ? (parseFloat(val) || 0) * db.orderUnitSize : (parseFloat(val) || 0);
+    const baseAmount = (db.orderUnitSize > 0) ? (parseFloat(val || '') || 0) * db.orderUnitSize : (parseFloat(val || '') || 0);
     persistIngredientStock(db.name, baseAmount);
   }
 
-  const row = document.querySelector(rowSelector);
+  const row = document.querySelector(`[data-row-key="${skey}"]`);
   if (!row) return;
-  const neededBase = parseFloat(row.dataset[neededAttr]) || 0;
-  const stockUnits = parseFloat(val) || 0;
+  const neededBase = parseFloat(row.dataset.needed) || 0;
+  const stockUnits = parseFloat(val || '') || 0;
   const stockBase = (db && db.orderUnitSize > 0) ? stockUnits * db.orderUnitSize : stockUnits;
   const toOrderBase = Math.max(0, neededBase - stockBase);
   const hasOrderUnit = db && db.orderUnitSize > 0;
@@ -1579,12 +1602,14 @@ export function _updateStockInline(storageObj: Record<string, number>, key: stri
   }
 }
 
-export function updateCombinedOrderStock(key: string, val: string) {
-  _updateStockInline(combinedOrderStock, key, val, `[data-combined-key="${key}"]`, 'needed');
-}
-
+// Backward-compat shims for any inline handler still calling the old names.
+// (The render code now emits updateOrderStockInput directly; keeping these
+// avoids breakage if any cached HTML is in flight during deploy.)
 export function updateOrderStock(key: string, val: string) {
-  _updateStockInline(orderInventory, key, val, `[data-stock-key="${key}"]`, 'needed');
+  updateOrderStockInput('', key, val);
+}
+export function updateCombinedOrderStock(key: string, val: string) {
+  updateOrderStockInput('', key, val);
 }
 
 export async function refreshAllRecipes() {
