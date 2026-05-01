@@ -275,14 +275,14 @@ export function batchDragStart(e: DragEvent, batchId: string) {
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', batchId);
   }
-  (e.target as HTMLElement)?.closest('.batch-tile')?.classList.add('dragging');
+  if (e.target instanceof Element) e.target.closest('.batch-tile')?.classList.add('dragging');
   // Highlight all slots as drop targets
   document.querySelectorAll('.slot').forEach(s => s.classList.add('slot-assign-target'));
 }
 
 export function batchDragEnd(e: DragEvent) {
   S.draggingBatchId = null;
-  const tile = (e.target as HTMLElement)?.closest('.batch-tile');
+  const tile = e.target instanceof Element ? e.target.closest('.batch-tile') : null;
   if (tile) tile.classList.remove('dragging');
   document.querySelectorAll('.slot').forEach(s => {
     s.classList.remove('slot-assign-target', 'slot-drag-over');

@@ -518,7 +518,7 @@ export function inlineAddAllergenStart(id: string, evt: Event | null) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   // Use the clicked button's parent to avoid duplicate-ID issues (e.g. dashboard shows same batch twice)
-  const btn = evt ? (evt.target as HTMLElement).closest('.allergen-add-btn') : null;
+  const btn = evt && evt.target instanceof Element ? evt.target.closest('.allergen-add-btn') : null;
   const container = btn ? btn.closest('.allergen-inline') : document.getElementById('ag-inline-' + id);
   if (!container || container.querySelector('.allergen-add-select')) return;
   const addBtn = btn || container.querySelector('.allergen-add-btn');
