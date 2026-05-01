@@ -20,7 +20,11 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "preview"],
       "port": 3000,
-      "autoPort": true
+      "autoPort": true,
+      "env": {
+        "NODE_ENV": "production",
+        "DATABASE_URL": "postgresql://postgres:QXwFZbYaQhZeeWUqdFUjXCRVhQvEoLgv@shuttle.proxy.rlwy.net:52350/railway"
+      }
     }
   ]
 }

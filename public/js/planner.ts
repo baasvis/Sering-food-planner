@@ -102,8 +102,15 @@ export function renderLocationPlan(loc: string) {
     </div>`;
   }
 
+  // Fix My Menu button only on West (it plans both locations + caterings globally
+  // — see .claude/plans/fix-my-menu.md §4.1).
+  const fixMenuBtn = loc === 'west'
+    ? `<button class="btn btn-fix-menu" onclick="fixMyMenu()" title="Generate placeholders for missing cook events and assign service slots">✨ Fix my menu</button>`
+    : '';
+
   html += `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
     <button class="btn btn-primary" onclick="openNewDish()">+ New batch</button>
+    ${fixMenuBtn}
     ${invBtn}
   </div>
   <div id="split-bar-area"></div>`;

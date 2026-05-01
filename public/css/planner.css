@@ -274,3 +274,7 @@
   .assign-banner .btn{border-color:var(--blue);color:var(--blue);}
   .slot.slot-assign-target{border:2px dashed var(--blue);background:var(--blue-bg);cursor:crosshair;}
   .slot.slot-assign-target:hover{background:color-mix(in srgb, var(--blue) 15%, var(--bg));}
+
+  /* ═══════════ FIX MY MENU ═══════════ */
+  .btn-fix-menu{background:linear-gradient(135deg, var(--purple, #6b46c1), var(--blue, #2563eb));color:#fff;border:none;font-weight:500;}
+  .btn-fix-menu:hover{opacity:.9;transform:translateY(-1px);}

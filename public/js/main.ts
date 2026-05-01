@@ -24,6 +24,7 @@ import { TUTORIALS, startTutorial, tutNext, tutPrev, tutSkip } from './tutorial'
 import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, switchGlobalLocation } from './init';
 import { initTelemetry, trackScreenView, trackEvent, trackError } from './telemetry';
 import { executeUndo, flushUndo } from './undo';
+import { fixMyMenu } from './menu-fixer';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -95,6 +96,9 @@ Object.assign(window, {
 
   // telemetry
   initTelemetry, trackScreenView, trackEvent, trackError,
+
+  // menu-fixer
+  fixMyMenu,
 });
 
 // ═══════════════════════════════════════════════════════════════════
