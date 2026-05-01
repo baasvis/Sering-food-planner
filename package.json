@@ -43,7 +43,8 @@
       "**/test/**/*.test.ts"
     ],
     "setupFiles": [
-      "<rootDir>/test/setup-env.ts"
+      "<rootDir>/test/setup-env.ts",
+      "<rootDir>/test/setup-dom-stubs.ts"
     ],
     "moduleNameMapper": {
       "^@shared/(.*)$": "<rootDir>/shared/$1"

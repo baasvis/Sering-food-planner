@@ -1,13 +1,13 @@
 // ── FIX MY MENU ─────────────────────────────────────────────────────────────
 // Single button that scaffolds and rebalances the 14-day menu.
-// Slice 2 (this file): cleanup pass + planning window + placeholder generator
-//                      + button wiring. NO service assignment yet (that's Slice 3).
+// Slice 2: cleanup + planning window + placeholder generator + button wiring.
+// Slice 3 (this file): two-pass service assigner (cooked-finish, then 2-newest).
 // See .claude/plans/fix-my-menu.md for the full spec.
 
 import type { Batch, DishType, Location, Meal } from '@shared/types';
 import { S } from './state';
 import { newId, scheduleSave, toast } from './utils';
-import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast } from './core';
+import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired } from './core';
 import { rerenderCurrentView } from './navigate';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -221,6 +221,271 @@ export function generateMissingPlaceholders(window: PlanDay[], snapshot: BatchSn
   return newBatches;
 }
 
+// ── Step 4 helpers: slot eligibility ────────────────────────────────────────
+
+/**
+ * Convert a cookDate "DD/MM/YYYY" to ISO "YYYY-MM-DD" for lexical comparison.
+ * Returns null if the input is empty or malformed.
+ */
+function cookDateToIso(ddmmyyyy: string | null | undefined): string | null {
+  if (!ddmmyyyy) return null;
+  const parts = ddmmyyyy.split('/');
+  if (parts.length !== 3) return null;
+  const [dd, mm, yyyy] = parts;
+  if (!dd || !mm || !yyyy) return null;
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Number of days between two ISO dates (b - a). Negative if b is before a.
+ */
+function diffDaysIso(aIso: string, bIso: string): number {
+  const a = new Date(aIso + 'T12:00:00').getTime();
+  const b = new Date(bIso + 'T12:00:00').getTime();
+  return Math.round((b - a) / 86400000);
+}
+
+/**
+ * A batch with cookDate = X is servable starting at dinner of X (lunch of X is
+ * too early — cooking happens during the day). Any later day is fine.
+ */
+export function isServableBy(cookDateDdmmyyyy: string | null, slotIsoDate: string, slotMeal: Meal): boolean {
+  const cookIso = cookDateToIso(cookDateDdmmyyyy);
+  if (!cookIso) return false;
+  if (slotIsoDate < cookIso) return false;
+  if (slotIsoDate > cookIso) return true;
+  return slotMeal === 'dinner';
+}
+
+/**
+ * Stale = service date is `threshold` or more days after cook date.
+ * Same logic as core's isDishStale, but parameterised so we can ask
+ * "would this batch be stale by THIS slot's date?" without time-of-day fuzz.
+ */
+export function isStaleAtSlot(cookDateDdmmyyyy: string | null, slotIsoDate: string, threshold = STALE_THRESHOLD_DAYS): boolean {
+  const cookIso = cookDateToIso(cookDateDdmmyyyy);
+  if (!cookIso) return false;
+  return diffDaysIso(cookIso, slotIsoDate) >= threshold;
+}
+
+/**
+ * How many batches of `type` currently have a service entry matching the
+ * given (loc, isoDate, meal) slot. Counts the LIVE state of `batches.services`
+ * so it picks up assignments added earlier in the same pass.
+ */
+export function countTypeInSlot(batches: Batch[], type: DishType, loc: Location, isoDate: string, meal: Meal): number {
+  let n = 0;
+  for (const b of batches) {
+    if (b.type !== type) continue;
+    if (!b.services || b.services.length === 0) continue;
+    for (const s of b.services) {
+      if (s.loc === loc && s.date === isoDate && s.meal === meal) { n++; break; }
+    }
+  }
+  return n;
+}
+
+/** True if the batch already has a service entry exactly matching this slot. */
+export function alreadyInSlot(batch: Batch, loc: Location, isoDate: string, meal: Meal): boolean {
+  return (batch.services || []).some(s => s.loc === loc && s.date === isoDate && s.meal === meal);
+}
+
+/** Lexically-comparable cookDate value for sorting (oldest first when ascending). */
+function cookDateSortKey(b: Batch): string {
+  return cookDateToIso(b.cookDate) || '9999-99-99';
+}
+
+// ── Step 4 — Pass 1: finish cooked stock first ─────────────────────────────
+
+/**
+ * For each cooked batch (oldest cookDate first), extend its services forward
+ * through the planning window until either:
+ *   - calcRequired(batch) catches up to stock (no surplus left), OR
+ *   - the next slot would be on a stale day (>= STALE_THRESHOLD_DAYS after cook), OR
+ *   - no more slots are eligible.
+ *
+ * Mutates batch.services in place. Returns counters for reporting.
+ *
+ * Catering reservations are respected automatically because calcRequired()
+ * already includes catering demand — a batch with a big catering hold will
+ * hit its capacity ceiling earlier and stop being extended.
+ */
+export function assignServicesPass1(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+): { servicesAdded: number; batchesTouched: number } {
+  const cookedSorted = allBatches
+    .filter(b => TYPES_TO_PLAN.includes(b.type))
+    .filter(b => b.stock > 0)
+    .filter(b => b.cookDate)
+    .filter(b => b.storage !== 'Frozen')
+    .sort((a, b) => cookDateSortKey(a).localeCompare(cookDateSortKey(b)));
+
+  let added = 0;
+  const touched = new Set<string>();
+
+  for (const batch of cookedSorted) {
+    let surplus = batch.stock - calcReq(batch);
+    if (surplus <= 0) continue;
+
+    walk: for (const day of window) {
+      // Once the batch would be stale at this day's earliest slot, stop entirely.
+      if (isStaleAtSlot(batch.cookDate, day.isoDate)) break walk;
+
+      for (const slot of day.slots) {
+        if (slot.isPast) continue;
+        if (!isServableBy(batch.cookDate, day.isoDate, slot.meal)) continue;
+        if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal)) continue;
+        if (countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) continue;
+
+        // Tentatively assign, then check capacity. If overcommitted, undo.
+        batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+        const overshot = calcReq(batch) > batch.stock;
+        if (overshot) {
+          batch.services.pop();
+          // No more room in this batch — move to the next batch.
+          break walk;
+        }
+
+        added++;
+        touched.add(batch.id);
+        surplus = batch.stock - calcReq(batch);
+        if (surplus <= 0) break walk;
+      }
+    }
+  }
+
+  return { servicesAdded: added, batchesTouched: touched.size };
+}
+
+// ── Step 4 — Pass 2: 2-newest rule ─────────────────────────────────────────
+
+/**
+ * Iterates every (day, slot, type) triple in chronological order. For each
+ * still-empty position (slot has < SLOTS_PER_TYPE batches of this type),
+ * picks the most recent eligible cook event and assigns it.
+ *
+ * Sort order:
+ *   1. Newest cookDate first (the "2-newest" rule).
+ *   2. Tie-break: cooked-and-aging > uncooked at the same cookDate (this is
+ *      the "5d" stale-food preference baked into ordering — older real food
+ *      gets used before fresh-from-the-pot uncooked plans).
+ *
+ * Round-robin: when the top sort bucket has multiple batches with the same
+ * (cookDate, cooked-status), an index per (cookDate, type, status) advances
+ * each pick so e.g. Sunday's three soups distribute evenly across Sun→Tue
+ * services rather than always picking the same one.
+ *
+ * Eligibility:
+ *   - cookDate is set and servable by this slot (cook day's dinner or later).
+ *   - Not already in this slot.
+ *   - Not stale yet (cooked) or always eligible (uncooked).
+ *   - Not frozen (`storage !== 'Frozen'`).
+ *   - Cooked: tentatively-assign capacity check via calcReq(b) <= stock.
+ */
+export function assignServicesPass2(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+): { servicesAdded: number } {
+  const sameDayPickIdx = new Map<string, number>();
+  let added = 0;
+
+  for (const day of window) {
+    for (const slot of day.slots) {
+      if (slot.isPast) continue;
+
+      for (const type of TYPES_TO_PLAN) {
+        const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+        const remaining = SLOTS_PER_TYPE - filled;
+        if (remaining <= 0) continue;
+
+        for (let i = 0; i < remaining; i++) {
+          const placed = tryFillOnePosition(
+            allBatches, type, slot.loc, day.isoDate, slot.meal,
+            sameDayPickIdx, calcReq,
+          );
+          if (placed) added++;
+          else break;  // no candidate fit — leave the rest of this slot's positions empty
+        }
+      }
+    }
+  }
+
+  return { servicesAdded: added };
+}
+
+/**
+ * Find the best candidate for a single (slot, type) position and assign it.
+ * Returns true if a batch was placed. Tries successive candidates if the top
+ * pick fails the capacity check (cooked batch already at stock limit).
+ */
+function tryFillOnePosition(
+  allBatches: Batch[],
+  type: DishType,
+  loc: Location,
+  isoDate: string,
+  meal: Meal,
+  sameDayPickIdx: Map<string, number>,
+  calcReq: (b: Batch) => number,
+): boolean {
+  // Build candidate list (excluded: wrong type, already-in-slot, frozen, stale-cooked, unservable).
+  let candidates = allBatches.filter(b => {
+    if (b.type !== type) return false;
+    if (!b.cookDate) return false;
+    if (b.storage === 'Frozen') return false;
+    if (alreadyInSlot(b, loc, isoDate, meal)) return false;
+    if (!isServableBy(b.cookDate, isoDate, meal)) return false;
+    if (b.stock > 0 && isStaleAtSlot(b.cookDate, isoDate)) return false;
+    return true;
+  });
+
+  while (candidates.length > 0) {
+    // Sort: newest cookDate first; tiebreak: cooked > uncooked at same date.
+    candidates.sort((a, b) => {
+      const aIso = cookDateToIso(a.cookDate)!;
+      const bIso = cookDateToIso(b.cookDate)!;
+      if (aIso !== bIso) return aIso > bIso ? -1 : 1;
+      const aCooked = a.stock > 0 ? 1 : 0;
+      const bCooked = b.stock > 0 ? 1 : 0;
+      return bCooked - aCooked;
+    });
+
+    const top = candidates[0];
+    const topIso = cookDateToIso(top.cookDate)!;
+    const topCooked = top.stock > 0 ? 'cooked' : 'uncooked';
+
+    // Round-robin within the same (cookDate, status) bucket.
+    const sameBucket = candidates.filter(c =>
+      cookDateToIso(c.cookDate) === topIso && (c.stock > 0 ? 'cooked' : 'uncooked') === topCooked
+    );
+
+    let chosen: Batch;
+    if (sameBucket.length > 1) {
+      const key = `${topIso}|${type}|${topCooked}`;
+      const idx = (sameDayPickIdx.get(key) || 0) % sameBucket.length;
+      chosen = sameBucket[idx];
+      sameDayPickIdx.set(key, idx + 1);
+    } else {
+      chosen = top;
+    }
+
+    // Tentatively assign and check capacity.
+    chosen.services.push({ loc, date: isoDate, meal });
+    if (chosen.stock > 0 && calcReq(chosen) > chosen.stock) {
+      chosen.services.pop();
+      // This batch can't take more services — drop it and try the next candidate.
+      candidates = candidates.filter(c => c !== chosen);
+      continue;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 /**
@@ -257,21 +522,38 @@ export function fixMyMenu(): void {
     S.batches.push(b);
   }
 
-  // Persist + refresh
+  // Rebuild the planner index BEFORE running the assigner — calcRequired uses
+  // S.planner to count peer batches per slot, and Pass 2's capacity check
+  // depends on it being current.
+  rebuildPlanner();
+
+  // Step 4 — Pass 1: extend cooked batches forward through the window.
+  const pass1 = assignServicesPass1(S.batches, planWindow, calcRequired);
+  // Pass 1 added new service entries; rebuild planner so peer counts are
+  // accurate when Pass 2 evaluates eligibility.
+  rebuildPlanner();
+
+  // Step 4 — Pass 2: fill remaining empty positions with the 2-newest rule.
+  const pass2 = assignServicesPass2(S.batches, planWindow, calcRequired);
+
+  // Final refresh and persist.
   rebuildPlanner();
   rerenderCurrentView();
   scheduleSave();
 
-  // Slice 2 result UI: simple toast. Slice 4 replaces this with a results
-  // modal that includes service-fill summary, warnings, and rescue actions.
+  // Slice 3 result UI: toast with the new counters. Slice 4 will replace this
+  // with a results modal that adds warnings and rescue actions.
   const cleaned = orphans.length;
   const created = newPlaceholders.length;
-  if (created === 0 && cleaned === 0) {
-    toast('Menu already covers the cook rhythm — nothing to add.');
+  const assigned = pass1.servicesAdded + pass2.servicesAdded;
+
+  if (created === 0 && cleaned === 0 && assigned === 0) {
+    toast('Menu already covers the cook rhythm and slots are filled — nothing to do.');
   } else {
     const parts: string[] = [];
     if (created > 0) parts.push(`Created ${created} placeholder${created === 1 ? '' : 's'}`);
     if (cleaned > 0) parts.push(`cleaned ${cleaned} unused`);
+    if (assigned > 0) parts.push(`assigned ${assigned} service slot${assigned === 1 ? '' : 's'}`);
     toast(parts.join(', '));
   }
 }
