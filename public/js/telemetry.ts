@@ -19,13 +19,19 @@ export function initTelemetry(userEmail?: string): void {
 }
 
 export function trackScreenView(screenName: string): void {
-  const now = Date.now();
-  // Record duration of previous screen
-  if (lastScreen && lastScreenTime) {
-    addEvent('screen_view', lastScreen, { duration: now - lastScreenTime });
-  }
+  flushScreenDuration();
   lastScreen = screenName;
-  lastScreenTime = now;
+  lastScreenTime = Date.now();
+}
+
+const MAX_SCREEN_DURATION = 30 * 60_000; // cap at 30 minutes
+
+function flushScreenDuration(): void {
+  if (!lastScreen || !lastScreenTime) return;
+  const raw = Date.now() - lastScreenTime;
+  const duration = Math.min(raw, MAX_SCREEN_DURATION);
+  addEvent('screen_view', lastScreen, { duration });
+  lastScreenTime = Date.now();
 }
 
 export function trackEvent(action: string, label?: string, data?: Record<string, unknown>): void {
@@ -72,7 +78,10 @@ setInterval(flushEvents, 30_000);
 
 // Flush when page is hidden (user navigates away or closes tab)
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') flushEvents();
+  if (document.visibilityState === 'hidden') {
+    flushScreenDuration();
+    flushEvents();
+  }
 });
 
 // ── Global error handlers ──

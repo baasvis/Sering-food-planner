@@ -427,7 +427,8 @@ export function renderOrders() {
 
 function setupHanosBtnDelegation(container: HTMLElement) {
   container.addEventListener('click', (e: MouseEvent) => {
-    const btn = (e.target as HTMLElement).closest('.hanos-btn[data-order-code]') as HTMLElement;
+    if (!(e.target instanceof Element)) return;
+    const btn = e.target.closest('.hanos-btn[data-order-code]') as HTMLElement;
     if (!btn) return;
     e.preventDefault();
     hanosAddSingle(btn.dataset.orderCode, btn.dataset.ingName);
