@@ -27,16 +27,14 @@ model Batch {
   note              String   @default("")
   services          Json     @default("[]")
   createdAt         String   @map("created_at")
-
-  // Recipe v2 fields
   recipeId          String?  @map("recipe_id")
   actualIngredients Json?    @map("actual_ingredients")
   cookNotes         String   @default("") @map("cook_notes")
   stockDeducted     Boolean  @default(false) @map("stock_deducted")
-
-  parent       Batch?  @relation("BatchParent", fields: [parentId], references: [id], onDelete: SetNull)
-  childBatches Batch[] @relation("BatchParent")
-  recipe       Recipe? @relation("BatchRecipe", fields: [recipeId], references: [id], onDelete: SetNull)
+  generated         Boolean  @default(false)
+  parent            Batch?   @relation("BatchParent", fields: [parentId], references: [id])
+  childBatches      Batch[]  @relation("BatchParent")
+  recipe            Recipe?  @relation("BatchRecipe", fields: [recipeId], references: [id])
 
   @@index([location])
   @@index([cookDate])
@@ -99,33 +97,32 @@ model TransportItem {
 }
 
 model Ingredient {
-  id                String  @id
-  name              String  @default("")
-  supplierName      String  @default("") @map("supplier_name")
-  category          String  @default("")
-  unit              String  @default("Grams")
-  supplier          String  @default("")
-  orderCode         String  @default("") @map("order_code")
-  orderUnit         String  @default("") @map("order_unit")
-  orderPrice        Float?  @map("order_price")
-  orderUnitSize     Float   @default(0) @map("order_unit_size")
-  allergens         String  @default("")
-  notes             String  @default("")
-  active            Boolean @default(true)
-  nutrition         Json    @default("{}")
-  priceAlert        Boolean @default(false) @map("price_alert")
-  priceHistory      Json    @default("[]") @map("price_history")
-  priceLevel        String  @default("") @map("price_level")
-  pricePer100       Float   @default(0) @map("price_per_100")
-  stock             Json    @default("{}")
-  storageLocations  Json    @default("{}") @map("storage_locations")
-  types             Json    @default("[]")
-  measureMode       String  @default("weight") @map("measure_mode")
-  targetStock       Json    @default("{}") @map("target_stock")
-  orderUnitStandard String  @default("") @map("order_unit_standard")
-  orderAmountGrams  Float   @default(0) @map("order_amount_grams")
-  pricePer100g      Float   @default(0) @map("price_per_100g")
-
+  id                String                @id
+  name              String                @default("")
+  supplierName      String                @default("") @map("supplier_name")
+  types             Json                  @default("[]")
+  category          String                @default("")
+  unit              String                @default("Grams")
+  supplier          String                @default("")
+  orderCode         String                @default("") @map("order_code")
+  orderUnit         String                @default("") @map("order_unit")
+  orderUnitStandard String                @default("") @map("order_unit_standard")
+  orderPrice        Float?                @map("order_price")
+  orderAmountGrams  Float                 @default(0) @map("order_amount_grams")
+  priceLevel        String                @default("") @map("price_level")
+  pricePer100g      Float                 @default(0) @map("price_per_100g")
+  priceHistory      Json                  @default("[]") @map("price_history")
+  priceAlert        Boolean               @default(false) @map("price_alert")
+  storageLocations  Json                  @default("{}") @map("storage_locations")
+  stock             Json                  @default("{}")
+  nutrition         Json                  @default("{}")
+  allergens         String                @default("")
+  notes             String                @default("")
+  active            Boolean               @default(true)
+  orderUnitSize     Float                 @default(0) @map("order_unit_size")
+  pricePer100       Float                 @default(0) @map("price_per_100")
+  measureMode       String                @default("weight") @map("measure_mode")
+  targetStock       Json                  @default("{}") @map("target_stock")
   recipeUsages      RecipeIngredientRow[]
 
   @@index([active])
@@ -248,87 +245,53 @@ model ProductRevenue {
   @@map("product_revenue")
 }
 
-// ── Recipe system (v2) ──────────────────────────────────────────────────────
-
 model Recipe {
-  id                String   @id
-  name              String
-  type              String   @default("Soup")
-
-  // Descriptors
-  structure         String   @default("")
-  seasonality       String   @default("")
-  servingTemp       String   @default("") @map("serving_temp")
-  servingSize       Int      @default(280) @map("serving_size")
-
-  // Volume & scaling
-  recipeVolume      Float?   @map("recipe_volume")
-
-  // Allergens
-  autoAllergens     String[] @map("auto_allergens")
-  extraAllergens    String[] @map("extra_allergens")
-
-  // Cost (auto-calculated from ingredients, Float not String)
-  costPerServing    Float?   @map("cost_per_serving")
-
-  // Ratings (aggregated from batch serve events)
-  avgSkill          Float    @default(0) @map("avg_skill")
-  avgSpeed          Float    @default(0) @map("avg_speed")
-  avgBanger         Float    @default(0) @map("avg_banger")
-  timesServed       Int      @default(0) @map("times_served")
-
-  // Prep steps: [{step, text, note?}]
-  prepSteps         Json     @default("[]") @map("prep_steps")
-
-  // Storage instructions
-  coolingMethod     String   @default("") @map("cooling_method")
-  storageMethod     String   @default("") @map("storage_method")
-
-  // Photo (URL served from RecipePhoto table)
-  photoUrl          String?  @map("photo_url")
-
-  // Completeness (guided creation)
-  isComplete        Boolean  @default(false) @map("is_complete")
-
-  // Versioning: JSON array of snapshots [{version, date, changedBy, ingredients, notes}]
-  versions          Json     @default("[]")
-
-  // Metadata
-  createdBy         String   @default("") @map("created_by")
-  createdAt         String   @map("created_at")
-  updatedAt         String   @map("updated_at")
-
-  // Legacy link (migrated from Google Sheet)
-  legacySheetId     String?  @map("legacy_sheet_id")
-
-  // Relations
-  ingredients       RecipeIngredientRow[]
-  batches           Batch[]  @relation("BatchRecipe")
+  id             String                @id
+  name           String
+  type           String                @default("Soup")
+  structure      String                @default("")
+  seasonality    String                @default("")
+  servingTemp    String                @default("") @map("serving_temp")
+  servingSize    Int                   @default(280) @map("serving_size")
+  recipeVolume   Float?                @map("recipe_volume")
+  autoAllergens  String[]              @map("auto_allergens")
+  extraAllergens String[]              @map("extra_allergens")
+  costPerServing Float?                @map("cost_per_serving")
+  avgSkill       Float                 @default(0) @map("avg_skill")
+  avgSpeed       Float                 @default(0) @map("avg_speed")
+  avgBanger      Float                 @default(0) @map("avg_banger")
+  timesServed    Int                   @default(0) @map("times_served")
+  prepSteps      Json                  @default("[]") @map("prep_steps")
+  coolingMethod  String                @default("") @map("cooling_method")
+  storageMethod  String                @default("") @map("storage_method")
+  photoUrl       String?               @map("photo_url")
+  isComplete     Boolean               @default(false) @map("is_complete")
+  versions       Json                  @default("[]")
+  createdBy      String                @default("") @map("created_by")
+  createdAt      String                @map("created_at")
+  updatedAt      String                @map("updated_at")
+  legacySheetId  String?               @map("legacy_sheet_id")
+  batches        Batch[]               @relation("BatchRecipe")
+  ingredients    RecipeIngredientRow[]
 
   @@index([type])
   @@map("recipes")
 }
 
 model RecipeIngredientRow {
-  id              String  @id
-  recipeId        String  @map("recipe_id")
-  ingredientId    String? @map("ingredient_id")
-  sortOrder       Int     @default(0) @map("sort_order")
-
-  // Amounts
-  rawAmount       Float   @map("raw_amount")
-  cookedAmount    Float?  @map("cooked_amount")
-  unit            String  @default("Grams")
-
-  // Flexible ingredient support ("Any vegetables")
-  isFlexible      Boolean @default(false) @map("is_flexible")
-  flexCategory    String? @map("flex_category")
-  flexLabel       String? @map("flex_label")
-  suggestedNames  String[] @map("suggested_names")
-
-  // Relations
-  recipe          Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
-  ingredient      Ingredient? @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+  id             String      @id
+  recipeId       String      @map("recipe_id")
+  ingredientId   String?     @map("ingredient_id")
+  sortOrder      Int         @default(0) @map("sort_order")
+  rawAmount      Float       @map("raw_amount")
+  cookedAmount   Float?      @map("cooked_amount")
+  unit           String      @default("Grams")
+  isFlexible     Boolean     @default(false) @map("is_flexible")
+  flexCategory   String?     @map("flex_category")
+  flexLabel      String?     @map("flex_label")
+  suggestedNames String[]    @map("suggested_names")
+  ingredient     Ingredient? @relation(fields: [ingredientId], references: [id])
+  recipe         Recipe      @relation(fields: [recipeId], references: [id], onDelete: Cascade)
 
   @@index([recipeId])
   @@map("recipe_ingredients")
@@ -344,13 +307,11 @@ model RecipePhoto {
   @@map("recipe_photos")
 }
 
-// ── Telemetry & AI Insights ──
-
 model TelemetryEvent {
   id        Int      @id @default(autoincrement())
   timestamp DateTime @default(now())
-  source    String   // 'frontend' | 'backend'
-  type      String   // 'error' | 'screen_view' | 'feature_use' | 'api_call'
+  source    String
+  type      String
   name      String
   data      Json?
   userId    String?  @map("user_id")
@@ -365,12 +326,12 @@ model TelemetryEvent {
 model AiInsight {
   id         Int       @id @default(autoincrement())
   timestamp  DateTime  @default(now())
-  category   String    // 'bug' | 'ux' | 'data_quality' | 'performance' | 'suggestion'
-  severity   String    // 'critical' | 'warning' | 'info'
+  category   String
+  severity   String
   title      String
   body       String
   data       Json?
-  status     String    @default("new") // 'new' | 'reviewed' | 'resolved' | 'dismissed'
+  status     String    @default("new")
   resolvedAt DateTime? @map("resolved_at")
 
   @@index([status, timestamp])

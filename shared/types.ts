@@ -76,6 +76,10 @@ export interface Batch {
   actualIngredients: ActualIngredient[] | null;
   cookNotes: string;
   stockDeducted: boolean;
+  // Fix My Menu: true only for placeholders the algorithm created and that are
+  // safe to clean up automatically on the next run. Optional so existing
+  // (pre-migration) deserialized rows are still valid Batch values.
+  generated?: boolean;
 }
 
 export interface GuestDay {

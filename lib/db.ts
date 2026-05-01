@@ -107,6 +107,7 @@ export function toBatchRow(b: Batch) {
     actualIngredients: (b.actualIngredients || undefined) as Prisma.InputJsonValue | undefined,
     cookNotes: b.cookNotes || '',
     stockDeducted: !!b.stockDeducted,
+    generated: !!b.generated,
   };
 }
 
@@ -205,6 +206,7 @@ export async function dbReadAll(): Promise<DataResponse> {
       actualIngredients: (b.actualIngredients ?? null) as ActualIngredient[] | null,
       cookNotes: b.cookNotes,
       stockDeducted: b.stockDeducted,
+      generated: b.generated,
     }));
 
     const guests = getDefaultGuests();

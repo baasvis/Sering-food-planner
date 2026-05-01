@@ -701,7 +701,7 @@ export function addPlaceholderDish() {
   const typeLabel = type === 'Main course' ? 'Main' : type;
   const name = `${dayName} ${typeLabel}`;
 
-  const newDish = {
+  const newDish: Batch = {
     id: newId(),
     name,
     type,
@@ -715,9 +715,17 @@ export function addPlaceholderDish() {
     orderFor: false,
     parentId: null,
     cookDate: dateToStr(new Date(date)),
+    recipeSheetId: null,
+    recipeVolume: null,
+    recipeIngredients: null,
+    note: '',
     services: [{ loc, date, meal }],
     createdAt: new Date().toISOString(),
-    recipeId: null, actualIngredients: null, cookNotes: '', stockDeducted: false,
+    recipeId: null,
+    actualIngredients: null,
+    cookNotes: '',
+    stockDeducted: false,
+    generated: false,
   };
   S.batches.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
