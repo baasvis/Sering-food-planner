@@ -132,6 +132,13 @@ export function getGuests(loc: string, dateStr: string, meal: Meal | string): nu
     return weekData[lk][dn][meal];
   }
 
+  // Fall back to predicted counts (from POS history) before base counts —
+  // base counts hold the current week's day-of-week values, which would
+  // return 0 for a future Monday if this Monday already passed.
+  if (S.predictions && S.predictions[lk] && S.predictions[lk][dn] && S.predictions[lk][dn][meal] !== undefined) {
+    return S.predictions[lk][dn][meal];
+  }
+
   // Final fallback to base counts
   return ((S.guests[lk] || {})[dn] || {} as any)[meal] || 0;
 }
