@@ -6,5 +6,6 @@
   "orders.spec.ts": [],
   "batch-create.spec.ts": ["batch_create"],
   "batch-cooked.spec.ts": ["batch_create", "batch_confirm_cooked"],
+  "batch-delete.spec.ts": ["batch_delete"],
   "recipes.spec.ts": ["recipe_save"]
 }

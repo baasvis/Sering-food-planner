@@ -2,6 +2,7 @@ import { S, LOCATIONS, DAYS } from './state';
 import { apiGet, apiPost, toast, toastError } from './utils';
 import { esc } from './modal';
 import { trackEvent } from './telemetry';
+import { registerRenderer } from './navigate';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FINANCE — Revenue overview from Tebi POS
@@ -16,14 +17,11 @@ export function getFinanceMonday(offset: any) {
   return d;
 }
 
-export function fmtDate(d: any) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-export function fmtDateShort(dateStr: any) {
-  const [y, m, d] = dateStr.split('-');
-  return `${d}/${m}`;
-}
+// Delegate to @shared/dates — was duplicating dateToIso/todayIso/localDateStr.
+// `import as` + `export` (not pure re-export) so the aliases land in local
+// scope; renderFinance and loadFinanceData call fmtDate / fmtDateShort below.
+import { formatIso as fmtDate, shortDayMonth as fmtDateShort } from '@shared/dates';
+export { fmtDate, fmtDateShort };
 
 export function fmtEuro(n: any) {
   if (n == null || isNaN(n)) return '-';
@@ -460,3 +458,6 @@ export function changeFinanceWeek(delta: any) {
   S.financeWeekOffset += delta;
   loadFinanceData().then(() => renderFinance());
 }
+
+// Self-register so navigate.ts can dispatch without importing every screen.
+registerRenderer('finance', renderFinance);

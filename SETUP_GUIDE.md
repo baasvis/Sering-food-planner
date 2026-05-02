@@ -1,142 +1,194 @@
-# De Sering Food Planner — Setup & Editing Guide (v4)
+# Sering Food Planner — Setup Guide
 
-## What's new in v4
+This is the practical "I have a fresh checkout, how do I run it" guide. For
+architecture details see `DESIGN.md`. For Claude Code project conventions see
+`CLAUDE.md`.
 
-- **Google Sign-In** — only approved emails can access the app
-- **Save indicator** — you can see whether changes are saved, saving, or failed
-- **Automatic retry** — if a save fails (bad wifi), it retries up to 3 times
-- **Activity log** — every save is logged with who did it and when (in a "log" tab in your Google Sheet)
-- **Data validation** — the server rejects malformed data instead of silently corrupting the sheet
-- **Proper IDs** — dishes use UUID instead of timestamps, preventing duplicate ID bugs
-- **Search in planner** — the "add dish" popup now has a search box
-- **Dessert badge** — desserts now have their own purple badge colour
-- **HTML escaping** — dish names with special characters (& < >) no longer break the interface
+The app moved off Google Sheets in March 2026; the data layer is now
+PostgreSQL via Prisma, the frontend is bundled by Vite, and hosting is
+Railway. If you're reading an older guide that references `DB_SHEET_ID` or a
+"Google Sheet log tab", that one is obsolete.
 
 ---
 
-## First-time setup
+## 1. Prerequisites
 
-### 1. Environment variables
+- **Node.js >= 20.19.0** (`engines.node` in `package.json`).
+- **PostgreSQL** — local install, a Railway database, or any reachable Postgres.
+- **Git**.
+- For finance sync (optional): the first `npm install` downloads ~300 MB of
+  Chromium for Playwright. Skippable if you don't need Tebi sync — see step 3.
 
-You need to set these environment variables (in Replit Secrets, .env file, or your hosting panel):
+---
 
-| Variable | What it is | Required? |
+## 2. Environment variables
+
+Create `.env` in the repo root. The file is gitignored.
+
+| Variable | Required? | What it is |
 |---|---|---|
-| `GOOGLE_CREDENTIALS` | Your Google service account JSON (for Sheets access) | Yes |
-| `DB_SHEET_ID` | The Google Sheet ID used as your database | Yes |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID (for login) | Yes for production |
-| `ALLOWED_EMAILS` | Comma-separated emails allowed to log in | Yes for production |
-| `INGREDIENT_DB_SHEET_ID` | Sheet ID for ingredient database | Optional (has default) |
+| `DATABASE_URL` | **Yes** | Postgres URL — `postgresql://user:pass@host:port/db` |
+| `DATABASE_URL_TEST` | For tests | Separate Postgres for `npm test`. Test runner refuses to use a known prod host. Staging is fine. |
+| `GOOGLE_CLIENT_ID` | Production only | Google OAuth client ID. Without it, the server runs in **dev mode** — anyone can log in via the "Dev mode login" button on the login screen. |
+| `ALLOWED_EMAILS` | Recommended | Comma-separated emails permitted to log in. If empty when `GOOGLE_CLIENT_ID` is set, **anyone with a Google account can log in**. |
+| `ANTHROPIC_API_KEY` | Optional | Enables the AI insights cron (data-quality checks summarised by Claude). |
+| `AI_ANALYSIS_CRON` | Optional | Default `0 7 * * *` (daily 07:00). Standard cron syntax. |
+| `AI_ANALYSIS_MODEL` | Optional | Default `claude-sonnet-4-6`. |
+| `TEBI_EMAIL` / `TEBI_PASSWORD` | Optional | Credentials for ledger 1 (Sering West, default ledger ID 723192). |
+| `TEBI_LEDGER_ID` | Optional | Defaults to 723192 if not set. |
+| `TEBI_LEDGER_ID_2` | Optional | Set to 724466 to also scrape the second ledger (TestTafel + Centraal). |
+| `TEBI_EMAIL_2` / `TEBI_PASSWORD_2` | Optional | Credentials for ledger 2 if it's a separate Tebi account. If unset but `TEBI_LEDGER_ID_2` is set, the worker falls back to the primary creds (one-account-spans-both-ledgers mode). |
+| `TEBI_FORCE_LOCATION` | Optional | `west` or `centraal` to bypass profit-center auto-discovery. |
+| `TEBI_HEADLESS` | Optional | `false` to show the Playwright browser when debugging. |
+| `FINANCE_SYNC_CRON` | Optional | Default `30 4 * * *` (daily 04:30). |
+| `HANOS_USER_WEST` / `HANOS_PASS_WEST` | Optional | Hanos OCC credentials per location. |
+| `HANOS_USER_CENTRAAL` / `HANOS_PASS_CENTRAAL` | Optional | Same for Centraal. |
+| `HANOS_CLIENT_SECRET` | Optional | Hanos OAuth client secret. |
+| `COVERAGE_API_KEY` | Optional | Bearer token for `GET /api/coverage/snapshot`. The weekly e2e coverage agent (`.github/workflows/weekly-coverage.yml`) uses this; the endpoint returns 503 if unset. |
+| `GOOGLE_CREDENTIALS` | Optional | Service account JSON for legacy Google Sheets recipe import (`lib/recipe-sheets.ts`). Not required for normal app use. |
 
-### 2. Set up Google Sign-In
+A minimum-viable `.env` for local dev:
 
-1. Go to https://console.cloud.google.com/apis/credentials
-2. Click "Create Credentials" → "OAuth client ID"
-3. Choose "Web application"
-4. Add your app URL to "Authorised JavaScript origins" (e.g. `https://your-app.replit.app`)
-5. Copy the Client ID and set it as `GOOGLE_CLIENT_ID`
-6. Add your team's email addresses to `ALLOWED_EMAILS`:
-   ```
-   ALLOWED_EMAILS=chef@desering.nl,volunteer1@gmail.com,volunteer2@gmail.com
-   ```
+```
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sering_dev
+DATABASE_URL_TEST=postgresql://postgres:postgres@localhost:5432/sering_test
+```
 
-### 3. Install and run
+---
+
+## 3. Install
 
 ```bash
 npm install
+```
+
+This runs `prisma generate` and downloads Chromium for Playwright. If you don't need the Tebi finance sync (you usually don't for local dev), skip Chromium with:
+
+```bash
+npm install --ignore-scripts
+npx prisma generate
+```
+
+You can always run the postinstall later if you need Tebi:
+
+```bash
+PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install --with-deps chromium
+```
+
+(On Windows cmd.exe the inline env var doesn't work — set it separately or use PowerShell / Git Bash.)
+
+---
+
+## 4. Set up the database
+
+```bash
+npx prisma migrate deploy
+```
+
+This applies every migration in `prisma/migrations/` to the database pointed at by `DATABASE_URL`. The first deploy seeds the ingredient catalogue and the standard-inventory list from `seeds/*.json` automatically (only if those tables are empty).
+
+For a fresh test DB, do the same with `DATABASE_URL_TEST` substituted in.
+
+---
+
+## 5. Run the app
+
+```bash
+npm run dev
+```
+
+This starts two servers via `concurrently`:
+- Vite on **:5173** (frontend, with HMR)
+- tsx-watched Express on **:3000** (backend)
+
+Open http://localhost:5173 in a browser. The Vite dev server proxies `/api/*` to the backend.
+
+If you only want one port (matches the Railway production layout, fewer cookie quirks):
+
+```bash
+npm run preview
+```
+
+This runs `npm run build && node dist/server/server.js`. Single port :3000, no HMR. This is also what Claude Code's `preview_start` mechanism uses.
+
+For production:
+
+```bash
+npm run build
 npm start
 ```
 
-### Dev mode (no Google login)
-
-If `GOOGLE_CLIENT_ID` is not set, the app runs in dev mode:
-- A "Dev mode login" button appears on the login screen
-- No real authentication happens
-- Good for local testing
+`npm start` runs `node dist/server/server.js`. Railway runs the same after a `prisma migrate deploy`.
 
 ---
 
-## How the save system works
+## 6. Tests
 
-- Changes are **debounced** — the app waits 1.5 seconds after your last change, then saves everything at once
-- While saving, the dot in the top bar turns **amber** (saving)
-- When saved, it turns **green** (saved)
-- If it fails, it turns **red** and retries up to 3 times
-- If all retries fail, you see an error toast — your changes are still in memory, so don't close the tab
+### Unit / API tests (Jest)
 
----
-
-## Activity log
-
-Every save is logged in the "log" tab of your database Google Sheet with:
-- Timestamp
-- Who saved (email + name)
-- What changed (number of dishes)
-
-This means you can always see who last modified the data.
-
----
-
-## Common edits
-
-All the editing instructions from v3 still apply. Here's the quick reference:
-
-### Change a tab name
-Search for the current name in quotes, e.g. `"Guest counts"`.
-
-### Add a new storage state (e.g. "Fridge")
-Search for `const STORAGE=` and add your new state.
-
-### Add a new logistics option (e.g. a third location)
-Search for `const LOGISTICS=` and add your new option.
-
-### Change the days of the week
-Search for `const DAYS=`.
-
-### Change colours
-Search for `:root {` at the top of `index.html`.
-
-### Add a dish type
-Search for `['Soup','Main course','Dessert']` — it appears in several places.
-
-### Add someone to the allowed users list
-Update the `ALLOWED_EMAILS` environment variable with their email address.
-
----
-
-## Structure of index.html (v4)
-
-```
-1. <style> block          — all visual styling
-2. Login screen HTML      — shown before auth
-3. App shell HTML         — tabs, save indicator, user menu
-4. <script> block:
-   a. Constants            — DAYS, MEALS, STORAGE, LOGISTICS
-   b. State (S object)     — all data in memory
-   c. Auth functions        — handleGoogleLogin, checkSession, etc.
-   d. UUID generator        — newId() using crypto.randomUUID()
-   e. API + save system     — apiGet/apiPost, scheduleSave, doSave with retry
-   f. Core logic            — calcRequired(), calcIngredients() etc.
-   g. Screen renderers      — renderGuests/Planner/Dishes/Orders
-   h. Action functions      — openEditDish, doSplit, etc.
-   i. Modal + utils         — showModal, closeModal, esc()
-   j. Init                  — checks session, loads data
+```bash
+npm test
 ```
 
+Runs Jest with `@swc/jest` against `DATABASE_URL_TEST`. The setup at `test/setup-env.ts` will refuse to start if you accidentally point it at a production host. Currently ~118 tests across `api.test.ts`, `location-state.test.ts`, `stock-location.test.ts`, `redact-secrets.test.ts`.
+
+### End-to-end tests (Playwright)
+
+```bash
+npm run test:e2e        # headless
+npm run test:e2e:ui     # UI runner — better for debugging
+npm run test:all        # both Jest and Playwright in one go
+```
+
+Specs live in `e2e/`. The config in `playwright.config.ts` boots `npm run preview` on port 3000 against `DATABASE_URL_TEST`, then drives a headless browser through the dev-mode-login + location-chooser flow before running each spec.
+
+The e2e suite is run weekly in CI by `.github/workflows/weekly-coverage.yml`, which then files PRs for any `trackEvent()` features that aren't covered.
+
+### Typecheck
+
+```bash
+npm run typecheck
+```
+
+Runs `tsc --noEmit` on the backend.
+
 ---
 
-## Things NOT to change
+## 7. Git hooks
 
-- The `newId()` function — it generates proper UUIDs
-- The `scheduleSave()` / `doSave()` system — it handles debouncing and retries
-- The `requireAuth` middleware in server.js — this protects your data
-- The `validateDishes()` / `validateGuests()` functions — they prevent data corruption
-- The `withWriteLock()` function — it prevents concurrent write conflicts
+`.git/hooks/pre-commit` runs `npm test` before allowing a commit. If you're working in a worktree, the hook auto-sources `.env` from the main repo when `DATABASE_URL` isn't set in the worktree's environment.
 
 ---
 
-## Backing up
+## 8. Common issues
 
-Your data lives in Google Sheets, which has its own version history (File → Version history).
-The activity log tab shows who changed what and when.
-Your code is in `index.html` and `server.js` — keep this zip as a backup.
+- **"DATABASE_URL not set"** in tests — make sure `.env` is in the repo root and `DATABASE_URL_TEST` is set. Worktrees don't inherit `.env`; copy it from the main repo or rely on the pre-commit hook's auto-source.
+- **Tests refuse to run** — the guard in `test/setup-env.ts` blocks known production hosts. Set `DATABASE_URL_TEST` to a scratch or staging URL.
+- **`npm install` postinstall fails on Windows cmd** — `PLAYWRIGHT_BROWSERS_PATH=0` doesn't work as an inline prefix in cmd.exe. Use PowerShell, Git Bash, or `npm install --ignore-scripts && npx prisma generate` and skip the Playwright download until needed.
+- **Login fails / always redirects to login** — confirm `GOOGLE_CLIENT_ID` matches the OAuth client used by the frontend. Without it, the dev-mode bypass button should appear.
+- **"I keep getting logged off"** — until session persistence ships, every Railway redeploy wipes in-memory sessions. The cookie is still valid for 7 days but the server has forgotten the session. This is tracked as a planned fix; see the audit plan.
+- **Tebi sync silently does nothing** — check `GET /api/finance/sync-status` for `lastSyncError`. After a deploy, status auto-hydrates from telemetry, so a stale failure is preserved instead of looking like a fresh empty state.
+
+---
+
+## 9. Where things live
+
+See `CLAUDE.md` "Project Structure" for the full file map. Quick orientation:
+
+- **Backend entry**: `server.ts` → `app.ts` → `routes/*.ts`
+- **Frontend entry**: `public/index.html` → `public/js/main.ts` → `bootstrap()` in `init.ts`
+- **DB schema**: `prisma/schema.prisma`
+- **Shared types**: `shared/types.ts`
+- **Migration history**: `prisma/migrations/`
+- **One-shot scripts**: `scripts/` (read the file headers before running anything)
+- **Archived scripts**: `prisma/archive/` — historical migrations, **do not run against prod** (they call `deleteMany()` on every major table)
+- **End-to-end tests**: `e2e/*.spec.ts` (Playwright). `playwright.config.ts` at the repo root.
+- **CI workflows**: `.github/workflows/` — `test.yml` (typecheck + Jest on push/PR), `weekly-coverage.yml` (weekly e2e + agent), `sync-staging.yml` (manual prod→staging copy).
+
+---
+
+## 10. Backups
+
+Production data lives on Railway PostgreSQL — Railway provides automated point-in-time backups. There is no Google Sheet, no spreadsheet history, no other authoritative store.
+
+Before any schema migration that drops or renames columns, take a manual `pg_dump` snapshot of the staging DB at minimum. The `prisma/archive/` directory and the audit plan have more notes.

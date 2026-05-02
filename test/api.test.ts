@@ -86,12 +86,15 @@ describe('GET /api/data', () => {
 });
 
 describe('POST /api/data', () => {
-  it('rejects invalid batches', async () => {
+  // Legacy endpoint was the destructive delete-all/create-all path. Now returns
+  // 410 Gone — clients must use POST /api/data/patch instead.
+  it('returns 410 Gone (legacy endpoint removed)', async () => {
     const res = await request(app)
       .post('/api/data')
-      .send({ batches: [{ id: 'x', name: 'Bad', type: 'INVALID' }] });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/invalid type/i);
+      .send({ batches: [] });
+    expect(res.status).toBe(410);
+    expect(res.body.error).toMatch(/legacy/i);
+    expect(res.body.message).toMatch(/\/api\/data\/patch/);
   });
 });
 
@@ -528,6 +531,36 @@ describe('Ingredient Stock Bulk API', () => {
       .send({ ingredientId: ing1, location: 'west', amount: 100 });
     expect(res.status).toBe(400);
   });
+
+  // Regression: two simultaneous /stock writes for different locations on the
+  // same ingredient must both apply. Without withWriteLock, the read-modify-
+  // write on the JSON `stock` column raced and one of the two values was
+  // silently dropped. (Audit §3.1 lost-update bug.)
+  it('POST /api/ingredients/stock — concurrent writes both apply', async () => {
+    // Reset to a known empty state
+    await prisma.ingredient.update({
+      where: { id: ing1 },
+      data: { stock: {} as any },
+    });
+
+    // Fire two concurrent stock writes for the same ingredient at different locations
+    const [r1, r2] = await Promise.all([
+      request(app)
+        .post('/api/ingredients/stock')
+        .send({ ingredientId: ing1, location: 'west', amount: 111 }),
+      request(app)
+        .post('/api/ingredients/stock')
+        .send({ ingredientId: ing1, location: 'centraal', amount: 222 }),
+    ]);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+
+    // Both writes must be present
+    const after = await prisma.ingredient.findUnique({ where: { id: ing1 } });
+    const stock = (after?.stock || {}) as Record<string, { amount: number; date: string }>;
+    expect(stock.west?.amount).toBe(111);
+    expect(stock.centraal?.amount).toBe(222);
+  });
 });
 
 // ── Guest History Roundtrip ──
@@ -763,6 +796,57 @@ describe('Data Patch API', () => {
     const gone = checkRes.body.batches.find((b: any) => b.id === patchBatchId);
     expect(gone).toBeUndefined();
   }, 15000);
+
+  // S9 validation surface — every patch field is now validated before any DB
+  // write. Previously deletedBatches/Caterings/TransportItems and the
+  // caterings/transportItems arrays themselves were forwarded straight to
+  // Prisma. Audit §6.1.
+
+  it('POST /api/data/patch — rejects deletedBatches that is not an array', async () => {
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({ deletedBatches: 'not-an-array' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/deletedBatches/i);
+  });
+
+  it('POST /api/data/patch — rejects deletedBatches with > 500 ids', async () => {
+    const tooMany = Array.from({ length: 501 }, (_, i) => `id-${i}`);
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({ deletedBatches: tooMany });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/too many/i);
+  });
+
+  it('POST /api/data/patch — rejects deletedBatches with non-string entries', async () => {
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({ deletedBatches: ['valid', 1234] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/deletedBatches\[1\]/i);
+  });
+
+  it('POST /api/data/patch — rejects malformed catering', async () => {
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({
+        caterings: [{
+          id: T + 'c1', name: 'x', date: 'not-a-date', guestCount: 0,
+          deliveryMode: 'pickup', dishes: [], logisticsNotes: '',
+        }],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/date/i);
+  });
+
+  it('POST /api/data/patch — rejects malformed transport item', async () => {
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({ transportItems: [{ id: T + 't1', text: 123 }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/text/i);
+  });
 });
 
 // ── Recipe v2 CRUD ──

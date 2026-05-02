@@ -7,13 +7,17 @@ import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNew
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
 import { showModal, closeModal, esc, setOpenInventoryFn } from './modal';
 import { renderCaterings } from './caterings';
-import { rerenderCurrentView } from './navigate';
+import { rerenderCurrentView, registerRenderer } from './navigate';
 import { trackEvent } from './telemetry';
+import { locName } from '@shared/location';
 
 // ── WEEK PLAN (UNIFIED) ──────────────────────────────────
 
 let _plannerInitialLocApplied = false;
 export function renderWeekPlan() {
+  // showScreen used to call rebuildPlanner() before dispatching here.
+  // Each renderer that needs planner state now does it itself.
+  rebuildPlanner();
   // On first render, default to the user's global location
   if (!_plannerInitialLocApplied) {
     _plannerInitialLocApplied = true;
@@ -458,7 +462,7 @@ export function toggleTypeCollapse(key: string) {
 
 export function copyDayToOther(fromLoc: string, date: string) {
   const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
-  const toLabel = toLoc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const toLabel = locName(toLoc);
   const dayName = dateToDayName(date);
   let added = 0;
   MEALS.forEach(meal => {
@@ -483,7 +487,7 @@ export function copyDayToOther(fromLoc: string, date: string) {
 
 export function copySlotToOther(fromLoc: string, date: string, meal: string) {
   const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
-  const toLabel = toLoc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const toLabel = locName(toLoc);
   const k = `${fromLoc}-${date}-${meal}`;
   const dishes = S.planner[k] || [];
   if (!dishes.length) return;
@@ -522,7 +526,7 @@ export function renderAddModal(loc: string, date: string, meal: string, existing
   if (!locFilter) locFilter = loc;
   S._addModalState = { loc, date, meal, existing, typeFilter, tab, locFilter };
 
-  const locLabel = locFilter === 'west' ? 'Sering West' : 'Sering Centraal';
+  const locLabel = locName(locFilter);
   const typeLabel = typeFilter ? ` (${typeFilter === 'Main course' ? 'Mains' : typeFilter + 's'})` : '';
 
   // Build filtered lists for counts and display
@@ -603,7 +607,7 @@ export function renderAddModal(loc: string, date: string, meal: string, existing
   ).join('');
 
   // Location toggle
-  const slotLocLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const slotLocLabel = locName(loc);
   const locToggleHtml = `<div class="order-loc-bar" style="margin-bottom:10px;" id="add-modal-loc-toggle">
     <button class="order-loc-btn${locFilter === 'west' ? ' active' : ''}" onclick="switchAddModalLoc('west')">Sering West</button>
     <button class="order-loc-btn${locFilter === 'centraal' ? ' active' : ''}" onclick="switchAddModalLoc('centraal')">Sering Centraal</button>
@@ -1072,7 +1076,7 @@ export function getInventoryButton(loc: string) {
 }
 
 export function openInventory(loc: string) {
-  const locLabel = loc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const locLabel = locName(loc);
   const dishes = S.batches.filter(d => {
     if (!isBatchCooked(d)) return false; // Only cooked batches need inventory
     return d.location === loc; // Only show batches physically at this location
@@ -1183,3 +1187,6 @@ export function finishInventory(loc: string) {
   toast('Inventory complete!');
 }
 
+
+// Self-register so navigate.ts can dispatch without importing every screen.
+registerRenderer('planner', renderWeekPlan);

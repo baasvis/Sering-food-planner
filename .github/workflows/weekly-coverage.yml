@@ -14,6 +14,13 @@ on:
     - cron: '0 8 * * 1'      # Monday 08:00 UTC = 09:00 / 10:00 Europe/Amsterdam
   workflow_dispatch: {}      # Manual trigger from the Actions tab
 
+# Shares the staging DB with pr-tests.yml. Same concurrency group so the
+# agent's verification run queues behind any open-PR test runs instead of
+# racing with them on guestsNextWeeks snapshot/restore.
+concurrency:
+  group: tests-staging-db
+  cancel-in-progress: false
+
 permissions:
   contents: write            # push the test branch
   pull-requests: write       # open the PR

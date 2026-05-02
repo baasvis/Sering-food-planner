@@ -38,6 +38,7 @@ router.get('/recipe-index', asyncHandler(async (_req: Request, res: Response) =>
 router.post('/recipe-index', asyncHandler(async (req: Request, res: Response) => {
   const recipe = req.body;
   if (!recipe || !recipe.id || !recipe.name) return res.status(400).json({ error: 'id and name required' });
+  await withWriteLock(async () => {
   await prisma.recipeIndex.upsert({
     where: { id: recipe.id },
     create: {
@@ -77,6 +78,7 @@ router.post('/recipe-index', asyncHandler(async (req: Request, res: Response) =>
       timesServed: recipe.timesServed || 0,
     },
   });
+  });
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'recipe-index', `saved "${recipe.name}"`);
   res.json({ ok: true });
@@ -84,7 +86,9 @@ router.post('/recipe-index', asyncHandler(async (req: Request, res: Response) =>
 
 router.delete('/recipe-index/:id', asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
-  await prisma.recipeIndex.delete({ where: { id } });
+  await withWriteLock(async () => {
+    await prisma.recipeIndex.delete({ where: { id } });
+  });
   res.json({ ok: true });
 }));
 
@@ -247,24 +251,29 @@ router.post('/recipes', asyncHandler(async (req: Request, res: Response) => {
   res.json(result);
 }));
 
-// Recalculate costs for all recipes (must be before /:id routes)
+// Recalculate costs for all recipes (must be before /:id routes).
+// withWriteLock prevents the loop's per-row updates from racing with
+// concurrent recipe edits or another recalc trigger.
 router.post('/recipes/recalculate-costs', asyncHandler(async (_req: Request, res: Response) => {
   const recipes = await prisma.recipe.findMany({
     include: { ingredients: true },
   });
 
-  let updated = 0;
-  for (const r of recipes) {
-    try {
-      const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume);
-      if (cost !== r.costPerServing) {
-        await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
-        updated++;
+  const updated = await withWriteLock(async () => {
+    let count = 0;
+    for (const r of recipes) {
+      try {
+        const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume);
+        if (cost !== r.costPerServing) {
+          await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
+          count++;
+        }
+      } catch (e: unknown) {
+        console.warn(`Skipping recipe ${r.id} (${r.name}) cost recalc: ${errMsg(e)}`);
       }
-    } catch (e: unknown) {
-      console.warn(`Skipping recipe ${r.id} (${r.name}) cost recalc: ${errMsg(e)}`);
     }
-  }
+    return count;
+  });
 
   res.json({ ok: true, updated, total: recipes.length });
 }));
@@ -501,40 +510,46 @@ router.delete('/recipes/:id', asyncHandler(async (req: Request, res: Response) =
   res.json({ ok: true });
 }));
 
-// Save new version (snapshot current state)
+// Save new version (snapshot current state).
+// Read-modify-write on the JSON `versions` array — withWriteLock prevents
+// two simultaneous version saves from clobbering each other (audit §3.1).
 router.post('/recipes/:id/version', asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   const notes = req.body.notes || '';
 
-  const recipe = await prisma.recipe.findUnique({
-    where: { id },
-    include: includeIngredients,
+  const result = await withWriteLock(async () => {
+    const recipe = await prisma.recipe.findUnique({
+      where: { id },
+      include: includeIngredients,
+    });
+    if (!recipe) return { notFound: true as const };
+
+    const currentVersions = (recipe.versions as unknown as RecipeVersionSnapshot[]) ?? [];
+    const nextVersion = currentVersions.length > 0 ? currentVersions[currentVersions.length - 1].version + 1 : 1;
+
+    const snapshot: RecipeVersionSnapshot = {
+      version: nextVersion,
+      date: new Date().toISOString(),
+      changedBy: user.email,
+      ingredients: recipe.ingredients.map(toRecipeIngredientFull),
+      notes,
+    };
+
+    const updated = await prisma.recipe.update({
+      where: { id },
+      data: {
+        versions: [...currentVersions, snapshot] as unknown as Prisma.InputJsonValue,
+        updatedAt: new Date().toISOString(),
+      },
+      include: includeIngredients,
+    });
+    return { notFound: false as const, recipe, nextVersion, updated };
   });
-  if (!recipe) return res.status(404).json({ error: 'Recipe not found' });
 
-  const currentVersions = (recipe.versions as unknown as RecipeVersionSnapshot[]) ?? [];
-  const nextVersion = currentVersions.length > 0 ? currentVersions[currentVersions.length - 1].version + 1 : 1;
-
-  const snapshot: RecipeVersionSnapshot = {
-    version: nextVersion,
-    date: new Date().toISOString(),
-    changedBy: user.email,
-    ingredients: recipe.ingredients.map(toRecipeIngredientFull),
-    notes,
-  };
-
-  const updated = await prisma.recipe.update({
-    where: { id },
-    data: {
-      versions: [...currentVersions, snapshot] as unknown as Prisma.InputJsonValue,
-      updatedAt: new Date().toISOString(),
-    },
-    include: includeIngredients,
-  });
-
-  dbAppendLog(user.email, user.name, 'recipe-version', `saved version ${nextVersion} of "${recipe.name}"`);
-  res.json(toRecipeFull(updated));
+  if (result.notFound) return res.status(404).json({ error: 'Recipe not found' });
+  dbAppendLog(user.email, user.name, 'recipe-version', `saved version ${result.nextVersion} of "${result.recipe.name}"`);
+  res.json(toRecipeFull(result.updated));
 }));
 
 // Get version history
@@ -559,23 +574,24 @@ router.post('/recipes/:id/photo', upload.single('photo'), asyncHandler(async (re
   if (!file.mimetype.startsWith('image/')) return res.status(400).json({ error: 'File must be an image' });
 
   const photoData = new Uint8Array(file.buffer);
-  await prisma.recipePhoto.upsert({
-    where: { recipeId: id },
-    create: {
-      id: `photo-${id}`,
-      recipeId: id,
-      mimeType: file.mimetype,
-      data: photoData,
-      createdAt: new Date().toISOString(),
-    },
-    update: {
-      mimeType: file.mimetype,
-      data: photoData,
-    },
-  });
-
   const photoUrl = `/api/recipes/${id}/photo`;
-  await prisma.recipe.update({ where: { id }, data: { photoUrl } });
+  await withWriteLock(async () => {
+    await prisma.recipePhoto.upsert({
+      where: { recipeId: id },
+      create: {
+        id: `photo-${id}`,
+        recipeId: id,
+        mimeType: file.mimetype,
+        data: photoData,
+        createdAt: new Date().toISOString(),
+      },
+      update: {
+        mimeType: file.mimetype,
+        data: photoData,
+      },
+    });
+    await prisma.recipe.update({ where: { id }, data: { photoUrl } });
+  });
 
   res.json({ ok: true, photoUrl });
 }));
@@ -593,8 +609,10 @@ router.get('/recipes/:id/photo', asyncHandler(async (req: Request, res: Response
 // Delete photo
 router.delete('/recipes/:id/photo', asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
-  await prisma.recipePhoto.deleteMany({ where: { recipeId: id } });
-  await prisma.recipe.update({ where: { id }, data: { photoUrl: null } });
+  await withWriteLock(async () => {
+    await prisma.recipePhoto.deleteMany({ where: { recipeId: id } });
+    await prisma.recipe.update({ where: { id }, data: { photoUrl: null } });
+  });
   res.json({ ok: true });
 }));
 

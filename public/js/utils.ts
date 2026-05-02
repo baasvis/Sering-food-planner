@@ -598,9 +598,11 @@ function updateSnapshotForRemote(msg: RemotePatchMessage): void {
 // PREP CHECKLIST API
 // ═══════════════════════════════════════════════════════════════════
 
-export function todayIso(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-}
+// todayIso: see @shared/dates. Local Y-M-D — never UTC.
+// `import` + `export` (not pure re-export) so the name is in local scope;
+// loadPrepChecklist below calls `todayIso()`.
+import { todayIso } from '@shared/dates';
+export { todayIso };
 
 export async function loadPrepChecklist(loc: string): Promise<void> {
   try {

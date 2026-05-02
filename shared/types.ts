@@ -27,7 +27,7 @@ export interface RecipeIngredient {
 export interface CateringDish {
   dishId: string;
   name: string;
-  type: DishType | string;
+  type: DishType;
 }
 
 // ── Storage config (per-location) ──

@@ -1,0 +1,43 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: typecheck + jest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.x'
+          cache: 'npm'
+
+      # Skip the postinstall Playwright Chromium download — tests don't need
+      # the scraper. Saves ~300 MB and ~60s per run. package-lock.json is
+      # gitignored in this repo, so we use `npm install` rather than `npm ci`.
+      - name: Install dependencies (skip Playwright)
+        run: npm install --ignore-scripts
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Typecheck (backend)
+        run: npm run typecheck
+
+      - name: Run Jest tests
+        env:
+          DATABASE_URL_TEST: ${{ secrets.DATABASE_URL_TEST }}
+          # DATABASE_URL is required by lib/db.ts at import time even though
+          # tests swap it out via setup-env.ts. Set it to the same staging
+          # URL so module load succeeds.
+          DATABASE_URL: ${{ secrets.DATABASE_URL_TEST }}
+        run: npm test

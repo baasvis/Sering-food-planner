@@ -7,6 +7,7 @@ import { scheduleSave, apiPost, toast } from './utils';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { renderBatchTile } from './dishes';
+import { locName } from '@shared/location';
 
 export function isBatchCooked(d: Batch): boolean {
   return (d.stock || 0) > 0;
@@ -30,10 +31,12 @@ export function dateToDayName(dateStr: string): string {
   return DAYS[(d.getDay() + 6) % 7];
 }
 
-// Convert a JS Date object to ISO date string "2026-03-23"
-export function dateToIso(d: Date): string {
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-}
+// Convert a JS Date object to ISO date string "2026-03-23".
+// Delegates to @shared/dates#formatIso — single source of truth.
+// `import as` + `export` (not pure `export { X } from 'foo'`) so the
+// alias is in the local scope; later code in this file calls `dateToIso(...)`.
+import { formatIso as dateToIso } from '@shared/dates';
+export { dateToIso };
 
 // Check if a service is past / "served".
 // Services store date as ISO string (e.g., "2026-03-23").
@@ -171,7 +174,7 @@ export interface BreakdownLine {
 export function calcRequiredBreakdown(dish: Batch): string[] {
   const lines: string[] = [];
   (dish.services || []).forEach((svc: Service) => {
-    const loc = svc.loc === 'west' ? 'Sering West' : 'Sering Centraal';
+    const loc = locName(svc.loc);
     const meal = svc.meal.charAt(0).toUpperCase() + svc.meal.slice(1);
     const dayName = dateToDayName(svc.date);
     // Past services show as "served" instead of contributing liters

@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { prisma } from '../lib/db';
+import { prisma, withWriteLock } from '../lib/db';
 import { asyncHandler } from '../lib/config';
 
 const router = express.Router();
@@ -34,10 +34,10 @@ router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
   if (typeof processed !== 'boolean') return res.status(400).json({ error: 'processed must be a boolean' });
 
-  const updated = await prisma.feedback.update({
+  const updated = await withWriteLock(async () => prisma.feedback.update({
     where: { id },
     data: { processed },
-  });
+  }));
   res.json(updated);
 }));
 

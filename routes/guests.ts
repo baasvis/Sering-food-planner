@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { prisma } from '../lib/db';
+import { prisma, withWriteLock } from '../lib/db';
 import { asyncHandler } from '../lib/config';
 import type { GuestHistory, GuestHistoryMeta, GuestsNextWeeks } from '@prisma/client';
 
@@ -85,6 +85,10 @@ router.post('/guest-history', asyncHandler(async (req: Request, res: Response) =
   const incoming = req.body;
   if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'Expected object' });
 
+  // Two POS devices uploading concurrently used to race: each read the existing
+  // history, merged its own data, and the later write wiped the earlier merge.
+  // withWriteLock serialises the read-merge-write cycle.
+  await withWriteLock(async () => {
   await prisma.$transaction(async (tx) => {
     const [existingHist, existingMeta] = await Promise.all([
       tx.guestHistory.findMany(),
@@ -174,6 +178,7 @@ router.post('/guest-history', asyncHandler(async (req: Request, res: Response) =
       });
     }
   });
+  });
   res.json({ ok: true });
 }));
 
@@ -189,8 +194,10 @@ router.post('/guests-next-weeks', asyncHandler(async (req: Request, res: Respons
   if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Expected object' });
 
   const rows: Array<{ mondayKey: string; location: string; day: string; meal: string; count: number }> = [];
+  const mondayKeysInBody = new Set<string>();
   for (const [mondayKey, locations] of Object.entries(data as Record<string, Record<string, Record<string, Record<string, number>>>>)) {
     if (typeof locations !== 'object') continue;
+    mondayKeysInBody.add(mondayKey);
     for (const [loc, days] of Object.entries(locations)) {
       if (typeof days !== 'object') continue;
       for (const [day, meals] of Object.entries(days)) {
@@ -202,10 +209,17 @@ router.post('/guests-next-weeks', asyncHandler(async (req: Request, res: Respons
     }
   }
 
-  await prisma.$transaction([
-    prisma.guestsNextWeeks.deleteMany(),
-    prisma.guestsNextWeeks.createMany({ data: rows }),
-  ]);
+  // Scope the deleteMany to ONLY the mondayKeys in this request — previously
+  // this endpoint did `deleteMany()` over the whole table, so a client sending
+  // one week's data would wipe every other week. (Audit §1.7.)
+  await withWriteLock(async () => {
+    await prisma.$transaction([
+      prisma.guestsNextWeeks.deleteMany({
+        where: { mondayKey: { in: Array.from(mondayKeysInBody) } },
+      }),
+      prisma.guestsNextWeeks.createMany({ data: rows }),
+    ]);
+  });
   res.json({ ok: true });
 }));
 

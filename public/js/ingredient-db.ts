@@ -4,12 +4,15 @@ import { toast, toastError, apiGet, apiPost, saveStorageConfig, loadIngredientDb
 import { chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { renderOrders } from './orders';
+import { locName } from '@shared/location';
 
 // ── INGREDIENT DATABASE TAB ──────────────────────────────────
 
 // State
-export let ingredientDbFull: Ingredient[] = [];       // full ingredient list from /api/ingredients/full
-export let ingredientDbFullLoaded = false;
+// `S.ingredientDb` is the single source of truth. `loadIngredientDb()` (utils)
+// fetches the slim shape; `loadIngredientDbFull()` below fetches the rich shape
+// (with priceHistory / nutrition / pricePer100g) and replaces it. The
+// `S.ingredientDbFullyLoaded` flag tracks which one is in memory.
 export let ingredientDbSearch = '';
 export let ingredientDbTypeFilter = 'all'; // 'all' | 'Food' | 'Drinks' | 'Non-food'
 export let ingredientDbCatFilter = 'all';  // 'all' | category name
@@ -49,11 +52,13 @@ export function updateIngredientSearch(el: HTMLInputElement) {
 
 export async function loadIngredientDbFull() {
   try {
-    ingredientDbFull = await apiGet('/api/ingredients/full');
-    ingredientDbFullLoaded = true;
+    S.ingredientDb = await apiGet('/api/ingredients/full');
+    S.ingredientDbFullyLoaded = true;
   } catch (e: unknown) {
-    ingredientDbFull = [];
-    ingredientDbFullLoaded = true;
+    // Don't blank existing data on a transient error — it'll show stale
+    // info instead of an empty editor. Just flag that the rich payload
+    // hasn't loaded so the editor can show its loading state.
+    S.ingredientDbFullyLoaded = false;
     console.error('Failed to load ingredient DB:', e);
   }
 }
@@ -79,7 +84,7 @@ export function ingredientMatchesTypeFilter(ing: Ingredient) {
 }
 
 export function getFilteredIngredients() {
-  let list = ingredientDbFull;
+  let list = S.ingredientDb;
 
   // Type filter
   if (ingredientDbTypeFilter !== 'all') list = list.filter(ingredientMatchesTypeFilter);
@@ -146,7 +151,7 @@ export function saveInlineStock(ingId: string, location: string, val: string) {
   const amount = parseFloat(val) || 0;
 
   // Update local state
-  const ing = ingredientDbFull.find(i => i.id === ingId);
+  const ing = S.ingredientDb.find(i => i.id === ingId);
   if (ing) {
     if (!ing.stock) ing.stock = {};
     ing.stock[location] = { amount, date: new Date().toISOString().slice(0, 10) };
@@ -177,7 +182,7 @@ export function renderStockBadges(stock: Ingredient['stock'] | undefined) {
 }
 
 export function renderIngredientDbTab() {
-  if (!ingredientDbFullLoaded) {
+  if (!S.ingredientDbFullyLoaded) {
     loadIngredientDbFull().then(() => renderOrders());
     return '<div class="empty">Loading ingredient database...</div>';
   }
@@ -193,7 +198,7 @@ export function renderIngredientDbTab() {
 
   let html = `<div>
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <span>Ingredient Database (${ingredientDbFull.length} total, ${filtered.length} shown)</span>
+      <span>Ingredient Database (${S.ingredientDb.length} total, ${filtered.length} shown)</span>
       <div style="display:flex;gap:8px;align-items:center;">
         <button class="btn btn-sm" onclick="openAddIngredientModal()">+ Add ingredient</button>
         <button class="btn btn-sm" onclick="openStorageLocationsModal()">Storage locations</button>
@@ -476,7 +481,7 @@ export function renderIngredientEditRow(ing: Ingredient) {
 }
 
 export function showInlineCategoryEdit(ingId: string, td: HTMLElement) {
-  const ing = ingredientDbFull.find(i => i.id === ingId);
+  const ing = S.ingredientDb.find(i => i.id === ingId);
   if (!ing) return;
   const opts = '<option value="">—</option>' + ALL_CATEGORIES.map(c =>
     `<option value="${esc(c)}"${ing.category===c?' selected':''}>${esc(c)}</option>`
@@ -486,7 +491,7 @@ export function showInlineCategoryEdit(ingId: string, td: HTMLElement) {
 }
 
 export async function saveInlineCategory(ingId: string, value: string) {
-  const ing = ingredientDbFull.find(i => i.id === ingId);
+  const ing = S.ingredientDb.find(i => i.id === ingId);
   if (!ing) return;
   ing.category = value;
   try {
@@ -525,7 +530,7 @@ export function updateEditCategoryOptions() {
 }
 
 export async function saveIngredientEdit(id: string) {
-  const ing = ingredientDbFull.find(i => i.id === id);
+  const ing = S.ingredientDb.find(i => i.id === id);
   if (!ing) return;
 
   const nameVal = ((document.getElementById('ing-edit-name') as HTMLInputElement | null)?.value || '').trim();
@@ -592,7 +597,7 @@ export async function saveIngredientEdit(id: string) {
 }
 
 export async function toggleIngredientActive(id: string) {
-  const ing = ingredientDbFull.find(i => i.id === id);
+  const ing = S.ingredientDb.find(i => i.id === id);
   if (!ing) return;
   ing.active = !ing.active;
   try {
@@ -609,7 +614,7 @@ export async function deleteIngredient(id: string, name: string) {
   try {
     const r = await fetch('/api/ingredients/' + id, { method: 'DELETE' });
     if (!r.ok) throw new Error('Delete failed');
-    ingredientDbFull = ingredientDbFull.filter(i => i.id !== id);
+    S.ingredientDb = S.ingredientDb.filter(i => i.id !== id);
     ingredientDbEditId = null;
     loadIngredientDb();
     renderOrders();
@@ -620,8 +625,8 @@ export async function deleteIngredient(id: string, name: string) {
 }
 
 export async function openIngredientModal(name: string) {
-  if (!ingredientDbFullLoaded) await loadIngredientDbFull();
-  const ing = ingredientDbFull.find(i => i.name.toLowerCase().trim() === name.toLowerCase().trim());
+  if (!S.ingredientDbFullyLoaded) await loadIngredientDbFull();
+  const ing = S.ingredientDb.find(i => i.name.toLowerCase().trim() === name.toLowerCase().trim());
   if (!ing) { toastError('Ingredient not found in database'); return; }
 
   // Reuse the full edit form from renderIngredientEditRow, adapted for modal
@@ -800,7 +805,7 @@ export async function openIngredientModal(name: string) {
 
 export async function saveIngredientFromModal(id: string) {
   // Reuse saveIngredientEdit logic but close modal instead of re-rendering inline
-  const ing = ingredientDbFull.find(i => i.id === id);
+  const ing = S.ingredientDb.find(i => i.id === id);
   if (!ing) return;
   const newName = ((document.getElementById('ing-edit-name') as HTMLInputElement | null)?.value || '').trim();
   if (!newName) { toastError('Name is required'); return; }
@@ -1102,7 +1107,7 @@ export async function saveNewIngredient(id: string) {
 
   try {
     await apiPost('/api/ingredients/' + id, ing);
-    ingredientDbFull.push(ing);
+    S.ingredientDb.push(ing);
     loadIngredientDb();
     closeModal();
     renderOrders();
@@ -1119,14 +1124,14 @@ export function openStoragePopover(ingredientId: string, anchorEl: HTMLElement) 
   const existing = document.getElementById('storage-popover');
   if (existing) existing.remove();
 
-  const ing = ingredientDbFull.find(i => i.id === ingredientId) || S.ingredientDb.find(i => i.id === ingredientId);
+  const ing = S.ingredientDb.find(i => i.id === ingredientId) || S.ingredientDb.find(i => i.id === ingredientId);
   if (!ing) return;
 
   const storLocs = ing.storageLocations || {};
   const rect = anchorEl.getBoundingClientRect();
   const catNames = Object.keys(STORAGE_CATEGORIES);
   const curLoc = S.currentLoc;
-  const locLabel = curLoc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const locLabel = locName(curLoc);
 
   const s = storLocs[curLoc] || {};
   const cat = s.category || '';
@@ -1185,7 +1190,7 @@ export async function saveStorageFromPopover(ingredientId: string) {
   if (!catEl || !locEl) return;
 
   // Update in full DB — only change the current location, preserve the other
-  const ingFull = ingredientDbFull.find(i => i.id === ingredientId);
+  const ingFull = S.ingredientDb.find(i => i.id === ingredientId);
   const newLocs = ingFull ? { ...(ingFull.storageLocations || {}) } : {};
   newLocs[curLoc] = { category: catEl.value, location: locEl.value };
 
@@ -1229,7 +1234,7 @@ export async function handleSupplierUpload(file: File | undefined) {
 export function renderSupplierImportPanel() {
   if (!supplierUploadData || !supplierUploadData.length) return '';
 
-  const existingCodes = new Set(ingredientDbFull.map(i => i.orderCode).filter(Boolean));
+  const existingCodes = new Set(S.ingredientDb.map(i => i.orderCode).filter(Boolean));
   const matched = supplierUploadData.filter(p => existingCodes.has(p.orderCode));
   const unmatched = supplierUploadData.filter(p => !existingCodes.has(p.orderCode) && p.recentOrders > 0);
 
@@ -1256,7 +1261,7 @@ export async function applySupplierUpdate() {
   supplierUploadData.forEach(p => { byCode[p.orderCode] = p; });
 
   let updated = 0;
-  ingredientDbFull.forEach(ing => {
+  S.ingredientDb.forEach(ing => {
     if (!ing.orderCode) return;
     const sup = byCode[ing.orderCode];
     if (!sup) return;
@@ -1296,7 +1301,7 @@ export async function applySupplierUpdate() {
 
   toast('Saving ' + updated + ' updated ingredients...');
   try {
-    await apiPost('/api/ingredients', ingredientDbFull);
+    await apiPost('/api/ingredients', S.ingredientDb);
     loadIngredientDb();
     supplierUploadData = null;
     renderOrders();
@@ -1502,7 +1507,7 @@ export async function runMigration(dryRun: boolean) {
     } else {
       if (status) status.innerHTML = `<strong style="color:var(--green);">Migration complete!</strong><br>
         ${result.total} ingredients saved. ${result.matched} matched with old DB.`;
-      ingredientDbFullLoaded = false;
+      S.ingredientDbFullyLoaded = false;
       loadIngredientDb();
       toast('Migration complete: ' + result.total + ' ingredients');
     }

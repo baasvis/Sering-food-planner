@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { prisma } from '../lib/db';
+import { prisma, withWriteLock } from '../lib/db';
 import { asyncHandler } from '../lib/config';
 
 const router = express.Router();
@@ -22,12 +22,16 @@ router.get('/standard-inventory', asyncHandler(async (req: Request, res: Respons
 router.post('/standard-inventory', asyncHandler(async (req: Request, res: Response) => {
   const { location, items } = req.body;
   if (!location || !Array.isArray(items)) return res.status(400).json({ error: 'Expected { location, items }' });
-  await prisma.$transaction([
-    prisma.standardInventory.deleteMany({ where: { location } }),
-    prisma.standardInventory.createMany({
-      data: items.map((i: StandardInventoryItem) => ({ id: i.id, name: i.name, amount: i.amount, unit: i.unit, location })),
-    }),
-  ]);
+  // Scope-by-location delete-all/create-all. withWriteLock keeps two staff
+  // editing the same location's standard inventory from clobbering each other.
+  await withWriteLock(async () => {
+    await prisma.$transaction([
+      prisma.standardInventory.deleteMany({ where: { location } }),
+      prisma.standardInventory.createMany({
+        data: items.map((i: StandardInventoryItem) => ({ id: i.id, name: i.name, amount: i.amount, unit: i.unit, location })),
+      }),
+    ]);
+  });
   res.json({ ok: true });
 }));
 
@@ -41,10 +45,12 @@ router.get('/storage-config', asyncHandler(async (_req: Request, res: Response) 
 router.post('/storage-config', asyncHandler(async (req: Request, res: Response) => {
   const config = req.body;
   if (!config || typeof config !== 'object') return res.status(400).json({ error: 'Expected object' });
-  await prisma.storageConfig.upsert({
-    where: { id: 'default' },
-    create: { id: 'default', config },
-    update: { config },
+  await withWriteLock(async () => {
+    await prisma.storageConfig.upsert({
+      where: { id: 'default' },
+      create: { id: 'default', config },
+      update: { config },
+    });
   });
   res.json({ ok: true });
 }));
@@ -103,15 +109,17 @@ router.get('/prep-checklist', asyncHandler(async (req: Request, res: Response) =
 router.post('/prep-checklist', asyncHandler(async (req: Request, res: Response) => {
   const { loc, date, checked } = req.body;
   if (!loc || !date) return res.status(400).json({ error: 'loc and date required' });
-  await prisma.prepChecklist.upsert({
-    where: { loc_date: { loc, date } },
-    create: { loc, date, checked: Array.isArray(checked) ? checked : [] },
-    update: { checked: Array.isArray(checked) ? checked : [], updatedAt: new Date() },
-  });
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 3);
-  await prisma.prepChecklist.deleteMany({
-    where: { updatedAt: { lt: cutoff } },
+  await withWriteLock(async () => {
+    await prisma.prepChecklist.upsert({
+      where: { loc_date: { loc, date } },
+      create: { loc, date, checked: Array.isArray(checked) ? checked : [] },
+      update: { checked: Array.isArray(checked) ? checked : [], updatedAt: new Date() },
+    });
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 3);
+    await prisma.prepChecklist.deleteMany({
+      where: { updatedAt: { lt: cutoff } },
+    });
   });
   res.json({ ok: true });
 }));

@@ -1,8 +1,7 @@
 import express, { Request, Response } from 'express';
-import { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateBatches, validateGuests, withWriteLock, dbWriteGuests, dbUpsertBatches, dbDeleteBatchIds, dbUpsertCaterings, dbDeleteCateringIds, dbUpsertTransportItems, dbDeleteTransportItemIds } from '../lib/db';
+import { dbReadAll, dbAppendLog, validateBatches, validateGuests, validateCaterings, validateTransportItems, validateIdList, withWriteLock, dbWriteGuests, dbUpsertBatches, dbDeleteBatchIds, dbUpsertCaterings, dbDeleteCateringIds, dbUpsertTransportItems, dbDeleteTransportItemIds } from '../lib/db';
 import { broadcast } from './events';
 import { asyncHandler, AppError } from '../lib/config';
-import type { Batch, Catering, TransportItem } from '../shared/types';
 
 const router = express.Router();
 
@@ -10,23 +9,16 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   res.json(await dbReadAll());
 }));
 
-router.post('/', asyncHandler(async (req: Request, res: Response) => {
-  const batches = req.body.batches || [];
-  const guests = req.body.guests || getDefaultGuests();
-  const caterings = req.body.caterings || [];
-  const transportItems = req.body.transportItems || [];
-
-  const batchErr = validateBatches(batches);
-  if (batchErr) return res.status(400).json({ error: batchErr });
-  const guestErr = validateGuests(guests);
-  if (guestErr) return res.status(400).json({ error: guestErr });
-
-  await dbWriteAll(batches, guests, caterings, transportItems);
-
-  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
-  dbAppendLog(user.email, user.name, 'save', `${batches.length} batches`);
-
-  res.json({ ok: true, savedAt: new Date().toISOString() });
+// Legacy POST /api/data — full replace of batches/guests/caterings/transport.
+// Superseded by POST /api/data/patch (targeted upsert/delete). Kept reachable
+// only to return a clear refusal: a stale browser tab from a previous version
+// could otherwise issue a destructive delete-all-then-create-all against live
+// data. Frontend has used /patch since the 2026-03-23 batch model rewrite.
+router.post('/', asyncHandler(async (_req: Request, res: Response) => {
+  res.status(410).json({
+    error: 'Legacy save endpoint removed',
+    message: 'POST /api/data is no longer supported. Use POST /api/data/patch.',
+  });
 }));
 
 // ── Concurrent save detection ──
@@ -50,6 +42,40 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
   const { batches, deletedBatches, guests, caterings, deletedCaterings,
           transportItems, deletedTransportItems } = req.body;
 
+  // Validate ALL inputs before acquiring the lock. The previous version only
+  // validated batches and guests; deletedBatches/Caterings/TransportItems and
+  // the caterings/transportItems arrays themselves were passed straight to
+  // Prisma, which meant a misbehaving authenticated client could mass-delete
+  // by sending a giant array of IDs. (Audit §6.1.)
+  if (deletedBatches !== undefined) {
+    const err = validateIdList(deletedBatches, 'deletedBatches');
+    if (err) throw new AppError(400, err);
+  }
+  if (deletedCaterings !== undefined) {
+    const err = validateIdList(deletedCaterings, 'deletedCaterings');
+    if (err) throw new AppError(400, err);
+  }
+  if (deletedTransportItems !== undefined) {
+    const err = validateIdList(deletedTransportItems, 'deletedTransportItems');
+    if (err) throw new AppError(400, err);
+  }
+  if (batches !== undefined) {
+    const err = validateBatches(batches);
+    if (err) throw new AppError(400, err);
+  }
+  if (guests !== undefined && guests !== null) {
+    const err = validateGuests(guests);
+    if (err) throw new AppError(400, err);
+  }
+  if (caterings !== undefined) {
+    const err = validateCaterings(caterings);
+    if (err) throw new AppError(400, err);
+  }
+  if (transportItems !== undefined) {
+    const err = validateTransportItems(transportItems);
+    if (err) throw new AppError(400, err);
+  }
+
   await withWriteLock(async () => {
     // Batches: targeted upsert/delete (no more delete-all/create-all)
     if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
@@ -57,8 +83,6 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
         await dbDeleteBatchIds(deletedBatches);
       }
       if (batches && batches.length) {
-        const batchErr = validateBatches(batches);
-        if (batchErr) throw new AppError(400, batchErr);
         // Field-level merge: upsert reads existing row and merges,
         // so stale fields from one client don't overwrite fresh changes
         await dbUpsertBatches(batches);
@@ -67,8 +91,6 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
 
     // Guests: read current, merge changed days, write back
     if (guests) {
-      const guestErr = validateGuests(guests);
-      if (guestErr) throw new AppError(400, guestErr);
       const current = await dbReadAll();
       const merged = current.guests;
       for (const loc of ['west', 'centraal']) {
