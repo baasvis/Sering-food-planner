@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import express, { Request, Response } from 'express';
-import { prisma } from '../lib/db';
+import { prisma, withWriteLock } from '../lib/db';
 import { asyncHandler } from '../lib/config';
 import { generateInsights, aggregateTelemetry } from '../lib/ai-analyzer';
 import type { InsightStatus } from '../shared/types';
@@ -61,7 +61,7 @@ router.patch('/insights/:id', asyncHandler(async (req: Request, res: Response) =
   const data: { status: string; resolvedAt?: Date } = { status };
   if (status === 'resolved') data.resolvedAt = new Date();
 
-  const updated = await prisma.aiInsight.update({ where: { id }, data });
+  const updated = await withWriteLock(async () => prisma.aiInsight.update({ where: { id }, data }));
   res.json(updated);
 }));
 

@@ -531,6 +531,36 @@ describe('Ingredient Stock Bulk API', () => {
       .send({ ingredientId: ing1, location: 'west', amount: 100 });
     expect(res.status).toBe(400);
   });
+
+  // Regression: two simultaneous /stock writes for different locations on the
+  // same ingredient must both apply. Without withWriteLock, the read-modify-
+  // write on the JSON `stock` column raced and one of the two values was
+  // silently dropped. (Audit §3.1 lost-update bug.)
+  it('POST /api/ingredients/stock — concurrent writes both apply', async () => {
+    // Reset to a known empty state
+    await prisma.ingredient.update({
+      where: { id: ing1 },
+      data: { stock: {} as any },
+    });
+
+    // Fire two concurrent stock writes for the same ingredient at different locations
+    const [r1, r2] = await Promise.all([
+      request(app)
+        .post('/api/ingredients/stock')
+        .send({ ingredientId: ing1, location: 'west', amount: 111 }),
+      request(app)
+        .post('/api/ingredients/stock')
+        .send({ ingredientId: ing1, location: 'centraal', amount: 222 }),
+    ]);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+
+    // Both writes must be present
+    const after = await prisma.ingredient.findUnique({ where: { id: ing1 } });
+    const stock = (after?.stock || {}) as Record<string, { amount: number; date: string }>;
+    expect(stock.west?.amount).toBe(111);
+    expect(stock.centraal?.amount).toBe(222);
+  });
 });
 
 // ── Guest History Roundtrip ──

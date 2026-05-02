@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import fs from 'fs';
 import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
 import { Prisma } from '@prisma/client';
-import { prisma, dbAppendLog, recalcRecipeCostsForIngredient } from '../lib/db';
+import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, withWriteLock } from '../lib/db';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
@@ -65,10 +65,13 @@ router.get('/full', asyncHandler(async (_req: Request, res: Response) => {
   res.json(ingredients);
 }));
 
-// Bulk save all ingredients
+// Bulk save all ingredients (delete-all/create-all — frontend always sends
+// the complete set). withWriteLock serialises against any concurrent ingredient
+// edit so a single-row save during a bulk replace can't be silently dropped.
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const ingredients = req.body;
   if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'Expected array' });
+  await withWriteLock(async () => {
   await prisma.$transaction([
     prisma.ingredient.deleteMany(),
     prisma.ingredient.createMany({
@@ -103,51 +106,68 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       }),
     }),
   ]);
+  });
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients`);
   res.json({ ok: true, count: ingredients.length });
 }));
 
-// Update target stock for a single ingredient at one location
+// Update target stock for a single ingredient at one location.
+// withWriteLock prevents the read-modify-write on the JSON targetStock column
+// from racing with a concurrent edit.
 router.post('/target-stock', asyncHandler(async (req: Request, res: Response) => {
   const { ingredientId, location, amount } = req.body;
   if (!ingredientId || !location) return res.status(400).json({ error: 'ingredientId and location required' });
-  const ing = await prisma.ingredient.findUnique({ where: { id: ingredientId } });
-  if (!ing) return res.status(404).json({ error: 'Ingredient not found' });
-  const targetStock = (ing.targetStock || {}) as LocationStock;
-  if (amount === null || amount === undefined || amount === '' || parseFloat(amount) <= 0) {
-    delete targetStock[location];
-  } else {
-    targetStock[location] = parseFloat(amount);
-  }
-  await prisma.ingredient.update({ where: { id: ingredientId }, data: { targetStock: targetStock as unknown as Prisma.InputJsonValue } });
+  const result = await withWriteLock(async () => {
+    const ing = await prisma.ingredient.findUnique({ where: { id: ingredientId } });
+    if (!ing) return { notFound: true };
+    const targetStock = (ing.targetStock || {}) as LocationStock;
+    if (amount === null || amount === undefined || amount === '' || parseFloat(amount) <= 0) {
+      delete targetStock[location];
+    } else {
+      targetStock[location] = parseFloat(amount);
+    }
+    await prisma.ingredient.update({ where: { id: ingredientId }, data: { targetStock: targetStock as unknown as Prisma.InputJsonValue } });
+    return { notFound: false };
+  });
+  if (result.notFound) return res.status(404).json({ error: 'Ingredient not found' });
   res.json({ ok: true });
 }));
 
-// Update stock for a single ingredient at one location
+// Update stock for a single ingredient at one location.
+// withWriteLock prevents two concurrent stock edits from clobbering each other
+// when both read the JSON `stock` column at the same time. Was the lost-update
+// bug from audit §3.1.
 router.post('/stock', asyncHandler(async (req: Request, res: Response) => {
   const { ingredientId, location, amount } = req.body;
   if (!ingredientId || !location) return res.status(400).json({ error: 'ingredientId and location required' });
-  const ing = await prisma.ingredient.findUnique({ where: { id: ingredientId } });
-  if (!ing) return res.status(404).json({ error: 'Ingredient not found' });
-  const stock = (ing.stock || {}) as Record<string, { amount: number; date: string }>;
-  stock[location] = { amount: parseFloat(amount) || 0, date: new Date().toISOString().slice(0, 10) };
-  await prisma.ingredient.update({ where: { id: ingredientId }, data: { stock: stock as unknown as Prisma.InputJsonValue } });
+  const result = await withWriteLock(async () => {
+    const ing = await prisma.ingredient.findUnique({ where: { id: ingredientId } });
+    if (!ing) return { notFound: true };
+    const stock = (ing.stock || {}) as Record<string, { amount: number; date: string }>;
+    stock[location] = { amount: parseFloat(amount) || 0, date: new Date().toISOString().slice(0, 10) };
+    await prisma.ingredient.update({ where: { id: ingredientId }, data: { stock: stock as unknown as Prisma.InputJsonValue } });
+    return { notFound: false };
+  });
+  if (result.notFound) return res.status(404).json({ error: 'Ingredient not found' });
   res.json({ ok: true });
 }));
 
-// Bulk stock update (for stocktake)
+// Bulk stock update (for stocktake). Per-row read-modify-write inside a
+// transaction; withWriteLock ensures two stocktake submissions don't race.
 router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
   const updates = req.body;
   if (!Array.isArray(updates)) return res.status(400).json({ error: 'Expected array' });
-  await prisma.$transaction(async (tx) => {
-    for (const u of updates) {
-      const ing = await tx.ingredient.findUnique({ where: { id: u.ingredientId } });
-      if (!ing) continue;
-      const stock = (ing.stock || {}) as Record<string, { amount: number; date: string }>;
-      stock[u.location] = { amount: parseFloat(u.amount) || 0, date: new Date().toISOString().slice(0, 10) };
-      await tx.ingredient.update({ where: { id: u.ingredientId }, data: { stock: stock as unknown as Prisma.InputJsonValue } });
-    }
+  await withWriteLock(async () => {
+    await prisma.$transaction(async (tx) => {
+      for (const u of updates) {
+        const ing = await tx.ingredient.findUnique({ where: { id: u.ingredientId } });
+        if (!ing) continue;
+        const stock = (ing.stock || {}) as Record<string, { amount: number; date: string }>;
+        stock[u.location] = { amount: parseFloat(u.amount) || 0, date: new Date().toISOString().slice(0, 10) };
+        await tx.ingredient.update({ where: { id: u.ingredientId }, data: { stock: stock as unknown as Prisma.InputJsonValue } });
+      }
+    });
   });
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'stock-update', `bulk stock update: ${updates.length} items`);
@@ -184,10 +204,12 @@ router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
     notes: ingredient.notes || '',
     active: ingredient.active !== false,
   };
-  await prisma.ingredient.upsert({
-    where: { id: req.params.id as string },
-    create: { id: req.params.id as string, ...data },
-    update: data,
+  await withWriteLock(async () => {
+    await prisma.ingredient.upsert({
+      where: { id: req.params.id as string },
+      create: { id: req.params.id as string, ...data },
+      update: data,
+    });
   });
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'ingredient', `saved "${ingredient.name}"`);
@@ -200,7 +222,9 @@ router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
 
 // Delete ingredient
 router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
-  await prisma.ingredient.delete({ where: { id: req.params.id as string } });
+  await withWriteLock(async () => {
+    await prisma.ingredient.delete({ where: { id: req.params.id as string } });
+  });
   res.json({ ok: true });
 }));
 
