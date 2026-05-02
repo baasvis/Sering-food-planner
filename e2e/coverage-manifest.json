@@ -8,5 +8,8 @@
   "batch-cooked.spec.ts": ["batch_create", "batch_confirm_cooked"],
   "batch-delete.spec.ts": ["batch_delete"],
   "batch-assign-modal.spec.ts": ["batch_assign_modal"],
+  "feedback-submit.spec.ts": ["feedback_submit"],
+  "stocktake-start.spec.ts": ["stocktake_start"],
+  "predictions-apply.spec.ts": ["predictions_apply"],
   "recipes.spec.ts": ["recipe_save"]
 }

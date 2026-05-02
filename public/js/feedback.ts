@@ -43,7 +43,7 @@ export function openFeedback() {
       </div>
       <div class="modal-actions" style="margin-top:8px;">
         <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-purple" onclick="submitFeedback('${currentScreen}')">Send feedback</button>
+        <button class="btn btn-purple" data-testid="feedback-submit-btn" onclick="submitFeedback('${currentScreen}')">Send feedback</button>
       </div>
     </div>`);
 }
