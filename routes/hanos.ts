@@ -1,9 +1,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // HANOS API ROUTES — Add-to-Cart, product lookup, search, cart view
+//
+// All handlers use asyncHandler + AppError. Unhandled rejections forward to
+// the global error handler in app.ts, which:
+//   - emits an addBackendEvent('error', ...) telemetry record for >=500
+//   - suppresses internal error messages in production
+//   - returns `{ error: <message> }` JSON
+// Per-handler logging stays as console.error so Railway logs still show the
+// raw upstream message; safeErrMsg() redacts credentials before they reach
+// the client.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import express, { Request, Response } from 'express';
-import { errMsg, safeErrMsg } from '../lib/config';
+import { errMsg, safeErrMsg, AppError, asyncHandler } from '../lib/config';
 import { OCC_BASE, getCredentials, getClient, invalidateClient, formatProduct } from '../lib/hanos-client';
 
 const router = express.Router();
@@ -29,8 +38,10 @@ router.get('/status', (_req: Request, res: Response) => {
   });
 });
 
-// Diagnostic: test login without adding to cart
-router.get('/test-login', async (req: Request, res: Response) => {
+// Diagnostic: test login without adding to cart. Intentionally returns 200 with
+// a custom { ok, error, location } shape rather than throwing, so the frontend
+// status page can distinguish "configured but failing" from "not configured".
+router.get('/test-login', asyncHandler(async (req: Request, res: Response) => {
   const loc = (req.query.location as string) || 'west';
   try {
     const creds = getCredentials(loc);
@@ -39,18 +50,20 @@ router.get('/test-login', async (req: Request, res: Response) => {
     const client = await getClient(loc);
     res.json({ ok: true, hasToken: !!client.accessToken, hasCart: !!client.cartId });
   } catch (e: unknown) {
+    console.error(`[Hanos] test-login (${loc}):`, errMsg(e));
     res.json({ ok: false, error: safeErrMsg(e), location: loc });
   }
-});
+}));
 
-router.post('/add-to-cart', async (req: Request, res: Response) => {
+router.post('/add-to-cart', asyncHandler(async (req: Request, res: Response) => {
+  const { items, location } = req.body;
+  if (!Array.isArray(items) || !items.length) {
+    throw new AppError(400, 'items array required');
+  }
+  const loc = (location as string) || 'west';
+
   try {
-    const { items, location } = req.body;
-    if (!Array.isArray(items) || !items.length) {
-      return res.status(400).json({ error: 'items array required' });
-    }
-
-    const client = await getClient(location || 'west');
+    const client = await getClient(loc);
     const results: Array<{ orderCode: string; success: boolean; error?: string; name?: string; quantity?: unknown }> = [];
 
     for (const item of items) {
@@ -79,82 +92,76 @@ router.post('/add-to-cart', async (req: Request, res: Response) => {
     const failed = results.filter(r => !r.success).length;
     res.json({ ok, failed, total: results.length, results });
   } catch (e: unknown) {
-    console.error('[Hanos] add-to-cart error:', errMsg(e));
-    invalidateClient(req.body.location || 'west');
-    res.status(500).json({ error: safeErrMsg(e) });
+    // Setup-time failure (e.g. login or token refresh threw). Drop the cached
+    // client so the next call re-authenticates, then forward to the global
+    // handler — it will telemeter and mask the message in production.
+    console.error('[Hanos] add-to-cart setup error:', errMsg(e));
+    invalidateClient(loc);
+    throw e;
   }
-});
+}));
 
-router.get('/product/:code', async (req: Request, res: Response) => {
-  try {
-    const code = (req.params.code as string).trim();
-    if (!code) return res.status(400).json({ error: 'Product code required' });
+router.get('/product/:code', asyncHandler(async (req: Request, res: Response) => {
+  const code = (req.params.code as string).trim();
+  if (!code) throw new AppError(400, 'Product code required');
 
-    const loc = (req.query.location as string) || 'west';
-    const client = await getClient(loc);
+  const loc = (req.query.location as string) || 'west';
+  const client = await getClient(loc);
 
-    const url = `${OCC_BASE}/products/${encodeURIComponent(code)}?lang=en&curr=EUR&fields=FULL`;
-    const resp = await fetch(url, {
+  const url = `${OCC_BASE}/products/${encodeURIComponent(code)}?lang=en&curr=EUR&fields=FULL`;
+  const resp = await fetch(url, {
+    headers: client._headers(),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (resp.status === 401 && client.refreshToken) {
+    await client._refreshAccessToken();
+    const retry = await fetch(url, {
       headers: client._headers(),
       signal: AbortSignal.timeout(15000),
     });
-
-    if (resp.status === 401 && client.refreshToken) {
-      await client._refreshAccessToken();
-      const retry = await fetch(url, {
-        headers: client._headers(),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!retry.ok) {
-        return res.status(retry.status).json({ error: `Product not found (HTTP ${retry.status})` });
-      }
-      const product = await retry.json() as Record<string, unknown>;
-      return res.json(formatProduct(product));
+    if (!retry.ok) {
+      throw new AppError(retry.status, `Product not found (HTTP ${retry.status})`);
     }
-
-    if (!resp.ok) {
-      return res.status(resp.status).json({ error: `Product not found (HTTP ${resp.status})` });
-    }
-
-    const product = await resp.json() as Record<string, unknown>;
-    res.json(formatProduct(product));
-  } catch (e: unknown) {
-    console.error('[Hanos] product lookup error:', errMsg(e));
-    res.status(500).json({ error: safeErrMsg(e) });
+    const product = await retry.json() as Record<string, unknown>;
+    return res.json(formatProduct(product));
   }
-});
 
-router.get('/search', async (req: Request, res: Response) => {
+  if (!resp.ok) {
+    throw new AppError(resp.status, `Product not found (HTTP ${resp.status})`);
+  }
+
+  const product = await resp.json() as Record<string, unknown>;
+  res.json(formatProduct(product));
+}));
+
+router.get('/search', asyncHandler(async (req: Request, res: Response) => {
+  const query = ((req.query.q as string) || '').trim();
+  if (!query) throw new AppError(400, 'Search query required');
+
+  const loc = (req.query.location as string) || 'west';
+  const client = await getClient(loc);
+
+  const url = `${OCC_BASE}/products/search?query=${encodeURIComponent(query)}&pageSize=10&lang=en&curr=EUR&fields=FULL`;
+  const resp = await fetch(url, {
+    headers: client._headers(),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!resp.ok) {
+    throw new AppError(resp.status, `Search failed (HTTP ${resp.status})`);
+  }
+
+  const data = await resp.json() as Record<string, unknown>;
+  const products = ((data.products || []) as Array<Record<string, unknown>>).map(formatProduct);
+  const pagination = data.pagination as Record<string, unknown> | undefined;
+  res.json({ results: products, total: pagination ? pagination.totalResults : products.length });
+}));
+
+router.get('/cart', asyncHandler(async (req: Request, res: Response) => {
+  const loc = (req.query.location as string) || 'west';
   try {
-    const query = ((req.query.q as string) || '').trim();
-    if (!query) return res.status(400).json({ error: 'Search query required' });
-
-    const loc = (req.query.location as string) || 'west';
     const client = await getClient(loc);
-
-    const url = `${OCC_BASE}/products/search?query=${encodeURIComponent(query)}&pageSize=10&lang=en&curr=EUR&fields=FULL`;
-    const resp = await fetch(url, {
-      headers: client._headers(),
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (!resp.ok) {
-      return res.status(resp.status).json({ error: `Search failed (HTTP ${resp.status})` });
-    }
-
-    const data = await resp.json() as Record<string, unknown>;
-    const products = ((data.products || []) as Array<Record<string, unknown>>).map(formatProduct);
-    const pagination = data.pagination as Record<string, unknown> | undefined;
-    res.json({ results: products, total: pagination ? pagination.totalResults : products.length });
-  } catch (e: unknown) {
-    console.error('[Hanos] search error:', errMsg(e));
-    res.status(500).json({ error: safeErrMsg(e) });
-  }
-});
-
-router.get('/cart', async (req: Request, res: Response) => {
-  try {
-    const client = await getClient((req.query.location as string) || 'west');
     const cart = await client.getCart() as Record<string, unknown>;
     const entries = ((cart.entries || []) as Array<Record<string, unknown>>).map(e => {
       const p = (e.product || {}) as Record<string, unknown>;
@@ -174,9 +181,9 @@ router.get('/cart', async (req: Request, res: Response) => {
     });
   } catch (e: unknown) {
     console.error('[Hanos] cart error:', errMsg(e));
-    invalidateClient((req.query.location as string) || 'west');
-    res.status(500).json({ error: safeErrMsg(e) });
+    invalidateClient(loc);
+    throw e;
   }
-});
+}));
 
 export default router;
