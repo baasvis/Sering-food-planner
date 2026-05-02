@@ -6,6 +6,39 @@
 
 ---
 
+## Run summary (2026-05-02)
+
+**11 slices shipped on branch `claude/elastic-volhard-ef95ad`, 12 commits ahead of main.**
+
+| Slice | Commit | Status |
+|---|---|---|
+| S1 — Silent bug pass | `94f8c03` | ✅ shipped |
+| S2 — Doc refresh | `4d5d5e9` | ✅ shipped |
+| S3 — CI workflow + dep pinning | `4704712` | ✅ shipped |
+| S4 — Schema housekeeping | — | ⏸ deferred (parallel "Fix My Menu" branch's staging drift) |
+| S5 — Frontend strict mode | — | ⏸ reordered post-S16 (488 errors; tractable only after big files are split) |
+| S6 — Centralize helpers | `e0a8f98` | ✅ shipped |
+| S7 — asyncHandler conversion | `bf89fd2` | ✅ shipped |
+| S8 — withWriteLock pass | `b5bc3b2` | ✅ shipped |
+| S9 — Validation surface | `37a78e7` | ✅ shipped |
+| S10 — `pricePer100g` cleanup | — | ⏸ deferred (needs migration) |
+| S11 — Sessions to Postgres | — | ⏸ deferred (needs migration) |
+| S12 — Sunset Recipe v1 | — | ⏸ deferred (needs migration) |
+| S13 — Unify ingredient DB state | `d6d3d9a` | ✅ shipped |
+| S14 — Unify stocktake | `573f15d` | ✅ shipped |
+| S15 — Move `showScreen` to `navigate.ts` | `b1386c7` | ✅ shipped |
+| S16 — File splits | — | ⏸ deferred (largest slice; better to schedule its own session) |
+
+Tests went from 98 baseline to 118/118 passing (added redact-secrets unit
+tests, concurrent-stock-write regression test, 5 patch-validation tests).
+Build is clean. No console errors in preview.
+
+**Remaining work** is gated on two things:
+1. The parallel "Fix My Menu" branch landing on main (unblocks S4, S10,
+   S11, S12).
+2. A scheduled session to do S16 deliberately, then S5 on the smaller
+   files.
+
 ## Status note (2026-05-02)
 
 **Migration-requiring slices are all blocked** by drift between this worktree's
