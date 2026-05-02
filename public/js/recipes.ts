@@ -49,7 +49,7 @@ export function renderRecipeIndex() {
   const v2Count = S.recipes.length;
   let html = `
   <div class="btn-row" style="margin-bottom:12px;">
-    <button class="btn btn-primary" onclick="openRecipeEditor()">+ Create recipe</button>
+    <button class="btn btn-primary" data-testid="recipe-create-btn" onclick="openRecipeEditor()">+ Create recipe</button>
     <button class="btn" onclick="openAddRecipe()">Import from Sheet</button>
     <button class="btn" onclick="recalcAllCosts()" title="Recalculate all recipe costs from current ingredient prices">Recalculate costs</button>
     <button class="btn" onclick="importCookedAmounts()" title="Re-import cooked amounts from Google Sheets for all recipes">Import cooked amounts</button>

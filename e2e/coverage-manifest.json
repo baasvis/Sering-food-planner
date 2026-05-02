@@ -1,0 +1,10 @@
+{
+  "_doc": "Maps each e2e/*.spec.ts file to the telemetry feature_use event names it exercises. Used by scripts/mine-telemetry-journeys.ts to detect which trackEvent() calls in the source aren't covered by any test. The weekly-test-coverage agent updates this file when it adds a new test. If a test exercises no trackEvent() calls (e.g. it's a navigation-only smoke), use [].",
+  "navigation.spec.ts": [],
+  "smoke.spec.ts": [],
+  "guests.spec.ts": [],
+  "orders.spec.ts": [],
+  "batch-create.spec.ts": ["batch_create"],
+  "batch-cooked.spec.ts": ["batch_create", "batch_confirm_cooked"],
+  "recipes.spec.ts": ["recipe_save"]
+}

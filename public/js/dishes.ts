@@ -74,7 +74,7 @@ export function renderDishesOverview() {
 
   const html = `
   <div class="btn-row" style="margin-bottom:12px;">
-    <button class="btn btn-primary" onclick="openNewDish()">+ New batch</button>
+    <button class="btn btn-primary" data-testid="new-batch-btn" onclick="openNewDish()">+ New batch</button>
   </div>
   <div class="filter-bar">
     <div style="display:flex;gap:4px;flex-wrap:wrap;">
@@ -265,7 +265,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
   const expandCls = isExpanded ? ' expanded' : '';
 
   // Compact row
-  let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${splitCls}${assignCls}${expandCls}" data-id="${d.id}" draggable="true" ondragstart="batchDragStart(event,'${d.id}')" ondragend="batchDragEnd(event)">
+  let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${splitCls}${assignCls}${expandCls}" data-testid="batch-tile" data-id="${d.id}" draggable="true" ondragstart="batchDragStart(event,'${d.id}')" ondragend="batchDragEnd(event)">
     <div class="batch-tile-compact" onclick="toggleBatchExpand('${d.id}')">
       <div class="sel-box${isSel ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelect('${d.id}')"></div>
       <span class="batch-type-dot batch-type-${(d.type||'Soup').toLowerCase().replace(/ /g,'-')}"></span>
@@ -709,7 +709,7 @@ export function getCookCellHtml(d: Batch) {
   }
   // Planned for today — show confirm button
   if (isCookDayToday(d)) {
-    return `<div class="bx-cook-wrap"><span class="bx-cook-label">Cook</span><button class="cook-today-btn" onclick="event.stopPropagation();confirmCooked('${d.id}')">Today — mark as cooked</button></div>`;
+    return `<div class="bx-cook-wrap"><span class="bx-cook-label">Cook</span><button class="cook-today-btn" data-testid="cook-today-btn" onclick="event.stopPropagation();confirmCooked('${d.id}')">Today — mark as cooked</button></div>`;
   }
   // Has a planned future day — show "Cook on" + dropdown
   if (d.cookDate && !isBatchCooked(d)) {
@@ -720,7 +720,7 @@ export function getCookCellHtml(d: Batch) {
     </select></div>`;
   }
   // No plan yet — show "Cook on" + dropdown with red warning style
-  return `<div class="bx-cook-wrap"><span class="bx-cook-label">Cook on</span><select class="cook-select no-date" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
+  return `<div class="bx-cook-wrap"><span class="bx-cook-label">Cook on</span><select class="cook-select no-date" data-testid="cook-select" onchange="setCookDay('${d.id}',this.value)" onclick="event.stopPropagation()">
     <option value="">Select day</option>
     ${opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
     <option value="__date">Pick a date...</option>
@@ -954,7 +954,7 @@ export function searchNewDishModal() {
     <div class="dish-opts-list" style="max-height:260px;" id="new-dish-list">${recipeList}</div>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
       <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Or create from scratch:</div>
-      <button class="btn" onclick="openNewDishScratch()">Create blank batch</button>
+      <button class="btn" data-testid="new-batch-blank-btn" onclick="openNewDishScratch()">Create blank batch</button>
     </div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
 }
@@ -975,7 +975,7 @@ export function openNewDishScratch() {
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveNewDish()">Create batch</button>
+      <button class="btn btn-primary" data-testid="new-batch-submit" onclick="saveNewDish()">Create batch</button>
     </div>`);
 }
 
