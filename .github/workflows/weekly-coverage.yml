@@ -30,9 +30,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          # No `cache: 'npm'` — package-lock.json is gitignored in this repo,
+          # and the action errors out when it can't find a lock file.
 
-      - run: npm ci
+      # `npm install` (not `npm ci`) for the same reason — `npm ci` requires
+      # a committed lock file. Slower by ~10s but reliable.
+      - run: npm install
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
