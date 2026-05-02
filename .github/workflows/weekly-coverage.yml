@@ -1,0 +1,79 @@
+name: Weekly e2e test coverage
+
+# Runs every Monday 08:00 UTC. The agent fetches a coverage snapshot from the
+# live Sering server, picks one uncovered trackEvent feature, writes a new
+# Playwright test for it, verifies it, and opens a PR.
+#
+# Why this lives in GitHub Actions (not Anthropic CCR routines):
+# Anthropic's remote-agent sandbox blocks egress to Railway entirely (both DB
+# ports and HTTPS). GitHub Actions runners have unrestricted egress, so they
+# can reach Railway's HTTPS endpoint AND the staging DB for verification.
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'      # Monday 08:00 UTC = 09:00 / 10:00 Europe/Amsterdam
+  workflow_dispatch: {}      # Manual trigger from the Actions tab
+
+permissions:
+  contents: write            # push the test branch
+  pull-requests: write       # open the PR
+  id-token: write            # claude-code-action fetches an OIDC token for auth
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # full history so the agent can branch off main cleanly
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # No `cache: 'npm'` — package-lock.json is gitignored in this repo,
+          # and the action errors out when it can't find a lock file.
+
+      # `npm install` (not `npm ci`) for the same reason — `npm ci` requires
+      # a committed lock file. Slower by ~10s but reliable.
+      - run: npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the coverage agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # bypassPermissions: this is an autonomous CI agent in an isolated
+          # runner; the default interactive-mode allowlist denies git push,
+          # gh pr create, etc. — without this it runs but can't ship a PR.
+          claude_args: "--model claude-sonnet-4-6 --permission-mode bypassPermissions"
+          show_full_output: true
+          prompt: |
+            You are running the weekly e2e test coverage check for Sering Suite.
+            Your operating manual is at `.claude/agents/weekly-test-coverage.md` —
+            read it FIRST, then follow it.
+
+            Three env vars are already set for you:
+              COVERAGE_API_URL  — production HTTPS URL of the Sering app
+              COVERAGE_API_KEY  — bearer token for /api/coverage/snapshot
+              DATABASE_URL_TEST — staging Postgres for running the new e2e test
+
+            Quick start:
+              1. curl the snapshot:
+                   curl -sS -H "Authorization: Bearer $COVERAGE_API_KEY" \
+                     "$COVERAGE_API_URL/api/coverage/snapshot?days=14" \
+                     > /tmp/journeys.json
+              2. If response isn't 200/JSON, OR uncoveredFeatures is empty:
+                 report what you saw and stop. Don't open a PR.
+              3. Otherwise follow the manual to pick a feature, write a test,
+                 verify with `DATABASE_URL_TEST="$DATABASE_URL_TEST" npm run test:e2e -- e2e/<file>.spec.ts`,
+                 update e2e/coverage-manifest.json, and open a PR.
+
+            One test per run. If the test fails after 3 fix attempts, open
+            the PR as Draft with a "Known issues" section instead of looping.
+        env:
+          COVERAGE_API_URL: https://sering-food-planner-production.up.railway.app
+          COVERAGE_API_KEY: ${{ secrets.COVERAGE_API_KEY }}
+          DATABASE_URL_TEST: ${{ secrets.DATABASE_URL_TEST }}

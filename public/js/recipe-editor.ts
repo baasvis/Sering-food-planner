@@ -523,7 +523,7 @@ function renderSaveSection(): string {
       <div class="re-checklist-inline">${checklistHtml}</div>
       <div class="modal-actions">
         <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="reSaveRecipe(false)">Save${allOk ? '' : ' (incomplete)'}</button>
+        <button class="btn btn-primary" data-testid="recipe-save-draft" onclick="reSaveRecipe(false)">Save${allOk ? '' : ' (incomplete)'}</button>
         ${allOk ? '<button class="btn btn-primary" onclick="reSaveRecipe(true)" style="background:var(--green);border-color:var(--green);">Save as complete</button>' : ''}
       </div>
     </div>`;
