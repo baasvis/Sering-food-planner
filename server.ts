@@ -80,6 +80,18 @@ app.listen(PORT, () => {
         console.error('Telemetry cleanup failed:', errMsg(e));
       }
     });
+
+    // Session cleanup: delete expired auth sessions (daily at 3:15am, just
+    // after telemetry to spread DB load across the maintenance window).
+    cron.schedule('15 3 * * *', async () => {
+      try {
+        const { cleanupExpiredSessions } = await import('./routes/auth');
+        const count = await cleanupExpiredSessions();
+        if (count > 0) console.log(`Cleaned up ${count} expired sessions`);
+      } catch (e: unknown) {
+        console.error('Session cleanup failed:', errMsg(e));
+      }
+    });
   }).catch(() => {});
 
   // Nightly Tebi finance sync at 04:30 (backfill last 14 days, upsert is idempotent).

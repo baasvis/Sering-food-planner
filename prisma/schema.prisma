@@ -171,6 +171,23 @@ model Log {
   @@map("log")
 }
 
+// Active login sessions. Previously held in-process in a Map, which meant
+// every Railway redeploy logged everyone out (the cookie was still valid for
+// 7 days but the in-memory state was gone). Persisting here closes the
+// "I keep getting logged off" feedback loop and also removes a multi-replica
+// blocker. expiresAt mirrors the cookie's maxAge.
+model Session {
+  id        String   @id
+  email     String
+  name      String
+  picture   String?
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
 model Feedback {
   id        Int     @id @default(autoincrement())
   timestamp String
