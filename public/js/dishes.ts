@@ -416,7 +416,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
           ${isBatchCooked(d)
             ? `<button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button>`
             : `${(d.services || []).length > 0 ? `<button class="btn btn-sm" style="background:var(--blue);color:white;" onclick="event.stopPropagation();openReplaceBatch('${d.id}')">Replace</button>` : ''}
-               <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteBatch('${d.id}')">Delete</button>`
+               <button class="btn btn-sm btn-danger" data-testid="batch-delete-btn" onclick="event.stopPropagation();deleteBatch('${d.id}')">Delete</button>`
           }
         </div>
       </div>` : ''}
