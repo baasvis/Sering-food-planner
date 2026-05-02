@@ -6,6 +6,7 @@ import { showModal, closeModal, esc } from './modal';
 import { doLogout } from './auth';
 import { openRecipeEditor, openRecipeDetail } from './recipe-editor';
 import type { DishType } from '@shared/types';
+import { registerRenderer } from './navigate';
 
 // ── RECIPE INDEX ──────────────────────────────────────────
 export let riSearch = '';
@@ -597,3 +598,6 @@ export function deleteV2Recipe(recipeId: string) {
     },
   });
 }
+
+// Self-register so navigate.ts can dispatch without importing every screen.
+registerRenderer('recipe-index', renderRecipeIndex);

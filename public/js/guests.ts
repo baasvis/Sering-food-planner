@@ -3,6 +3,7 @@ import { scheduleSave, toast, apiGet, apiPost, scheduleNextWeeksSave, toastError
 import { getGuests, calcTotalGuests, getToday } from './core';
 import { parseCSV, categorizeUploadedFiles, predictGuests, getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav } from './predictions';
 import { esc } from './modal';
+import { registerRenderer } from './navigate';
 import { trackEvent } from './telemetry';
 
 // ── GUESTS ────────────────────────────────────────────────
@@ -377,3 +378,6 @@ export function restoreFocusAfterRender(renderFn: any) {
     }
   }
 }
+
+// Self-register so navigate.ts can dispatch without importing every screen.
+registerRenderer('guests', renderGuests);

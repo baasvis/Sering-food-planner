@@ -1,5 +1,5 @@
 import type { Batch, Location, Meal, DishType } from '@shared/types';
-import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, NAV_SCREENS } from './state';
+import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS } from './state';
 
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
 type DashBatch = Batch & { starch?: string | null };
@@ -8,13 +8,10 @@ import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePas
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
 import { esc } from './modal';
-import { registerRenderer, setCurrentScreen } from './navigate';
-import { renderFeedbackAdmin } from './feedback-admin';
-import { renderFinance } from './finance';
-import { renderGuests } from './guests';
-import { renderOrders, startStocktake, renderStocktakeAreaPicker, enterStocktakeArea, renderStocktakeArea, saveStocktakeArea, exitStocktake, getIngredientsForArea } from './orders';
-import { renderRecipeIndex } from './recipes';
-import { renderWeekPlan } from './planner';
+import { registerRenderer, setOnScreenChange } from './navigate';
+// Stocktake helpers used by the dashboard chip — kept distinct from the
+// individual screen render fns (those self-register via navigate.ts now).
+import { startStocktake, renderStocktakeAreaPicker, enterStocktakeArea, renderStocktakeArea, saveStocktakeArea, exitStocktake, getIngredientsForArea } from './orders';
 import { trackScreenView } from './telemetry';
 import { showModal, closeModal } from './modal';
 import { getStorageConfigForLoc } from './state';
@@ -22,36 +19,16 @@ import { locName } from '@shared/location';
 
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
+// showScreen and getScreenFromHash now live in navigate.ts. Each screen
+// module self-registers via registerRenderer() at import time. Re-exported
+// here so consumers that already import { showScreen } from './dashboard'
+// don't break.
+export { showScreen, getScreenFromHash } from './navigate';
 
-export function showScreen(name: string, pushState = true) {
-  trackScreenView(name);
-  setCurrentScreen(name);
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById('screen-' + name)?.classList.add('active');
-  document.querySelectorAll('.nav-btn, .bnav-btn').forEach(b => {
-    b.classList.toggle('active', (b as HTMLElement).dataset.screen === name);
-  });
-  if (pushState) {
-    const hash = name === 'dashboard' ? '' : '#' + name;
-    if (window.location.hash !== hash && !(name === 'dashboard' && !window.location.hash)) {
-      history.pushState({ screen: name }, '', hash || window.location.pathname);
-    }
-  }
-  if (name === 'planner' || name === 'dashboard' || name === 'orders') rebuildPlanner();
-  if (name === 'dashboard') renderDashboard();
-  if (name === 'guests') renderGuests();
-  if (name === 'planner') renderWeekPlan();
-  if (name === 'recipe-index') renderRecipeIndex();
-  if (name === 'orders') renderOrders();
-  if (name === 'finance') renderFinance();
-  if (name === 'feedback-admin') renderFeedbackAdmin();
-}
-
-export function getScreenFromHash(): string {
-  const hash = window.location.hash.replace('#', '');
-  const validScreens = NAV_SCREENS.map(s => s.id);
-  return validScreens.includes(hash) ? hash : 'dashboard';
-}
+// Wire telemetry into showScreen via the navigate.ts hook — keeps navigate.ts
+// free of any screen-specific imports while still preserving the original
+// trackScreenView call on every navigation.
+setOnScreenChange(trackScreenView);
 
 // ── CHOPPABLE INGREDIENT LOGIC ───────────────────────────────
 export const CHOPPABLE_CATEGORIES = [
@@ -393,6 +370,10 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
 // ── DASHBOARD RENDER ─────────────────────────────────────────
 
 export function renderDashboard() {
+  // showScreen used to call rebuildPlanner() before dispatching to the
+  // dashboard renderer. Now lives in navigate.ts and is renderer-agnostic, so
+  // each renderer that needs the planner state regenerates it itself.
+  rebuildPlanner();
   S.dashMeal = autoDetectMeal();
   const loc = S.currentLoc;
 
@@ -1112,11 +1093,7 @@ export function navTo(screen: string, subTab: string) {
   showScreen(screen);
 }
 
-// ── Register screen renderers ────────────────────────────────
+// Self-register so navigate.ts can dispatch without importing every screen.
+// Other screens self-register from their own files; this one stays here
+// because dashboard.ts owns its render fn.
 registerRenderer('dashboard', renderDashboard);
-registerRenderer('guests', renderGuests);
-registerRenderer('planner', renderWeekPlan);
-registerRenderer('recipe-index', renderRecipeIndex);
-registerRenderer('orders', renderOrders);
-registerRenderer('finance', renderFinance);
-registerRenderer('feedback-admin', renderFeedbackAdmin);

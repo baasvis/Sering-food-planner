@@ -7,7 +7,7 @@ import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNew
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
 import { showModal, closeModal, esc, setOpenInventoryFn } from './modal';
 import { renderCaterings } from './caterings';
-import { rerenderCurrentView } from './navigate';
+import { rerenderCurrentView, registerRenderer } from './navigate';
 import { trackEvent } from './telemetry';
 import { locName } from '@shared/location';
 
@@ -15,6 +15,9 @@ import { locName } from '@shared/location';
 
 let _plannerInitialLocApplied = false;
 export function renderWeekPlan() {
+  // showScreen used to call rebuildPlanner() before dispatching here.
+  // Each renderer that needs planner state now does it itself.
+  rebuildPlanner();
   // On first render, default to the user's global location
   if (!_plannerInitialLocApplied) {
     _plannerInitialLocApplied = true;
@@ -1093,3 +1096,6 @@ export function finishInventory(loc: string) {
   toast('Inventory complete!');
 }
 
+
+// Self-register so navigate.ts can dispatch without importing every screen.
+registerRenderer('planner', renderWeekPlan);

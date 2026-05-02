@@ -1,6 +1,7 @@
 import { S } from './state';
 import { apiGet, apiPost, toast } from './utils';
 import { showModal, closeModal, esc } from './modal';
+import { registerRenderer } from './navigate';
 
 // ── FEEDBACK ADMIN ──────────────────────────────────────
 // View all submitted feedback, filter by type, copy for Claude
@@ -165,3 +166,6 @@ export function copyFeedbackForClaude() {
       </div>`);
   });
 }
+
+// Self-register so navigate.ts can dispatch without importing every screen.
+registerRenderer('feedback-admin', renderFeedbackAdmin);

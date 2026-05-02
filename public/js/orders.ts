@@ -7,6 +7,7 @@ import { trackEvent } from './telemetry';
 import type { Ingredient, Batch, Location } from '@shared/types';
 import { toGrams, baseUnitOf } from '@shared/units';
 import { locName } from '@shared/location';
+import { registerRenderer } from './navigate';
 
 // ── Local type aliases for order data ──
 
@@ -386,6 +387,9 @@ function attachIngDbReadyListener() {
 }
 
 export function renderOrders() {
+  // showScreen used to call rebuildPlanner() before dispatching here.
+  // Each renderer that needs planner state now does it itself.
+  rebuildPlanner();
   attachIngDbReadyListener();
   if (!ingredientDbLoaded) {
     const screenEl = document.getElementById('screen-orders');
@@ -1981,3 +1985,6 @@ export function exitStocktake() {
   renderOrders();
 }
 
+
+// Self-register so navigate.ts can dispatch without importing every screen.
+registerRenderer('orders', renderOrders);

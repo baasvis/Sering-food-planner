@@ -2,6 +2,7 @@ import { S, LOCATIONS, DAYS } from './state';
 import { apiGet, apiPost, toast, toastError } from './utils';
 import { esc } from './modal';
 import { trackEvent } from './telemetry';
+import { registerRenderer } from './navigate';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FINANCE — Revenue overview from Tebi POS
@@ -454,3 +455,6 @@ export function changeFinanceWeek(delta: any) {
   S.financeWeekOffset += delta;
   loadFinanceData().then(() => renderFinance());
 }
+
+// Self-register so navigate.ts can dispatch without importing every screen.
+registerRenderer('finance', renderFinance);
