@@ -1004,7 +1004,7 @@ export function renderCombinedOrderTab() {
         <span class="tbox${combinedIncludeDishes ? ' on' : ''}"><span class="tknob"></span></span>
         Include batch ingredients
       </label>
-      <button class="btn btn-sm" style="background:var(--blue);color:white;" onclick="startStocktake()">📋 Do stocktake</button>
+      <button class="btn btn-sm" data-testid="stocktake-start-btn" style="background:var(--blue);color:white;" onclick="startStocktake()">📋 Do stocktake</button>
     </div>`;
 
   storageOrder.forEach(storageCat => {

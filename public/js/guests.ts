@@ -37,7 +37,7 @@ export function renderGuests() {
     }
   }
   if (S.predictions) {
-    actions += `<button class="btn btn-sm" onclick="applyPredictions()" style="font-size:12px;padding:5px 12px;">Apply predictions</button>`;
+    actions += `<button class="btn btn-sm" data-testid="apply-predictions-btn" onclick="applyPredictions()" style="font-size:12px;padding:5px 12px;">Apply predictions</button>`;
   }
 
   let html = renderDayNav(_guestsDayOffset, -14, 14, 'changeGuestDay', actions);
