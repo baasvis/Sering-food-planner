@@ -5,12 +5,16 @@
 - **Frontend**: TypeScript ES modules bundled by Vite (dev: HMR on :5173, prod: static bundle)
 - **Database**: PostgreSQL via Prisma ORM, Google Sign-In for auth
 - **Google Sheets API**: used for external recipe sheet reading only (lib/recipe-sheets.ts)
-- **Hosting**: Railway (auto-deploy from main branch, Postgres plugin)
+- **Hosting**: Railway (auto-deploy from main branch, Postgres plugin). Single dyno today —
+  several pieces of state (sessions, SSE clients, write locks, Hanos client pool, Tebi sync
+  supervisor, telemetry buffer) assume single-replica and would need rework before scaling out.
+- **Node**: `>=20.19.0` (`engines.node` in package.json). `npm install` triggers a `postinstall`
+  that runs `prisma generate` and downloads Chromium (~300 MB) for the Tebi Playwright scraper.
 
 ## Project Structure
 ```
-server.ts              — Express entry point (starts listening)
-app.ts                 — Express app, mounts routers, global error handler
+server.ts              — Express entry point (starts listening, schedules cron jobs)
+app.ts                 — Express app, mounts routers, global error handler, gzip + static serving
 shared/
   types.ts             — Shared interfaces (Batch, Service, Ingredient, etc.) used by both backend & frontend
 types/
@@ -18,27 +22,40 @@ types/
   globals.d.ts         — DOM type augmentations
   multer.d.ts          — Multer module declaration
 lib/
-  config.ts            — Configuration, env vars
-  db.ts                — Prisma client, row transformers, dbReadAll/dbWriteAll, validators
-  recipe-sheets.ts     — Google Sheets client (external recipe reading only)
+  config.ts            — Env vars, AppError, asyncHandler, errMsg, redactSecrets, safeErrMsg, cookieOpts
+  db.ts                — Prisma client, row transformers, dbReadAll, validators, dbUpsertBatches, recipe cost/nutrition calc
+  recipe-sheets.ts     — Google Sheets client (legacy recipe import only)
   hanos-parser.ts      — Hanos quantity parser (hoeveelheid → grams)
+  hanos-client.ts      — Hanos OCC v2 OAuth client class (login pool, cart, product lookup)
+  tebi-sync.ts         — Spawn helper for the Tebi Playwright scraper, telemetry hydration, status
   ai-analyzer.ts       — Data quality checks, telemetry aggregation, Claude API insights
 routes/
   auth.ts              — Login, logout, session, requireAuth middleware
-  data.ts              — GET/POST /api/data + POST /api/data/patch (main planner state)
+  data.ts              — GET /api/data (full read) + POST /api/data/patch (targeted merge)
+                         POST /api/data returns 410 — superseded by /patch
   batches.ts           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
-  recipes.ts           — Recipe index CRUD + single recipe fetch + Recipe v2 CRUD + photo + print + versioning + cost recalc
-  ingredients.ts       — Ingredient CRUD + stock management
-  ingredients-import.ts — Hanos XLSX upload + CSV migration
+  recipes.ts           — Recipe v2 CRUD + photo + print + versioning + cost recalc.
+                         Also hosts GET /api/ingredients/suggest (mounted under /api).
+                         Legacy /api/recipe-index endpoints kept until Recipe v1 sunset.
+  ingredients.ts       — Ingredient CRUD + stock/target-stock + bulk-stock
+  ingredients-import.ts — Hanos XLSX upload (POST /api/ingredients/upload-supplier) + CSV migration
   guests.ts            — Guest history + next-weeks predictions
   inventory.ts         — Standard inventory (per-location) + storage config + prep checklist + activity log
-  feedback.ts          — User feedback
+  feedback.ts          — User feedback POST/PATCH/list
   events.ts            — SSE live sync: client registry, broadcast to other users on save
   health.ts            — Health check endpoint
-  hanos.ts             — Hanos OCC v2 API client (OAuth, cart, product lookup)
-  finance.ts           — Finance revenue endpoints
-  telemetry.ts         — Telemetry event ingestion (no auth, buffered writes)
+  hanos.ts             — Hanos status, search, product lookup, add-to-cart, cart view
+  finance.ts           — Finance revenue endpoints (delegate to lib/tebi-sync.ts)
+  telemetry.ts         — Telemetry event ingestion (no auth, buffered writes, exports flushBuffer)
   admin.ts             — AI insights & telemetry admin endpoints
+scripts/
+  fix-raw-amounts.ts          — One-off recipe ingredient backfill
+  import-standard-inventory.js — CSV → DB importer
+  import-storage-locations.js  — CSV → DB importer
+  migrate-ingredients.js      — Legacy Sheets → DB ingredient migration
+  seed-staging.js             — Copy prod → staging DB
+  tebi-scraper.js             — Playwright scraper (called by tebi-sync-worker)
+  tebi-sync-worker.js         — Node child process spawned by lib/tebi-sync.ts
 public/
   index.html           — Shell HTML + login screen (single module entry point)
   css/
@@ -54,12 +71,16 @@ public/
     tutorial.css       — Tutorial overlay and tooltips
     mobile.css         — All mobile/responsive overrides, bottom nav
   js/
-    main.ts            — Entry point: imports all modules, assigns onclick functions to window
+    main.ts            — Entry point: imports all modules, assigns onclick functions to window, calls bootstrap()
     state.ts           — Constants, NAV_SCREENS, storage config helpers, global state object S
     auth.ts            — Google Sign-In, sessions
-    utils.ts           — API helpers (apiGet/apiPost), save system, toast, prep checklist, SSE
+    utils.ts           — apiGet/apiPost, save system, toast, prep checklist, SSE, todayIso (local)
     core.ts            — rebuildPlanner, calcRequired, diffStr, badges, isServicePast
-    dashboard.ts       — showScreen(), Dashboard screen
+    init.ts            — buildNav(), initApp, bootstrap. Re-exports modal helpers from modal.ts.
+    modal.ts           — showModal, closeModal, esc, modal escape handler
+    navigate.ts        — Renderer registry: registerRenderer, getCurrentScreen, rerenderCurrentView
+    undo.ts            — Undo manager: pushUndo (5s deferred-save), executeUndo, flushUndo
+    dashboard.ts       — showScreen() router + Dashboard screen
     predictions.ts     — Guest prediction from POS CSV data
     guests.ts          — Guest count tables
     planner.ts         — Week plan grid + transport + inventory modal
@@ -67,16 +88,25 @@ public/
     caterings.ts       — Catering events
     recipes.ts         — Recipe index/library (legacy + v2 unified list)
     recipe-editor.ts   — Recipe v2 editor (multi-step modal), detail view with scaling, batch recipe editor with scaling, post-cook recording
-    orders.ts          — Order overview (combined, standard inventory, dish ingredients tabs)
+    orders.ts          — Order overview (combined, standard inventory, dish ingredients tabs) + Hanos + stocktake
     ingredient-db.ts   — Ingredient database editor + supplier import
     finance.ts         — Finance screen (revenue dashboard, sync, week nav)
     feedback.ts        — Feedback form
     feedback-admin.ts  — Feedback admin screen
     telemetry.ts       — Frontend telemetry collection (errors, screen views, feature usage)
     tutorial.ts        — Guided tutorial system
-    init.ts            — Modal system, esc helper, buildNav(), beforeunload guard, initApp
 test/
   api.test.ts          — API integration tests (Jest + @swc/jest)
+  location-state.test.ts — Frontend setGlobalLocation / restoreGlobalLocation unit tests
+  stock-location.test.ts — Frontend getDbStockForLoc / hasDbStockEntryForLoc unit tests
+  redact-secrets.test.ts — lib/config redactSecrets / safeErrMsg unit tests
+  setup-env.ts         — Test DB guard: refuses prod hosts, swaps in DATABASE_URL_TEST
+.github/workflows/
+  sync-staging.yml     — Manual: copy prod → staging
+prisma/
+  schema.prisma        — Source of truth for the DB shape
+  migrations/          — Forward-only migrations
+  archive/             — Historical one-shot scripts (read the file headers before running)
 tsconfig.json          — Frontend TypeScript config (ESNext modules, DOM libs)
 tsconfig.server.json   — Backend TypeScript config (CommonJS output to dist/server/)
 vite.config.ts         — Vite config (root: public/, proxy /api to :3000, @shared alias)
@@ -89,16 +119,18 @@ npm run dev            # Vite on :5173 (frontend HMR) + tsx on :3000 (backend)
 npm run build          # Vite build + tsc backend → dist/
 npm run preview        # Build + serve on :3000 (single port, for Claude preview)
 npm start              # node dist/server/server.js (production)
-npm test               # Jest with @swc/jest (74 API tests). Requires DATABASE_URL_TEST
-                       # pointing at a scratch DB — test/setup-env.ts refuses to run
-                       # against production. See "Testing" section below.
+npm test               # Jest with @swc/jest. Currently ~112 tests across 4 files.
+                       # Requires DATABASE_URL_TEST pointing at a scratch DB —
+                       # test/setup-env.ts refuses to run against production.
+                       # See "Testing" section below.
 npm run typecheck      # tsc --noEmit on backend
 ```
 
 Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`).
-Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Ledger 1 (Sering West, default ledger `723192`). For the second account/ledger (TestTafel + Centraal, `724466`), set `TEBI_LEDGER_ID_2=724466` and `TEBI_EMAIL_2` + `TEBI_PASSWORD_2`. Backward compatibility: if `TEBI_LEDGER_ID_2` is set but the `_2` credentials are not, the primary `TEBI_EMAIL/PASSWORD` are reused (only valid when one Tebi account spans both ledgers, no longer the case as of 2026-04-26). Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` to bypass discovery if needed.
+Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Ledger 1 (Sering West, default ledger `723192`). For the second account/ledger (TestTafel + Centraal, `724466`), set `TEBI_LEDGER_ID_2=724466` and `TEBI_EMAIL_2` + `TEBI_PASSWORD_2`.
+Note on the `_2` env vars: only `scripts/tebi-sync-worker.js` reads them. The app-level `tebiConfigured` check (`lib/tebi-sync.ts`) and `runTebiSync` refusal logic look at the primary `TEBI_EMAIL`/`TEBI_PASSWORD` only. If `TEBI_LEDGER_ID_2` is set but the `_2` credentials are not, the worker silently falls back to primary creds — only valid if one Tebi account spans both ledgers (no longer the case as of 2026-04-26). Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` to bypass discovery if needed.
 
 ## Preview (for Claude Code verification)
 Use `preview_start` with `name: "preview"` (not `"dev"`). The `dev` script runs two
@@ -111,25 +143,34 @@ confusion. After the page loads, click the "Dev mode login" button to bypass aut
 - Functions referenced in inline `onclick=""` handlers are assigned to `window` in `main.ts`
 - State lives in the global `S` object (typed as `AppState` in state.ts)
 - Each screen has a render function: `renderDashboard()`, `renderOrders()`, etc.
-- `rerenderCurrentView()` refreshes the active screen
+- **Renderer registry**: each screen module calls `registerRenderer('dashboard', renderDashboard)` at import time (see `public/js/navigate.ts`). `rerenderCurrentView()` looks up the renderer by string key. Don't import other screens' render fns directly — register and look up.
+- **`showScreen()` lives in `dashboard.ts`** — it's the screen switcher that imports every other screen's render function. Slated to move into `navigate.ts` so the registry is self-contained (see plan).
+- **Destructive actions use `pushUndo`** (`public/js/undo.ts`), not `confirm()` browser dialog. 5s deferred-save with a "undo" toast. Used by `deleteBatch`, `deleteCatering`, `deleteV2Recipe`, etc.
+- **SSE patches must flush pending undo before applying** — `init.ts` registers `setFlushUndo(flushUndo)` so `applyRemotePatch` commits any pending soft-delete before merging an incoming snapshot.
 - `scheduleSave()` debounces auto-save to PostgreSQL
-- Date format: ISO "YYYY-MM-DD" for service dates, "DD-MM-YYYY" for cook dates in UI
+- Date format: ISO "YYYY-MM-DD" for service dates, "DD-MM-YYYY" for cook dates in UI. `todayIso()` in `utils.ts` returns local Y-M-D (don't use `toISOString().slice(0,10)` — it's UTC).
 - Location keys: "west", "centraal" (in data), "Sering West"/"Sering Centraal" (display)
 - Server writes use `withWriteLock()` to serialize concurrent writes
+- Backend async route handlers wrapped with `asyncHandler()` (`lib/config.ts`) so unhandled rejections route to the global error handler. Throw `AppError(status, message)` for typed HTTP errors.
+- Backend errors that surface to clients should use `safeErrMsg(e)` (redacts password/secret/token/Bearer/Basic patterns). Use raw `errMsg(e)` for console.* logs only.
+- Every write endpoint logs the user action with `dbAppendLog(user.email, user.name, action, details)` — surfaces in the activity log via `GET /api/log`.
+- `addBackendEvent('error'|'feature_use'|..., name, data)` (`routes/telemetry.ts`) is the side-channel for backend events. Errors that don't reach this function won't surface in AI insights.
+- `compression()` middleware in `app.ts` deliberately skips `/api/events` (SSE must stream un-buffered). Don't break this filter.
 - Prisma schema in `prisma/schema.prisma` — run `npx prisma migrate dev` after changes
 - Navigation screens defined in `NAV_SCREENS` array (state.ts) — add new screens there, not in HTML
 - CSS split into per-screen files in `public/css/` — add new screen styles to the matching file
 - Shared types in `shared/types.ts` — used by both backend and frontend via `@shared` alias (Vite) or relative import (backend)
 
 ## TypeScript Patterns
-- **Never use `any`** — use proper types, `unknown` for catch blocks, or specific interfaces
-- **Catch blocks**: always `catch (e: unknown)` — use `errMsg(e)` from `lib/config.ts` on the backend, or `e instanceof Error ? e.message : 'Unknown error'` on the frontend
+- **Backend is `strict: true`. Frontend is currently `strict: false` — being flipped per the audit plan.** Until then, the frontend has accumulated `any` usage; new frontend code should still avoid `any`.
+- **Never use `any`** in new code — use proper types, `unknown` for catch blocks, or specific interfaces
+- **Catch blocks**: always `catch (e: unknown)` — use `errMsg(e)` from `lib/config.ts` on the backend (or `safeErrMsg(e)` for client-facing rendering), or `e instanceof Error ? e.message : 'Unknown error'` on the frontend
 - **Domain constants**: use string literal union types from `shared/types.ts` (`Location`, `Meal`, `DishType`, `StorageType`) — not plain `string`
 - **Prisma ↔ TypeScript boundary**: when writing JSON fields to Prisma, cast with `as unknown as Prisma.InputJsonValue`; when reading, cast back with `as unknown as Batch` or map fields explicitly with `as Batch['type']`
 - **Global state**: `S` is typed as `AppState` (defined in state.ts) — add new fields to the `AppState` interface, not with ad-hoc properties
 - **DOM access**: no catch-all `any` on HTMLElement — use proper casts like `(el as HTMLInputElement).value`
 - **Window functions**: the `Window` index signature `[key: string]: any` is kept only for the `onclick` handler pattern in `main.ts` — don't rely on it for new code
-- **Single Prisma client**: always import `prisma` from `lib/db.ts` — never create separate `new PrismaClient()` instances
+- **Single Prisma client**: always import `prisma` from `lib/db.ts` in app code — never create separate `new PrismaClient()` instances. One-off `scripts/*.js` are exempt (they need their own client outside the request lifecycle).
 
 ## Search/Filter Input Rule
 When a search or filter input triggers a re-render, **never replace the input's own DOM element**.
@@ -139,28 +180,34 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - See `recipes.ts` (`renderRecipeIndex` + `updateRecipeResults`) and `planner.ts` (`renderAddModal`) for examples
 
 ## Key Data Flow
-- `GET /api/data` returns `{batches, guests, recipeIndex, caterings, transportItems}`
-- `POST /api/data` saves `{batches, guests, caterings, transportItems}`
+- `GET /api/data` returns `{batches, guests, recipeIndex, recipes, caterings, transportItems}` — note `recipes` is the v2 recipes array (denormalized with ingredient details). `recipeIndex` is currently always `[]` (legacy v1 table is no longer served).
+- `POST /api/data` → 410 Gone (was the legacy delete-all path; superseded by `/patch`).
 - `POST /api/data/patch` merges `{batches, deletedBatches, guests, caterings, ...}` — uses targeted upserts/deletes (not delete-all/create-all), merges batch fields with existing DB rows
 - Batch CRUD: `GET/POST /api/batches`, `GET/PATCH/DELETE /api/batches/:id`
 - Batch = physical container of food. Lifecycle: PLANNED → COOKED → SERVING → DONE
 - Key batch fields: `location` ("west"/"centraal"), `inTransit` (bool), `services` (embedded JSON), `cookDate`, `note`
 - Cannot delete a batch with stock > 0 (real food exists)
-- Ingredient DB has separate endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`
-- Ingredient stock endpoints: `/api/ingredients/stock`, `/api/ingredients/stock/bulk`
-- Ingredient migration: `POST /api/ingredients/migrate` (accepts oldCsv + hanosCsv, supports `?dryRun=true`)
-- Ingredient DB stores JSON fields: `types`, `storageLocations`, `stock`, `nutrition`, `priceHistory` (Prisma Json type)
+- Recipe v2: `GET /api/recipes`, `GET /api/recipes/:id`, `POST /api/recipes`, `PATCH /api/recipes/:id`, `DELETE /api/recipes/:id`. Photo: `POST/DELETE /api/recipes/:id/photo`. Versioning: `POST /api/recipes/:id/version`. Print: `GET /api/recipes/:id/print`. Cost recalc: `POST /api/recipes/recalculate-costs`.
+- Recipe ingredient suggestion: `GET /api/ingredients/suggest?category=X&loc=west` — lives in `routes/recipes.ts`, mounted under `/api`. Don't look for it in `routes/ingredients.ts`.
+- Ingredient endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`, `/api/ingredients/stock`, `/api/ingredients/stock/bulk`, `/api/ingredients/target-stock`
+- Ingredient migration: `POST /api/ingredients/migrate` (accepts oldCsv + hanosCsv, supports `?dryRun=true`). Supplier upload: `POST /api/ingredients/upload-supplier` (XLSX).
+- Ingredient DB stores JSON fields: `types`, `storageLocations`, `stock`, `nutrition`, `priceHistory`, `targetStock` (Prisma Json type)
 - Ingredient constants in state.ts: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `PRICE_LEVELS`
 - Storage config: `GET/POST /api/storage-config` — per-location areas with colors, order, and spots (persisted as JSON)
 - `STORAGE_CATEGORIES` is dynamically rebuilt from `S.storageConfig` via `rebuildStorageCategories(loc)`
 - Standard inventory: `GET/POST /api/standard-inventory?location=west|centraal` — per-location weekly base order
+- Prep checklist: `GET/POST /api/prep-checklist?loc=west&date=YYYY-MM-DD`
+- Activity log: `GET /api/log` (last 50 actions, oldest first)
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
+- Finance: `GET /api/finance/revenue?start=...&end=...&location=...`, `GET /api/finance/products?...`, `POST /api/finance/sync`, `POST /api/finance/sync-cancel`, `GET /api/finance/sync-status`. Status auto-hydrates from telemetry on first call after a restart.
+- Admin: `POST /api/admin/analyze`, `GET /api/admin/insights`, `PATCH /api/admin/insights/:id`, `GET /api/admin/telemetry/summary`
 - Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.ts sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders. Snapshot updates are targeted (only remote items), so unsaved local changes survive incoming patches.
 
 ## Testing
 - `npm test` runs against **`DATABASE_URL_TEST`**, not `DATABASE_URL`. The planner is live in production — the test suite's `afterAll` block issues `deleteMany` calls that would mutate real records.
 - `test/setup-env.ts` enforces this: if `DATABASE_URL_TEST` is set it overrides `DATABASE_URL`; if `DATABASE_URL` points at a known production host and `DATABASE_URL_TEST` is not set, jest refuses to start.
 - Point `DATABASE_URL_TEST` at a scratch local Postgres, or at staging (`shuttle.proxy.rlwy.net:52350`). Tests use `test-<timestamp>-` prefixed IDs so they can share a DB with other data, but the DB must not be production.
+- Worktrees don't inherit `.env` from the main repo — copy it when creating one.
 - To add a new prod host fragment to the guard, edit `PROD_HOST_FRAGMENTS` in `test/setup-env.ts`.
 - Frontend state modules (e.g. `public/js/state.ts`) can be unit-tested without a DB by importing them directly. The jest config has a `moduleNameMapper` for `@shared/types` so the Vite alias resolves in Node. Mock `localStorage` in the test file (`Object.defineProperty(global, 'localStorage', ...)`) since Jest runs in Node without browser globals.
 
@@ -169,3 +216,5 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - After any migration, always verify `prisma/schema.prisma` matches the DB: run `npx prisma db pull` then `npx prisma generate`, and ensure all fields use camelCase with `@map("snake_case")`. Commit the updated schema in the same PR.
 - Don't remove withWriteLock from write endpoints
 - Don't run `npm test` against production — use `DATABASE_URL_TEST`
+- Don't surface raw `errMsg(e)` to clients in error handlers — use `safeErrMsg(e)` so credentials in upstream error bodies don't leak
+- Don't run anything in `prisma/archive/` against production — those scripts call `deleteMany()` on every major table

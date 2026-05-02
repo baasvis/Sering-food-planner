@@ -160,7 +160,7 @@ routes/
   health.ts            — Health check endpoint
 public/
   index.html           — Shell HTML + login screen (single module entry point)
-  css/                 — Per-screen CSS files (base, dashboard, guests, planner, orders, recipes, finance, feedback, tutorial, mobile)
+  css/                 — Per-screen CSS files (base, dashboard, guests, planner, orders, recipes, recipe-editor, finance, feedback, tutorial, mobile)
   js/
     main.ts            — Entry point: imports all modules, assigns onclick functions to window
     state.ts           — Constants, NAV_SCREENS, storage config helpers, global state object S
@@ -208,17 +208,17 @@ SETUP_GUIDE.md         — Installation instructions
 
 | Entity | Key Fields | Prisma Model / Table |
 |--------|-----------|-----------|
-| Batch | id, name, type, stock, serving, storage, logistics, allergens, cookDate, cookConfirmed, recipeSheetId, recipeId, recipeVolume, recipeIngredients, actualIngredients (JSON), cookNotes, stockDeducted, services (JSON), location, inTransit, note | Batch |
-| Guests | location, day, lunch count, dinner count | AppState (JSON) |
-| Recipe Index | id, name, type, recipeSheetId, allergens, costPerServing, structure, seasonality, ratings, timesServed | RecipeIndex |
-| Recipe (v2) | id, name, type, structure, seasonality, servingTemp, servingSize, recipeVolume, autoAllergens, extraAllergens, costPerServing, prepSteps (JSON), coolingMethod, storageMethod, photoUrl, isComplete, versions (JSON), createdBy, updatedAt | Recipe |
-| Recipe Ingredient Row | id, recipeId, ingredientId, sortOrder, rawAmount, cookedAmount, unit, isFlexible, flexCategory, flexLabel, suggestedNames | RecipeIngredientRow |
-| Recipe Photo | id, recipeId, mimeType, data (binary) | RecipePhoto |
-| Catering | id, name, date, guestCount, deliveryMode, dishes (JSON), logisticsNotes | AppState (JSON) |
-| Transport Item | id, text | AppState (JSON) |
-| Feedback | timestamp, user, type, screen, text, userAgent | Feedback |
-| Ingredient | name, unit, types, category, orderCode, orderUnit, orderUnitSize, orderPrice, storageLocations, stock, nutrition, priceHistory | Ingredient |
-| Standard Inventory | location, items (JSON) | StandardInventory |
+| Batch | id, name, type, stock, serving, storage, location, inTransit, allergens, extraAllergens, cookDate, recipeSheetId, recipeId, recipeVolume, recipeIngredients, actualIngredients (JSON), cookNotes, stockDeducted, services (JSON), parentId, note, orderFor, createdAt | Batch / batches |
+| Guests | location, day, lunch, dinner | Guest / guests (one row per (location, day)) |
+| Recipe Index | id, name, type, recipeSheetId, allergens, costPerServing, structure, seasonality, ratings, timesServed | RecipeIndex / recipe_index (legacy — see Recipe v2) |
+| Recipe (v2) | id, name, type, structure, seasonality, servingTemp, servingSize, recipeVolume, autoAllergens, extraAllergens, costPerServing, prepSteps (JSON), coolingMethod, storageMethod, photoUrl, isComplete, versions (JSON), createdBy, updatedAt, legacySheetId | Recipe / recipes |
+| Recipe Ingredient Row | id, recipeId, ingredientId, sortOrder, rawAmount, cookedAmount, unit, isFlexible, flexCategory, flexLabel, suggestedNames | RecipeIngredientRow / recipe_ingredients |
+| Recipe Photo | id, recipeId, mimeType, data (binary) | RecipePhoto / recipe_photos |
+| Catering | id, name, date, guestCount, deliveryMode, dishes (JSON), logisticsNotes, createdAt | Catering / caterings |
+| Transport Item | id, text | TransportItem / transport_items |
+| Feedback | timestamp, user, type, screen, text, userAgent, processed | Feedback / feedback |
+| Ingredient | id, name, supplierName, unit, types (JSON), category, orderCode, orderUnit, orderUnitSize, orderPrice, pricePer100, pricePer100g, priceLevel, priceAlert, storageLocations (JSON), stock (JSON), targetStock (JSON), nutrition (JSON), priceHistory (JSON), allergens, notes, active, measureMode | Ingredient / ingredients |
+| Standard Inventory | id, name, amount, unit, location | StandardInventory / standard_inventory (one row per item) |
 | Storage Config | location, config (JSON) | StorageConfig |
 | Guest History | location, meal, date, count | GuestHistory (+ GuestHistoryMeta) |
 | Guests Next Weeks | mondayKey, location, day, meal, count | GuestsNextWeeks |
