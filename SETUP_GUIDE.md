@@ -44,6 +44,7 @@ Create `.env` in the repo root. The file is gitignored.
 | `HANOS_USER_WEST` / `HANOS_PASS_WEST` | Optional | Hanos OCC credentials per location. |
 | `HANOS_USER_CENTRAAL` / `HANOS_PASS_CENTRAAL` | Optional | Same for Centraal. |
 | `HANOS_CLIENT_SECRET` | Optional | Hanos OAuth client secret. |
+| `COVERAGE_API_KEY` | Optional | Bearer token for `GET /api/coverage/snapshot`. The weekly e2e coverage agent (`.github/workflows/weekly-coverage.yml`) uses this; the endpoint returns 503 if unset. |
 | `GOOGLE_CREDENTIALS` | Optional | Service account JSON for legacy Google Sheets recipe import (`lib/recipe-sheets.ts`). Not required for normal app use. |
 
 A minimum-viable `.env` for local dev:
@@ -123,11 +124,27 @@ npm start
 
 ## 6. Tests
 
+### Unit / API tests (Jest)
+
 ```bash
 npm test
 ```
 
-Runs Jest with `@swc/jest` against `DATABASE_URL_TEST`. The setup at `test/setup-env.ts` will refuse to start if you accidentally point it at a production host. Currently ~112 tests across `api.test.ts`, `location-state.test.ts`, `stock-location.test.ts`, `redact-secrets.test.ts`.
+Runs Jest with `@swc/jest` against `DATABASE_URL_TEST`. The setup at `test/setup-env.ts` will refuse to start if you accidentally point it at a production host. Currently ~118 tests across `api.test.ts`, `location-state.test.ts`, `stock-location.test.ts`, `redact-secrets.test.ts`.
+
+### End-to-end tests (Playwright)
+
+```bash
+npm run test:e2e        # headless
+npm run test:e2e:ui     # UI runner — better for debugging
+npm run test:all        # both Jest and Playwright in one go
+```
+
+Specs live in `e2e/`. The config in `playwright.config.ts` boots `npm run preview` on port 3000 against `DATABASE_URL_TEST`, then drives a headless browser through the dev-mode-login + location-chooser flow before running each spec.
+
+The e2e suite is run weekly in CI by `.github/workflows/weekly-coverage.yml`, which then files PRs for any `trackEvent()` features that aren't covered.
+
+### Typecheck
 
 ```bash
 npm run typecheck
@@ -165,6 +182,8 @@ See `CLAUDE.md` "Project Structure" for the full file map. Quick orientation:
 - **Migration history**: `prisma/migrations/`
 - **One-shot scripts**: `scripts/` (read the file headers before running anything)
 - **Archived scripts**: `prisma/archive/` — historical migrations, **do not run against prod** (they call `deleteMany()` on every major table)
+- **End-to-end tests**: `e2e/*.spec.ts` (Playwright). `playwright.config.ts` at the repo root.
+- **CI workflows**: `.github/workflows/` — `test.yml` (typecheck + Jest on push/PR), `weekly-coverage.yml` (weekly e2e + agent), `sync-staging.yml` (manual prod→staging copy).
 
 ---
 

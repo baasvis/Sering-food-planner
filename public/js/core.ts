@@ -33,7 +33,10 @@ export function dateToDayName(dateStr: string): string {
 
 // Convert a JS Date object to ISO date string "2026-03-23".
 // Delegates to @shared/dates#formatIso — single source of truth.
-export { formatIso as dateToIso } from '@shared/dates';
+// `import as` + `export` (not pure `export { X } from 'foo'`) so the
+// alias is in the local scope; later code in this file calls `dateToIso(...)`.
+import { formatIso as dateToIso } from '@shared/dates';
+export { dateToIso };
 
 // Check if a service is past / "served".
 // Services store date as ISO string (e.g., "2026-03-23").

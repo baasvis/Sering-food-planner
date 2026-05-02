@@ -565,7 +565,10 @@ function updateSnapshotForRemote(msg: RemotePatchMessage): void {
 // ═══════════════════════════════════════════════════════════════════
 
 // todayIso: see @shared/dates. Local Y-M-D — never UTC.
-export { todayIso } from '@shared/dates';
+// `import` + `export` (not pure re-export) so the name is in local scope;
+// loadPrepChecklist below calls `todayIso()`.
+import { todayIso } from '@shared/dates';
+export { todayIso };
 
 export async function loadPrepChecklist(loc: string): Promise<void> {
   try {

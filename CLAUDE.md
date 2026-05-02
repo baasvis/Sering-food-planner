@@ -29,6 +29,7 @@ lib/
   hanos-client.ts      — Hanos OCC v2 OAuth client class (login pool, cart, product lookup)
   tebi-sync.ts         — Spawn helper for the Tebi Playwright scraper, telemetry hydration, status
   ai-analyzer.ts       — Data quality checks, telemetry aggregation, Claude API insights
+  telemetry-coverage.ts — Discovers trackEvent() features in public/js, mines telemetry sessions for user journeys, surfaces uncovered features for the weekly e2e coverage agent
 routes/
   auth.ts              — Login, logout, session, requireAuth middleware
   data.ts              — GET /api/data (full read) + POST /api/data/patch (targeted merge)
@@ -48,6 +49,7 @@ routes/
   finance.ts           — Finance revenue endpoints (delegate to lib/tebi-sync.ts)
   telemetry.ts         — Telemetry event ingestion (no auth, buffered writes, exports flushBuffer)
   admin.ts             — AI insights & telemetry admin endpoints
+  coverage.ts          — Bearer-token /api/coverage/snapshot (mounted before requireAuth so the weekly remote agent can fetch without a session cookie)
 scripts/
   fix-raw-amounts.ts          — One-off recipe ingredient backfill
   import-standard-inventory.js — CSV → DB importer
@@ -56,6 +58,14 @@ scripts/
   seed-staging.js             — Copy prod → staging DB
   tebi-scraper.js             — Playwright scraper (called by tebi-sync-worker)
   tebi-sync-worker.js         — Node child process spawned by lib/tebi-sync.ts
+  mine-telemetry-journeys.ts  — CLI: scans the telemetry table for user journeys, prints uncovered trackEvent() features
+e2e/                          — Playwright end-to-end test suite (run via `npm run test:e2e`)
+  smoke.spec.ts               — Login + nav smoke
+  navigation.spec.ts          — Each top-level screen
+  batch-create.spec.ts, batch-cooked.spec.ts — Batch lifecycle
+  guests.spec.ts, orders.spec.ts, recipes.spec.ts — Per-screen flows
+  helpers.ts                  — Shared test setup (dev login, location chooser dismiss)
+  coverage-manifest.json      — Maps trackEvent() feature names to which spec covers them; consumed by lib/telemetry-coverage.ts
 public/
   index.html           — Shell HTML + login screen (single module entry point)
   css/
@@ -103,6 +113,10 @@ test/
   setup-env.ts         — Test DB guard: refuses prod hosts, swaps in DATABASE_URL_TEST
 .github/workflows/
   sync-staging.yml     — Manual: copy prod → staging
+  test.yml             — Runs npm run typecheck + npm test on push/PR
+  weekly-coverage.yml  — Weekly Claude Code agent that runs the e2e suite, fetches /api/coverage/snapshot, files PRs to add tests for uncovered features
+.claude/agents/
+  weekly-test-coverage.md — Prompt + tool list for the weekly coverage agent (consumed by .github/workflows/weekly-coverage.yml)
 prisma/
   schema.prisma        — Source of truth for the DB shape
   migrations/          — Forward-only migrations
@@ -110,6 +124,7 @@ prisma/
 tsconfig.json          — Frontend TypeScript config (ESNext modules, DOM libs)
 tsconfig.server.json   — Backend TypeScript config (CommonJS output to dist/server/)
 vite.config.ts         — Vite config (root: public/, proxy /api to :3000, @shared alias)
+playwright.config.ts   — Playwright e2e config (boots `npm run preview` on :3000 against the test DB)
 ```
 
 ## Build & Dev
@@ -119,16 +134,26 @@ npm run dev            # Vite on :5173 (frontend HMR) + tsx on :3000 (backend)
 npm run build          # Vite build + tsc backend → dist/
 npm run preview        # Build + serve on :3000 (single port, for Claude preview)
 npm start              # node dist/server/server.js (production)
-npm test               # Jest with @swc/jest. Currently ~112 tests across 4 files.
+npm test               # Jest with @swc/jest. Currently ~118 tests across 4 files.
                        # Requires DATABASE_URL_TEST pointing at a scratch DB —
                        # test/setup-env.ts refuses to run against production.
                        # See "Testing" section below.
+npm run test:e2e       # Playwright end-to-end suite. Runs `npm run preview` on
+                       # :3000 first, then drives a headless browser through
+                       # the dev-mode-login flow and through each screen.
+                       # Specs live in e2e/. Requires DATABASE_URL_TEST.
+npm run test:e2e:ui    # Same suite, but in Playwright's UI runner (good for debugging).
+npm run test:all       # npm test && npm run test:e2e — full local test pass.
+npm run telemetry:mine # CLI: scans the telemetry table for user journeys, prints
+                       # uncovered trackEvent() features. Used by the weekly
+                       # coverage agent and for ad-hoc local exploration.
 npm run typecheck      # tsc --noEmit on backend
 ```
 
 Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`).
+Optional: `COVERAGE_API_KEY` for the weekly e2e coverage agent — required for `GET /api/coverage/snapshot` (returns 503 if unset). The endpoint is mounted before `requireAuth` so a remote agent can fetch with a `Bearer <key>` header instead of a session cookie.
 Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Ledger 1 (Sering West, default ledger `723192`). For the second account/ledger (TestTafel + Centraal, `724466`), set `TEBI_LEDGER_ID_2=724466` and `TEBI_EMAIL_2` + `TEBI_PASSWORD_2`.
 Note on the `_2` env vars: only `scripts/tebi-sync-worker.js` reads them. The app-level `tebiConfigured` check (`lib/tebi-sync.ts`) and `runTebiSync` refusal logic look at the primary `TEBI_EMAIL`/`TEBI_PASSWORD` only. If `TEBI_LEDGER_ID_2` is set but the `_2` credentials are not, the worker silently falls back to primary creds — only valid if one Tebi account spans both ledgers (no longer the case as of 2026-04-26). Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` to bypass discovery if needed.
 
@@ -210,6 +235,15 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Worktrees don't inherit `.env` from the main repo — copy it when creating one.
 - To add a new prod host fragment to the guard, edit `PROD_HOST_FRAGMENTS` in `test/setup-env.ts`.
 - Frontend state modules (e.g. `public/js/state.ts`) can be unit-tested without a DB by importing them directly. The jest config has a `moduleNameMapper` for `@shared/types` so the Vite alias resolves in Node. Mock `localStorage` in the test file (`Object.defineProperty(global, 'localStorage', ...)`) since Jest runs in Node without browser globals.
+
+### End-to-end tests (Playwright)
+- Specs live in `e2e/`. Run with `npm run test:e2e` (headless) or `npm run test:e2e:ui` (UI runner). Use the `data-testid="..."` attribute on any element a spec needs to find — the existing specs depend on a small set of stable testids and adding a new selector to the markup is preferred over fragile text matching.
+- `playwright.config.ts` boots `npm run preview` on :3000 against `DATABASE_URL_TEST` and waits for the dev-mode login button before running tests. `e2e/helpers.ts` handles the dev-login + location-chooser ceremony.
+- The e2e suite is *not* part of `npm test`. It runs in `npm run test:e2e` and is consumed weekly by `.github/workflows/weekly-coverage.yml`, which:
+  1. Runs the suite,
+  2. Calls `GET /api/coverage/snapshot` (bearer-auth via `COVERAGE_API_KEY`),
+  3. Spawns a Claude Code agent (`/.claude/agents/weekly-test-coverage.md`) to file PRs for any uncovered `trackEvent()` features.
+- New `trackEvent('feature_name')` calls in the frontend automatically widen the "uncovered features" surface until covered by a spec — see `lib/telemetry-coverage.ts:discoverKnownFeatures`.
 
 ## Don't
 - Don't change the Prisma schema without creating a migration (`npx prisma migrate dev`)

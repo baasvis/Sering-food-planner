@@ -692,8 +692,11 @@ export function getVisibleDays(offset: any) {
 }
 
 // Delegate to @shared/dates — was a near-duplicate of dateToIso/todayIso/fmtDate.
-// Re-exported under the legacy names because main.ts puts them on window.
-export { mondayKeyOf as getMondayKeyForDate, formatIso as localDateStr } from '@shared/dates';
+// `import as` + `export` (not pure re-export) so the aliases land in local
+// scope; predictGuests above calls localDateStr / getMondayKeyForDate.
+// main.ts also puts them on window for inline-onclick compat.
+import { mondayKeyOf as getMondayKeyForDate, formatIso as localDateStr } from '@shared/dates';
+export { getMondayKeyForDate, localDateStr };
 
 // Render the day-navigation header bar used by both Guests and Planner
 export function renderDayNav(offset: any, minOffset: any, maxOffset: any, changeFn: any, extraHtml: any) {

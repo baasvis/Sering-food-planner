@@ -18,7 +18,10 @@ export function getFinanceMonday(offset: any) {
 }
 
 // Delegate to @shared/dates — was duplicating dateToIso/todayIso/localDateStr.
-export { formatIso as fmtDate, shortDayMonth as fmtDateShort } from '@shared/dates';
+// `import as` + `export` (not pure re-export) so the aliases land in local
+// scope; renderFinance and loadFinanceData call fmtDate / fmtDateShort below.
+import { formatIso as fmtDate, shortDayMonth as fmtDateShort } from '@shared/dates';
+export { fmtDate, fmtDateShort };
 
 export function fmtEuro(n: any) {
   if (n == null || isNaN(n)) return '-';
