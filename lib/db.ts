@@ -67,6 +67,72 @@ export function validateGuests(guests: GuestsData): string | null {
   return null;
 }
 
+export function validateCatering(c: Catering, prefix = ''): string | null {
+  const p = prefix ? `${prefix}: ` : '';
+  if (!c.id || typeof c.id !== 'string') return `${p}missing or invalid id`;
+  if (typeof c.name !== 'string' || c.name.length > 200) return `${p}invalid name`;
+  if (c.date !== null && c.date !== undefined && (typeof c.date !== 'string' || (c.date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(c.date)))) {
+    return `${p}invalid date (expected YYYY-MM-DD)`;
+  }
+  if (typeof c.guestCount !== 'number' || c.guestCount < 0 || c.guestCount > 9999) return `${p}invalid guestCount`;
+  if (typeof c.deliveryMode !== 'string' || c.deliveryMode.length > 50) return `${p}invalid deliveryMode`;
+  if (!Array.isArray(c.dishes)) return `${p}dishes must be an array`;
+  for (const d of c.dishes) {
+    if (!d.dishId || typeof d.dishId !== 'string') return `${p}dish missing dishId`;
+    if (typeof d.name !== 'string' || d.name.length > 200) return `${p}dish has invalid name`;
+    if (typeof d.type !== 'string') return `${p}dish has invalid type`;
+  }
+  if (typeof c.logisticsNotes !== 'string' || c.logisticsNotes.length > 5000) return `${p}invalid logisticsNotes`;
+  return null;
+}
+
+export function validateCaterings(caterings: Catering[]): string | null {
+  if (!Array.isArray(caterings)) return 'caterings must be an array';
+  if (caterings.length > 500) return 'Too many caterings (max 500)';
+  const ids = new Set<string>();
+  for (let i = 0; i < caterings.length; i++) {
+    const c = caterings[i];
+    if (ids.has(c.id)) return `Catering ${i}: duplicate id "${c.id}"`;
+    ids.add(c.id);
+    const err = validateCatering(c, `Catering ${i}`);
+    if (err) return err;
+  }
+  return null;
+}
+
+export function validateTransportItem(t: TransportItem, prefix = ''): string | null {
+  const p = prefix ? `${prefix}: ` : '';
+  if (!t.id || typeof t.id !== 'string') return `${p}missing or invalid id`;
+  if (typeof t.text !== 'string' || t.text.length > 500) return `${p}invalid text`;
+  return null;
+}
+
+export function validateTransportItems(items: TransportItem[]): string | null {
+  if (!Array.isArray(items)) return 'transportItems must be an array';
+  if (items.length > 200) return 'Too many transport items (max 200)';
+  const ids = new Set<string>();
+  for (let i = 0; i < items.length; i++) {
+    const t = items[i];
+    if (ids.has(t.id)) return `TransportItem ${i}: duplicate id "${t.id}"`;
+    ids.add(t.id);
+    const err = validateTransportItem(t, `TransportItem ${i}`);
+    if (err) return err;
+  }
+  return null;
+}
+
+/** Validate an array of string IDs (for deletedBatches/Caterings/TransportItems). */
+export function validateIdList(ids: unknown, fieldName: string, max = 500): string | null {
+  if (!Array.isArray(ids)) return `${fieldName} must be an array`;
+  if (ids.length > max) return `${fieldName}: too many ids (max ${max})`;
+  for (let i = 0; i < ids.length; i++) {
+    if (typeof ids[i] !== 'string' || (ids[i] as string).length === 0 || (ids[i] as string).length > 200) {
+      return `${fieldName}[${i}]: invalid id`;
+    }
+  }
+  return null;
+}
+
 // ── Default data ──
 
 export function getDefaultGuests(): GuestsData {
@@ -743,11 +809,47 @@ export async function calcRecipeNutrition(
 // toGrams: see shared/units.ts (single source of truth — was duplicated here,
 // in public/js/recipe-editor.ts, and in public/js/orders.ts as toBaseUnit).
 
-/** Validate a recipe for required fields */
-export function validateRecipe(r: { name?: string; type?: string; servingSize?: number }): string | null {
+/** Validate a recipe for required fields. Catches the servingSize=0 edge case
+ *  that previously caused division-by-zero in hydrateRecipeForDetail. */
+export function validateRecipe(r: {
+  name?: string;
+  type?: string;
+  servingSize?: number;
+  recipeVolume?: number | null;
+  ingredients?: Array<{ rawAmount?: unknown; cookedAmount?: unknown; unit?: unknown; ingredientId?: unknown; isFlexible?: unknown }>;
+  extraAllergens?: unknown;
+  prepSteps?: Array<{ step?: unknown; text?: unknown }>;
+}): string | null {
   if (!r.name || typeof r.name !== 'string' || r.name.length > 200) return 'invalid name';
   if (r.type && !VALID_TYPES.includes(r.type)) return `invalid type "${r.type}"`;
   if (r.servingSize !== undefined && (typeof r.servingSize !== 'number' || r.servingSize < 1 || r.servingSize > 9999)) return 'invalid servingSize';
+  if (r.recipeVolume !== undefined && r.recipeVolume !== null && (typeof r.recipeVolume !== 'number' || r.recipeVolume < 0 || r.recipeVolume > 9999)) return 'invalid recipeVolume';
+  if (r.extraAllergens !== undefined) {
+    if (!Array.isArray(r.extraAllergens)) return 'extraAllergens must be an array';
+    if (r.extraAllergens.length > 50) return 'too many extraAllergens';
+    for (const a of r.extraAllergens) if (typeof a !== 'string' || a.length > 100) return 'invalid extraAllergens entry';
+  }
+  if (r.ingredients !== undefined) {
+    if (!Array.isArray(r.ingredients)) return 'ingredients must be an array';
+    if (r.ingredients.length > 200) return 'too many ingredients (max 200)';
+    for (let i = 0; i < r.ingredients.length; i++) {
+      const ing = r.ingredients[i];
+      if (typeof ing.rawAmount !== 'number' || ing.rawAmount < 0 || ing.rawAmount > 999999) return `ingredient ${i}: invalid rawAmount`;
+      if (ing.cookedAmount !== undefined && ing.cookedAmount !== null && (typeof ing.cookedAmount !== 'number' || ing.cookedAmount < 0 || ing.cookedAmount > 999999)) return `ingredient ${i}: invalid cookedAmount`;
+      if (ing.unit !== undefined && (typeof ing.unit !== 'string' || ing.unit.length > 20)) return `ingredient ${i}: invalid unit`;
+      if (ing.ingredientId !== undefined && ing.ingredientId !== null && typeof ing.ingredientId !== 'string') return `ingredient ${i}: invalid ingredientId`;
+      if (ing.isFlexible !== undefined && typeof ing.isFlexible !== 'boolean') return `ingredient ${i}: isFlexible must be boolean`;
+    }
+  }
+  if (r.prepSteps !== undefined) {
+    if (!Array.isArray(r.prepSteps)) return 'prepSteps must be an array';
+    if (r.prepSteps.length > 50) return 'too many prepSteps';
+    for (let i = 0; i < r.prepSteps.length; i++) {
+      const ps = r.prepSteps[i];
+      if (typeof ps.step !== 'number') return `prepStep ${i}: step must be a number`;
+      if (typeof ps.text !== 'string' || ps.text.length > 5000) return `prepStep ${i}: invalid text`;
+    }
+  }
   return null;
 }
 

@@ -7,7 +7,29 @@ import { errMsg, AppError, asyncHandler } from '../lib/config';
 import { parseHanosQuantityGrams } from '../lib/hanos-parser';
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+// File filter: accept only XLSX (Hanos supplier export) and CSV (legacy import).
+// 20 MB cap covers a Hanos export of ~10k ingredients with full price history.
+// Without the filter, multer accepted anything and only XLSX.read failed at
+// parse time, but the buffer was already in memory.
+const ACCEPTED_MIME = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+  'application/vnd.ms-excel',                                          // .xls (legacy)
+  'text/csv',
+  'application/csv',
+  'application/octet-stream', // some browsers send this for .xlsx — accepted with extension check below
+]);
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  // multer types are loose (project ships only `declare module 'multer'`),
+  // so we hand-type the fileFilter signature here.
+  fileFilter: (_req: Request, file: { mimetype: string; originalname: string }, cb: (err: Error | null, accept?: boolean) => void) => {
+    const ok = ACCEPTED_MIME.has(file.mimetype) || /\.(xlsx|xls|csv)$/i.test(file.originalname);
+    if (!ok) return cb(new Error('Only .xlsx, .xls, and .csv files are accepted'));
+    cb(null, true);
+  },
+});
 
 // Hanos category → app type + category mapping
 const HANOS_TYPE_MAP: Record<string, { types: string[]; category: string }> = {

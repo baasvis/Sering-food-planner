@@ -796,6 +796,57 @@ describe('Data Patch API', () => {
     const gone = checkRes.body.batches.find((b: any) => b.id === patchBatchId);
     expect(gone).toBeUndefined();
   }, 15000);
+
+  // S9 validation surface — every patch field is now validated before any DB
+  // write. Previously deletedBatches/Caterings/TransportItems and the
+  // caterings/transportItems arrays themselves were forwarded straight to
+  // Prisma. Audit §6.1.
+
+  it('POST /api/data/patch — rejects deletedBatches that is not an array', async () => {
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({ deletedBatches: 'not-an-array' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/deletedBatches/i);
+  });
+
+  it('POST /api/data/patch — rejects deletedBatches with > 500 ids', async () => {
+    const tooMany = Array.from({ length: 501 }, (_, i) => `id-${i}`);
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({ deletedBatches: tooMany });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/too many/i);
+  });
+
+  it('POST /api/data/patch — rejects deletedBatches with non-string entries', async () => {
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({ deletedBatches: ['valid', 1234] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/deletedBatches\[1\]/i);
+  });
+
+  it('POST /api/data/patch — rejects malformed catering', async () => {
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({
+        caterings: [{
+          id: T + 'c1', name: 'x', date: 'not-a-date', guestCount: 0,
+          deliveryMode: 'pickup', dishes: [], logisticsNotes: '',
+        }],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/date/i);
+  });
+
+  it('POST /api/data/patch — rejects malformed transport item', async () => {
+    const res = await request(app)
+      .post('/api/data/patch')
+      .send({ transportItems: [{ id: T + 't1', text: 123 }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/text/i);
+  });
 });
 
 // ── Recipe v2 CRUD ──

@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { dbReadAll, dbAppendLog, validateBatches, validateGuests, withWriteLock, dbWriteGuests, dbUpsertBatches, dbDeleteBatchIds, dbUpsertCaterings, dbDeleteCateringIds, dbUpsertTransportItems, dbDeleteTransportItemIds } from '../lib/db';
+import { dbReadAll, dbAppendLog, validateBatches, validateGuests, validateCaterings, validateTransportItems, validateIdList, withWriteLock, dbWriteGuests, dbUpsertBatches, dbDeleteBatchIds, dbUpsertCaterings, dbDeleteCateringIds, dbUpsertTransportItems, dbDeleteTransportItemIds } from '../lib/db';
 import { broadcast } from './events';
 import { asyncHandler, AppError } from '../lib/config';
 
@@ -42,6 +42,40 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
   const { batches, deletedBatches, guests, caterings, deletedCaterings,
           transportItems, deletedTransportItems } = req.body;
 
+  // Validate ALL inputs before acquiring the lock. The previous version only
+  // validated batches and guests; deletedBatches/Caterings/TransportItems and
+  // the caterings/transportItems arrays themselves were passed straight to
+  // Prisma, which meant a misbehaving authenticated client could mass-delete
+  // by sending a giant array of IDs. (Audit §6.1.)
+  if (deletedBatches !== undefined) {
+    const err = validateIdList(deletedBatches, 'deletedBatches');
+    if (err) throw new AppError(400, err);
+  }
+  if (deletedCaterings !== undefined) {
+    const err = validateIdList(deletedCaterings, 'deletedCaterings');
+    if (err) throw new AppError(400, err);
+  }
+  if (deletedTransportItems !== undefined) {
+    const err = validateIdList(deletedTransportItems, 'deletedTransportItems');
+    if (err) throw new AppError(400, err);
+  }
+  if (batches !== undefined) {
+    const err = validateBatches(batches);
+    if (err) throw new AppError(400, err);
+  }
+  if (guests !== undefined && guests !== null) {
+    const err = validateGuests(guests);
+    if (err) throw new AppError(400, err);
+  }
+  if (caterings !== undefined) {
+    const err = validateCaterings(caterings);
+    if (err) throw new AppError(400, err);
+  }
+  if (transportItems !== undefined) {
+    const err = validateTransportItems(transportItems);
+    if (err) throw new AppError(400, err);
+  }
+
   await withWriteLock(async () => {
     // Batches: targeted upsert/delete (no more delete-all/create-all)
     if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
@@ -49,8 +83,6 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
         await dbDeleteBatchIds(deletedBatches);
       }
       if (batches && batches.length) {
-        const batchErr = validateBatches(batches);
-        if (batchErr) throw new AppError(400, batchErr);
         // Field-level merge: upsert reads existing row and merges,
         // so stale fields from one client don't overwrite fresh changes
         await dbUpsertBatches(batches);
@@ -59,8 +91,6 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
 
     // Guests: read current, merge changed days, write back
     if (guests) {
-      const guestErr = validateGuests(guests);
-      if (guestErr) throw new AppError(400, guestErr);
       const current = await dbReadAll();
       const merged = current.guests;
       for (const loc of ['west', 'centraal']) {
