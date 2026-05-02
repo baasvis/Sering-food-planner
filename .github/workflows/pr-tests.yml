@@ -1,0 +1,49 @@
+name: Tests
+
+# Runs the full test suite (typecheck + Jest API + Playwright e2e) on every
+# PR targeting main, plus on direct pushes to main as a safety net.
+#
+# Concurrency: every job in this workflow shares one staging DB
+# (DATABASE_URL_TEST). Two runs in parallel would race on guestsNextWeeks
+# snapshot/restore, batch creation IDs, etc. The 'tests-staging-db' group
+# serialises every run that touches the staging DB — including the weekly
+# coverage agent's verification step.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Different runs of the workflow share one DB; queue them.
+concurrency:
+  group: tests-staging-db
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL_TEST: ${{ secrets.DATABASE_URL_TEST }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # No cache: 'npm' — package-lock.json is gitignored in this repo.
+
+      - run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Jest API tests
+        run: npm test
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright e2e tests
+        run: npm run test:e2e
