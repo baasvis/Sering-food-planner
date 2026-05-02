@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import express, { Request, Response } from 'express';
-import { errMsg } from '../lib/config';
+import { errMsg, safeErrMsg } from '../lib/config';
 import { OCC_BASE, getCredentials, getClient, invalidateClient, formatProduct } from '../lib/hanos-client';
 
 const router = express.Router();
@@ -17,14 +17,14 @@ router.get('/status', (_req: Request, res: Response) => {
     configured: !!(west.user && west.pass) || !!(centraal.user && centraal.pass),
     west: !!(west.user && west.pass),
     centraal: !!(centraal.user && centraal.pass),
-    // Diagnostic: show credential presence (not values) and client_secret presence
+    // Diagnostic: show credential presence only. Length removed to avoid
+    // a side-channel signal about the client secret value.
     _diag: {
       westUser: !!west.user,
       westPass: !!west.pass,
       centraalUser: !!centraal.user,
       centraalPass: !!centraal.pass,
       clientSecret: !!process.env.HANOS_CLIENT_SECRET,
-      clientSecretLen: (process.env.HANOS_CLIENT_SECRET || '').length,
     },
   });
 });
@@ -39,7 +39,7 @@ router.get('/test-login', async (req: Request, res: Response) => {
     const client = await getClient(loc);
     res.json({ ok: true, hasToken: !!client.accessToken, hasCart: !!client.cartId });
   } catch (e: unknown) {
-    res.json({ ok: false, error: errMsg(e), location: loc });
+    res.json({ ok: false, error: safeErrMsg(e), location: loc });
   }
 });
 
@@ -71,7 +71,7 @@ router.post('/add-to-cart', async (req: Request, res: Response) => {
         });
       } catch (e: unknown) {
         console.error(`[Hanos] Failed to add ${orderCode}:`, errMsg(e));
-        results.push({ orderCode, success: false, error: errMsg(e) });
+        results.push({ orderCode, success: false, error: safeErrMsg(e) });
       }
     }
 
@@ -81,7 +81,7 @@ router.post('/add-to-cart', async (req: Request, res: Response) => {
   } catch (e: unknown) {
     console.error('[Hanos] add-to-cart error:', errMsg(e));
     invalidateClient(req.body.location || 'west');
-    res.status(500).json({ error: errMsg(e) });
+    res.status(500).json({ error: safeErrMsg(e) });
   }
 });
 
@@ -120,7 +120,7 @@ router.get('/product/:code', async (req: Request, res: Response) => {
     res.json(formatProduct(product));
   } catch (e: unknown) {
     console.error('[Hanos] product lookup error:', errMsg(e));
-    res.status(500).json({ error: errMsg(e) });
+    res.status(500).json({ error: safeErrMsg(e) });
   }
 });
 
@@ -148,7 +148,7 @@ router.get('/search', async (req: Request, res: Response) => {
     res.json({ results: products, total: pagination ? pagination.totalResults : products.length });
   } catch (e: unknown) {
     console.error('[Hanos] search error:', errMsg(e));
-    res.status(500).json({ error: errMsg(e) });
+    res.status(500).json({ error: safeErrMsg(e) });
   }
 });
 
@@ -175,7 +175,7 @@ router.get('/cart', async (req: Request, res: Response) => {
   } catch (e: unknown) {
     console.error('[Hanos] cart error:', errMsg(e));
     invalidateClient((req.query.location as string) || 'west');
-    res.status(500).json({ error: errMsg(e) });
+    res.status(500).json({ error: safeErrMsg(e) });
   }
 });
 

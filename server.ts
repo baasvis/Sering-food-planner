@@ -8,7 +8,7 @@ import fs from 'fs';
 import { CONFIG, INGREDIENTS_SEED, STD_INV_SEED, errMsg } from './lib/config';
 import { prisma } from './lib/db';
 import app from './app';
-import { startFlushTimer, stopFlushTimer } from './routes/telemetry';
+import { startFlushTimer, stopFlushTimer, flushBuffer } from './routes/telemetry';
 import { runTebiSync } from './lib/tebi-sync';
 
 // ── Seed — on first deploy, write seed data to Postgres ──
@@ -101,9 +101,12 @@ app.listen(PORT, () => {
   }).catch(() => { console.log('  node-cron not available, skipping finance sync'); });
 });
 
-// Graceful shutdown
+// Graceful shutdown — flush the telemetry buffer before disconnecting so
+// up-to-60s of buffered events (including any final error events from the
+// shutdown itself) are not dropped on every deploy.
 process.on('SIGTERM', async () => {
   stopFlushTimer();
+  try { await flushBuffer(); } catch { /* best-effort */ }
   await prisma.$disconnect();
   process.exit(0);
 });

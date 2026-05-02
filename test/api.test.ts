@@ -86,12 +86,15 @@ describe('GET /api/data', () => {
 });
 
 describe('POST /api/data', () => {
-  it('rejects invalid batches', async () => {
+  // Legacy endpoint was the destructive delete-all/create-all path. Now returns
+  // 410 Gone — clients must use POST /api/data/patch instead.
+  it('returns 410 Gone (legacy endpoint removed)', async () => {
     const res = await request(app)
       .post('/api/data')
-      .send({ batches: [{ id: 'x', name: 'Bad', type: 'INVALID' }] });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/invalid type/i);
+      .send({ batches: [] });
+    expect(res.status).toBe(410);
+    expect(res.body.error).toMatch(/legacy/i);
+    expect(res.body.message).toMatch(/\/api\/data\/patch/);
   });
 });
 

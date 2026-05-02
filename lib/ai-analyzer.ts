@@ -73,24 +73,36 @@ export async function runDataQualityChecks(): Promise<DataQualityReport> {
     take: 20,
   });
 
-  // Missing guest counts for next 7 days
-  const futureDays: string[] = [];
+  // Missing guest counts for next 7 weekdays.
+  //
+  // Guest.day stores weekday short names ('Mon'..'Sun'), not ISO dates.
+  // The previous version queried Guest.day with ISO date strings and
+  // always returned 0 rows, then reported every future weekday as
+  // "missing" — flooding insights with false positives. We compare
+  // against the weekday name and use the ISO date only for the
+  // human-readable insight body.
+  const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+  const futureDayPairs: { weekday: string; iso: string }[] = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(Date.now() + i * 86400000);
-    if (d.getDay() === 0) continue; // Skip Sunday
-    futureDays.push(d.toISOString().slice(0, 10));
+    if (d.getDay() === 0) continue; // Skip Sunday — restaurant closed
+    futureDayPairs.push({
+      weekday: WEEKDAY_NAMES[d.getDay()],
+      iso: d.toISOString().slice(0, 10),
+    });
   }
+  const futureWeekdays = futureDayPairs.map(p => p.weekday);
   const existingGuests = await prisma.guest.findMany({
-    where: { day: { in: futureDays } },
+    where: { day: { in: futureWeekdays } },
     select: { day: true, location: true, lunch: true, dinner: true },
   });
   const guestDaySet = new Set(existingGuests
     .filter(g => g.lunch > 0 || g.dinner > 0)
     .map(g => `${g.location}:${g.day}`));
-  const missingGuestDays = futureDays.flatMap(day =>
+  const missingGuestDays = futureDayPairs.flatMap(({ weekday, iso }) =>
     ['west', 'centraal']
-      .filter(loc => !guestDaySet.has(`${loc}:${day}`))
-      .map(loc => `${loc}:${day}`)
+      .filter(loc => !guestDaySet.has(`${loc}:${weekday}`))
+      .map(loc => `${loc}:${iso}`)
   );
 
   // Finance sync gaps — check last 7 days

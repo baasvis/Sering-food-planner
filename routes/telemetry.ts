@@ -25,7 +25,7 @@ const MAX_BUFFER = 10_000;
 let buffer: BufferedEvent[] = [];
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 
-async function flushBuffer(): Promise<void> {
+export async function flushBuffer(): Promise<void> {
   if (buffer.length === 0) return;
   const events = buffer.splice(0, buffer.length);
   try {

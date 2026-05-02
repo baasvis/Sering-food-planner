@@ -19,6 +19,7 @@ import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import { addBackendEvent } from '../routes/telemetry';
 import { prisma } from './db';
+import { redactSecrets } from './config';
 
 export type SyncSource = 'manual' | 'cron';
 
@@ -242,15 +243,19 @@ export function runTebiSync(opts: RunOpts): RunResult {
   let stdoutTail = '';
   let stderrTail = '';
 
+  // Worker stdout/stderr is captured here so getStatus() can show diagnostic
+  // detail. The Playwright scraper occasionally echoes login form contents
+  // (and Tebi's API can echo request bodies in error responses), so we redact
+  // password/secret/token patterns before persisting or surfacing.
   child.stdout!.on('data', (data: Buffer) => {
-    const s = data.toString();
+    const s = redactSecrets(data.toString());
     stdoutTail = tail(stdoutTail + s, OUTPUT_TAIL_CHARS);
     appendOutput(s);
     s.trim().split('\n').forEach((line) => { if (line) console.log(`[finance] ${line}`); });
   });
 
   child.stderr!.on('data', (data: Buffer) => {
-    const s = data.toString();
+    const s = redactSecrets(data.toString());
     stderrTail = tail(stderrTail + s, OUTPUT_TAIL_CHARS);
     appendOutput(s);
     console.error(`[finance] ${s.trim()}`);

@@ -565,7 +565,14 @@ function updateSnapshotForRemote(msg: RemotePatchMessage): void {
 // ═══════════════════════════════════════════════════════════════════
 
 export function todayIso(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  // Local YYYY-MM-DD. toISOString().slice(0,10) returns UTC, which flips to
+  // yesterday in Amsterdam between 00:00 and ~02:00 local — used to break
+  // prep-checklist keys for late-night kitchen work.
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 export async function loadPrepChecklist(loc: string): Promise<void> {

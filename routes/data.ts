@@ -1,8 +1,7 @@
 import express, { Request, Response } from 'express';
-import { dbReadAll, dbWriteAll, dbAppendLog, getDefaultGuests, validateBatches, validateGuests, withWriteLock, dbWriteGuests, dbUpsertBatches, dbDeleteBatchIds, dbUpsertCaterings, dbDeleteCateringIds, dbUpsertTransportItems, dbDeleteTransportItemIds } from '../lib/db';
+import { dbReadAll, dbAppendLog, validateBatches, validateGuests, withWriteLock, dbWriteGuests, dbUpsertBatches, dbDeleteBatchIds, dbUpsertCaterings, dbDeleteCateringIds, dbUpsertTransportItems, dbDeleteTransportItemIds } from '../lib/db';
 import { broadcast } from './events';
 import { asyncHandler, AppError } from '../lib/config';
-import type { Batch, Catering, TransportItem } from '../shared/types';
 
 const router = express.Router();
 
@@ -10,23 +9,16 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   res.json(await dbReadAll());
 }));
 
-router.post('/', asyncHandler(async (req: Request, res: Response) => {
-  const batches = req.body.batches || [];
-  const guests = req.body.guests || getDefaultGuests();
-  const caterings = req.body.caterings || [];
-  const transportItems = req.body.transportItems || [];
-
-  const batchErr = validateBatches(batches);
-  if (batchErr) return res.status(400).json({ error: batchErr });
-  const guestErr = validateGuests(guests);
-  if (guestErr) return res.status(400).json({ error: guestErr });
-
-  await dbWriteAll(batches, guests, caterings, transportItems);
-
-  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
-  dbAppendLog(user.email, user.name, 'save', `${batches.length} batches`);
-
-  res.json({ ok: true, savedAt: new Date().toISOString() });
+// Legacy POST /api/data — full replace of batches/guests/caterings/transport.
+// Superseded by POST /api/data/patch (targeted upsert/delete). Kept reachable
+// only to return a clear refusal: a stale browser tab from a previous version
+// could otherwise issue a destructive delete-all-then-create-all against live
+// data. Frontend has used /patch since the 2026-03-23 batch model rewrite.
+router.post('/', asyncHandler(async (_req: Request, res: Response) => {
+  res.status(410).json({
+    error: 'Legacy save endpoint removed',
+    message: 'POST /api/data is no longer supported. Use POST /api/data/patch.',
+  });
 }));
 
 // ── Concurrent save detection ──

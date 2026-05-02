@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import multer from 'multer';
 import XLSX from 'xlsx';
 import { prisma, dbAppendLog } from '../lib/db';
-import { errMsg } from '../lib/config';
+import { errMsg, safeErrMsg } from '../lib/config';
 import { parseHanosQuantityGrams } from '../lib/hanos-parser';
 
 const router = express.Router();
@@ -125,7 +125,7 @@ router.post('/upload-supplier', upload.single('file'), (req: Request, res: Respo
     res.json(products);
   } catch (e: unknown) {
     console.error('XLSX parse error:', errMsg(e));
-    res.status(500).json({ error: 'Failed to parse file: ' + errMsg(e) });
+    res.status(500).json({ error: 'Failed to parse file: ' + safeErrMsg(e) });
   }
 });
 
@@ -310,7 +310,7 @@ router.post('/migrate', upload.fields([
     res.json({ ok: true, ...stats });
   } catch (e: unknown) {
     console.error('Migration error:', errMsg(e));
-    res.status(500).json({ error: errMsg(e) });
+    res.status(500).json({ error: safeErrMsg(e) });
   }
 });
 

@@ -23,6 +23,31 @@ export function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : 'Unknown error';
 }
 
+// Redact credential-like substrings from error text before it reaches HTTP
+// responses, telemetry payloads, or stderr captures. Upstream APIs occasionally
+// echo the request (Hanos OAuth, Tebi's Playwright stderr) and could leak the
+// password/secret/token in their error bodies. Use whenever rendering an
+// error message that came from an external system.
+const REDACT_PATTERNS: Array<[RegExp, string]> = [
+  // Authorization header schemes — preserve the scheme name, hide the value.
+  [/(\bBearer\s+)[A-Za-z0-9._\-+/=]+/gi, '$1***'],
+  [/(\bBasic\s+)[A-Za-z0-9+/=]+/gi, '$1***'],
+  // key=value / key: value patterns. "authorization" is intentionally NOT in
+  // this list — Bearer/Basic above handle the realistic auth-header cases,
+  // and adding it here would double-redact and hide the scheme name.
+  [/(\b(?:password|passwd|secret|token|client_secret|api[_-]?key)\b\s*[:=]\s*)([^\s,&;"'}]+)/gi,
+   '$1***'],
+];
+export function redactSecrets(s: string): string {
+  if (!s) return s;
+  let out = s;
+  for (const [re, rep] of REDACT_PATTERNS) out = out.replace(re, rep);
+  return out;
+}
+export function safeErrMsg(e: unknown): string {
+  return redactSecrets(errMsg(e));
+}
+
 // Typed error with HTTP status code — caught by global error handler in app.ts
 export class AppError extends Error {
   constructor(public status: number, message: string) {
