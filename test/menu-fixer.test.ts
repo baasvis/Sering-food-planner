@@ -311,13 +311,9 @@ describe('assignServicesPass2', () => {
     expect(thuDinnerWest.map(b => b.name).sort()).toEqual(['Thu Soup', 'Wed Soup']);
   });
 
-  test('Sundays 3 same-day soups round-robin across services (no orphans)', () => {
-    // The spec promises round-robin among same-cookDate batches so that none
-    // gets orphaned. It does NOT promise tight balance — when the bucket
-    // shrinks mid-slot (because one Sun batch just got picked into position 1
-    // and is now alreadyInSlot for position 2), the modulo distribution
-    // becomes uneven. The strong invariant we test here is "every batch gets
-    // at least one service."
+  test('Sundays 3 same-day soups distribute evenly via least-loaded tiebreaker', () => {
+    // With the least-loaded tiebreaker, same-cookDate batches stay within 1
+    // service of each other regardless of how the bucket shrinks mid-slot.
     const window = makeWindow([
       { iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' },
       { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
@@ -330,13 +326,15 @@ describe('assignServicesPass2', () => {
 
     assignServicesPass2([a, b, c, tue], window, fixedCalcRequired(1));
 
-    // No orphans — the strong promise of round-robin.
+    // No orphans.
     expect(a.services.length).toBeGreaterThan(0);
     expect(b.services.length).toBeGreaterThan(0);
     expect(c.services.length).toBeGreaterThan(0);
-
-    // Tue Soup also gets services (it's the newest from Tue dinner onwards).
     expect(tue.services.length).toBeGreaterThan(0);
+
+    // Strong fairness: max-min ≤ 1 across the same-cookDate Sun batches.
+    const counts = [a.services.length, b.services.length, c.services.length];
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
   });
 
   test('frozen batches never auto-assigned', () => {

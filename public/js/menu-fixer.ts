@@ -389,7 +389,6 @@ export function assignServicesPass2(
   window: PlanDay[],
   calcReq: (b: Batch) => number,
 ): { servicesAdded: number } {
-  const sameDayPickIdx = new Map<string, number>();
   let added = 0;
 
   for (const day of window) {
@@ -403,8 +402,7 @@ export function assignServicesPass2(
 
         for (let i = 0; i < remaining; i++) {
           const placed = tryFillOnePosition(
-            allBatches, type, slot.loc, day.isoDate, slot.meal,
-            sameDayPickIdx, calcReq,
+            allBatches, type, slot.loc, day.isoDate, slot.meal, calcReq,
           );
           if (placed) added++;
           else break;  // no candidate fit — leave the rest of this slot's positions empty
@@ -427,7 +425,6 @@ function tryFillOnePosition(
   loc: Location,
   isoDate: string,
   meal: Meal,
-  sameDayPickIdx: Map<string, number>,
   calcReq: (b: Batch) => number,
 ): boolean {
   // Build candidate list (excluded: wrong type, already-in-slot, frozen, stale-cooked, unservable).
@@ -456,20 +453,14 @@ function tryFillOnePosition(
     const topIso = cookDateToIso(top.cookDate)!;
     const topCooked = top.stock > 0 ? 'cooked' : 'uncooked';
 
-    // Round-robin within the same (cookDate, status) bucket.
-    const sameBucket = candidates.filter(c =>
-      cookDateToIso(c.cookDate) === topIso && (c.stock > 0 ? 'cooked' : 'uncooked') === topCooked
-    );
-
-    let chosen: Batch;
-    if (sameBucket.length > 1) {
-      const key = `${topIso}|${type}|${topCooked}`;
-      const idx = (sameDayPickIdx.get(key) || 0) % sameBucket.length;
-      chosen = sameBucket[idx];
-      sameDayPickIdx.set(key, idx + 1);
-    } else {
-      chosen = top;
-    }
+    // Among same (cookDate, cooked-status) candidates, pick the one with the
+    // FEWEST services already assigned. This replaces the previous round-robin
+    // index — same fairness intent, but actually balanced even when the bucket
+    // shrinks mid-slot. Tiebreak by source order (stable sort).
+    const sameBucket = candidates
+      .filter(c => cookDateToIso(c.cookDate) === topIso && (c.stock > 0 ? 'cooked' : 'uncooked') === topCooked)
+      .sort((a, b) => a.services.length - b.services.length);
+    const chosen = sameBucket[0];
 
     // Tentatively assign and check capacity.
     chosen.services.push({ loc, date: isoDate, meal });
