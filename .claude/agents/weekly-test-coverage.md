@@ -63,7 +63,7 @@ If `uncoveredFeatures` is empty: the suite is caught up. Don't open a PR. Commen
 
 ### 4. Write the test
 
-- Branch off main: `git checkout -b claude/weekly-coverage-$(date +%Y%m%d)`
+- Branch off main with a name unique to this run — multiple runs on the same day must not collide: `git checkout -b claude/coverage-<feature-name>-$(date +%Y%m%d-%H%M%S)`. Never reuse a date-only branch like `claude/weekly-coverage-20260502` — if a previous run failed mid-flow, the stale remote branch will reject your push and lead you to rebase onto unrelated history.
 - Read 2 existing specs as templates: `e2e/batch-create.spec.ts` (for create/save flows) and `e2e/recipes.spec.ts` (for modal-based flows).
 - Use `loginAsDev` from `e2e/helpers.ts` — it already waits for the initial data loads, so you don't have to worry about the race condition.
 - Add a `data-testid` to any UI element you target if it doesn't have one. Keep these additions minimal — single-attribute changes only.
