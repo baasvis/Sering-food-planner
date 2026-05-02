@@ -9,6 +9,7 @@ import { addDishFromRecipe } from './recipes';
 import { openPostCookRecording, openBatchRecipe } from './recipe-editor';
 import { batchDragStart, batchDragEnd, startAssignMode, openReplaceBatch } from './planner';
 import type { Batch, CateringDish, DishType, Location, StorageType, Service, RecipeIngredient } from '@shared/types';
+import { locName } from '@shared/location';
 
 /** Check if a batch has a v2 recipe with unresolved flexible ingredient slots */
 function hasUnresolvedFlexible(d: Batch): boolean {
@@ -849,7 +850,7 @@ export function renderSplitBar() {
     <span style="font-size:12px;color:var(--text2);flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(names)}</span>
     <label>Amount (L)</label><input type="number" id="sp-amt" min="0.1" step="0.5" value="10" style="width:68px;"/>
     <label>Storage</label><select id="sp-storage">${STORAGE.map(s => `<option>${s}</option>`).join('')}</select>
-    <label>Location</label><select id="sp-location">${LOCATIONS.map(l => `<option value="${l}">${l === 'west' ? 'Sering West' : 'Sering Centraal'}</option>`).join('')}</select>
+    <label>Location</label><select id="sp-location">${LOCATIONS.map(l => `<option value="${l}">${locName(l)}</option>`).join('')}</select>
     <button class="btn btn-primary" onclick="doSplit(false)">Split off</button>
     ${hasWest ? `<button class="btn btn-purple" onclick="doTransportSplit('centraal',${smartCentraalAmt})">Split ${smartCentraalAmt}L &rarr; Centraal</button>` : ''}
     ${hasCentraal ? `<button class="btn btn-purple" onclick="doTransportSplit('west',${smartWestAmt})">Split ${smartWestAmt}L &rarr; West</button>` : ''}
@@ -968,7 +969,7 @@ export function openNewDishScratch() {
     <div class="fr"><label>Stock (liters)</label><input type="number" id="nd-stock" value="0" step="0.5" min="0" /></div>
     <div class="fr"><label>Serving size (ml per guest)</label><input type="number" id="nd-serving" value="280" /></div>
     <div class="fr"><label>Storage state</label><select id="nd-storage">${STORAGE.map(s => `<option>${s}</option>`).join('')}</select></div>
-    <div class="fr"><label>Location</label><select id="nd-location">${LOCATIONS.map(l => `<option value="${l}">${l === 'west' ? 'Sering West' : 'Sering Centraal'}</option>`).join('')}</select></div>
+    <div class="fr"><label>Location</label><select id="nd-location">${LOCATIONS.map(l => `<option value="${l}">${locName(l)}</option>`).join('')}</select></div>
     <div class="fr"><label>Recipe Google Sheet ID (optional)</label>
       <input type="text" id="nd-sheetid" placeholder="Paste the sheet ID from the URL" />
       <div style="font-size:11px;color:var(--text2);margin-top:4px;">Found in the sheet URL: /spreadsheets/d/<strong>THIS_PART</strong>/edit</div>
@@ -1031,7 +1032,7 @@ export function openEditDish(id: string) {
       ${STORAGE.map(s => `<option${d.storage === s ? ' selected' : ''}>${s}</option>`).join('')}
     </select></div>
     <div class="fr"><label>Location</label><select id="ed-location">
-      ${LOCATIONS.map(l => `<option value="${l}"${d.location === l ? ' selected' : ''}>${l === 'west' ? 'Sering West' : 'Sering Centraal'}</option>`).join('')}
+      ${LOCATIONS.map(l => `<option value="${l}"${d.location === l ? ' selected' : ''}>${locName(l)}</option>`).join('')}
     </select></div>
     <div class="fr"><label>In transit?</label><select id="ed-intransit">
       <option value="false"${!d.inTransit ? ' selected' : ''}>No — at location</option>

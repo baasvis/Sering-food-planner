@@ -8,7 +8,7 @@
     "dev": "concurrently \"npx vite --config vite.config.ts\" \"npx tsx watch server.ts\"",
     "dev:server": "npx tsx watch server.ts",
     "build": "npx vite build --config vite.config.ts && npx tsc -p tsconfig.server.json",
-    "preview": "npm run build && node dist/server/server.js",
+    "preview": "npm run build && cross-env NODE_ENV=production node dist/server/server.js",
     "postinstall": "prisma generate && cross-env PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install --with-deps chromium",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "node prisma/seed.js",

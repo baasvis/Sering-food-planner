@@ -691,19 +691,9 @@ export function getVisibleDays(offset: any) {
   });
 }
 
-// Get the Monday date key (YYYY-MM-DD) for the week a date belongs to
-export function getMondayKeyForDate(d: any) {
-  const dow = d.getDay(); // 0=Sun
-  const off = dow === 0 ? -6 : 1 - dow;
-  const mon = new Date(d);
-  mon.setDate(d.getDate() + off);
-  return localDateStr(mon);
-}
-
-// Format a Date as YYYY-MM-DD using local timezone (avoids UTC shift)
-export function localDateStr(d: any) {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-}
+// Delegate to @shared/dates — was a near-duplicate of dateToIso/todayIso/fmtDate.
+// Re-exported under the legacy names because main.ts puts them on window.
+export { mondayKeyOf as getMondayKeyForDate, formatIso as localDateStr } from '@shared/dates';
 
 // Render the day-navigation header bar used by both Guests and Planner
 export function renderDayNav(offset: any, minOffset: any, maxOffset: any, changeFn: any, extraHtml: any) {

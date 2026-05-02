@@ -16,14 +16,8 @@ export function getFinanceMonday(offset: any) {
   return d;
 }
 
-export function fmtDate(d: any) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-export function fmtDateShort(dateStr: any) {
-  const [y, m, d] = dateStr.split('-');
-  return `${d}/${m}`;
-}
+// Delegate to @shared/dates — was duplicating dateToIso/todayIso/localDateStr.
+export { formatIso as fmtDate, shortDayMonth as fmtDateShort } from '@shared/dates';
 
 export function fmtEuro(n: any) {
   if (n == null || isNaN(n)) return '-';

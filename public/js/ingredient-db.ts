@@ -4,6 +4,7 @@ import { toast, toastError, apiGet, apiPost, saveStorageConfig, loadIngredientDb
 import { chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { renderOrders } from './orders';
+import { locName } from '@shared/location';
 
 // ── INGREDIENT DATABASE TAB ──────────────────────────────────
 
@@ -1126,7 +1127,7 @@ export function openStoragePopover(ingredientId: string, anchorEl: HTMLElement) 
   const rect = anchorEl.getBoundingClientRect();
   const catNames = Object.keys(STORAGE_CATEGORIES);
   const curLoc = S.currentLoc;
-  const locLabel = curLoc === 'west' ? 'Sering West' : 'Sering Centraal';
+  const locLabel = locName(curLoc);
 
   const s = storLocs[curLoc] || {};
   const cat = s.category || '';

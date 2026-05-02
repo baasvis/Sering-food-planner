@@ -9,6 +9,7 @@ import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
 import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType } from '@shared/types';
+import { toGrams } from '@shared/units';
 
 // ── Editor state ──
 
@@ -102,14 +103,8 @@ function calcEditorCostData(): { totalCost: number; hasPrice: number; totalNonFl
   return { totalCost, hasPrice, totalNonFlex, perServing, servings, volume };
 }
 
-function toGrams(amount: number, unit: string): number {
-  switch (unit) {
-    case 'Kilos': return amount * 1000;
-    case 'Liters': return amount * 1000;
-    case 'ML': return amount;
-    default: return amount; // Grams
-  }
-}
+// toGrams: see @shared/units. Was a case-sensitive variant here that silently
+// dropped 'kg' / 'L' inputs — replaced with the lenient shared version.
 
 /** Round a scaled ingredient amount to a precision appropriate for its unit.
  * Math.round() on Kilos/Liters truncates small values to zero (e.g. 0.25 kg

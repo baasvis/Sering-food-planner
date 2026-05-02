@@ -4,6 +4,7 @@
 
 import { PrismaClient, Prisma } from '@prisma/client';
 import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeEntry, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient } from '../shared/types';
+import { toGrams } from '../shared/units';
 
 export const prisma = new PrismaClient();
 
@@ -739,15 +740,8 @@ export async function calcRecipeNutrition(
   return result;
 }
 
-/** Convert amount in recipe unit to grams */
-function toGrams(amount: number, unit: string): number {
-  switch (unit.toLowerCase()) {
-    case 'kilos': case "kilo's": case 'kg': return amount * 1000;
-    case 'liters': case 'l': return amount * 1000; // 1L ≈ 1000g for liquids
-    case 'ml': return amount;
-    case 'grams': case 'g': default: return amount;
-  }
-}
+// toGrams: see shared/units.ts (single source of truth — was duplicated here,
+// in public/js/recipe-editor.ts, and in public/js/orders.ts as toBaseUnit).
 
 /** Validate a recipe for required fields */
 export function validateRecipe(r: { name?: string; type?: string; servingSize?: number }): string | null {

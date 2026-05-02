@@ -18,6 +18,7 @@ import { renderWeekPlan } from './planner';
 import { trackScreenView } from './telemetry';
 import { showModal, closeModal } from './modal';
 import { getStorageConfigForLoc } from './state';
+import { locName } from '@shared/location';
 
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
@@ -723,7 +724,7 @@ function renderStocktakeModal() {
     // Area picker
     let html = `<div class="dash-stocktake-modal">
       <h3 style="margin:0 0 4px;">📋 Stocktake</h3>
-      <p style="color:var(--text2);margin:0 0 16px;font-size:12px;">${esc(loc === 'west' ? 'Sering West' : 'Sering Centraal')} — Select a storage area</p>
+      <p style="color:var(--text2);margin:0 0 16px;font-size:12px;">${esc(locName(loc))} — Select a storage area</p>
       <div style="display:grid;gap:8px;">`;
 
     areas.forEach(area => {

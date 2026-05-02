@@ -564,16 +564,8 @@ function updateSnapshotForRemote(msg: RemotePatchMessage): void {
 // PREP CHECKLIST API
 // ═══════════════════════════════════════════════════════════════════
 
-export function todayIso(): string {
-  // Local YYYY-MM-DD. toISOString().slice(0,10) returns UTC, which flips to
-  // yesterday in Amsterdam between 00:00 and ~02:00 local — used to break
-  // prep-checklist keys for late-night kitchen work.
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+// todayIso: see @shared/dates. Local Y-M-D — never UTC.
+export { todayIso } from '@shared/dates';
 
 export async function loadPrepChecklist(loc: string): Promise<void> {
   try {

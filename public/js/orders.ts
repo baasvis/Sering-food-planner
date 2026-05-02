@@ -5,6 +5,8 @@ import { showModal, closeModal, esc } from './modal';
 import { ingredientDbFull, openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
 import { trackEvent } from './telemetry';
 import type { Ingredient, Batch, Location } from '@shared/types';
+import { toGrams, baseUnitOf } from '@shared/units';
+import { locName } from '@shared/location';
 
 // ── Local type aliases for order data ──
 
@@ -101,22 +103,12 @@ export const BATCH_COLORS = ['#2563eb', '#7c3aed', '#059669', '#d97706', '#dc262
 
 // ── Shared helpers ────────────────────────────────────────
 
-// Convert to base units: grams for weight, ml for volume, raw count for pieces
-export function toBaseUnit(amount: number, unit: string) {
-  const u = (unit || '').toLowerCase().replace(/'/g, '');
-  if (u === 'kilos' || u === 'kilo' || u === 'kg') return amount * 1000;
-  if (u === 'liters' || u === 'liter' || u === 'litres' || u === 'l') return amount * 1000;
-  return amount;
-}
-
-// Mirror of toBaseUnit on the unit string side: returns the base-unit name so
-// callers can normalize accumulators and avoid double-converting later.
-export function baseUnitOf(unit: string): string {
-  const u = (unit || '').toLowerCase().replace(/'/g, '');
-  if (u === 'kilos' || u === 'kilo' || u === 'kg' || u === 'grams' || u === 'gram' || u === 'g') return 'g';
-  if (u === 'liters' || u === 'liter' || u === 'litres' || u === 'l' || u === 'ml') return 'ml';
-  return unit || 'g';
-}
+// toBaseUnit: now delegates to the shared toGrams (single source of truth).
+// Re-exported under the legacy name because main.ts still assigns it to window
+// for inline-onclick compatibility, and external callers may reference it.
+export const toBaseUnit = toGrams;
+// baseUnitOf: re-exported from @shared/units; same window-compat reason.
+export { baseUnitOf };
 
 export function normalizeSupplier(s: string) {
   if (!s) return 'Unknown';
@@ -570,7 +562,7 @@ export function renderStandardInventoryTab() {
   return `
     <div>
       <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
-        <span>Set Standard Inventory &mdash; ${esc(curLoc === 'west' ? 'Sering West' : 'Sering Centraal')}</span>
+        <span>Set Standard Inventory &mdash; ${esc(locName(curLoc))}</span>
         ${totalValue > 0 ? `<span style="font-size:13px;font-weight:600;">Estimated order: \u20AC${totalValue.toFixed(2)}</span>` : ''}
       </div>
       <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">Set target stock levels for each ingredient. The order is calculated automatically from the deficit (target \u2212 current stock).</p>
@@ -635,7 +627,7 @@ export function toggleBatchIngredient(batchId: string) {
   const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
   const header = document.querySelector('.section-title span');
   if (header && header.textContent.includes('selected')) {
-    header.textContent = `Batches at ${curLoc === 'west' ? 'Sering West' : 'Sering Centraal'} (${onCount}/${eligible.length} selected)`;
+    header.textContent = `Batches at ${locName(curLoc)} (${onCount}/${eligible.length} selected)`;
   }
   // Persist to server (syncs across devices via SSE batch update)
   persistBatchOrderFor(batchId, isOn);
@@ -670,7 +662,7 @@ export function toggleAllBatchIngredients(on: boolean) {
   const onCount = on ? eligible.length : 0;
   const header = document.querySelector('.section-title span');
   if (header && header.textContent.includes('selected')) {
-    header.textContent = `Batches at ${curLoc === 'west' ? 'Sering West' : 'Sering Centraal'} (${onCount}/${eligible.length} selected)`;
+    header.textContent = `Batches at ${locName(curLoc)} (${onCount}/${eligible.length} selected)`;
   }
 }
 
@@ -692,7 +684,7 @@ export function renderDishesTab() {
   const dishesWithSheets = eligible.filter(d => d.recipeSheetId);
   let html = `<div style="margin-bottom:16px;">
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <span>Batches at ${curLoc === 'west' ? 'Sering West' : 'Sering Centraal'} (${onCount}/${eligible.length} selected)</span>
+      <span>Batches at ${locName(curLoc)} (${onCount}/${eligible.length} selected)</span>
       <div style="display:flex;align-items:center;gap:8px;">
         ${dishesWithSheets.length ? `<button class="copy-all-btn" onclick="refreshAllRecipes()">↻ Refresh recipe data</button>` : ''}
         <button class="copy-all-btn" onclick="toggleAllBatchIngredients(true)">All on</button>
@@ -996,7 +988,7 @@ export function renderCombinedOrderTab() {
 
   const hanosAllCombinedBtn = isHanosEnabled() && ingList.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk()" title="Send entire combined order to Hanos cart">🛒 Send all to Hanos</button>` : '';
   html += `<div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <span>Combined Order &mdash; ${esc(curLoc === 'west' ? 'Sering West' : 'Sering Centraal')}</span>
+      <span>Combined Order &mdash; ${esc(locName(curLoc))}</span>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="font-size:13px;font-weight:600;">${totalValue > 0 ? 'Estimated: \u20AC' + totalValue.toFixed(2) : ''}</span>
         ${hanosAllCombinedBtn}
@@ -1749,7 +1741,7 @@ export function renderStocktakeAreaPicker() {
 
   let html = `<div style="padding:20px;max-width:600px;margin:0 auto;">
     <h2 style="margin:0 0 8px;">📋 Stocktake</h2>
-    <p style="color:var(--text2);margin:0 0 20px;">${esc(loc === 'west' ? 'Sering West' : 'Sering Centraal')} — Select a storage area to count</p>
+    <p style="color:var(--text2);margin:0 0 20px;">${esc(locName(loc))} — Select a storage area to count</p>
     <div style="display:grid;gap:12px;">`;
 
   areas.forEach(area => {
@@ -1799,7 +1791,7 @@ export function renderStocktakeArea() {
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;border-left:5px solid ${areaColor};padding-left:12px;">
       <div>
         <h2 style="margin:0;font-size:20px;">📋 ${esc(stocktakeArea)}</h2>
-        <p style="color:var(--text2);margin:2px 0 0;font-size:13px;">${esc(loc === 'west' ? 'Sering West' : 'Sering Centraal')} — ${items.length} items</p>
+        <p style="color:var(--text2);margin:2px 0 0;font-size:13px;">${esc(locName(loc))} — ${items.length} items</p>
       </div>
     </div>`;
 
