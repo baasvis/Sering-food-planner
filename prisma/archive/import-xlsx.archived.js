@@ -1,9 +1,23 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ONE-TIME IMPORT: Google Sheets XLSX export → PostgreSQL
-// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️  ARCHIVED — DO NOT RUN AGAINST PRODUCTION ⚠️
 //
-// Usage: node prisma/import-xlsx.js path/to/export.xlsx
-// ─────────────────────────────────────────────────────────────────────────────
+// One-time XLSX import from the v3/v4 era (March 2026). The script below
+// calls deleteMany() on 13 tables (batches/dishes/services/guests/ingredients/
+// recipe_index/caterings/transport_items/guest_history/guest_history_meta/
+// guests_next_weeks/log/feedback) before re-inserting. Running it against
+// the live DB would wipe everything.
+//
+// Renamed to *.archived.js so `node prisma/import-xlsx.js ...` no longer
+// resolves. If you genuinely need to re-import from a spreadsheet:
+//   1. Understand exactly what deleteMany() targets,
+//   2. Point DATABASE_URL at a scratch / staging DB,
+//   3. Rename back to import-xlsx.js for the run.
+//
+// Refuses to start unless the explicit override is set:
+if (process.env.ALLOW_ARCHIVED_DESTRUCTIVE_SCRIPT !== 'i-understand-this-wipes-tables') {
+  console.error('REFUSED: this script wipes 13 tables. Read the header.');
+  process.exit(1);
+}
 
 try { require('dotenv').config(); } catch (e) {}
 const XLSX = require('xlsx');

@@ -39,6 +39,7 @@ model Batch {
   @@index([location])
   @@index([cookDate])
   @@index([recipeId])
+  @@index([parentId])
   @@map("batches")
 }
 
@@ -106,9 +107,7 @@ model Ingredient {
   supplier          String                @default("")
   orderCode         String                @default("") @map("order_code")
   orderUnit         String                @default("") @map("order_unit")
-  orderUnitStandard String                @default("") @map("order_unit_standard")
   orderPrice        Float?                @map("order_price")
-  orderAmountGrams  Float                 @default(0) @map("order_amount_grams")
   priceLevel        String                @default("") @map("price_level")
   pricePer100g      Float                 @default(0) @map("price_per_100g")
   priceHistory      Json                  @default("[]") @map("price_history")
@@ -157,6 +156,7 @@ model GuestsNextWeeks {
   count     Int    @default(0)
 
   @@unique([mondayKey, location, day, meal])
+  @@index([mondayKey])
   @@map("guests_next_weeks")
 }
 
@@ -283,6 +283,7 @@ model Recipe {
   legacySheetId  String?               @map("legacy_sheet_id")
   batches        Batch[]               @relation("BatchRecipe")
   ingredients    RecipeIngredientRow[]
+  photo          RecipePhoto?
 
   @@index([type])
   @@map("recipes")
@@ -304,6 +305,7 @@ model RecipeIngredientRow {
   recipe         Recipe      @relation(fields: [recipeId], references: [id], onDelete: Cascade)
 
   @@index([recipeId])
+  @@index([ingredientId])
   @@map("recipe_ingredients")
 }
 
@@ -313,6 +315,8 @@ model RecipePhoto {
   mimeType  String @map("mime_type")
   data      Bytes
   createdAt String @map("created_at")
+
+  recipe    Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
 
   @@map("recipe_photos")
 }

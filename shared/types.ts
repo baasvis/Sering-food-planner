@@ -265,8 +265,6 @@ export interface Ingredient {
   nutrition?: Record<string, number>;
   priceHistory?: Array<{ month: string; price: number }>;
   pricePer100g?: number;
-  orderAmountGrams?: number;
-  orderUnitStandard?: string;
 }
 
 export interface AppUser {

@@ -1,12 +1,22 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ONE-TIME MIGRATION: Google Sheets → PostgreSQL
-// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️  ARCHIVED — DO NOT RUN AGAINST PRODUCTION ⚠️
 //
-// Usage: DATABASE_URL=... GOOGLE_CREDENTIALS=... DB_SHEET_ID=... node prisma/migrate-from-sheets.js
+// One-time Google-Sheets → PostgreSQL migration that ran in March 2026 to
+// seed the database from the legacy spreadsheet. Reads from Sheets and
+// writes to PG; assumes target tables are empty and may overwrite anything
+// it touches.
 //
-// This script reads all data from Google Sheets and writes it to PostgreSQL.
-// Run this ONCE before switching to the Prisma-based code in production.
-// ─────────────────────────────────────────────────────────────────────────────
+// Renamed to *.archived.js so `node prisma/migrate-from-sheets.js` no longer
+// resolves. If you somehow need to re-run this:
+//   1. Confirm DATABASE_URL is a scratch DB,
+//   2. Rename back temporarily,
+//   3. Have a pg_dump backup ready.
+//
+// Refuses to start unless the explicit override is set:
+if (process.env.ALLOW_ARCHIVED_DESTRUCTIVE_SCRIPT !== 'i-understand-this-overwrites-tables') {
+  console.error('REFUSED: this script overwrites tables from a Google Sheet. Read the header.');
+  process.exit(1);
+}
 
 try { require('dotenv').config(); } catch (e) {}
 const { google } = require('googleapis');
