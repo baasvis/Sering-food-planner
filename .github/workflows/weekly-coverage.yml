@@ -45,7 +45,11 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--model claude-sonnet-4-6"
+          # bypassPermissions: this is an autonomous CI agent in an isolated
+          # runner; the default interactive-mode allowlist denies git push,
+          # gh pr create, etc. — without this it runs but can't ship a PR.
+          claude_args: "--model claude-sonnet-4-6 --permission-mode bypassPermissions"
+          show_full_output: true
           prompt: |
             You are running the weekly e2e test coverage check for Sering Suite.
             Your operating manual is at `.claude/agents/weekly-test-coverage.md` —
