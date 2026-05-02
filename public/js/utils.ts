@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, PatchRequest, SaveSnapshot, SaveState, Location } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
@@ -228,6 +228,7 @@ export async function loadData(): Promise<void> {
     // Load ingredient DB + storage config in background (for order overview)
     loadIngredientDb();
     loadStorageConfig();
+    loadKitchenEquipment();
     // Load guest history + next weeks in background (for Guests tab)
     loadGuestHistory();
     loadGuestsNextWeeks();
@@ -323,6 +324,39 @@ export async function saveStorageConfig(): Promise<void> {
     await apiPost('/api/storage-config', S.storageConfig);
   } catch (_e: unknown) {
     toastError('Failed to save storage config');
+  }
+}
+
+const DEFAULT_KITCHEN_EQUIPMENT: KitchenEquipment = {
+  pots: [],
+  gasBurners: 0,
+  inductionBurners: 0,
+  bigBurnerThreshold: 80,
+};
+
+export async function loadKitchenEquipment(): Promise<void> {
+  try {
+    const eq = await apiGet('/api/kitchen-equipment');
+    if (eq && typeof eq === 'object' && Array.isArray(eq.pots)) {
+      S.kitchenEquipment = {
+        pots: eq.pots,
+        gasBurners: Number(eq.gasBurners) || 0,
+        inductionBurners: Number(eq.inductionBurners) || 0,
+        bigBurnerThreshold: Number(eq.bigBurnerThreshold) || 80,
+      };
+    } else {
+      S.kitchenEquipment = { ...DEFAULT_KITCHEN_EQUIPMENT };
+    }
+  } catch (_e: unknown) {
+    S.kitchenEquipment = { ...DEFAULT_KITCHEN_EQUIPMENT };
+  }
+}
+
+export async function saveKitchenEquipment(): Promise<void> {
+  try {
+    await apiPost('/api/kitchen-equipment', S.kitchenEquipment);
+  } catch (_e: unknown) {
+    toastError('Failed to save kitchen equipment');
   }
 }
 

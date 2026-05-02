@@ -55,6 +55,46 @@ router.post('/storage-config', asyncHandler(async (req: Request, res: Response) 
   res.json({ ok: true });
 }));
 
+// ── Kitchen Equipment (single-row config; powers Fix My Menu's pot allocation) ──
+
+router.get('/kitchen-equipment', asyncHandler(async (_req: Request, res: Response) => {
+  const row = await prisma.kitchenEquipment.findUnique({ where: { id: 'default' } });
+  res.json(row ? {
+    pots: row.pots,
+    gasBurners: row.gasBurners,
+    inductionBurners: row.inductionBurners,
+    bigBurnerThreshold: row.bigBurnerThreshold,
+  } : {
+    pots: [],
+    gasBurners: 0,
+    inductionBurners: 0,
+    bigBurnerThreshold: 80,
+  });
+}));
+
+router.post('/kitchen-equipment', asyncHandler(async (req: Request, res: Response) => {
+  const { pots, gasBurners, inductionBurners, bigBurnerThreshold } = req.body || {};
+  if (!Array.isArray(pots) || pots.some(p => typeof p !== 'number' || p <= 0 || p > 1000)) {
+    return res.status(400).json({ error: 'pots must be an array of positive numbers (≤ 1000 L each)' });
+  }
+  if (typeof gasBurners !== 'number' || gasBurners < 0 || gasBurners > 100) {
+    return res.status(400).json({ error: 'gasBurners must be 0–100' });
+  }
+  if (typeof inductionBurners !== 'number' || inductionBurners < 0 || inductionBurners > 100) {
+    return res.status(400).json({ error: 'inductionBurners must be 0–100' });
+  }
+  const threshold = typeof bigBurnerThreshold === 'number' ? bigBurnerThreshold : 80;
+  if (threshold < 1 || threshold > 1000) {
+    return res.status(400).json({ error: 'bigBurnerThreshold must be 1–1000 L' });
+  }
+  await prisma.kitchenEquipment.upsert({
+    where: { id: 'default' },
+    create: { id: 'default', pots, gasBurners, inductionBurners, bigBurnerThreshold: threshold },
+    update: { pots, gasBurners, inductionBurners, bigBurnerThreshold: threshold },
+  });
+  res.json({ ok: true });
+}));
+
 // ── Prep Checklist ──
 
 router.get('/prep-checklist', asyncHandler(async (req: Request, res: Response) => {

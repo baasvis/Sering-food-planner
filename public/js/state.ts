@@ -1,6 +1,6 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeEntry, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeEntry, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment } from '@shared/types';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -138,6 +138,7 @@ export interface AppState {
   guestFlowDistribution: Record<string, unknown> | null;
   guestsNextWeeks: Record<string, Record<string, Record<string, Record<string, number>>>>;
   storageConfig: StorageConfig | null;
+  kitchenEquipment: KitchenEquipment | null;
   financeData: Record<string, unknown>[];
   financeProducts: Record<string, unknown>[];
   financeSyncing: boolean;
@@ -191,6 +192,7 @@ export let S: AppState = {
   guestFlowDistribution:null,
   guestsNextWeeks:{},
   storageConfig: null,
+  kitchenEquipment: null,
   financeData: [],
   financeProducts: [],
   financeSyncing: false,

@@ -265,6 +265,18 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
   const assignCls = isAssigning ? ' assigning' : '';
   const expandCls = isExpanded ? ' expanded' : '';
 
+  // "Too big" badge: this batch's projected demand exceeds the biggest pot in
+  // the kitchen, meaning the cook can't make it in a single pot. Surfaced
+  // here on the tile (not as a Fix My Menu modal action) so it's visible in
+  // the regular planner view too.
+  const biggestPot = S.kitchenEquipment && S.kitchenEquipment.pots.length > 0
+    ? Math.max(...S.kitchenEquipment.pots) : Infinity;
+  const projected = calcRequired(d);
+  const tooBig = projected > biggestPot;
+  const tooBigBadge = tooBig
+    ? `<span class="batch-too-big-badge" title="Needs ${projected.toFixed(1)}L but biggest pot is ${biggestPot}L — cook in 2 pots">⚠️ Too big</span>`
+    : '';
+
   // Compact row
   let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${splitCls}${assignCls}${expandCls}" data-testid="batch-tile" data-id="${d.id}" draggable="true" ondragstart="batchDragStart(event,'${d.id}')" ondragend="batchDragEnd(event)">
     <div class="batch-tile-compact" onclick="toggleBatchExpand('${d.id}')">
@@ -274,6 +286,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
       <span class="batch-status ${isBatchCooked(d) ? (isDishStale(d) ? 'status-stale' : 'status-cooked') : 'status-tocook'}">${isBatchCooked(d) ? (isDishStale(d) ? 'Stale' : 'Cooked') : 'To cook'}</span>
       <span class="batch-tile-cook">${batchCookLabel(d)}</span>
       <span class="batch-tile-stock ${cls}">${d.stock || 0}L <small>${str}</small></span>
+      ${tooBigBadge}
       <span class="batch-tile-logistics ${logisticsBadgeClass(d)}" style="font-size:10px;">${logisticsShort(d)}</span>
       ${d.inTransit ? '<span class="batch-transit-badge">In transit</span>' : ''}
       ${opts.showAssign && !S.assigningBatchId ? `<button class="batch-assign-btn" onclick="event.stopPropagation();startAssignMode('${d.id}')">Assign</button>` : ''}

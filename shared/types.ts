@@ -76,6 +76,17 @@ export interface Batch {
   actualIngredients: ActualIngredient[] | null;
   cookNotes: string;
   stockDeducted: boolean;
+  // Fix My Menu: true only for placeholders the algorithm created and that are
+  // safe to clean up automatically on the next run. Optional so existing
+  // (pre-migration) deserialized rows are still valid Batch values.
+  generated?: boolean;
+}
+
+export interface KitchenEquipment {
+  pots: number[];           // sizes in liters, e.g. [140, 140, 100, 100, ...]
+  gasBurners: number;       // burners that can handle pots > bigBurnerThreshold
+  inductionBurners: number; // burners that handle pots ≤ bigBurnerThreshold
+  bigBurnerThreshold: number; // typically 80 — pot size that requires a gas burner
 }
 
 export interface GuestDay {
