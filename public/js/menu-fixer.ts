@@ -63,11 +63,6 @@ export interface BatchSnapshot {
   inWindow: Batch[];
 }
 
-export interface FixReport {
-  createdPlaceholders: Batch[];
-  cleanedOrphans: number;
-}
-
 // ── Step 1: Build planning window ───────────────────────────────────────────
 
 export function buildPlanningWindow(today: Date, horizonDays = PLANNING_HORIZON_DAYS): PlanDay[] {
@@ -1184,8 +1179,6 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
       const b = S.batches.find(x => x.id === a.batchId);
       if (!b || w.anchor?.kind !== 'batch') return;
       // Find next under-filled slot of this batch's type and assign
-      const today = dateToIso(getToday());
-      const horizon = dateToIso(new Date(getToday().getTime() + (PLANNING_HORIZON_DAYS - 1) * 86400000));
       let placed = false;
       for (const day of buildPlanningWindow(getToday())) {
         if (placed) break;
@@ -1261,9 +1254,28 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
 
 function removeWarningRow(idx: number): void {
   const row = document.querySelector(`.fix-menu-warning-row[data-idx="${idx}"]`);
-  if (row) row.remove();
+  if (!row) return;
+  // Remove the row, then its section header if no rows of that category remain.
+  // The section grouping puts each header before a run of warning rows of the
+  // same category; once the last warning of a category is removed, the header
+  // is dangling and should go too.
+  let sectionHdr: Element | null = row.previousElementSibling;
+  while (sectionHdr && !sectionHdr.classList.contains('fix-menu-section-hdr')) {
+    sectionHdr = sectionHdr.previousElementSibling;
+  }
+  row.remove();
+  if (sectionHdr) {
+    let next: Element | null = sectionHdr.nextElementSibling;
+    let stillHasWarnings = false;
+    while (next && !next.classList.contains('fix-menu-section-hdr')) {
+      if (next.classList.contains('fix-menu-warning-row')) { stillHasWarnings = true; break; }
+      next = next.nextElementSibling;
+    }
+    if (!stillHasWarnings) sectionHdr.remove();
+  }
+  // If the list is now empty of warning rows, replace it with the "all clear" message.
   const list = document.querySelector('.fix-menu-warnings-list');
-  if (list && list.children.length === 0) {
+  if (list && list.querySelectorAll('.fix-menu-warning-row').length === 0) {
     const hdr = document.querySelector('.fix-menu-warnings-hdr');
     if (hdr) hdr.remove();
     list.outerHTML = `<div class="fix-menu-clean">All issues resolved 🎉</div>`;

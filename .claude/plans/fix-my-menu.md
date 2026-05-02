@@ -9,7 +9,7 @@
 
 ## 1. Problem
 
-Building a 14-day menu for 2 locations × 2 services/day × (2 soups + 2 mains) per service is tedious manual work. Cooks either spend excessive time planning, or under-plan and cause Centraal stockouts and waste.
+Building a 10-day menu for 2 locations × 2 services/day × (2 soups + 2 mains) per service is tedious manual work. Cooks either spend excessive time planning, or under-plan and cause Centraal stockouts and waste.
 
 A single button should:
 
@@ -90,7 +90,7 @@ This is the only place the algorithm deletes. It also makes the button safe to p
 
 #### Step 1 — Build planning window
 
-14 days from `getToday()`. Each day has 4 service slots: (west, lunch), (west, dinner), (centraal, lunch), (centraal, dinner). Skip slots where `isServicePast()` returns true.
+PLANNING_HORIZON_DAYS days from `getToday()` (currently 10). Each day has 4 service slots: (west, lunch), (west, dinner), (centraal, lunch), (centraal, dinner). Skip slots where `isServicePast()` returns true.
 
 #### Step 2 — Snapshot existing state
 
@@ -189,7 +189,7 @@ sort candidates by cookDate descending (newest first)
               (older real cookDate → higher priority) — this is the
               "5d" stale-food preference baked into Pass 2 ordering.
 for i in 0..remaining:
-  pick the next candidate, applying round-robin among same-cookDate ties
+  pick the next candidate using the same-bucket logic (most-loaded under bigPot, least-loaded over)
   add {loc, date, meal} to chosen.services
 ```
 
@@ -321,7 +321,7 @@ New file: `public/js/menu-fixer.ts`
 menu-fixer.ts
 ├── Constants (COOK_RHYTHM, etc.)
 ├── fixMyMenu()                      ← entry point, called from button
-├── cleanupOrphans()                 ← Step 0
+├── findOrphanPlaceholders()                 ← Step 0
 ├── buildPlanningWindow()            ← Step 1
 ├── snapshotBatches()                ← Step 2
 ├── generateMissingPlaceholders()    ← Step 3
@@ -367,7 +367,7 @@ Each slice is a separate commit/PR-sized chunk. Test in preview before moving on
 - **Commit**: "Add Batch.generated flag + fix missing fields in addPlaceholderDish"
 
 ### Slice 2 — Placeholder generator + cleanup pass
-- Create `public/js/menu-fixer.ts` with constants, `buildPlanningWindow`, `snapshotBatches`, `generateMissingPlaceholders`, `cleanupOrphans`
+- Create `public/js/menu-fixer.ts` with constants, `buildPlanningWindow`, `snapshotBatches`, `generateMissingPlaceholders`, `findOrphanPlaceholders`
 - `fixMyMenu()` calls Steps 0, 1, 2, 3 only — no assignment yet
 - Wire up `✨ Fix my menu` button on West tab
 - Confirmation dialog
@@ -381,7 +381,7 @@ Each slice is a separate commit/PR-sized chunk. Test in preview before moving on
 
 ### Slice 3 — Two-pass service assigner
 - `assignServicesPass1()` — finish cooked stock until stale or full
-- `assignServicesPass2()` — 2-newest rule with round-robin and servable-by rule
+- `assignServicesPass2()` — 2-newest rule with most-loaded-under-bigPot concentration and servable-by rule
 - Wire into `fixMyMenu()` after Step 3
 - **Unit tests** (Jest, no DB needed — use module imports + mocked S):
   - 2-newest pairs Tue+Wed at Wed dinner, Wed+Thu at Thu dinner
@@ -391,7 +391,7 @@ Each slice is a separate commit/PR-sized chunk. Test in preview before moving on
   - Frozen batches never auto-assigned
   - Past slots untouched
   - Same batch never appears in both slots of one service
-- **Verify in preview**: full empty week generates a sensible 14-day plan
+- **Verify in preview**: full empty week generates a sensible 10-day plan
 - **Commit**: "Slice 3: Fix My Menu assigns services (cooked-first then 2-newest)"
 
 ### Slice 4 — Validator + results modal + rescue actions
@@ -433,11 +433,11 @@ Each slice is a separate commit/PR-sized chunk. Test in preview before moving on
 
 The frontend functions are pure given an `S`-like input. Per CLAUDE.md, frontend state modules can be unit-tested without a DB by mocking `localStorage` and importing directly. Each helper takes inputs explicitly so they can be tested without touching real `S`. Aim for tests on:
 
-- `cleanupOrphans()` — generated placeholders deleted, cook-created not deleted
-- `buildPlanningWindow()` — 14 days × 4 slots, past-slot filtering
+- `findOrphanPlaceholders()` — generated placeholders deleted, cook-created not deleted
+- `buildPlanningWindow()` — 10 days × 4 slots, past-slot filtering
 - `generateMissingPlaceholders()` — gap calculation, naming pattern
 - `assignServicesPass1()` — extension stops at stale, stops at zero surplus, respects catering reservations
-- `assignServicesPass2()` — 2-newest, round-robin, servable-by, no in-slot duplicates, capacity for cooked
+- `assignServicesPass2()` — 2-newest, most-loaded-under-bigPot, servable-by, no in-slot duplicates, capacity for cooked
 - `validateAndReport()` — each warning category triggers correctly, 0-guest suppression
 
 **Manual preview verification** at each slice as listed above.

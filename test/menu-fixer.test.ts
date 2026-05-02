@@ -25,6 +25,7 @@ import {
   findOrphanPlaceholders,
   generateMissingPlaceholders,
   snapshotBatches,
+  stripFutureServices,
   COOK_RHYTHM,
   SLOTS_PER_TYPE,
   PLANNING_HORIZON_DAYS,
@@ -191,7 +192,7 @@ describe('stripFutureServices', () => {
     b.services.push({ loc: 'west', date: '2020-01-01', meal: 'dinner' });
 
     // Need to import — let me use the function from menu-fixer
-    const removed = (require('../public/js/menu-fixer') as { stripFutureServices: (batches: Batch[]) => number }).stripFutureServices([b]);
+    const removed = stripFutureServices([b]);
     expect(removed).toBe(2);
     expect(b.services.length).toBe(1);
     expect(b.services[0].date).toBe('2020-01-01');
