@@ -14,6 +14,7 @@ import type { Batch, DishType, Location, Meal, Service, StorageType } from '../s
 import {
   assignServicesPass1,
   assignServicesPass2,
+  assignServicesPass3,
   allocatePotCaps,
   collectWarnings,
   buildPlanningWindow,
@@ -26,6 +27,7 @@ import {
   snapshotBatches,
   COOK_RHYTHM,
   SLOTS_PER_TYPE,
+  PLANNING_HORIZON_DAYS,
   type PlanDay,
 } from '../public/js/menu-fixer';
 import type { KitchenEquipment } from '../shared/types';
@@ -163,10 +165,14 @@ describe('generateMissingPlaceholders', () => {
     expect(sun.filter(b => b.type === 'Soup').length).toBe(3);
     expect(sun.filter(b => b.type === 'Main course').length).toBe(3);
     // Multi-batch days get numbered names
-    expect(sun.filter(b => b.type === 'Soup').map(b => b.name).sort()).toEqual(['Sun Soup 1', 'Sun Soup 2', 'Sun Soup 3']);
+    expect(sun.filter(b => b.type === 'Soup').map(b => b.name).sort()).toEqual([
+      'Sun soup 1 cooking 03/05/2026',
+      'Sun soup 2 cooking 03/05/2026',
+      'Sun soup 3 cooking 03/05/2026',
+    ]);
     // Single-batch days get unnumbered names
     const wed = placeholders.filter(b => b.cookDate === '06/05/2026');
-    expect(wed.find(b => b.type === 'Soup')!.name).toBe('Wed Soup');
+    expect(wed.find(b => b.type === 'Soup')!.name).toBe('Wed soup cooking 06/05/2026');
   });
 
   test('partial coverage → only fills the gap', () => {
@@ -522,6 +528,106 @@ describe('Pass 2 with pot caps', () => {
 
     // Capped at 3L = 3 services (would be 6+ without cap given our window)
     expect(cooked.services.length).toBe(3);
+  });
+});
+
+// ── Pass 3 (fill-remaining, ignores pot caps) ──────────────────────────────
+
+describe('assignServicesPass3', () => {
+  test('fills empty slots that Pass 2 left empty due to pot caps', () => {
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // 1 batch, can serve all slots. Pre-fill 2 slots so Pass 3 has work to do.
+    const onlyBatch = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup' });
+    onlyBatch.services = [
+      { loc: 'centraal', date: '2026-05-04', meal: 'lunch' },
+      { loc: 'west', date: '2026-05-04', meal: 'lunch' },
+    ];
+
+    // Pass 3 should fill every other slot (only one batch available — all
+    // remaining positions go to it). 2 days × 4 slots × 2 type-positions
+    // minus the 2 pre-filled = 14 positions. But same batch can't be in same
+    // slot twice — only ONE position per slot. So 2 days × 4 slots - 2 = 6
+    // positions added.
+    const result = assignServicesPass3([onlyBatch], window, fixedCalcRequired(1));
+    expect(result.servicesAdded).toBe(6);
+    expect(onlyBatch.services.length).toBe(8);
+    // No in-slot duplicates
+    const keys = onlyBatch.services.map(s => `${s.loc}|${s.date}|${s.meal}`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  test('Pass 3 still respects stock for cooked batches', () => {
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+    ]);
+    // Cooked batch with low stock — Pass 3 must not push it past stock
+    const cooked = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 2 });
+    assignServicesPass3([cooked], window, fixedCalcRequired(1));
+    expect(cooked.services.length).toBe(2);  // 2L stock = 2 services at 1L each
+  });
+
+  test('Pass 3 still skips frozen and stale batches', () => {
+    const window = makeWindow([
+      { iso: '2026-05-08', dayName: 'Fri', cookDate: '08/05/2026' },
+    ]);
+    const frozen = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 5, storage: 'Frozen', name: 'Frozen' });
+    const stale = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 5, name: 'Stale' });
+    // Fri (08/05) is 5 days after cookDate Sun (03/05) → stale
+    assignServicesPass3([frozen, stale], window, fixedCalcRequired(1));
+    expect(frozen.services.length).toBe(0);
+    expect(stale.services.length).toBe(0);
+  });
+
+  test('Pass 2 → Pass 3 sequence: Pass 3 picks up where Pass 2 left off', () => {
+    // Setup: tiny pot caps force Pass 2 to leave slots empty, then Pass 3 fills
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const sun = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup' });
+    const tinyCap = new Map<string, number>([[sun.id, 2]]);  // 2L cap = max 2 services
+
+    assignServicesPass2([sun], window, fixedCalcRequired(1), tinyCap);
+    const afterPass2 = sun.services.length;
+    expect(afterPass2).toBeLessThanOrEqual(2);  // pot cap limited it
+
+    assignServicesPass3([sun], window, fixedCalcRequired(1));
+    expect(sun.services.length).toBeGreaterThan(afterPass2);  // Pass 3 added more
+  });
+});
+
+// ── Planning horizon constant ──────────────────────────────────────────────
+
+describe('PLANNING_HORIZON_DAYS', () => {
+  test('is 10 days', () => {
+    expect(PLANNING_HORIZON_DAYS).toBe(10);
+  });
+});
+
+// ── Placeholder name format ────────────────────────────────────────────────
+
+describe('placeholder naming', () => {
+  test('single batch per day uses unsuffixed name with cookDate', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const snapshot = snapshotBatches([], window);
+    const placeholders = generateMissingPlaceholders(window, snapshot);
+    const wedSoup = placeholders.find(b => b.type === 'Soup');
+    expect(wedSoup!.name).toBe('Wed soup cooking 06/05/2026');
+  });
+
+  test('multi-batch day uses numbered names with cookDate', () => {
+    const window = makeWindow([{ iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' }]);
+    const snapshot = snapshotBatches([], window);
+    const placeholders = generateMissingPlaceholders(window, snapshot);
+    const sunSoups = placeholders.filter(b => b.type === 'Soup').map(b => b.name).sort();
+    expect(sunSoups).toEqual([
+      'Sun soup 1 cooking 03/05/2026',
+      'Sun soup 2 cooking 03/05/2026',
+      'Sun soup 3 cooking 03/05/2026',
+    ]);
   });
 });
 

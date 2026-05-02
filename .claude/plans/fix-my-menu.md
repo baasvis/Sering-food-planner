@@ -71,7 +71,7 @@ const COOK_RHYTHM: Record<string, { soup: number; main: number }> = {
 };
 
 const SLOTS_PER_TYPE = 2;
-const PLANNING_HORIZON_DAYS = 14;
+const PLANNING_HORIZON_DAYS = 10;
 const STALE_THRESHOLD_DAYS = 3;
 const TYPES_TO_PLAN: DishType[] = ['Soup', 'Main course'];
 ```
@@ -117,7 +117,11 @@ If `gap > 0`, create `gap` placeholder Batches. Use the full Batch shape — inc
 ```typescript
 {
   id: newId(),
-  name: `${dayName} ${typeLabel}${gap > 1 ? ` ${i+1}` : ''}`,  // "Sun Soup 1", "Sun Soup 2", "Sun Soup 3"
+  // Lowercase typeLabel + cookDate suffix: "Wed soup cooking 06/05/2026",
+  // "Sun soup 1 cooking 03/05/2026" — distinguishes placeholders from real
+  // recipes (which start with capitals) and keeps multi-week placeholders
+  // unambiguous.
+  name: `${dayName} ${typeLabel.toLowerCase()}${gap > 1 ? ` ${i+1}` : ''} cooking ${cookDateStr}`,
   type,                          // 'Soup' | 'Main course'
   stock: 0,
   serving: 280,
@@ -165,7 +169,7 @@ while surplus > 0 and batch not stale:
 
 When Pass 1 stops with surplus remaining, that's a "consider freezing" warning candidate (Step 5).
 
-**Pass 2 — fill remaining empty positions with the 2-newest rule.**
+**Pass 2 — fill remaining empty positions with the 2-newest rule (respecting pot caps).**
 
 Iterate every service slot in chronological order (Centraal before West within the same date+meal). For each slot, for each type:
 
@@ -193,6 +197,20 @@ for i in 0..remaining:
 **Servable-by rule**: a batch with cookDate = X is servable from dinner of X onwards. Lunch of X is too early.
 
 **Centraal gaps (5b)**: because Pass 2 iterates all 4 service slots per day (both locations), a Centraal slot whose corresponding West slot is already filled will get filled by the same logic in the same pass — no separate "copy from West" step needed. The 2-newest rule will tend to pick the same batches because they're the most recent for both locations. This is "5b for free."
+
+**Pass 3 — fill anything still empty, IGNORING pot caps.**
+
+Filling slots ranks above respecting pot caps. Pass 3 iterates remaining empty positions and assigns the least-loaded eligible batch — even if it would push that batch over the pot it was originally allocated. Still respects the things that genuinely can't change:
+
+- stock for cooked batches (you can't conjure food)
+- frozen batches (cook decides to pull them)
+- stale batches (warning-only path)
+- in-slot duplicates (one batch can't fill both positions of one slot)
+- servability (cook day's lunch is too early)
+
+Over-cap batches surface as `over-pot-cap` warnings with an `[Add extra batch]` action. The cook can split reactively, or accept the over-pot reality.
+
+**Why filling > variety > pot-cap?** Empty slots are worse than oversized pots. An empty Tue lunch means actual humans show up and there's no soup; an over-cap batch just means the cook needs a 100L pot instead of an 80L one (or splits the cook). The user explicitly chose this prioritization: "filling all slots should be more important."
 
 #### Step 5 — Validate, report, and offer rescue actions
 

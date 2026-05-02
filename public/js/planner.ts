@@ -1,4 +1,4 @@
-import type { Batch, RecipeEntry, DishType, Location, Meal, Service } from '@shared/types';
+import type { Batch, RecipeEntry, RecipeFull, DishType, Location, Meal, Service } from '@shared/types';
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError } from './utils';
 import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate } from './core';
@@ -767,17 +767,23 @@ export function renderReplaceModal() {
   let candidates = S.batches.filter(d =>
     d.id !== old.id && d.type === old.type && !isBatchCooked(d)
   );
-  // Recipes not already active
-  const activeDishRecipeIds = new Set(S.batches.map(d => d.recipeSheetId).filter(Boolean));
-  let recipes = S.recipeIndex.filter(r =>
-    !activeDishRecipeIds.has(r.recipeSheetId) && (r.type || 'Soup') === old.type
+  // Recipes: search through ALL v2 recipes of the same type (legacy recipeIndex
+  // is no longer the source of truth — see CLAUDE.md "all planner batches now
+  // use v2 recipes"). Don't exclude already-active ones; cook may want to use
+  // the same recipe twice in a week.
+  let recipes = (S.recipes || []).filter(r =>
+    (r.type || 'Soup') === old.type
   );
 
-  // Apply search
+  // Apply search (matches name, structure, seasonality — broader than just name)
   if (rs.searchQuery) {
     const q = rs.searchQuery.toLowerCase();
     candidates = candidates.filter(d => d.name.toLowerCase().includes(q));
-    recipes = recipes.filter(r => r.name.toLowerCase().includes(q));
+    recipes = recipes.filter(r =>
+      r.name.toLowerCase().includes(q)
+      || (r.structure || '').toLowerCase().includes(q)
+      || (r.seasonality || '').toLowerCase().includes(q)
+    );
   }
 
   // Render batch options
@@ -799,14 +805,19 @@ export function renderReplaceModal() {
     </div>`;
   }).join('');
 
-  const renderRecipeOpts = (recs: RecipeEntry[]) => recs.slice(0, 20).map(r => {
-    const ags = (r.allergens || []).slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
-    return `<div class="dish-opt" onclick="replaceWithRecipe('${r.id}')">
+  const renderRecipeOpts = (recs: RecipeFull[]) => recs.slice(0, 50).map(r => {
+    const allAg = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
+    const ags = allAg.slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
+    const meta: string[] = [];
+    if (r.structure) meta.push(esc(r.structure));
+    if (r.seasonality) meta.push(esc(r.seasonality));
+    if (r.costPerServing != null) meta.push(`€${r.costPerServing.toFixed(2)}/p`);
+    return `<div class="dish-opt" onclick="replaceWithV2Recipe('${esc(r.id)}')">
       <div style="flex:1;">
         <div><span style="font-weight:500;">${esc(r.name)}</span></div>
         <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
           ${ags}
-          ${r.costPerServing ? `<span style="color:var(--text3);">${esc(r.costPerServing)}</span>` : ''}
+          ${meta.length > 0 ? `<span style="color:var(--text3);">${meta.join(' · ')}</span>` : ''}
         </div>
       </div>
     </div>`;
@@ -939,6 +950,70 @@ export function replaceWithRecipe(recipeId: string) {
   cleanCateringRefs(old.id, newBatch.id);
 
   // Delete old batch
+  const oldName = old.name;
+  S.batches = S.batches.filter(d => d.id !== old.id);
+  if (!S.deletedBatches) S.deletedBatches = [];
+  S.deletedBatches.push(old.id);
+
+  closeModal();
+  rebuildPlanner();
+  rerenderCurrentView();
+  scheduleSave();
+  toast(`Replaced ${oldName} with ${r.name}`);
+}
+
+/**
+ * V2 recipe replace path. Mirror of replaceWithRecipe but consumes from
+ * S.recipes (the v2 recipe library) and links via recipeId rather than
+ * recipeSheetId. Transfers services + cookDate from the old batch.
+ */
+export function replaceWithV2Recipe(recipeId: string) {
+  const rs = S._replaceState;
+  if (!rs) return;
+  const old = S.batches.find(d => d.id === rs.oldBatchId);
+  const r = (S.recipes || []).find(x => x.id === recipeId);
+  if (!old || !r) return;
+
+  const allAllergens = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
+  // Snapshot ingredients into the JSON shape the order system expects
+  const snapshotIngredients = (r.ingredients || []).map(ing => ({
+    name: ing.ingredientName || ing.flexLabel || 'Unknown',
+    amount: ing.rawAmount,
+    unit: ing.unit,
+    source: '',
+    cost: 0,
+  }));
+
+  const newBatch: Batch = {
+    id: newId(),
+    name: r.name,
+    type: (r.type || 'Soup') as DishType,
+    stock: 0,
+    serving: r.servingSize || 280,
+    storage: 'Gastro',
+    location: old.location,
+    inTransit: false,
+    recipeSheetId: null,
+    recipeVolume: r.recipeVolume || null,
+    recipeIngredients: snapshotIngredients,
+    allergens: allAllergens,
+    extraAllergens: [],
+    orderFor: false,
+    parentId: null,
+    cookDate: old.cookDate || null,
+    note: '',
+    services: [...(old.services || [])],
+    createdAt: new Date().toISOString(),
+    recipeId: r.id,
+    actualIngredients: null,
+    cookNotes: '',
+    stockDeducted: false,
+    generated: false,  // a real recipe now, no longer an algorithm placeholder
+  };
+  S.batches.push(newBatch);
+
+  cleanCateringRefs(old.id, newBatch.id);
+
   const oldName = old.name;
   S.batches = S.batches.filter(d => d.id !== old.id);
   if (!S.deletedBatches) S.deletedBatches = [];

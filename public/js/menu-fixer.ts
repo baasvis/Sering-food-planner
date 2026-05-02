@@ -27,7 +27,7 @@ export const COOK_RHYTHM: Record<string, { soup: number; main: number }> = {
 };
 
 export const SLOTS_PER_TYPE = 2;
-export const PLANNING_HORIZON_DAYS = 14;
+export const PLANNING_HORIZON_DAYS = 10;
 export const STALE_THRESHOLD_DAYS = 3;
 export const TYPES_TO_PLAN: DishType[] = ['Soup', 'Main course'];
 
@@ -149,10 +149,12 @@ interface PlaceholderInput {
  * cleanup passes know it's safe to remove if unused.
  */
 function buildPlaceholder(input: PlaceholderInput): Batch {
-  const typeLabel = input.type === 'Main course' ? 'Main' : 'Soup';
-  const name = input.total > 1
-    ? `${input.dayName} ${typeLabel} ${input.index}`
-    : `${input.dayName} ${typeLabel}`;
+  // Lowercase type label so placeholders sort visually after real recipe names
+  // (which start with capital letters): "Sat soup cooking 02/05/2026" stands
+  // out clearly as a placeholder waiting to be replaced with a real recipe.
+  const typeLabel = input.type === 'Main course' ? 'main' : 'soup';
+  const indexSuffix = input.total > 1 ? ` ${input.index}` : '';
+  const name = `${input.dayName} ${typeLabel}${indexSuffix} cooking ${input.cookDateStr}`;
 
   return {
     id: newId(),
@@ -561,6 +563,77 @@ function tryFillOnePosition(
   return false;
 }
 
+// ── Step 4 — Pass 3: fill remaining empty positions, IGNORE pot caps ──────
+
+/**
+ * After Pass 2 has done its variety-respecting + pot-cap-respecting work,
+ * any still-empty slot positions get filled here. This pass relaxes the pot
+ * cap constraint — better to over-fill a pot (warning territory) than to
+ * leave a service slot empty when food exists to fill it.
+ *
+ * Still respects:
+ *   - stock for cooked batches (you can't conjure food out of thin air)
+ *   - frozen batches stay out of auto rotation
+ *   - stale batches (cooked) stay out — cook can force-assign via the modal
+ *   - servability (cook day's lunch is too early)
+ *   - in-slot duplicates (same batch can't fill both positions of one slot)
+ *
+ * Picks least-loaded eligible batch — variety has already been applied in
+ * Pass 2's rounds, so this pass just balances the leftover load.
+ *
+ * Over-cap batches will be flagged by collectWarnings as `over-pot-cap`
+ * with an [Add extra batch] action — the cook can split reactively.
+ */
+export function assignServicesPass3(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+): { servicesAdded: number } {
+  let added = 0;
+
+  for (const day of window) {
+    for (const slot of day.slots) {
+      if (slot.isPast) continue;
+
+      for (const type of TYPES_TO_PLAN) {
+        const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+        const remaining = SLOTS_PER_TYPE - filled;
+        if (remaining <= 0) continue;
+
+        for (let i = 0; i < remaining; i++) {
+          let candidates = allBatches.filter(b => {
+            if (b.type !== type) return false;
+            if (!b.cookDate) return false;
+            if (b.storage === 'Frozen') return false;
+            if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal)) return false;
+            if (!isServableBy(b.cookDate, day.isoDate, slot.meal)) return false;
+            if (b.stock > 0 && isStaleAtSlot(b.cookDate, day.isoDate)) return false;
+            // Cooked: tentative-add and undo to verify we don't exceed STOCK
+            // (real food limit; pot cap is intentionally ignored here).
+            if (b.stock > 0) {
+              b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+              const overshot = calcReq(b) > b.stock;
+              b.services.pop();
+              if (overshot) return false;
+            }
+            return true;
+          });
+          if (candidates.length === 0) break;
+
+          // Least-loaded wins — keeps the over-cap pain spread evenly across
+          // sibling batches rather than dumping it on one.
+          candidates.sort((a, b) => a.services.length - b.services.length);
+          const chosen = candidates[0];
+          chosen.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+          added++;
+        }
+      }
+    }
+  }
+
+  return { servicesAdded: added };
+}
+
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 /**
@@ -613,8 +686,15 @@ export function fixMyMenu(): void {
   // accurate when Pass 2 evaluates eligibility.
   rebuildPlanner();
 
-  // Step 4 — Pass 2: fill remaining empty positions with the 2-newest rule.
+  // Step 4 — Pass 2: fill remaining empty positions with the 2-newest rule
+  // (respecting pot caps).
   const pass2 = assignServicesPass2(S.batches, planWindow, calcRequired, potCaps);
+  rebuildPlanner();
+
+  // Step 4 — Pass 3: fill anything still empty, IGNORING pot caps. Better to
+  // overflow a pot (warning territory) than to leave a slot empty when food
+  // exists to fill it. Filling > variety > pot-cap.
+  const pass3 = assignServicesPass3(S.batches, planWindow, calcRequired);
 
   // Final refresh and persist.
   rebuildPlanner();
@@ -636,7 +716,7 @@ export function fixMyMenu(): void {
   showResultsModal({
     cleaned: orphans.length,
     created: newPlaceholders.length,
-    assigned: pass1.servicesAdded + pass2.servicesAdded,
+    assigned: pass1.servicesAdded + pass2.servicesAdded + pass3.servicesAdded,
     placeholderNames: newPlaceholders.map(p => p.name),
     warnings,
   });
