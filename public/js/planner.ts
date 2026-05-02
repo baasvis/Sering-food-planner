@@ -110,7 +110,7 @@ export function renderLocationPlan(loc: string) {
     : '';
 
   html += `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
-    <button class="btn btn-primary" onclick="openNewDish()">+ New batch</button>
+    <button class="btn btn-primary" data-testid="new-batch-btn" onclick="openNewDish()">+ New batch</button>
     ${fixMenuBtn}
     ${invBtn}
   </div>

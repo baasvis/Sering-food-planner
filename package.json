@@ -13,6 +13,10 @@
     "db:migrate": "prisma migrate deploy",
     "db:seed": "node prisma/seed.js",
     "test": "jest --forceExit --detectOpenHandles",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:all": "npm test && npm run test:e2e",
+    "telemetry:mine": "tsx scripts/mine-telemetry-journeys.ts",
     "typecheck": "npx tsc -p tsconfig.server.json --noEmit"
   },
   "prisma": {
@@ -54,6 +58,7 @@
     "node": ">=20.19.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@swc/core": "^1.15.21",
     "@swc/jest": "^0.2.39",
     "@types/express": "^5.0.6",
