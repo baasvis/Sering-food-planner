@@ -12,6 +12,7 @@ import { registerRenderer, setOnScreenChange } from './navigate';
 // Stocktake helpers used by the dashboard chip — kept distinct from the
 // individual screen render fns (those self-register via navigate.ts now).
 import { startStocktake, renderStocktakeAreaPicker, enterStocktakeArea, renderStocktakeArea, saveStocktakeArea, exitStocktake, getIngredientsForArea } from './orders';
+import { saveStocktakeWithToast } from './stocktake';
 import { trackScreenView } from './telemetry';
 import { showModal, closeModal } from './modal';
 import { getStorageConfigForLoc } from './state';
@@ -813,32 +814,15 @@ export async function dashStocktakeSave(goToNext: boolean) {
     if (ingId) _stocktakeValues[ingId] = el.value === '' ? undefined : parseFloat(el.value);
   });
 
-  const updates: Array<{ ingredientId: string; location: string; amount: number }> = [];
-  items.forEach((ing: StocktakeItem) => {
-    const val = _stocktakeValues[ing.id];
-    if (val === undefined) return;
-    const baseAmount = ing.orderUnitSize > 0 ? val * ing.orderUnitSize : val;
-    updates.push({ ingredientId: ing.id, location: loc, amount: baseAmount });
-  });
-
-  if (updates.length) {
-    try {
-      await apiPost('/api/ingredients/stock/bulk', updates);
-    } catch (e: unknown) {
-      toastError('Failed to save stock: ' + (e instanceof Error ? e.message : 'Unknown error'));
-      return;
-    }
-    updates.forEach(u => {
-      const dbIng = S.ingredientDb.find(i => i.id === u.ingredientId);
-      if (dbIng) {
-        if (!dbIng.stock) dbIng.stock = {};
-        (dbIng.stock as Record<string, unknown>)[u.location] = { amount: u.amount, date: new Date().toISOString().slice(0, 10) };
-      }
-    });
+  // Persistence delegated to public/js/stocktake.ts (shared with the
+  // orders full-screen flow).
+  try {
+    await saveStocktakeWithToast(_stocktakeArea!, items, _stocktakeValues, loc);
+  } catch {
+    return; // toast shown by helper
   }
 
   _stocktakeSavedAreas.push(_stocktakeArea!);
-  toast(`${_stocktakeArea}: ${updates.length} items saved`);
 
   if (goToNext) {
     _stocktakeArea = null;

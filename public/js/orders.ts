@@ -6,6 +6,7 @@ import { ingredientDbFull, openIngredientModal, openStoragePopover, renderIngred
 import { trackEvent } from './telemetry';
 import type { Ingredient, Batch, Location } from '@shared/types';
 import { toGrams, baseUnitOf } from '@shared/units';
+import { saveStocktakeWithToast } from './stocktake';
 import { locName } from '@shared/location';
 import { registerRenderer } from './navigate';
 
@@ -1922,11 +1923,12 @@ export function updateStocktakeToOrder(input: HTMLInputElement) {
   }
 }
 
-/** Save stocktake for current area — persist stock to DB */
+/** Save stocktake for current area — persist stock to DB.
+ *  Persistence delegated to public/js/stocktake.ts (shared with the
+ *  dashboard modal flow). */
 export async function saveStocktakeArea(goToNext: boolean) {
   const loc = S.currentLoc;
   const items = getIngredientsForArea(stocktakeArea);
-  let saved = 0;
 
   // Collect values from DOM inputs (don't rely solely on oninput handler — unreliable on mobile)
   const container = document.getElementById('screen-orders');
@@ -1937,38 +1939,24 @@ export async function saveStocktakeArea(goToNext: boolean) {
     });
   }
 
-  // Batch save all items that have stocktake values
-  const updates = [];
-  items.forEach(ing => {
-    const val = stocktakeValues[ing.id];
-    if (val === undefined) return; // not touched — skip
-    const baseAmount = ing.orderUnitSize > 0 ? val * ing.orderUnitSize : val;
-    // Update local state
-    if (!ing.stock) ing.stock = {};
-    ing.stock[loc] = { amount: baseAmount, date: new Date().toISOString().slice(0, 10) };
-    updates.push({ ingredientId: ing.id, location: loc, amount: baseAmount });
-    saved++;
-  });
-
-  if (updates.length) {
-    try {
-      await apiPost('/api/ingredients/stock/bulk', updates);
-    } catch (e: unknown) {
-      toastError('Failed to save stock: ' + (e instanceof Error ? e.message : 'Unknown error'));
-      return;
-    }
-    // Also update ingredientDb in memory
-    updates.forEach(u => {
-      const dbIng = S.ingredientDb.find(i => i.id === u.ingredientId);
-      if (dbIng) {
-        if (!dbIng.stock) dbIng.stock = {};
-        dbIng.stock[u.location] = { amount: u.amount, date: new Date().toISOString().slice(0, 10) };
-      }
-    });
+  try {
+    await saveStocktakeWithToast(esc(stocktakeArea), items, stocktakeValues, loc);
+  } catch {
+    return; // toast already shown by helper
   }
 
+  // Mirror the saved values into the local items so the in-memory copy is
+  // consistent with the DB (this list is recomputed each render anyway, but
+  // keeping it accurate avoids a render-flicker between save and reload).
+  const today = new Date().toISOString().slice(0, 10);
+  items.forEach(ing => {
+    const val = stocktakeValues[ing.id];
+    if (val === undefined) return;
+    if (!ing.stock) ing.stock = {};
+    ing.stock[loc] = { amount: ing.orderUnitSize > 0 ? val * ing.orderUnitSize : val, date: today };
+  });
+
   stocktakeSavedAreas.push(stocktakeArea);
-  toast(`${esc(stocktakeArea)}: ${saved} items saved`);
 
   if (goToNext) {
     renderStocktakeAreaPicker();
