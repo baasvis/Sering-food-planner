@@ -134,7 +134,25 @@ One migration covering several additive/safe changes:
 
 ## Phase 3 — Type + structure consolidation (~3 hr)
 
-### Slice 5 — Frontend strict mode (2-3 hr)
+### Slice 5 — Frontend strict mode (4-6 hr — REORDERED to land after S16)
+
+**Status:** scope was much larger than the plan estimated. Reality check from
+2026-05-02:
+
+- The frontend has never been `tsc --noEmit`-checked at all. Vite handles type
+  resolution at bundle time with looser rules than the standalone compiler.
+  This means errors visible to a fresh tsc run include not just `any`s but
+  every accumulated drift the bundler has been silently accepting.
+- Flipping `strict: true` produced **488 errors**.
+- Flipping just `noImplicitAny: true` produced **433 errors**.
+- 301 of those 433 cluster in the 5 oversized files (orders.ts 110, predictions.ts
+  77, dishes.ts 43, planner.ts 40, finance.ts 31) that **S16 is going to split**.
+  Trying to type-fix a 1991-line file before splitting is fighting the order.
+
+**New plan:** S5 lands after S16 has split the big files. Each split file is
+~200-400 lines; typing them is then tractable. We also need a tsconfig
+`paths` mapping for `@shared/*` to make `tsc` resolve the alias the same way
+Vite does (currently the standalone compiler can't even find `@shared/types`).
 
 | Change | Closes |
 |---|---|
