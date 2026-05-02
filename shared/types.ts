@@ -82,6 +82,13 @@ export interface Batch {
   generated?: boolean;
 }
 
+export interface KitchenEquipment {
+  pots: number[];           // sizes in liters, e.g. [140, 140, 100, 100, ...]
+  gasBurners: number;       // burners that can handle pots > bigBurnerThreshold
+  inductionBurners: number; // burners that handle pots ≤ bigBurnerThreshold
+  bigBurnerThreshold: number; // typically 80 — pot size that requires a gas burner
+}
+
 export interface GuestDay {
   lunch: number;
   dinner: number;

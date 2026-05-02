@@ -4,11 +4,12 @@
 // Slice 3 (this file): two-pass service assigner (cooked-finish, then 2-newest).
 // See .claude/plans/fix-my-menu.md for the full spec.
 
-import type { Batch, DishType, Location, Meal } from '@shared/types';
+import type { Batch, DishType, Location, Meal, KitchenEquipment } from '@shared/types';
 import { S } from './state';
-import { newId, scheduleSave, toast } from './utils';
-import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired } from './core';
+import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './utils';
+import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired, getGuests } from './core';
 import { rerenderCurrentView } from './navigate';
+import { showModal, closeModal, esc } from './modal';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -221,6 +222,75 @@ export function generateMissingPlaceholders(window: PlanDay[], snapshot: BatchSn
   return newBatches;
 }
 
+// ── Pot allocation ──────────────────────────────────────────────────────────
+
+/**
+ * For each cook day, allocate the kitchen's available pots to that day's
+ * batches and return a per-batch liters cap.
+ *
+ * Allocation strategy:
+ *   - Group batches by cookDate, then by type.
+ *   - Within a day, interleave types: Soup1, Main1, Soup2, Main2, Soup3, Main3
+ *     This ensures the first batch of each type gets the biggest pot
+ *     (matches the user's "1 big per type" preference).
+ *   - Allocate pots from biggest to smallest in that order.
+ *   - If a day has more batches than pots, the overflow gets capped at the
+ *     smallest pot size (warning territory — flagged in validation).
+ *
+ * Returns a Map keyed by batch id. Batches not in the map (e.g. Desserts,
+ * batches outside the planning window) have no cap.
+ */
+export function allocatePotCaps(
+  batchesInWindow: Batch[],
+  equipment: KitchenEquipment | null,
+): Map<string, number> {
+  const caps = new Map<string, number>();
+  if (!equipment || equipment.pots.length === 0) return caps;
+  const sortedPotsDesc = [...equipment.pots].sort((a, b) => b - a);
+  const smallestPot = sortedPotsDesc[sortedPotsDesc.length - 1];
+
+  // Group by cookDate
+  const byDay = new Map<string, Batch[]>();
+  for (const b of batchesInWindow) {
+    if (!b.cookDate) continue;
+    if (!byDay.has(b.cookDate)) byDay.set(b.cookDate, []);
+    byDay.get(b.cookDate)!.push(b);
+  }
+
+  for (const [, dayBatches] of byDay) {
+    // Group by type, preserving id order within each type
+    const byType: Record<string, Batch[]> = {};
+    for (const b of dayBatches) {
+      if (!TYPES_TO_PLAN.includes(b.type)) continue;
+      (byType[b.type] = byType[b.type] || []).push(b);
+    }
+    // Sort each type's batches by id for deterministic allocation
+    for (const t of TYPES_TO_PLAN) {
+      if (byType[t]) byType[t].sort((a, b) => a.id.localeCompare(b.id));
+    }
+    // Interleave: take 1st of each type, then 2nd of each, then 3rd, ...
+    const ordered: Batch[] = [];
+    let i = 0;
+    let added = true;
+    while (added) {
+      added = false;
+      for (const t of TYPES_TO_PLAN) {
+        if (byType[t] && byType[t][i]) {
+          ordered.push(byType[t][i]);
+          added = true;
+        }
+      }
+      i++;
+    }
+    // Allocate pots in order
+    for (let k = 0; k < ordered.length; k++) {
+      const cap = sortedPotsDesc[k] ?? smallestPot;
+      caps.set(ordered[k].id, cap);
+    }
+  }
+  return caps;
+}
+
 // ── Step 4 helpers: slot eligibility ────────────────────────────────────────
 
 /**
@@ -314,6 +384,7 @@ export function assignServicesPass1(
   allBatches: Batch[],
   window: PlanDay[],
   calcReq: (b: Batch) => number,
+  potCaps?: Map<string, number>,
 ): { servicesAdded: number; batchesTouched: number } {
   const cookedSorted = allBatches
     .filter(b => TYPES_TO_PLAN.includes(b.type))
@@ -326,7 +397,10 @@ export function assignServicesPass1(
   const touched = new Set<string>();
 
   for (const batch of cookedSorted) {
-    let surplus = batch.stock - calcReq(batch);
+    // Effective ceiling = stock for cooked batches, capped further by pot size if known
+    const potCap = potCaps?.get(batch.id);
+    const ceiling = potCap != null ? Math.min(batch.stock, potCap) : batch.stock;
+    let surplus = ceiling - calcReq(batch);
     if (surplus <= 0) continue;
 
     walk: for (const day of window) {
@@ -341,7 +415,7 @@ export function assignServicesPass1(
 
         // Tentatively assign, then check capacity. If overcommitted, undo.
         batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-        const overshot = calcReq(batch) > batch.stock;
+        const overshot = calcReq(batch) > ceiling;
         if (overshot) {
           batch.services.pop();
           // No more room in this batch — move to the next batch.
@@ -350,7 +424,7 @@ export function assignServicesPass1(
 
         added++;
         touched.add(batch.id);
-        surplus = batch.stock - calcReq(batch);
+        surplus = ceiling - calcReq(batch);
         if (surplus <= 0) break walk;
       }
     }
@@ -388,6 +462,7 @@ export function assignServicesPass2(
   allBatches: Batch[],
   window: PlanDay[],
   calcReq: (b: Batch) => number,
+  potCaps?: Map<string, number>,
 ): { servicesAdded: number } {
   let added = 0;
 
@@ -402,7 +477,7 @@ export function assignServicesPass2(
 
         for (let i = 0; i < remaining; i++) {
           const placed = tryFillOnePosition(
-            allBatches, type, slot.loc, day.isoDate, slot.meal, calcReq,
+            allBatches, type, slot.loc, day.isoDate, slot.meal, calcReq, potCaps,
           );
           if (placed) added++;
           else break;  // no candidate fit — leave the rest of this slot's positions empty
@@ -417,7 +492,7 @@ export function assignServicesPass2(
 /**
  * Find the best candidate for a single (slot, type) position and assign it.
  * Returns true if a batch was placed. Tries successive candidates if the top
- * pick fails the capacity check (cooked batch already at stock limit).
+ * pick fails the capacity check (stock OR pot cap exceeded).
  */
 function tryFillOnePosition(
   allBatches: Batch[],
@@ -426,6 +501,7 @@ function tryFillOnePosition(
   isoDate: string,
   meal: Meal,
   calcReq: (b: Batch) => number,
+  potCaps?: Map<string, number>,
 ): boolean {
   // Build candidate list (excluded: wrong type, already-in-slot, frozen, stale-cooked, unservable).
   let candidates = allBatches.filter(b => {
@@ -463,8 +539,16 @@ function tryFillOnePosition(
     const chosen = sameBucket[0];
 
     // Tentatively assign and check capacity.
+    // Effective ceiling = min(stock for cooked, pot cap if known). Uncooked
+    // batches have unlimited stock conceptually but still respect pot cap.
+    const potCap = potCaps?.get(chosen.id);
+    const ceilings: number[] = [];
+    if (chosen.stock > 0) ceilings.push(chosen.stock);
+    if (potCap != null) ceilings.push(potCap);
+    const ceiling = ceilings.length > 0 ? Math.min(...ceilings) : Infinity;
+
     chosen.services.push({ loc, date: isoDate, meal });
-    if (chosen.stock > 0 && calcReq(chosen) > chosen.stock) {
+    if (calcReq(chosen) > ceiling) {
       chosen.services.pop();
       // This batch can't take more services — drop it and try the next candidate.
       candidates = candidates.filter(c => c !== chosen);
@@ -518,33 +602,592 @@ export function fixMyMenu(): void {
   // depends on it being current.
   rebuildPlanner();
 
+  // Allocate kitchen pots to in-window batches (biggest pot to first batch of
+  // each type, alternating types). Both passes respect these caps.
+  const inWindowBatches = S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type));
+  const potCaps = allocatePotCaps(inWindowBatches, S.kitchenEquipment);
+
   // Step 4 — Pass 1: extend cooked batches forward through the window.
-  const pass1 = assignServicesPass1(S.batches, planWindow, calcRequired);
+  const pass1 = assignServicesPass1(S.batches, planWindow, calcRequired, potCaps);
   // Pass 1 added new service entries; rebuild planner so peer counts are
   // accurate when Pass 2 evaluates eligibility.
   rebuildPlanner();
 
   // Step 4 — Pass 2: fill remaining empty positions with the 2-newest rule.
-  const pass2 = assignServicesPass2(S.batches, planWindow, calcRequired);
+  const pass2 = assignServicesPass2(S.batches, planWindow, calcRequired, potCaps);
 
   // Final refresh and persist.
   rebuildPlanner();
+
+  // Step 5: collect warnings (after rebuild so calcRequired sees current peers)
+  const warnings = collectWarnings(
+    S.batches,
+    planWindow,
+    S.caterings || [],
+    calcRequired,
+    potCaps,
+    S.kitchenEquipment,
+    getGuests,
+  );
+
   rerenderCurrentView();
   scheduleSave();
 
-  // Slice 3 result UI: toast with the new counters. Slice 4 will replace this
-  // with a results modal that adds warnings and rescue actions.
-  const cleaned = orphans.length;
-  const created = newPlaceholders.length;
-  const assigned = pass1.servicesAdded + pass2.servicesAdded;
+  showResultsModal({
+    cleaned: orphans.length,
+    created: newPlaceholders.length,
+    assigned: pass1.servicesAdded + pass2.servicesAdded,
+    placeholderNames: newPlaceholders.map(p => p.name),
+    warnings,
+  });
+}
 
-  if (created === 0 && cleaned === 0 && assigned === 0) {
-    toast('Menu already covers the cook rhythm and slots are filled — nothing to do.');
-  } else {
-    const parts: string[] = [];
-    if (created > 0) parts.push(`Created ${created} placeholder${created === 1 ? '' : 's'}`);
-    if (cleaned > 0) parts.push(`cleaned ${cleaned} unused`);
-    if (assigned > 0) parts.push(`assigned ${assigned} service slot${assigned === 1 ? '' : 's'}`);
-    toast(parts.join(', '));
+// ── Step 5: validation ─────────────────────────────────────────────────────
+
+export type WarningCategory =
+  | 'under-filled-slot'
+  | 'cooked-stockout'
+  | 'stale-with-stock'
+  | 'over-pot-cap'
+  | 'burner-overload'
+  | 'catering-no-dishes';
+
+export interface Warning {
+  category: WarningCategory;
+  message: string;
+  // Anchor for "Go to" navigation: a slot, a batch, or a catering
+  anchor?: { kind: 'slot'; loc: Location; date: string; meal: Meal }
+         | { kind: 'batch'; batchId: string }
+         | { kind: 'catering'; cateringId: string };
+  // Optional rescue actions
+  actions?: WarningAction[];
+}
+
+export type WarningAction =
+  | { kind: 'use-frozen'; batchId: string; batchName: string }
+  | { kind: 'add-emergency-cook'; type: DishType; loc: Location; date: string; meal: Meal }
+  | { kind: 'assign-anyway'; batchId: string }
+  | { kind: 'move-to-freezer'; batchId: string }
+  | { kind: 'add-extra-batch'; cookDate: string; type: DishType };
+
+export function collectWarnings(
+  allBatches: Batch[],
+  window: PlanDay[],
+  caterings: { id: string; date: string | null; dishes: { dishId: string }[] }[],
+  calcReq: (b: Batch) => number,
+  potCaps: Map<string, number>,
+  equipment: KitchenEquipment | null,
+  getGuestsFn: (loc: Location, date: string, meal: Meal) => number,
+): Warning[] {
+  const warnings: Warning[] = [];
+
+  // 1. Under-filled slot warnings (only when guests > 0).
+  for (const day of window) {
+    for (const slot of day.slots) {
+      if (slot.isPast) continue;
+      const guests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
+      if (guests <= 0) continue;
+      for (const type of TYPES_TO_PLAN) {
+        const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+        if (filled < SLOTS_PER_TYPE) {
+          const missing = SLOTS_PER_TYPE - filled;
+          // Find frozen batches of this type as rescue candidates
+          const frozen = allBatches.filter(b => b.type === type && b.storage === 'Frozen' && (b.stock || 0) > 0);
+          const actions: WarningAction[] = [];
+          for (const f of frozen) {
+            actions.push({ kind: 'use-frozen', batchId: f.id, batchName: f.name });
+          }
+          // Today's dinner under-filled? offer emergency cook
+          const todayIso = dateToIso(getToday());
+          if (day.isoDate === todayIso && slot.meal === 'dinner') {
+            actions.push({ kind: 'add-emergency-cook', type, loc: slot.loc, date: day.isoDate, meal: slot.meal });
+          }
+          const typeLabel = type === 'Main course' ? 'main' : 'soup';
+          warnings.push({
+            category: 'under-filled-slot',
+            message: `${day.dayName} ${slot.meal} ${slot.loc} — ${filled} of ${SLOTS_PER_TYPE} ${typeLabel}${missing > 1 ? 's' : ''} assigned`,
+            anchor: { kind: 'slot', loc: slot.loc, date: day.isoDate, meal: slot.meal },
+            actions: actions.length > 0 ? actions : undefined,
+          });
+        }
+      }
+    }
   }
+
+  // 2. Cooked stockout: a cooked batch's projected demand exceeds its stock.
+  for (const b of allBatches) {
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (b.stock <= 0) continue;
+    if (b.storage === 'Frozen') continue;
+    const demand = calcReq(b);
+    if (demand > b.stock) {
+      warnings.push({
+        category: 'cooked-stockout',
+        message: `"${b.name}" cooked ${b.cookDate || '?'} — needs ${demand.toFixed(1)}L, only ${b.stock}L cooked`,
+        anchor: { kind: 'batch', batchId: b.id },
+      });
+    }
+  }
+
+  // 3. Stale batch with leftover stock.
+  for (const b of allBatches) {
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (b.stock <= 0) continue;
+    if (b.storage === 'Frozen') continue;
+    if (!isStaleAtSlot(b.cookDate, dateToIso(getToday()))) continue;
+    warnings.push({
+      category: 'stale-with-stock',
+      message: `"${b.name}" cooked ${b.cookDate} — ${b.stock}L left, getting stale`,
+      anchor: { kind: 'batch', batchId: b.id },
+      actions: [
+        { kind: 'assign-anyway', batchId: b.id },
+        { kind: 'move-to-freezer', batchId: b.id },
+      ],
+    });
+  }
+
+  // 4. Over-pot-cap: batch projected demand exceeds its allocated pot size.
+  // The algorithm tries to prevent this in Pass 2, but Pass 1's stock-driven
+  // extension or pre-existing manual assignments can still produce it.
+  for (const b of allBatches) {
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (b.storage === 'Frozen') continue;
+    const cap = potCaps.get(b.id);
+    if (cap == null) continue;
+    const demand = calcReq(b);
+    if (demand > cap && b.cookDate) {
+      warnings.push({
+        category: 'over-pot-cap',
+        message: `"${b.name}" cooked ${b.cookDate} — needs ${demand.toFixed(1)}L, biggest pot fits ${cap}L. Add a second cook to split?`,
+        anchor: { kind: 'batch', batchId: b.id },
+        actions: [
+          { kind: 'add-extra-batch', cookDate: b.cookDate, type: b.type },
+        ],
+      });
+    }
+  }
+
+  // 5. Burner overload per cook day: too many >threshold pots needed for
+  // available gas burners (which can run pots > threshold). Info-only for v1.
+  if (equipment && equipment.gasBurners >= 0) {
+    const threshold = equipment.bigBurnerThreshold || 80;
+    const byDay = new Map<string, Batch[]>();
+    for (const b of allBatches) {
+      if (!b.cookDate) continue;
+      if (!TYPES_TO_PLAN.includes(b.type)) continue;
+      if (!byDay.has(b.cookDate)) byDay.set(b.cookDate, []);
+      byDay.get(b.cookDate)!.push(b);
+    }
+    for (const [day, dayBatches] of byDay) {
+      let bigPotCount = 0;
+      for (const b of dayBatches) {
+        const cap = potCaps.get(b.id);
+        if (cap != null && cap > threshold) bigPotCount++;
+      }
+      if (bigPotCount > equipment.gasBurners) {
+        warnings.push({
+          category: 'burner-overload',
+          message: `${day}: ${bigPotCount} batches need pots > ${threshold}L but you only have ${equipment.gasBurners} gas burner${equipment.gasBurners === 1 ? '' : 's'}`,
+        });
+      }
+    }
+  }
+
+  // 6. Caterings in window with no dishes assigned.
+  const todayIso = dateToIso(getToday());
+  const horizonEnd = dateToIso(new Date(getToday().getTime() + (PLANNING_HORIZON_DAYS - 1) * 86400000));
+  for (const c of caterings) {
+    if (!c.date) continue;
+    // Catering date format: DD/MM/YYYY → convert to ISO
+    const cIso = cookDateToIso(c.date);
+    if (!cIso) continue;
+    if (cIso < todayIso || cIso > horizonEnd) continue;
+    if (!c.dishes || c.dishes.length === 0) {
+      warnings.push({
+        category: 'catering-no-dishes',
+        message: `Catering on ${c.date} has no dishes assigned`,
+        anchor: { kind: 'catering', cateringId: c.id },
+      });
+    }
+  }
+
+  return warnings;
+}
+
+// ── Results modal + warning action handlers ────────────────────────────────
+
+interface ResultsReport {
+  cleaned: number;
+  created: number;
+  assigned: number;
+  placeholderNames: string[];
+  warnings: Warning[];
+}
+
+let _lastReport: ResultsReport | null = null;
+
+function actionLabel(a: WarningAction): string {
+  switch (a.kind) {
+    case 'use-frozen': return `Use frozen ${a.batchName}`;
+    case 'add-emergency-cook': return 'Add emergency cook';
+    case 'assign-anyway': return 'Assign anyway';
+    case 'move-to-freezer': return 'Move to freezer';
+    case 'add-extra-batch': return 'Add extra batch';
+  }
+}
+
+function encodeAction(a: WarningAction): string {
+  return encodeURIComponent(JSON.stringify(a));
+}
+
+function renderWarningRow(w: Warning, idx: number): string {
+  const goto = w.anchor ? `<button class="btn btn-sm fix-menu-goto" onclick="fixMenuGoto(${idx})">Go to</button>` : '';
+  const actions = (w.actions || []).map(a =>
+    `<button class="btn btn-sm fix-menu-action" onclick="fixMenuAction(${idx}, '${encodeAction(a)}')">${esc(actionLabel(a))}</button>`
+  ).join('');
+  return `<div class="fix-menu-warning-row" data-idx="${idx}">
+    <div class="fix-menu-warning-msg">${esc(w.message)}</div>
+    <div class="fix-menu-warning-actions">${goto}${actions}</div>
+  </div>`;
+}
+
+function showResultsModal(report: ResultsReport): void {
+  _lastReport = report;
+  const { cleaned, created, assigned, placeholderNames, warnings } = report;
+  const summary: string[] = [];
+  if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
+  if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
+  if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);
+  if (summary.length === 0) summary.push(`<div>Menu already covers the cook rhythm — nothing to do.</div>`);
+
+  const warningsHtml = warnings.length === 0
+    ? `<div class="fix-menu-clean">No issues — menu looks good 🎉</div>`
+    : `<div class="fix-menu-warnings-hdr">⚠️ ${warnings.length} issue${warnings.length === 1 ? '' : 's'} to look at</div>
+       <div class="fix-menu-warnings-list">${warnings.map((w, i) => renderWarningRow(w, i)).join('')}</div>`;
+
+  const html = `
+    <div class="modal-content fix-menu-results" onclick="event.stopPropagation()">
+      <h2>Fix My Menu — done</h2>
+      <div class="fix-menu-summary">${summary.join('')}</div>
+      ${warningsHtml}
+      <div class="fix-menu-actions"><button class="btn btn-primary" onclick="closeModal()">Got it</button></div>
+    </div>
+  `;
+  showModal(html);
+}
+
+/**
+ * Navigate to a warning's anchor point. Closes the modal and scrolls/flashes
+ * the relevant DOM element. The element selectors here mirror what the planner
+ * renders (slots use `data-loc`/`data-date`/`data-meal`; batches use the tile
+ * id; caterings use the catering row id).
+ */
+export function fixMenuGoto(idx: number): void {
+  if (!_lastReport) return;
+  const w = _lastReport.warnings[idx];
+  if (!w?.anchor) return;
+  closeModal();
+  // Defer slightly so closeModal's animation doesn't interfere with scroll
+  setTimeout(() => {
+    let target: Element | null = null;
+    if (w.anchor!.kind === 'slot') {
+      target = document.querySelector(`[data-loc="${w.anchor.loc}"][data-date="${w.anchor.date}"][data-meal="${w.anchor.meal}"]`);
+    } else if (w.anchor!.kind === 'batch') {
+      target = document.getElementById(`batch-${w.anchor.batchId}`)
+            || document.querySelector(`[data-batch-id="${w.anchor.batchId}"]`);
+    } else if (w.anchor!.kind === 'catering') {
+      target = document.querySelector(`[data-catering-id="${w.anchor.cateringId}"]`);
+    }
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.classList.add('slot-highlight');
+      setTimeout(() => target.classList.remove('slot-highlight'), 2000);
+    }
+  }, 100);
+}
+
+export function fixMenuAction(idx: number, encoded: string): void {
+  if (!_lastReport) return;
+  const w = _lastReport.warnings[idx];
+  if (!w) return;
+  let action: WarningAction;
+  try {
+    action = JSON.parse(decodeURIComponent(encoded)) as WarningAction;
+  } catch (_e: unknown) {
+    toastError('Could not decode action');
+    return;
+  }
+  applyWarningAction(w, action, idx);
+}
+
+function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
+  switch (a.kind) {
+    case 'move-to-freezer': {
+      const b = S.batches.find(x => x.id === a.batchId);
+      if (!b) return;
+      b.storage = 'Frozen';
+      removeWarningRow(idx);
+      rebuildPlanner();
+      rerenderCurrentView();
+      scheduleSave();
+      toast(`Moved ${b.name} to freezer`);
+      return;
+    }
+    case 'use-frozen': {
+      const b = S.batches.find(x => x.id === a.batchId);
+      if (!b || w.anchor?.kind !== 'slot') return;
+      b.services.push({ loc: w.anchor.loc, date: w.anchor.date, meal: w.anchor.meal });
+      removeWarningRow(idx);
+      rebuildPlanner();
+      rerenderCurrentView();
+      scheduleSave();
+      toast(`Assigned ${b.name} (frozen) to ${w.anchor.date} ${w.anchor.meal}`);
+      return;
+    }
+    case 'assign-anyway': {
+      const b = S.batches.find(x => x.id === a.batchId);
+      if (!b || w.anchor?.kind !== 'batch') return;
+      // Find next under-filled slot of this batch's type and assign
+      const today = dateToIso(getToday());
+      const horizon = dateToIso(new Date(getToday().getTime() + (PLANNING_HORIZON_DAYS - 1) * 86400000));
+      let placed = false;
+      for (const day of buildPlanningWindow(getToday())) {
+        if (placed) break;
+        for (const slot of day.slots) {
+          if (slot.isPast) continue;
+          if (countTypeInSlot(S.batches, b.type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) continue;
+          if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal)) continue;
+          b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+          placed = true;
+          toast(`Assigned ${b.name} to ${day.dayName} ${slot.meal} ${slot.loc}`);
+          break;
+        }
+      }
+      if (placed) {
+        removeWarningRow(idx);
+        rebuildPlanner();
+        rerenderCurrentView();
+        scheduleSave();
+      } else {
+        toastError('No under-filled slot available for this batch');
+      }
+      return;
+    }
+    case 'add-emergency-cook': {
+      const dayName = dateToDayName(a.date);
+      const typeLabel = a.type === 'Main course' ? 'Main' : 'Soup';
+      const newBatch: Batch = {
+        id: newId(),
+        name: `${dayName} ${typeLabel} (Emergency)`,
+        type: a.type,
+        stock: 0, serving: 280, storage: 'Gastro',
+        location: 'west', inTransit: false,
+        allergens: [], extraAllergens: [], orderFor: false, parentId: null,
+        cookDate: dateToStr(getToday()),
+        recipeSheetId: null, recipeVolume: null, recipeIngredients: null,
+        note: '',
+        services: [{ loc: a.loc, date: a.date, meal: a.meal }],
+        createdAt: new Date().toISOString(),
+        recipeId: null, actualIngredients: null,
+        cookNotes: 'Emergency morning cook', stockDeducted: false,
+        generated: true,
+      };
+      S.batches.push(newBatch);
+      removeWarningRow(idx);
+      rebuildPlanner();
+      rerenderCurrentView();
+      scheduleSave();
+      toast(`Added emergency ${typeLabel.toLowerCase()} for ${dayName} ${a.meal} ${a.loc}`);
+      return;
+    }
+    case 'add-extra-batch': {
+      const cookIso = cookDateToIso(a.cookDate);
+      if (!cookIso) return;
+      const computedDayName = dateToDayName(cookIso);
+      const typeLabel = a.type === 'Main course' ? 'Main' : 'Soup';
+      // Count existing same-day same-type batches to derive an index name
+      const existingCount = S.batches.filter(b => b.cookDate === a.cookDate && b.type === a.type).length;
+      const newBatch: Batch = {
+        id: newId(),
+        name: `${computedDayName} ${typeLabel} ${existingCount + 1}`,
+        type: a.type,
+        stock: 0, serving: 280, storage: 'Gastro',
+        location: 'west', inTransit: false,
+        allergens: [], extraAllergens: [], orderFor: false, parentId: null,
+        cookDate: a.cookDate,
+        recipeSheetId: null, recipeVolume: null, recipeIngredients: null,
+        note: '',
+        services: [],
+        createdAt: new Date().toISOString(),
+        recipeId: null, actualIngredients: null,
+        cookNotes: '', stockDeducted: false,
+        generated: true,
+      };
+      S.batches.push(newBatch);
+      removeWarningRow(idx);
+      // Re-run only the assignment passes so the new batch picks up services
+      const planWindow = buildPlanningWindow(getToday());
+      const inWindowBatches = S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type));
+      const potCaps = allocatePotCaps(inWindowBatches, S.kitchenEquipment);
+      assignServicesPass2(S.batches, planWindow, calcRequired, potCaps);
+      rebuildPlanner();
+      rerenderCurrentView();
+      scheduleSave();
+      toast(`Added second ${typeLabel.toLowerCase()} for ${computedDayName} — services redistributed`);
+      return;
+    }
+  }
+}
+
+function removeWarningRow(idx: number): void {
+  const row = document.querySelector(`.fix-menu-warning-row[data-idx="${idx}"]`);
+  if (row) row.remove();
+  const list = document.querySelector('.fix-menu-warnings-list');
+  if (list && list.children.length === 0) {
+    const hdr = document.querySelector('.fix-menu-warnings-hdr');
+    if (hdr) hdr.remove();
+    list.outerHTML = `<div class="fix-menu-clean">All issues resolved 🎉</div>`;
+  }
+}
+
+// ── Kitchen equipment editor ────────────────────────────────────────────────
+
+const DEFAULT_EQUIPMENT: KitchenEquipment = {
+  pots: [],
+  gasBurners: 0,
+  inductionBurners: 0,
+  bigBurnerThreshold: 80,
+};
+
+/** Working draft used by the modal — a copy so Cancel discards cleanly. */
+let _keqDraft: KitchenEquipment = { ...DEFAULT_EQUIPMENT };
+
+function renderEquipmentList(): string {
+  const sortedPots = [..._keqDraft.pots].sort((a, b) => b - a);
+  const items = sortedPots.length === 0
+    ? `<div class="keq-empty">No pots configured. Add one below.</div>`
+    : sortedPots.map((liters, idx) => {
+        const tier = liters > _keqDraft.bigBurnerThreshold ? 'gas' : 'induction';
+        const tierLabel = tier === 'gas' ? `<span class="keq-tier-gas">Gas burner</span>` : `<span class="keq-tier-induction">Induction</span>`;
+        return `<div class="keq-pot-row">
+          <span class="keq-pot-size">${liters} L</span>
+          ${tierLabel}
+          <button class="btn btn-sm btn-danger" onclick="keqRemovePot(${idx})">Remove</button>
+        </div>`;
+      }).join('');
+  return items;
+}
+
+function renderEquipmentSummary(): string {
+  const totalPots = _keqDraft.pots.length;
+  const bigPots = _keqDraft.pots.filter(p => p > _keqDraft.bigBurnerThreshold).length;
+  const smallPots = totalPots - bigPots;
+  const burnersTotal = _keqDraft.gasBurners + _keqDraft.inductionBurners;
+  const issues: string[] = [];
+  if (bigPots > _keqDraft.gasBurners) issues.push(`⚠️ ${bigPots} pots over ${_keqDraft.bigBurnerThreshold}L but only ${_keqDraft.gasBurners} gas burner${_keqDraft.gasBurners === 1 ? '' : 's'}`);
+  if (totalPots > burnersTotal) issues.push(`⚠️ ${totalPots} pots but only ${burnersTotal} burners — can't cook everything in parallel`);
+  return `<div class="keq-summary">
+    <div><strong>${totalPots}</strong> pot${totalPots === 1 ? '' : 's'}: ${bigPots} over ${_keqDraft.bigBurnerThreshold}L (need gas), ${smallPots} ≤ ${_keqDraft.bigBurnerThreshold}L</div>
+    <div><strong>${burnersTotal}</strong> burner${burnersTotal === 1 ? '' : 's'}: ${_keqDraft.gasBurners} gas, ${_keqDraft.inductionBurners} induction</div>
+    ${issues.length > 0 ? `<div class="keq-warnings">${issues.map(i => `<div>${i}</div>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+function refreshEquipmentModal() {
+  const list = document.getElementById('keq-pot-list');
+  const summary = document.getElementById('keq-summary');
+  if (list) list.innerHTML = renderEquipmentList();
+  if (summary) summary.innerHTML = renderEquipmentSummary();
+}
+
+export function openKitchenEquipmentModal(): void {
+  const current = S.kitchenEquipment || { ...DEFAULT_EQUIPMENT };
+  _keqDraft = {
+    pots: [...(current.pots || [])],
+    gasBurners: current.gasBurners || 0,
+    inductionBurners: current.inductionBurners || 0,
+    bigBurnerThreshold: current.bigBurnerThreshold || 80,
+  };
+
+  const html = `
+    <div class="modal-content keq-modal" onclick="event.stopPropagation()">
+      <h2>Kitchen equipment</h2>
+      <p class="keq-help">Tells Fix My Menu how to size cook batches. Pots over ${_keqDraft.bigBurnerThreshold}L need a gas burner; smaller pots fit on induction.</p>
+
+      <div class="keq-section">
+        <h3>Pots</h3>
+        <div id="keq-pot-list">${renderEquipmentList()}</div>
+        <div class="keq-add-pot">
+          <input id="keq-new-pot" type="number" min="1" max="1000" placeholder="Liters" />
+          <button class="btn btn-primary" onclick="keqAddPotFromInput()">+ Add pot</button>
+        </div>
+      </div>
+
+      <div class="keq-section">
+        <h3>Burners</h3>
+        <div class="keq-burner-row">
+          <label>Gas burners <span class="keq-hint">(handle pots > ${_keqDraft.bigBurnerThreshold}L)</span></label>
+          <input id="keq-gas" type="number" min="0" max="100" value="${_keqDraft.gasBurners}" oninput="keqUpdateBurners('gas', this.value)" />
+        </div>
+        <div class="keq-burner-row">
+          <label>Induction burners <span class="keq-hint">(handle pots ≤ ${_keqDraft.bigBurnerThreshold}L)</span></label>
+          <input id="keq-induction" type="number" min="0" max="100" value="${_keqDraft.inductionBurners}" oninput="keqUpdateBurners('induction', this.value)" />
+        </div>
+      </div>
+
+      <div id="keq-summary" class="keq-section">${renderEquipmentSummary()}</div>
+
+      <div class="keq-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="keqSave()">Save</button>
+      </div>
+    </div>
+  `;
+  showModal(html);
+}
+
+export function keqAddPotFromInput(): void {
+  const inp = document.getElementById('keq-new-pot') as HTMLInputElement | null;
+  if (!inp) return;
+  const liters = Number(inp.value);
+  if (!liters || liters <= 0 || liters > 1000) {
+    toastError('Enter a pot size between 1 and 1000 L');
+    return;
+  }
+  _keqDraft.pots.push(liters);
+  inp.value = '';
+  refreshEquipmentModal();
+  inp.focus();
+}
+
+export function keqRemovePot(idx: number): void {
+  // Remove from the SORTED-descending view's index, not the raw array
+  const sortedPots = [..._keqDraft.pots].sort((a, b) => b - a);
+  const target = sortedPots[idx];
+  if (target == null) return;
+  // Remove first occurrence in the unsorted array
+  const removeAt = _keqDraft.pots.indexOf(target);
+  if (removeAt >= 0) _keqDraft.pots.splice(removeAt, 1);
+  refreshEquipmentModal();
+}
+
+export function keqUpdateBurners(field: 'gas' | 'induction', value: string): void {
+  const n = Math.max(0, Math.min(100, Number(value) || 0));
+  if (field === 'gas') _keqDraft.gasBurners = n;
+  else _keqDraft.inductionBurners = n;
+  // Refresh only the summary to show updated warnings without losing input focus
+  const summary = document.getElementById('keq-summary');
+  if (summary) summary.innerHTML = renderEquipmentSummary();
+}
+
+export async function keqSave(): Promise<void> {
+  S.kitchenEquipment = {
+    pots: [..._keqDraft.pots],
+    gasBurners: _keqDraft.gasBurners,
+    inductionBurners: _keqDraft.inductionBurners,
+    bigBurnerThreshold: _keqDraft.bigBurnerThreshold,
+  };
+  await saveKitchenEquipment();
+  closeModal();
+  toast('Kitchen equipment saved');
 }

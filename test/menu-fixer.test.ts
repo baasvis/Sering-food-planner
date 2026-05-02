@@ -14,6 +14,8 @@ import type { Batch, DishType, Location, Meal, Service, StorageType } from '../s
 import {
   assignServicesPass1,
   assignServicesPass2,
+  allocatePotCaps,
+  collectWarnings,
   buildPlanningWindow,
   isServableBy,
   isStaleAtSlot,
@@ -26,6 +28,7 @@ import {
   SLOTS_PER_TYPE,
   type PlanDay,
 } from '../public/js/menu-fixer';
+import type { KitchenEquipment } from '../shared/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -421,6 +424,179 @@ describe('countTypeInSlot / alreadyInSlot', () => {
 
     expect(alreadyInSlot(a, 'west', '2026-05-06', 'dinner')).toBe(true);
     expect(alreadyInSlot(a, 'west', '2026-05-06', 'lunch')).toBe(false);
+  });
+});
+
+// ── Pot allocation ──────────────────────────────────────────────────────────
+
+describe('allocatePotCaps', () => {
+  const equipment: KitchenEquipment = {
+    pots: [140, 140, 100, 100, 100, 100, 100, 100, 100, 100],
+    gasBurners: 4,
+    inductionBurners: 4,
+    bigBurnerThreshold: 80,
+  };
+
+  test('Sunday 3+3 allocates 1 big pot per type (interleaved)', () => {
+    const sunSoups = [
+      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup 1' }),
+      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup 2' }),
+      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup 3' }),
+    ];
+    const sunMains = [
+      makeBatch({ type: 'Main course', cookDate: '03/05/2026', name: 'Sun Main 1' }),
+      makeBatch({ type: 'Main course', cookDate: '03/05/2026', name: 'Sun Main 2' }),
+      makeBatch({ type: 'Main course', cookDate: '03/05/2026', name: 'Sun Main 3' }),
+    ];
+    const caps = allocatePotCaps([...sunSoups, ...sunMains], equipment);
+    // First soup AND first main both get 140L (interleaved)
+    expect(caps.get(sunSoups[0].id)).toBe(140);
+    expect(caps.get(sunMains[0].id)).toBe(140);
+    // Subsequent batches get 100L
+    expect(caps.get(sunSoups[1].id)).toBe(100);
+    expect(caps.get(sunMains[1].id)).toBe(100);
+    expect(caps.get(sunSoups[2].id)).toBe(100);
+    expect(caps.get(sunMains[2].id)).toBe(100);
+  });
+
+  test('returns empty map when no equipment configured', () => {
+    const caps = allocatePotCaps([makeBatch({ type: 'Soup', cookDate: '06/05/2026' })], null);
+    expect(caps.size).toBe(0);
+  });
+
+  test('Wed 1+1 both get the biggest pots', () => {
+    const wedSoup = makeBatch({ type: 'Soup', cookDate: '06/05/2026' });
+    const wedMain = makeBatch({ type: 'Main course', cookDate: '06/05/2026' });
+    const caps = allocatePotCaps([wedSoup, wedMain], equipment);
+    expect(caps.get(wedSoup.id)).toBe(140);
+    expect(caps.get(wedMain.id)).toBe(140);
+  });
+
+  test('overflow batches get the smallest pot size', () => {
+    const tinyEquipment: KitchenEquipment = {
+      pots: [100, 80],  // only 2 pots
+      gasBurners: 1, inductionBurners: 1, bigBurnerThreshold: 80,
+    };
+    const batches = [
+      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'A' }),
+      makeBatch({ type: 'Main course', cookDate: '03/05/2026', name: 'B' }),
+      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'C' }),
+    ];
+    const caps = allocatePotCaps(batches, tinyEquipment);
+    expect(caps.get(batches[0].id)).toBe(100); // soup A → biggest
+    expect(caps.get(batches[1].id)).toBe(80);  // main B → next
+    expect(caps.get(batches[2].id)).toBe(80);  // soup C → fallback to smallest
+  });
+});
+
+// ── Pot cap enforcement in Pass 2 ──────────────────────────────────────────
+
+describe('Pass 2 with pot caps', () => {
+  test('uncooked batch capped at allocated pot size', () => {
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+      { iso: '2026-05-07', dayName: 'Thu', cookDate: '07/05/2026' },
+      { iso: '2026-05-08', dayName: 'Fri', cookDate: '08/05/2026' },
+    ]);
+    const wedSoup = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Wed Soup' });
+    const wedMain = makeBatch({ type: 'Main course', cookDate: '05/05/2026', name: 'Wed Main' });
+    // 5L cap means at most 5 services worth (1L each)
+    const caps = new Map<string, number>([[wedSoup.id, 5], [wedMain.id, 5]]);
+
+    assignServicesPass2([wedSoup, wedMain], window, fixedCalcRequired(1), caps);
+
+    expect(wedSoup.services.length).toBe(5);
+    expect(wedMain.services.length).toBe(5);
+  });
+
+  test('Pass 1 also respects pot caps for cooked batches', () => {
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+      { iso: '2026-05-07', dayName: 'Thu', cookDate: '07/05/2026' },
+    ]);
+    // Cooked batch has plenty of stock but small pot
+    const cooked = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100 });
+    const caps = new Map<string, number>([[cooked.id, 3]]);  // 3L pot
+
+    assignServicesPass1([cooked], window, fixedCalcRequired(1), caps);
+
+    // Capped at 3L = 3 services (would be 6+ without cap given our window)
+    expect(cooked.services.length).toBe(3);
+  });
+});
+
+// ── Validation / warnings ──────────────────────────────────────────────────
+
+describe('collectWarnings', () => {
+  const noGuests = (_l: unknown, _d: unknown, _m: unknown) => 0;
+  const lotsOfGuests = (_l: unknown, _d: unknown, _m: unknown) => 50;
+
+  test('no warnings when slots are filled and demand fits', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const a = makeBatch({ type: 'Soup', cookDate: '05/05/2026' });
+    const b = makeBatch({ type: 'Soup', cookDate: '05/05/2026' });
+    const c = makeBatch({ type: 'Main course', cookDate: '05/05/2026' });
+    const d = makeBatch({ type: 'Main course', cookDate: '05/05/2026' });
+    // Fill the wed-dinner slot fully
+    [a, b].forEach(s => s.services.push({ loc: 'west', date: '2026-05-06', meal: 'dinner' }));
+    [a, b].forEach(s => s.services.push({ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }));
+    [c, d].forEach(s => s.services.push({ loc: 'west', date: '2026-05-06', meal: 'dinner' }));
+    [c, d].forEach(s => s.services.push({ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }));
+    // Lunch is separately under-filled but guests=0 -> suppress
+    const warnings = collectWarnings([a, b, c, d], window, [], fixedCalcRequired(1), new Map(), null, noGuests);
+    expect(warnings.filter(w => w.category === 'under-filled-slot')).toEqual([]);
+  });
+
+  test('under-filled slot warning when guests > 0', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const warnings = collectWarnings([], window, [], fixedCalcRequired(1), new Map(), null, lotsOfGuests);
+    // 4 slots × 2 types = 8 under-filled warnings (no batches at all)
+    expect(warnings.filter(w => w.category === 'under-filled-slot').length).toBe(8);
+  });
+
+  test('cooked stockout warning when calcRequired > stock', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const overcommitted = makeBatch({ type: 'Soup', cookDate: '05/05/2026', stock: 2 });
+    overcommitted.services = [
+      { loc: 'west', date: '2026-05-06', meal: 'dinner' },
+      { loc: 'centraal', date: '2026-05-06', meal: 'dinner' },
+      { loc: 'west', date: '2026-05-07', meal: 'lunch' },
+    ];  // 3 services * 1L = 3L > 2L stock
+    const warnings = collectWarnings([overcommitted], window, [], fixedCalcRequired(1), new Map(), null, noGuests);
+    expect(warnings.filter(w => w.category === 'cooked-stockout').length).toBe(1);
+  });
+
+  test('over-pot-cap warning produces add-extra-batch action', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const big = makeBatch({ type: 'Soup', cookDate: '05/05/2026' });
+    // 10 services × 1L each
+    for (let i = 0; i < 10; i++) {
+      big.services.push({ loc: 'west', date: '2026-05-06', meal: 'dinner' });
+    }
+    const caps = new Map<string, number>([[big.id, 5]]);  // 5L pot
+    const warnings = collectWarnings([big], window, [], fixedCalcRequired(1), caps, null, noGuests);
+    const overPot = warnings.filter(w => w.category === 'over-pot-cap');
+    expect(overPot.length).toBe(1);
+    expect(overPot[0].actions?.[0].kind).toBe('add-extra-batch');
+  });
+
+  test('catering with no dishes warning', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const catering = { id: 'c1', date: '06/05/2026', dishes: [] };
+    const warnings = collectWarnings([], window, [catering], fixedCalcRequired(1), new Map(), null, noGuests);
+    expect(warnings.filter(w => w.category === 'catering-no-dishes').length).toBe(1);
+  });
+
+  test('burner overload warning when too many big-pot batches per cook day', () => {
+    const window = makeWindow([{ iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' }]);
+    const eq: KitchenEquipment = { pots: [140, 140, 140], gasBurners: 1, inductionBurners: 5, bigBurnerThreshold: 80 };
+    // 3 batches all on >80L pots per the allocation
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026' });
+    const b = makeBatch({ type: 'Main course', cookDate: '03/05/2026' });
+    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026' });
+    const caps = new Map<string, number>([[a.id, 140], [b.id, 140], [c.id, 140]]);
+    const warnings = collectWarnings([a, b, c], window, [], fixedCalcRequired(1), caps, eq, noGuests);
+    expect(warnings.filter(w => w.category === 'burner-overload').length).toBe(1);
   });
 });
 

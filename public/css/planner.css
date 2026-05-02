@@ -278,3 +278,40 @@
   /* ═══════════ FIX MY MENU ═══════════ */
   .btn-fix-menu{background:linear-gradient(135deg, var(--purple, #6b46c1), var(--blue, #2563eb));color:#fff;border:none;font-weight:500;}
   .btn-fix-menu:hover{opacity:.9;transform:translateY(-1px);}
+
+  /* ═══════════ KITCHEN EQUIPMENT MODAL ═══════════ */
+  .btn-keq{background:var(--bg-2,#f3f4f6);color:var(--text);border:1px solid var(--border,#d1d5db);}
+  .btn-keq:hover{background:var(--bg-3,#e5e7eb);}
+  .keq-modal{max-width:520px;}
+  .keq-help{font-size:13px;color:var(--text-muted,#6b7280);margin-bottom:16px;}
+  .keq-section{margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--border-soft,#e5e7eb);}
+  .keq-section:last-of-type{border-bottom:none;}
+  .keq-section h3{font-size:14px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted,#6b7280);}
+  .keq-pot-row{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-soft,#f3f4f6);}
+  .keq-pot-row:last-child{border-bottom:none;}
+  .keq-pot-size{font-weight:600;min-width:50px;}
+  .keq-tier-gas{background:var(--orange-bg,#fed7aa);color:var(--orange,#c2410c);font-size:11px;padding:2px 8px;border-radius:10px;flex:1;text-align:center;max-width:120px;}
+  .keq-tier-induction{background:var(--blue-bg,#dbeafe);color:var(--blue,#1d4ed8);font-size:11px;padding:2px 8px;border-radius:10px;flex:1;text-align:center;max-width:120px;}
+  .keq-empty{color:var(--text-muted,#6b7280);font-style:italic;padding:8px 0;}
+  .keq-add-pot{display:flex;gap:8px;margin-top:10px;}
+  .keq-add-pot input{flex:1;padding:6px 10px;border:1px solid var(--border,#d1d5db);border-radius:6px;}
+  .keq-burner-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+  .keq-burner-row label{flex:1;font-size:14px;}
+  .keq-hint{color:var(--text-muted,#6b7280);font-size:12px;}
+  .keq-burner-row input{width:80px;padding:6px 10px;border:1px solid var(--border,#d1d5db);border-radius:6px;text-align:right;}
+  .keq-summary{font-size:13px;line-height:1.6;background:var(--bg-2,#f9fafb);padding:10px 12px;border-radius:6px;}
+  .keq-warnings{margin-top:8px;color:var(--orange,#c2410c);font-size:12px;}
+  .keq-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;}
+
+  /* ═══════════ FIX MY MENU RESULTS MODAL ═══════════ */
+  .fix-menu-results{max-width:640px;}
+  .fix-menu-summary{margin-bottom:14px;line-height:1.7;}
+  .fix-menu-summary > div{padding:6px 0;}
+  .fix-menu-clean{padding:14px;text-align:center;color:var(--green,#16a34a);background:var(--green-bg,#dcfce7);border-radius:8px;}
+  .fix-menu-warnings-hdr{font-weight:600;margin:14px 0 8px;color:var(--orange,#c2410c);}
+  .fix-menu-warnings-list{display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto;}
+  .fix-menu-warning-row{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg-2,#f9fafb);border:1px solid var(--border-soft,#e5e7eb);border-radius:6px;flex-wrap:wrap;}
+  .fix-menu-warning-msg{flex:1;min-width:200px;font-size:13px;line-height:1.4;}
+  .fix-menu-warning-actions{display:flex;gap:6px;flex-wrap:wrap;}
+  .fix-menu-goto, .fix-menu-action{font-size:11px;padding:3px 9px;}
+  .slot-highlight{outline:3px solid var(--yellow,#facc15)!important;outline-offset:2px;transition:outline 0.3s ease;}

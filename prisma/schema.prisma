@@ -214,6 +214,16 @@ model StorageConfig {
   @@map("storage_config")
 }
 
+model KitchenEquipment {
+  id                 String @id @default("default")
+  pots               Json   @default("[]") // array of liter sizes, e.g. [140, 140, 100, 100, ...]
+  gasBurners         Int    @default(0) @map("gas_burners")         // burners that can handle pots > 80L
+  inductionBurners   Int    @default(0) @map("induction_burners")   // burners that handle pots ≤ 80L
+  bigBurnerThreshold Int    @default(80) @map("big_burner_threshold") // pot size that requires a gas burner
+
+  @@map("kitchen_equipment")
+}
+
 model DailyRevenue {
   id           Int    @id @default(autoincrement())
   date         String
