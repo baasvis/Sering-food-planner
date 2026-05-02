@@ -74,6 +74,11 @@ app.use('/api', (req, res, next) => {
 // Telemetry endpoint — no auth required (must work even if auth is broken)
 app.use('/api/telemetry', telemetryRouter);
 
+// Coverage snapshot — bearer-token auth (COVERAGE_API_KEY). Mounted before
+// requireAuth so remote agents can fetch without a session cookie.
+import coverageRouter from './routes/coverage';
+app.use('/api/coverage', coverageRouter);
+
 import authRouter, { requireAuth } from './routes/auth';
 app.use('/api/auth', authRouter);
 app.use('/api', requireAuth);

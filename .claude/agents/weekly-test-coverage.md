@@ -18,8 +18,25 @@ git fetch origin && git checkout main && git pull
 npm install
 ```
 
-### 2. Mine telemetry for uncovered usage
+### 2. Fetch the coverage snapshot from the live Sering server
 
+The mining query runs **server-side** behind a bearer-auth endpoint. This avoids opening direct DB connections from the agent's runtime, which often can't reach Railway's custom DB ports.
+
+```bash
+curl -sS -H "Authorization: Bearer $COVERAGE_API_KEY" \
+  "$COVERAGE_API_URL/api/coverage/snapshot?days=14" \
+  > /tmp/journeys.json
+```
+
+`COVERAGE_API_URL` is the production app URL (e.g. `https://sering-suite.up.railway.app`).
+`COVERAGE_API_KEY` matches the value the user set on Railway.
+
+If the curl fails or the response isn't JSON: stop. Surface the HTTP status. Likely causes:
+- Endpoint not deployed yet (`Cannot GET /api/coverage/snapshot` → wait for the next deploy)
+- `COVERAGE_API_KEY` mismatch (401 → user needs to update one side)
+- Server unreachable (DNS/network → unrelated infra issue)
+
+Local fallback (only when working without the routine, e.g. during dev):
 ```bash
 DATABASE_URL_PROD="$DATABASE_URL_PROD" npm run telemetry:mine > /tmp/journeys.json
 ```
