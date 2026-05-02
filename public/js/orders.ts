@@ -2,7 +2,7 @@ import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGRED
 import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ingredientDbLoaded, ingredientDbError } from './utils';
 import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, batchHasRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
-import { ingredientDbFull, openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
+import { openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
 import { trackEvent } from './telemetry';
 import type { Ingredient, Batch, Location } from '@shared/types';
 import { toGrams, baseUnitOf } from '@shared/units';
@@ -1527,18 +1527,11 @@ export function persistIngredientStock(ingredientName: string, amount: number) {
   const loc = S.currentLoc || 'west';
   const amountNum = amount || 0;
 
-  // Update in S.ingredientDb immediately
+  // Update in S.ingredientDb immediately. (Previously this also kept a
+  // separate ingredientDbFull array in sync — now collapsed into S.ingredientDb
+  // per S13.)
   if (!db.stock) db.stock = {};
   db.stock[loc] = { amount: amountNum, date: new Date().toISOString().slice(0, 10) };
-
-  // Update in ingredientDbFull too (if loaded)
-  if (typeof ingredientDbFull !== 'undefined') {
-    const full = ingredientDbFull.find(i => i.id === db.id);
-    if (full) {
-      if (!full.stock) full.stock = {};
-      full.stock[loc] = { amount: amountNum, date: new Date().toISOString().slice(0, 10) };
-    }
-  }
 
   // Debounced save to backend
   clearTimeout(_stockSaveTimeout);

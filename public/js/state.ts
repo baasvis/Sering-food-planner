@@ -118,6 +118,12 @@ export interface AppState {
   recipeIndex: RecipeEntry[];
   recipes: RecipeFull[];
   ingredientDb: Ingredient[];
+  /** True once the *full* ingredient payload has been fetched. The default
+   *  /api/ingredients endpoint returns a slim shape (no priceHistory /
+   *  nutrition / pricePer100g) for fast page load. /api/ingredients/full
+   *  fetches the rich shape and replaces S.ingredientDb. The ingredient DB
+   *  editor needs the rich shape; everywhere else only needs the slim. */
+  ingredientDbFullyLoaded: boolean;
   planner: Record<string, Batch[]>;
   user: AppUser | null;
   dashVegMode: string;
@@ -170,6 +176,7 @@ export let S: AppState = {
   recipeIndex:[],
   recipes:[],
   ingredientDb:[],
+  ingredientDbFullyLoaded: false,
   planner:{},
   user:null,
   dashVegMode:'combined',
