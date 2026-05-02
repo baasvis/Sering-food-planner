@@ -1,4 +1,4 @@
-import type { Batch, RecipeEntry, RecipeFull, DishType, Location, Meal, Service } from '@shared/types';
+import type { Batch, RecipeFull, DishType, Location, Meal, Service } from '@shared/types';
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError } from './utils';
 import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate } from './core';
@@ -535,18 +535,26 @@ export function renderAddModal(loc: string, date: string, meal: string, existing
 
   const cookedDishes = allAvail.filter(d => isBatchCooked(d) && d.location === locFilter && !d.inTransit);
   const plannedDishes = sortByCookDate(allAvail.filter(d => !isBatchCooked(d) && (d.services || []).length > 0));
-  let allRecipes = [...S.recipeIndex];
-  if (typeFilter) allRecipes = allRecipes.filter(r => r.type === typeFilter);
+  // Recipe v1 index removed in S12 — the legacy "Recipes" tab in this modal
+  // now relies entirely on S.recipes (v2). Keeping the empty array here so
+  // the existing tab/count layout below renders unchanged.
+  type LegacyRecipe = {
+    id: string;
+    name: string;
+    type?: string;
+    allergens?: string[];
+    costPerServing?: string;
+  };
+  const allRecipes: LegacyRecipe[] = [];
 
   // Apply search filter
   let filteredCooked = cookedDishes;
   let filteredPlanned = plannedDishes;
-  let filteredRecipes = allRecipes;
+  const filteredRecipes: LegacyRecipe[] = allRecipes;
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
     filteredCooked = cookedDishes.filter(d => d.name.toLowerCase().includes(q));
     filteredPlanned = plannedDishes.filter(d => d.name.toLowerCase().includes(q));
-    filteredRecipes = allRecipes.filter(r => r.name.toLowerCase().includes(q));
   }
 
   // Render dish options helper
@@ -569,12 +577,14 @@ export function renderAddModal(loc: string, date: string, meal: string, existing
     </div>`;
   }).join('');
 
-  // Render recipe options helper
-  const renderRecipeOpts = (recipes: RecipeEntry[]) => recipes.slice(0, 20).map(r => {
+  // Render recipe options helper. Operates on the (now-always-empty)
+  // legacy LegacyRecipe[] above; v2 recipes are surfaced through their
+  // own helper elsewhere in this modal.
+  const renderRecipeOpts = (recipes: LegacyRecipe[]) => recipes.slice(0, 20).map(r => {
     const ags = (r.allergens || []).slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
     return `<div class="dish-opt" onclick="addRecipeToSlot('${r.id}','${loc}','${date}','${meal}')">
       <div style="flex:1;">
-        <div><span style="font-weight:500;">${esc(r.name)}</span> ${typeBadge(r.type || 'Soup')}</div>
+        <div><span style="font-weight:500;">${esc(r.name)}</span> ${typeBadge((r.type || 'Soup') as DishType)}</div>
         <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
           ${ags}
           ${r.costPerServing ? `<span style="color:var(--text3);">${esc(r.costPerServing)}</span>` : ''}
@@ -675,33 +685,10 @@ export function confirmAddDish(dishId: string, loc: string, date: string, meal: 
   toast(`${dish.name} added to ${dateToDayName(date)} ${meal}`);
 }
 
-export function addRecipeToSlot(recipeId: string, loc: string, date: string, meal: string) {
-  const r = S.recipeIndex.find(x => x.id === recipeId);
-  if (!r) return;
-  const newDish = {
-    id: newId(),
-    name: r.name,
-    type: r.type || 'Soup',
-    stock: 0,
-    serving: r.servingSize || 280,
-    storage: 'Gastro',
-    location: loc,
-    inTransit: false,
-    recipeSheetId: r.recipeSheetId || null,
-    recipeVolume: r.recipeVolume || null,
-    recipeIngredients: r.recipeIngredients ? [...r.recipeIngredients] : null,
-    allergens: [...(r.allergens || [])],
-    extraAllergens: [],
-    orderFor: false,
-    parentId: null,
-    cookDate: null,
-    services: [{ loc, date, meal }],
-    createdAt: new Date().toISOString(),
-    recipeId: null, actualIngredients: null, cookNotes: '', stockDeducted: false,
-  };
-  S.batches.push(newDish);
-  closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-  toast(`${r.name} added to ${dateToDayName(date)} ${meal}`);
+// addRecipeToSlot was the v1-index path. Replaced with a deprecation toast —
+// the v2 path goes through replaceWithRecipe / addDishFromV2Recipe.
+export function addRecipeToSlot(_recipeId: string, _loc: string, _date: string, _meal: string) {
+  toastError('Recipe v1 has been removed — use Recipes → "+ Create recipe", then add via the planner.');
 }
 
 export function addPlaceholderDish() {
@@ -918,52 +905,10 @@ export function confirmReplaceBatch(newBatchId: string) {
   toast(`Replaced ${oldName} with ${replacement.name}`);
 }
 
-export function replaceWithRecipe(recipeId: string) {
-  const rs = S._replaceState;
-  if (!rs) return;
-  const old = S.batches.find(d => d.id === rs.oldBatchId);
-  const r = S.recipeIndex.find(x => x.id === recipeId);
-  if (!old || !r) return;
-
-  // Create new batch from recipe with old batch's services
-  const newBatch = {
-    id: newId(),
-    name: r.name,
-    type: r.type || 'Soup',
-    stock: 0,
-    serving: r.servingSize || 280,
-    storage: 'Gastro',
-    location: old.location,
-    inTransit: false,
-    recipeSheetId: r.recipeSheetId || null,
-    recipeVolume: r.recipeVolume || null,
-    recipeIngredients: r.recipeIngredients ? [...r.recipeIngredients] : null,
-    allergens: [...(r.allergens || [])],
-    extraAllergens: [],
-    orderFor: false,
-    parentId: null,
-    cookDate: old.cookDate || null,
-    note: '',
-    services: [...(old.services || [])],
-    createdAt: new Date().toISOString(),
-    recipeId: null, actualIngredients: null, cookNotes: '', stockDeducted: false,
-  };
-  S.batches.push(newBatch);
-
-  // Update catering references from old → new batch
-  cleanCateringRefs(old.id, newBatch.id);
-
-  // Delete old batch
-  const oldName = old.name;
-  S.batches = S.batches.filter(d => d.id !== old.id);
-  if (!S.deletedBatches) S.deletedBatches = [];
-  S.deletedBatches.push(old.id);
-
-  closeModal();
-  rebuildPlanner();
-  rerenderCurrentView();
-  scheduleSave();
-  toast(`Replaced ${oldName} with ${r.name}`);
+// replaceWithRecipe was the v1-index path. Removed in S12 — replacement now
+// goes through replaceWithV2Recipe (below) for the v2 path.
+export function replaceWithRecipe(_recipeId: string) {
+  toastError('Recipe v1 has been removed — use Recipes → v2 recipe → "Add to menu" instead.');
 }
 
 /**

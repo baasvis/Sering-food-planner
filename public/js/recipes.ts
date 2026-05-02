@@ -45,16 +45,17 @@ export function avgRating(r: any) {
 }
 
 export function renderRecipeIndex() {
-  const types = [...new Set(S.recipeIndex.map(r => r.type).filter(Boolean))];
+  // Type filter pills come from v2 recipes only (S.recipeIndex was the
+  // legacy v1 array, removed in S12).
+  const types = [...new Set((S.recipes || []).map(r => r.type).filter(Boolean))];
 
   const v2Count = S.recipes.length;
   let html = `
   <div class="btn-row" style="margin-bottom:12px;">
     <button class="btn btn-primary" data-testid="recipe-create-btn" onclick="openRecipeEditor()">+ Create recipe</button>
-    <button class="btn" onclick="openAddRecipe()">Import from Sheet</button>
     <button class="btn" onclick="recalcAllCosts()" title="Recalculate all recipe costs from current ingredient prices">Recalculate costs</button>
     <button class="btn" onclick="importCookedAmounts()" title="Re-import cooked amounts from Google Sheets for all recipes">Import cooked amounts</button>
-    <span style="font-size:12px;color:var(--text2);margin-left:8px;">${v2Count} recipe${v2Count !== 1 ? 's' : ''} + ${S.recipeIndex.length} legacy</span>
+    <span style="font-size:12px;color:var(--text2);margin-left:8px;">${v2Count} recipe${v2Count !== 1 ? 's' : ''}</span>
   </div>
   <input class="ri-search" id="ri-search-input" placeholder="Search recipes..." value="${esc(riSearch)}" oninput="updateRiSearch(this)" />
   <div class="ri-filter-bar">
@@ -94,40 +95,7 @@ export function updateRecipeResults() {
     return 0;
   });
 
-  // ── Legacy recipes ──
-  let filtered = S.recipeIndex;
-  if (riTypeFilter !== 'all') filtered = filtered.filter(r => r.type === riTypeFilter);
-  if (riSearch) {
-    const q = riSearch.toLowerCase();
-    filtered = filtered.filter(r => r.name.toLowerCase().includes(q) || (r.allergens||[]).join(' ').toLowerCase().includes(q));
-  }
-
-  const sorted = [...filtered].sort((a: any, b: any) => {
-    let va, vb;
-    switch (riSort.col) {
-      case 'name': va = a.name.toLowerCase(); vb = b.name.toLowerCase(); break;
-      case 'type': va = a.type||''; vb = b.type||''; break;
-      case 'cost': va = parseCost(a.costPerServing) ?? 999; vb = parseCost(b.costPerServing) ?? 999; break;
-      case 'rating': va = avgRating(a); vb = avgRating(b); break;
-      case 'banger': va = a.avgBanger||0; vb = b.avgBanger||0; break;
-      case 'served': va = a.timesServed||0; vb = b.timesServed||0; break;
-      case 'structure': va = a.structure||''; vb = b.structure||''; break;
-      case 'season': va = a.seasonality||''; vb = b.seasonality||''; break;
-      default: va = a.name; vb = b.name;
-    }
-    if (va < vb) return riSort.dir === 'asc' ? -1 : 1;
-    if (va > vb) return riSort.dir === 'asc' ? 1 : -1;
-    return 0;
-  });
-
-  const costsByType = {};
-  filtered.forEach(r => {
-    const c = parseCost(r.costPerServing);
-    if (c !== null) {
-      if (!costsByType[r.type]) costsByType[r.type] = [];
-      costsByType[r.type].push(c);
-    }
-  });
+  // Recipe v1 (S.recipeIndex) was removed in S12. All recipes are v2 now.
 
   const arrow = (col: any) => riSort.col === col ? (riSort.dir === 'asc' ? '▲' : '▼') : '↕';
   const thCls = (col: any) => riSort.col === col ? 'sorted' : '';
@@ -187,49 +155,16 @@ export function updateRecipeResults() {
     html += `</tbody></table></div>`;
   }
 
-  // ── Legacy recipes table ──
-  if (sorted.length === 0 && v2Filtered.length === 0) {
-    if (S.recipeIndex.length === 0 && (S.recipes || []).length === 0) {
+  // Empty state — all recipes are v2 now.
+  if (v2Filtered.length === 0) {
+    if ((S.recipes || []).length === 0) {
       html += `<div class="ri-empty">
         <p style="font-size:16px;font-weight:600;">No recipes yet</p>
-        <p>Create your first recipe or import from a Google Sheet.</p>
+        <p>Click "+ Create recipe" to add your first recipe.</p>
       </div>`;
     } else {
       html += `<div class="ri-empty"><p>No recipes match your search</p></div>`;
     }
-  }
-  if (sorted.length > 0) {
-    if (v2Filtered.length > 0) {
-      html += `<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.3px;margin:14px 0 6px;">Legacy recipes (imported from Google Sheets)</div>`;
-    }
-    html += `<div class="ri-table-wrap"><table class="ri-table">${tableHeaders}<tbody>`;
-
-    sorted.forEach(r => {
-      const cost = parseCost(r.costPerServing);
-      const typeCosts = costsByType[r.type] || [];
-      const cStyle = cost !== null ? costColor(cost, typeCosts) : '';
-      const ags = (r.allergens||[]).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join(' ');
-      const avg = avgRating(r);
-
-      html += `<tr>
-        <td class="ri-name-cell">
-          ${r.recipeSheetId ? `<a href="https://docs.google.com/spreadsheets/d/${esc(r.recipeSheetId)}/edit" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;">${esc(r.name)} <span style="font-size:10px;color:var(--green);">↗</span></a>` : esc(r.name)}
-        </td>
-        <td>${typeBadge(r.type || 'Soup')}</td>
-        <td style="font-size:12px;">${esc(r.structure || '—')}</td>
-        <td>${cost !== null ? `<span class="ri-cost-cell" style="${cStyle}">${esc(r.costPerServing)}</span>` : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
-        <td style="font-size:12px;">${esc(r.seasonality || '—')}</td>
-        <td>${ags || '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
-        <td>${r.timesServed ? `<span class="ri-rating"><span class="ri-rating-val">${(r.avgBanger||0).toFixed(1)}</span></span>` : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
-        <td>${r.timesServed ? `<span class="ri-rating"><span class="ri-rating-val">${avg.toFixed(1)}</span></span>` : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
-        <td style="text-align:center;">${r.timesServed || '—'}</td>
-        <td style="white-space:nowrap;">
-          <button class="btn btn-sm" onclick="addDishFromRecipe('${r.id}')">+ Menu</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteRecipeIndex('${r.id}')">✕</button>
-        </td>
-      </tr>`;
-    });
-    html += `</tbody></table></div>`;
   }
 
   const container = document.getElementById('ri-results');
@@ -246,233 +181,28 @@ export function riSortBy(col: any) {
   updateRecipeResults();
 }
 
-export function openAddRecipe() {
-  showModal(`<h3>Add recipes to index</h3>
-    <div style="margin-bottom:12px;">
-      <div class="ri-filter-bar">
-        <button class="fc on" id="ri-mode-single" onclick="setRiMode('single')">Single recipe</button>
-        <button class="fc" id="ri-mode-bulk" onclick="setRiMode('bulk')">Bulk import</button>
-      </div>
-    </div>
-    <div id="ri-input-area">
-      <div class="fr"><label>Paste Google Sheet URL</label>
-        <input type="text" id="ri-url" class="ri-add-url" placeholder="https://docs.google.com/spreadsheets/d/..." />
-        <div style="font-size:11px;color:var(--text2);margin-top:4px;">Paste the full URL of the recipe Google Sheet</div>
-      </div>
-    </div>
-    <div id="ri-bulk-progress" style="display:none;margin-top:12px;"></div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" id="ri-submit-btn" onclick="fetchAndAddRecipe()">Fetch recipe</button>
-    </div>`);
-}
-
-export function setRiMode(mode: any) {
-  document.getElementById('ri-mode-single').className = 'fc' + (mode === 'single' ? ' on' : '');
-  document.getElementById('ri-mode-bulk').className = 'fc' + (mode === 'bulk' ? ' on' : '');
-  const area = document.getElementById('ri-input-area');
-  const btn = document.getElementById('ri-submit-btn');
-  if (mode === 'single') {
-    area.innerHTML = `<div class="fr"><label>Paste Google Sheet URL</label>
-      <input type="text" id="ri-url" class="ri-add-url" placeholder="https://docs.google.com/spreadsheets/d/..." />
-      <div style="font-size:11px;color:var(--text2);margin-top:4px;">Paste the full URL of the recipe Google Sheet</div>
-    </div>`;
-    btn.textContent = 'Fetch recipe';
-    btn.onclick = fetchAndAddRecipe;
-  } else {
-    area.innerHTML = `<div class="fr"><label>Paste multiple Google Sheet URLs (one per line)</label>
-      <textarea id="ri-urls" rows="8" style="width:100%;font-size:12px;font-family:monospace;border:1px solid var(--border2);border-radius:var(--radius);padding:8px;background:var(--bg);color:var(--text);resize:vertical;" placeholder="https://docs.google.com/spreadsheets/d/abc123/edit&#10;https://docs.google.com/spreadsheets/d/def456/edit&#10;https://docs.google.com/spreadsheets/d/ghi789/edit"></textarea>
-      <div style="font-size:11px;color:var(--text2);margin-top:4px;">One URL per line. Duplicates and invalid URLs will be skipped.</div>
-    </div>`;
-    btn.textContent = 'Import all';
-    btn.onclick = bulkAddRecipes;
-  }
-  document.getElementById('ri-bulk-progress').style.display = 'none';
-  document.getElementById('ri-bulk-progress').innerHTML = '';
-}
-
-export function extractSheetId(url: any) {
+// Recipe v1 entry-point stubs. The button/handlers are gone from
+// renderRecipeIndex above, but main.ts still assigns these to window for
+// any cached HTML still calling them via inline onclick.
+export function openAddRecipe() { toastError(V1_DEPRECATED_MSG); }
+export function setRiMode(_mode: any) { /* no-op */ }
+export function extractSheetId(url: string) {
+  // Still useful for `addDishFromRecipe` (alive — used to attach a v2 recipe
+  // to a slot from a Google Sheets URL paste in some flows).
   const m = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
   return m ? m[1] : null;
 }
 
-export async function fetchAndAddRecipe() {
-  const url = document.getElementById('ri-url').value.trim();
-  if (!url) { alert('Please paste a URL'); return; }
-  const sheetId = extractSheetId(url);
-  if (!sheetId) { alert('Could not find a valid Google Sheet ID in that URL'); return; }
-
-  // Check if already in index
-  if (S.recipeIndex.find(r => r.recipeSheetId === sheetId)) {
-    alert('This recipe is already in your index');
-    return;
-  }
-
-  try {
-    toast('Fetching recipe data...');
-    const recipe = await apiGet('/api/recipe?sheetId=' + sheetId);
-    const newRecipe = {
-      id: newId(),
-      name: recipe.dishName || 'Unnamed recipe',
-      type: recipe.dishType || 'Soup',
-      recipeSheetId: sheetId,
-      allergens: recipe.allergens || [],
-      costPerServing: recipe.costPerServing || '',
-      structure: recipe.structure || '',
-      seasonality: recipe.seasonality || '',
-      servingTemp: recipe.servingTemp || '',
-      servingSize: recipe.serving || 280,
-      recipeVolume: recipe.recipeVolume || null,
-      recipeIngredients: recipe.ingredients || null,
-      createdAt: new Date().toISOString(),
-      avgSkill: 0, avgSpeed: 0, avgBanger: 0, timesServed: 0,
-    };
-
-    // Save to server
-    await apiPost('/api/recipe-index', newRecipe);
-    S.recipeIndex.push(newRecipe);
-
-    closeModal();
-    renderRecipeIndex();
-    toast(esc(newRecipe.name) + ' added to recipe index');
-  } catch (e: unknown) {
-    toastError('Could not fetch recipe: ' + (e instanceof Error ? e.message : 'Unknown error'));
-  }
-}
-
-export async function bulkAddRecipes() {
-  const textarea = document.getElementById('ri-urls');
-  if (!textarea) return;
-  const lines = textarea.value.split('\n').map(l => l.trim()).filter(Boolean);
-  if (!lines.length) { alert('Please paste at least one URL'); return; }
-
-  // Extract sheet IDs and deduplicate
-  const entries = [];
-  const seen = new Set();
-  lines.forEach(line => {
-    const sheetId = extractSheetId(line);
-    if (!sheetId) return;
-    if (seen.has(sheetId)) return;
-    if (S.recipeIndex.find(r => r.recipeSheetId === sheetId)) return; // already in index
-    seen.add(sheetId);
-    entries.push({ url: line, sheetId });
-  });
-
-  const skipped = lines.length - entries.length;
-  if (!entries.length) {
-    alert(skipped > 0 ? 'All URLs are either invalid, duplicates, or already in your index.' : 'No valid Google Sheet URLs found.');
-    return;
-  }
-
-  const progress = document.getElementById('ri-bulk-progress');
-  progress.style.display = 'block';
-  const btn = document.getElementById('ri-submit-btn');
-  btn.disabled = true;
-  btn.textContent = 'Importing...';
-
-  let ok = 0, fail = 0;
-  for (let i = 0; i < entries.length; i++) {
-    const { sheetId } = entries[i];
-    progress.innerHTML = `<div style="font-size:12px;margin-bottom:4px;">Fetching ${i + 1}/${entries.length}...</div>
-      <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
-        <div style="height:100%;width:${Math.round(((i + 1) / entries.length) * 100)}%;background:var(--blue);transition:width .2s;"></div>
-      </div>
-      <div style="font-size:11px;color:var(--text2);margin-top:4px;">${ok} added · ${fail} failed${skipped ? ' · ' + skipped + ' skipped' : ''}</div>`;
-
-    try {
-      const recipe = await apiGet('/api/recipe?sheetId=' + sheetId);
-      const newRecipe = {
-        id: newId(),
-        name: recipe.dishName || 'Unnamed recipe',
-        type: recipe.dishType || 'Soup',
-        recipeSheetId: sheetId,
-        allergens: recipe.allergens || [],
-        costPerServing: recipe.costPerServing || '',
-        structure: recipe.structure || '',
-        seasonality: recipe.seasonality || '',
-        servingTemp: recipe.servingTemp || '',
-        servingSize: recipe.serving || 280,
-        recipeVolume: recipe.recipeVolume || null,
-        recipeIngredients: recipe.ingredients || null,
-        createdAt: new Date().toISOString(),
-        avgSkill: 0, avgSpeed: 0, avgBanger: 0, timesServed: 0,
-      };
-      await apiPost('/api/recipe-index', newRecipe);
-      S.recipeIndex.push(newRecipe);
-      ok++;
-    } catch (e: unknown) {
-      console.error('Failed to import', sheetId, e);
-      fail++;
-    }
-  }
-
-  progress.innerHTML = `<div style="font-size:13px;font-weight:500;color:var(--green);margin-bottom:4px;">
-    Import complete: ${ok} added${fail ? ', ' + fail + ' failed' : ''}${skipped ? ', ' + skipped + ' skipped' : ''}
-  </div>`;
-  btn.disabled = false;
-  btn.textContent = 'Done';
-  btn.onclick = () => { closeModal(); renderRecipeIndex(); };
-  renderRecipeIndex();
-}
-
-export function openEditRecipe(id: any) {
-  const r = S.recipeIndex.find(x => x.id === id);
-  if (!r) return;
-  showModal(`<h3>Edit recipe &mdash; ${esc(r.name)}</h3>
-    <div class="fr"><label>Name</label><input type="text" id="re-name" value="${esc(r.name)}" /></div>
-    <div class="fr"><label>Type</label><select id="re-type">
-      ${['Soup','Main course','Dessert'].map(t => `<option${r.type === t ? ' selected' : ''}>${t}</option>`).join('')}
-    </select></div>
-    <div class="fr"><label>Structure</label><select id="re-structure">
-      ${['','Open structure','Closed structure'].map(s => `<option${r.structure === s ? ' selected' : ''}>${s}</option>`).join('')}
-    </select></div>
-    <div class="fr"><label>Seasonality</label><select id="re-season">
-      ${['','Year round','Spring','Summer','Fall','Winter'].map(s => `<option${r.seasonality === s ? ' selected' : ''}>${s}</option>`).join('')}
-    </select></div>
-    <div class="fr"><label>Cost per serving</label><input type="text" id="re-cost" value="${esc(r.costPerServing || '')}" placeholder="e.g. €0.55" /></div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveEditRecipe('${r.id}')">Save</button>
-    </div>`);
-}
-
-export async function saveEditRecipe(id: any) {
-  const r = S.recipeIndex.find(x => x.id === id);
-  if (!r) return;
-  r.name = document.getElementById('re-name').value.trim() || r.name;
-  r.type = document.getElementById('re-type').value;
-  r.structure = document.getElementById('re-structure').value;
-  r.seasonality = document.getElementById('re-season').value;
-  r.costPerServing = document.getElementById('re-cost').value.trim();
-  try {
-    await apiPost('/api/recipe-index', r);
-    closeModal();
-    renderRecipeIndex();
-    toast('Recipe updated');
-  } catch (e: unknown) { toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error')); }
-}
-
-export function deleteRecipeIndex(id: any) {
-  const entry = S.recipeIndex.find(x => x.id === id);
-  if (!entry) return;
-  const deleted = structuredClone(entry);
-  S.recipeIndex = S.recipeIndex.filter(x => x.id !== id);
-  renderRecipeIndex();
-  pushUndo({
-    label: esc(deleted.name) + ' removed',
-    restore: () => { S.recipeIndex.push(deleted); renderRecipeIndex(); },
-    commit: async () => {
-      try {
-        const r = await fetch('/api/recipe-index/' + id, { method: 'DELETE' });
-        if (r.status === 401) { doLogout(); return; }
-      } catch (e: unknown) {
-        toastError('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error'));
-        S.recipeIndex.push(deleted);
-        renderRecipeIndex();
-      }
-    },
-  });
-}
+// Recipe v1 ("Import from Sheet" + legacy index) was removed in S12. The
+// underlying /api/recipe-index endpoints are gone and the table was dropped.
+// These stubs remain so any cached tab still calling them via inline onclick
+// gets a clean deprecation toast instead of a console error or 404 cascade.
+const V1_DEPRECATED_MSG = 'Recipe v1 has been removed — use "+ Create recipe" to make a v2 recipe instead.';
+export function fetchAndAddRecipe() { toastError(V1_DEPRECATED_MSG); }
+export function bulkAddRecipes() { toastError(V1_DEPRECATED_MSG); }
+export function openEditRecipe(_id: any) { toastError(V1_DEPRECATED_MSG); }
+export function saveEditRecipe(_id: any) { toastError(V1_DEPRECATED_MSG); }
+export function deleteRecipeIndex(_id: any) { toastError(V1_DEPRECATED_MSG); }
 
 // Add a dish to the menu planner from a recipe in the index
 export async function importCookedAmounts() {
@@ -503,35 +233,9 @@ export async function recalcAllCosts() {
   }
 }
 
-export async function addDishFromRecipe(recipeId: any) {
-  const r = S.recipeIndex.find(x => x.id === recipeId);
-  if (!r) return;
-  const newDish = {
-    id: newId(),
-    name: r.name,
-    type: r.type || 'Soup',
-    stock: 0,
-    serving: r.servingSize || 280,
-    storage: 'Gastro',
-    location: 'west',
-    inTransit: false,
-    recipeSheetId: r.recipeSheetId || null,
-    recipeVolume: r.recipeVolume || null,
-    recipeIngredients: r.recipeIngredients ? [...r.recipeIngredients] : null,
-    allergens: [...(r.allergens || [])],
-    extraAllergens: [],
-    orderFor: false,
-    parentId: null,
-    cookDate: null,
-    services: [],
-    createdAt: new Date().toISOString(),
-    recipeId: null, actualIngredients: null, cookNotes: '', stockDeducted: false,
-  };
-  S.batches.push(newDish);
-  rebuildPlanner();
-  scheduleSave();
-  toast(esc(r.name) + ' added as batch to menu planner');
-}
+// addDishFromRecipe was the v1-index path. Replaced with a deprecated stub —
+// addDishFromV2Recipe (below) is the supported path now.
+export function addDishFromRecipe(_recipeId: any) { toastError(V1_DEPRECATED_MSG); }
 
 // Add a batch from a v2 recipe (with DB-linked ingredients)
 export function addDishFromV2Recipe(recipeId: string) {

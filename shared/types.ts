@@ -116,25 +116,9 @@ export interface TransportItem {
   text: string;
 }
 
-export interface RecipeEntry {
-  id: string;
-  name: string;
-  type: string;
-  recipeSheetId: string | null;
-  allergens: string[];
-  costPerServing: string;
-  structure: string;
-  seasonality: string;
-  servingTemp: string;
-  servingSize: number;
-  recipeVolume: number | null;
-  recipeIngredients: RecipeIngredient[] | null;
-  createdAt: string;
-  avgSkill: number;
-  avgSpeed: number;
-  avgBanger: number;
-  timesServed: number;
-}
+// RecipeEntry (legacy v1 row shape) and the corresponding `recipeIndex` field
+// on DataResponse / AppState were removed in S12 — all recipes are now Recipe
+// v2 (RecipeFull) and the legacy `recipe_index` table is dropped.
 
 // ── Recipe system v2 ──
 
@@ -285,7 +269,6 @@ export interface BatchRatings {
 export interface DataResponse {
   batches: Batch[];
   guests: GuestsData;
-  recipeIndex: RecipeEntry[];
   recipes: RecipeFull[];
   caterings: Catering[];
   transportItems: TransportItem[];

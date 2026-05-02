@@ -12,85 +12,12 @@ const upload = multer({ limits: { fileSize: 2 * 1024 * 1024 } }); // 2MB max
 
 const router = express.Router();
 
-router.get('/recipe-index', asyncHandler(async (_req: Request, res: Response) => {
-  const rows = await prisma.recipeIndex.findMany();
-  res.json(rows.map(r => ({
-    id: r.id,
-    name: r.name,
-    type: r.type,
-    recipeSheetId: r.recipeSheetId,
-    allergens: r.allergens,
-    costPerServing: r.costPerServing,
-    structure: r.structure,
-    seasonality: r.seasonality,
-    servingTemp: r.servingTemp,
-    servingSize: r.servingSize,
-    recipeVolume: r.recipeVolume,
-    recipeIngredients: r.recipeIngredients,
-    createdAt: r.createdAt,
-    avgSkill: r.avgSkill,
-    avgSpeed: r.avgSpeed,
-    avgBanger: r.avgBanger,
-    timesServed: r.timesServed,
-  })));
-}));
-
-router.post('/recipe-index', asyncHandler(async (req: Request, res: Response) => {
-  const recipe = req.body;
-  if (!recipe || !recipe.id || !recipe.name) return res.status(400).json({ error: 'id and name required' });
-  await withWriteLock(async () => {
-  await prisma.recipeIndex.upsert({
-    where: { id: recipe.id },
-    create: {
-      id: recipe.id,
-      name: recipe.name,
-      type: recipe.type || 'Soup',
-      recipeSheetId: recipe.recipeSheetId || null,
-      allergens: recipe.allergens || [],
-      costPerServing: recipe.costPerServing || '',
-      structure: recipe.structure || '',
-      seasonality: recipe.seasonality || '',
-      servingTemp: recipe.servingTemp || '',
-      servingSize: recipe.servingSize || 280,
-      recipeVolume: recipe.recipeVolume || null,
-      recipeIngredients: recipe.recipeIngredients || undefined,
-      createdAt: recipe.createdAt || new Date().toISOString(),
-      avgSkill: recipe.avgSkill || 0,
-      avgSpeed: recipe.avgSpeed || 0,
-      avgBanger: recipe.avgBanger || 0,
-      timesServed: recipe.timesServed || 0,
-    },
-    update: {
-      name: recipe.name,
-      type: recipe.type || 'Soup',
-      recipeSheetId: recipe.recipeSheetId || null,
-      allergens: recipe.allergens || [],
-      costPerServing: recipe.costPerServing || '',
-      structure: recipe.structure || '',
-      seasonality: recipe.seasonality || '',
-      servingTemp: recipe.servingTemp || '',
-      servingSize: recipe.servingSize || 280,
-      recipeVolume: recipe.recipeVolume || null,
-      recipeIngredients: recipe.recipeIngredients || undefined,
-      avgSkill: recipe.avgSkill || 0,
-      avgSpeed: recipe.avgSpeed || 0,
-      avgBanger: recipe.avgBanger || 0,
-      timesServed: recipe.timesServed || 0,
-    },
-  });
-  });
-  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
-  dbAppendLog(user.email, user.name, 'recipe-index', `saved "${recipe.name}"`);
-  res.json({ ok: true });
-}));
-
-router.delete('/recipe-index/:id', asyncHandler(async (req: Request, res: Response) => {
-  const id = req.params.id as string;
-  await withWriteLock(async () => {
-    await prisma.recipeIndex.delete({ where: { id } });
-  });
-  res.json({ ok: true });
-}));
+// Legacy /api/recipe-index endpoints removed in S12. The RecipeIndex table is
+// dropped; all recipes are now Recipe v2 (see /api/recipes). The frontend
+// previously POSTed here from /core.ts (rate-after-served) and from the
+// "Add legacy from Sheet" UI in /recipes.ts — both flows wrote to a table
+// that was never returned to the client (dbReadAll forced recipeIndex: [])
+// so any "saved" recipe disappeared on reload.
 
 // External recipe reading — still uses Google Sheets API
 router.get('/recipe', asyncHandler(async (req: Request, res: Response) => {

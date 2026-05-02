@@ -1,0 +1,23 @@
+-- S12: drop the legacy recipe_index table
+--
+-- The Recipe v1 ("Import from Sheet") system was superseded by Recipe v2
+-- (the `recipes` table + `recipe_ingredients` rows + ingredient FK joins)
+-- when the v2 editor shipped. dbReadAll has been forcing recipeIndex: []
+-- since then, so frontend writes via /api/recipe-index went to a table the
+-- frontend could never read back. Effectively dead writes.
+--
+-- This migration drops:
+--   - the recipe_index table (zero readers in current code)
+--
+-- This migration does NOT drop:
+--   - Batch.recipe_sheet_id  (still used to render "Open recipe ↗" links to
+--                              the original Google Sheet from batch tiles +
+--                              dashboard recipe button)
+--   - Batch.recipe_ingredients (still used as inline ingredient snapshot for
+--                                batches that don't link to a v2 Recipe)
+--
+-- See the same-numbered code commit for the matching frontend cleanup
+-- (broken UI flows replaced with deprecation toasts; S.recipeIndex /
+-- RecipeEntry / DataResponse.recipeIndex removed).
+
+DROP TABLE "recipe_index";

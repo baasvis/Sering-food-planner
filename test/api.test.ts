@@ -11,7 +11,6 @@ afterAll(async () => {
   await prisma.recipePhoto.deleteMany({ where: { recipeId: { startsWith: T } } });
   await prisma.recipe.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.batch.deleteMany({ where: { id: { startsWith: T } } });
-  await prisma.recipeIndex.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.ingredient.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.standardInventory.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.feedback.deleteMany({ where: { user: 'test-runner' } });
@@ -79,7 +78,7 @@ describe('GET /api/data', () => {
     expect(res.body).toHaveProperty('batches');
     expect(res.body).toHaveProperty('guests');
     expect(res.body).toHaveProperty('caterings');
-    expect(res.body).toHaveProperty('recipeIndex');
+    expect(res.body).toHaveProperty('recipes');
     expect(res.body).toHaveProperty('transportItems');
     expect(Array.isArray(res.body.batches)).toBe(true);
   });
@@ -288,37 +287,8 @@ describe('POST /api/ingredients/stock', () => {
 });
 
 // ── Recipes ──
-
-describe('Recipe Index API', () => {
-  const recipeId = T + 'recipe-1';
-
-  it('GET /api/recipe-index — returns list', async () => {
-    const res = await request(app).get('/api/recipe-index');
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-  });
-
-  it('POST /api/recipe-index — creates recipe', async () => {
-    const res = await request(app)
-      .post('/api/recipe-index')
-      .send({ id: recipeId, name: 'Test Soup', type: 'Soup', createdAt: new Date().toISOString() });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-  });
-
-  it('POST /api/recipe-index — rejects without id', async () => {
-    const res = await request(app)
-      .post('/api/recipe-index')
-      .send({ name: 'No ID' });
-    expect(res.status).toBe(400);
-  });
-
-  it('DELETE /api/recipe-index/:id — deletes recipe', async () => {
-    const res = await request(app).delete('/api/recipe-index/' + recipeId);
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-  });
-});
+// Legacy /api/recipe-index endpoints removed in S12 — see routes/recipes.ts.
+// Recipe v2 has its own test suite below ('Recipe v2 CRUD').
 
 // ── Standard Inventory ──
 

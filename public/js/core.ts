@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DAYS, MEALS, STORAGE } from './state';
-import type { Batch, Service, Catering, CateringDish, RecipeEntry, RecipeIngredient, Location, Meal, DishType, StorageType, BatchRatings } from '@shared/types';
+import type { Batch, Service, Catering, CateringDish, RecipeIngredient, Location, Meal, DishType, StorageType, BatchRatings } from '@shared/types';
 import { scheduleSave, apiPost, toast } from './utils';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
@@ -388,18 +388,11 @@ export function archiveDish(id: string, withRating: boolean): void {
       apiPost(`/api/recipes/${recipe.id}`, { avgSkill: recipe.avgSkill, avgSpeed: recipe.avgSpeed, avgBanger: recipe.avgBanger, timesServed: recipe.timesServed }, 'PATCH')
         .catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
     }
-  } else if (rating && d.recipeSheetId) {
-    const ri = S.recipeIndex.find((r: RecipeEntry) => r.recipeSheetId === d.recipeSheetId);
-    if (ri) {
-      const n = ri.timesServed || 0;
-      const newN = n + 1;
-      ri.avgSkill = ((ri.avgSkill || 0) * n + (rating.skill || 0)) / newN;
-      ri.avgSpeed = ((ri.avgSpeed || 0) * n + (rating.speed || 0)) / newN;
-      ri.avgBanger = ((ri.avgBanger || 0) * n + (rating.banger || 0)) / newN;
-      ri.timesServed = newN;
-      apiPost('/api/recipe-index', ri).catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
-    }
   }
+  // Legacy v1: rating updates by recipeSheetId used to write to /api/recipe-index.
+  // The endpoint and S.recipeIndex were removed in S12 (the writes never came
+  // back to the frontend, so ratings on Sheet-only batches disappeared on
+  // every reload). v2 ratings above are the supported path.
   // Remove from active dishes
   S.batches = S.batches.filter((x: Batch) => x.id !== id);
   pendingRatings = { skill:0, speed:0, banger:0 };

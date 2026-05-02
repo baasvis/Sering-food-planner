@@ -938,21 +938,12 @@ export function openNewDish() {
 }
 
 export function searchNewDishModal() {
+  // Legacy v1 recipe-index lookup removed in S12. The v2 "pick from recipes"
+  // path lives in planner.ts (renderAddModal). This modal now leads users to
+  // either the planner's modal (for v2 picks) or the "Create blank batch"
+  // button below.
   const searchQuery = (document.getElementById('new-dish-search') as HTMLInputElement | null)?.value || '';
-  let recipes = S.recipeIndex;
-  if (searchQuery) {
-    const q = searchQuery.toLowerCase();
-    recipes = recipes.filter(r => r.name.toLowerCase().includes(q));
-  }
-  const recipeList = recipes.length > 0
-    ? recipes.slice(0, 20).map(r => {
-      const ags = (r.allergens||[]).slice(0,3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
-      return `<div class="dish-opt" onclick="addDishFromRecipe('${r.id}');closeModal();">
-        <div><span style="font-weight:500;">${esc(r.name)}</span> ${typeBadge(r.type||'Soup')} ${ags}</div>
-        <div style="font-size:11px;color:var(--text2);">${r.costPerServing || ''}</div>
-      </div>`;
-    }).join('')
-    : `<div class="empty" style="padding:12px;">${S.recipeIndex.length === 0 ? 'No recipes in index yet. Add some in the Recipes tab.' : 'No recipes match "' + esc(searchQuery) + '"'}</div>`;
+  const recipeList = '<div class="empty" style="padding:12px;">To pick from a recipe, open the Week plan and click a slot. Or use "Create blank batch" below.</div>';
 
   // If modal already open, only update the list
   const existingList = document.getElementById('new-dish-list');
@@ -961,8 +952,7 @@ export function searchNewDishModal() {
     return;
   }
 
-  showModal(`<h3>Add batch to menu</h3>
-    <div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Pick from your recipe index:</div>
+  showModal(`<h3>New batch</h3>
     <input type="text" class="dish-search" id="new-dish-search" placeholder="Search recipes..." value="${esc(searchQuery)}"
       oninput="searchNewDishModal()" autofocus />
     <div class="dish-opts-list" style="max-height:260px;" id="new-dish-list">${recipeList}</div>

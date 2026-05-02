@@ -218,7 +218,6 @@ export async function loadData(): Promise<void> {
   try {
     const data = await apiGet('/api/data');
     if (data.guests) S.guests = data.guests;
-    if (data.recipeIndex) S.recipeIndex = data.recipeIndex;
     if (data.recipes) S.recipes = data.recipes;
     if (data.batches) S.batches = data.batches;
     if (data.caterings) S.caterings = data.caterings;

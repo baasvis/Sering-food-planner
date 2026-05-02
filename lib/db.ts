@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { PrismaClient, Prisma } from '@prisma/client';
-import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeEntry, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient } from '../shared/types';
+import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient } from '../shared/types';
 import { toGrams } from '../shared/units';
 
 export const prisma = new PrismaClient();
@@ -284,9 +284,6 @@ export async function dbReadAll(): Promise<DataResponse> {
       }
     }
 
-    // Legacy recipeIndex no longer served — all recipes are v2 now
-    const recipeIndex: RecipeEntry[] = [];
-
     const caterings: Catering[] = cateringRows.map(c => ({
       id: c.id,
       name: c.name,
@@ -304,11 +301,11 @@ export async function dbReadAll(): Promise<DataResponse> {
     // has usable display data (otherwise batch recipe editor shows "Unknown").
     await denormalizeRecipeIngredients(recipes);
 
-    return { batches, guests, recipeIndex, recipes, caterings, transportItems };
+    return { batches, guests, recipes, caterings, transportItems };
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Unknown error';
     console.error('dbReadAll error:', message);
-    return { batches: [], guests: getDefaultGuests(), recipeIndex: [], recipes: [], caterings: [], transportItems: [] };
+    return { batches: [], guests: getDefaultGuests(), recipes: [], caterings: [], transportItems: [] };
   }
 }
 

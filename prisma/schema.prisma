@@ -54,29 +54,6 @@ model Guest {
   @@map("guests")
 }
 
-model RecipeIndex {
-  id                String   @id
-  name              String
-  type              String   @default("Soup")
-  recipeSheetId     String?  @map("recipe_sheet_id")
-  allergens         String[]
-  costPerServing    String   @default("") @map("cost_per_serving")
-  structure         String   @default("")
-  seasonality       String   @default("")
-  servingTemp       String   @default("") @map("serving_temp")
-  servingSize       Int      @default(280) @map("serving_size")
-  recipeVolume      Float?   @map("recipe_volume")
-  recipeIngredients Json?    @map("recipe_ingredients")
-  createdAt         String   @map("created_at")
-  avgSkill          Float    @default(0) @map("avg_skill")
-  avgSpeed          Float    @default(0) @map("avg_speed")
-  avgBanger         Float    @default(0) @map("avg_banger")
-  timesServed       Int      @default(0) @map("times_served")
-
-  @@index([type])
-  @@map("recipe_index")
-}
-
 model Catering {
   id             String  @id
   name           String  @default("")
