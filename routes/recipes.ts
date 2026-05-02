@@ -628,7 +628,7 @@ router.get('/ingredients/suggest', asyncHandler(async (req: Request, res: Respon
     },
     select: {
       id: true, name: true, category: true, unit: true,
-      stock: true, pricePer100g: true, pricePer100: true, allergens: true,
+      stock: true, pricePer100: true, allergens: true,
     },
     orderBy: { name: 'asc' },
   });

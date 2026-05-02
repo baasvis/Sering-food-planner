@@ -109,7 +109,6 @@ model Ingredient {
   orderUnit         String                @default("") @map("order_unit")
   orderPrice        Float?                @map("order_price")
   priceLevel        String                @default("") @map("price_level")
-  pricePer100g      Float                 @default(0) @map("price_per_100g")
   priceHistory      Json                  @default("[]") @map("price_history")
   priceAlert        Boolean               @default(false) @map("price_alert")
   storageLocations  Json                  @default("{}") @map("storage_locations")

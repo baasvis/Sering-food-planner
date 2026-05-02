@@ -264,7 +264,6 @@ export interface Ingredient {
   active: boolean;
   nutrition?: Record<string, number>;
   priceHistory?: Array<{ month: string; price: number }>;
-  pricePer100g?: number;
 }
 
 export interface AppUser {

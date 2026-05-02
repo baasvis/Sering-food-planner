@@ -574,7 +574,7 @@ export async function denormalizeRecipeIngredients(recipes: RecipeFull[]): Promi
   if (idSet.size === 0) return;
   const dbIngs = await prisma.ingredient.findMany({
     where: { id: { in: Array.from(idSet) } },
-    select: { id: true, name: true, allergens: true, pricePer100g: true, pricePer100: true },
+    select: { id: true, name: true, allergens: true, pricePer100: true },
   });
   const ingMap = new Map(dbIngs.map(i => [i.id, i]));
   for (const r of recipes) {
@@ -584,7 +584,7 @@ export async function denormalizeRecipeIngredients(recipes: RecipeFull[]): Promi
         if (dbIng) {
           ing.ingredientName = dbIng.name;
           ing.ingredientAllergens = dbIng.allergens;
-          ing.costPer100 = dbIng.pricePer100g || dbIng.pricePer100 || 0;
+          ing.costPer100 = dbIng.pricePer100 || 0;
         }
       }
     }
@@ -642,7 +642,6 @@ export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> 
       id: true,
       name: true,
       allergens: true,
-      pricePer100g: true,
       pricePer100: true,
       nutrition: true,
     },
@@ -656,7 +655,7 @@ export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> 
     if (!dbIng) continue;
     ing.ingredientName = dbIng.name;
     ing.ingredientAllergens = dbIng.allergens;
-    ing.costPer100 = dbIng.pricePer100g || dbIng.pricePer100 || 0;
+    ing.costPer100 = dbIng.pricePer100 || 0;
   }
 
   // Compute cost and nutrition from the same map
@@ -679,7 +678,7 @@ export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> 
     if (!ing.ingredientId) continue;
     const dbIng = ingMap.get(ing.ingredientId);
     if (!dbIng) continue;
-    const pricePer100 = dbIng.pricePer100g || dbIng.pricePer100 || 0;
+    const pricePer100 = dbIng.pricePer100 || 0;
     totalCost += (amountGrams / 100) * pricePer100;
 
     totalLinked++;
@@ -727,9 +726,9 @@ export async function calcRecipeCost(
 
   const dbIngredients = await prisma.ingredient.findMany({
     where: { id: { in: linkedIds } },
-    select: { id: true, pricePer100g: true, pricePer100: true },
+    select: { id: true, pricePer100: true },
   });
-  const priceMap = new Map(dbIngredients.map(i => [i.id, i.pricePer100g || i.pricePer100 || 0]));
+  const priceMap = new Map(dbIngredients.map(i => [i.id, i.pricePer100 || 0]));
 
   const baseServings = (recipeVolume * 1000) / servingSize;
   if (baseServings <= 0) return null;
