@@ -19,7 +19,7 @@ import { showModal, closeModal, esc } from './modal';
 export const COOK_RHYTHM: Record<string, { soup: number; main: number }> = {
   Sun: { soup: 3, main: 3 },
   Mon: { soup: 0, main: 1 },
-  Tue: { soup: 1, main: 0 },
+  Tue: { soup: 1, main: 1 },
   Wed: { soup: 1, main: 1 },
   Thu: { soup: 1, main: 1 },
   Fri: { soup: 1, main: 1 },
@@ -112,6 +112,30 @@ export function snapshotBatches(batches: Batch[], window: PlanDay[]): BatchSnaps
   return { cookEventsByCookDate, inWindow };
 }
 
+// ── Strip future services (for redistributive re-planning) ─────────────────
+
+/**
+ * Remove every service entry whose date+meal is still in the future. Past
+ * services (already served by `isServicePast`) are preserved as-is.
+ *
+ * This makes the algorithm fully redistributive: when fixMyMenu runs, it
+ * starts from a "clean slate" of future assignments and rebuilds them from
+ * current state (cooked stock, pot sizes, guest counts, catering links). The
+ * catering link itself isn't a service entry so it survives untouched.
+ *
+ * Returns the number of service entries removed.
+ */
+export function stripFutureServices(batches: Batch[]): number {
+  let removed = 0;
+  for (const b of batches) {
+    if (!b.services || b.services.length === 0) continue;
+    const kept = b.services.filter(s => isServicePast(s));
+    removed += b.services.length - kept.length;
+    b.services = kept;
+  }
+  return removed;
+}
+
 // ── Step 0: Cleanup orphan generated placeholders ───────────────────────────
 
 /**
@@ -150,11 +174,13 @@ interface PlaceholderInput {
  */
 function buildPlaceholder(input: PlaceholderInput): Batch {
   // Lowercase type label so placeholders sort visually after real recipe names
-  // (which start with capital letters): "Sat soup cooking 02/05/2026" stands
-  // out clearly as a placeholder waiting to be replaced with a real recipe.
+  // (which start with capital letters): "Sat soup 02/05" stands out clearly
+  // as a placeholder waiting to be replaced with a real recipe.
   const typeLabel = input.type === 'Main course' ? 'main' : 'soup';
   const indexSuffix = input.total > 1 ? ` ${input.index}` : '';
-  const name = `${input.dayName} ${typeLabel}${indexSuffix} cooking ${input.cookDateStr}`;
+  // Strip the year — keep just dd/mm so the name stays compact in the planner UI.
+  const ddmm = input.cookDateStr.split('/').slice(0, 2).join('/');
+  const name = `${input.dayName} ${typeLabel}${indexSuffix} ${ddmm}`;
 
   return {
     id: newId(),
@@ -230,12 +256,12 @@ export function generateMissingPlaceholders(window: PlanDay[], snapshot: BatchSn
  * For each cook day, allocate the kitchen's available pots to that day's
  * batches and return a per-batch liters cap.
  *
- * Allocation strategy:
- *   - Group batches by cookDate, then by type.
- *   - Within a day, interleave types: Soup1, Main1, Soup2, Main2, Soup3, Main3
- *     This ensures the first batch of each type gets the biggest pot
- *     (matches the user's "1 big per type" preference).
+ * Demand-based allocation (called AFTER assignment passes complete):
+ *   - Group batches by cookDate.
+ *   - Within a day, sort batches by current demand DESCENDING.
  *   - Allocate pots from biggest to smallest in that order.
+ *   - The biggest cooking pot goes to the batch that needs the most food —
+ *     never wasted on a low-demand batch just because it sorts first by id.
  *   - If a day has more batches than pots, the overflow gets capped at the
  *     smallest pot size (warning territory — flagged in validation).
  *
@@ -245,6 +271,7 @@ export function generateMissingPlaceholders(window: PlanDay[], snapshot: BatchSn
 export function allocatePotCaps(
   batchesInWindow: Batch[],
   equipment: KitchenEquipment | null,
+  calcReq: (b: Batch) => number,
 ): Map<string, number> {
   const caps = new Map<string, number>();
   if (!equipment || equipment.pots.length === 0) return caps;
@@ -255,39 +282,22 @@ export function allocatePotCaps(
   const byDay = new Map<string, Batch[]>();
   for (const b of batchesInWindow) {
     if (!b.cookDate) continue;
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
     if (!byDay.has(b.cookDate)) byDay.set(b.cookDate, []);
     byDay.get(b.cookDate)!.push(b);
   }
 
   for (const [, dayBatches] of byDay) {
-    // Group by type, preserving id order within each type
-    const byType: Record<string, Batch[]> = {};
-    for (const b of dayBatches) {
-      if (!TYPES_TO_PLAN.includes(b.type)) continue;
-      (byType[b.type] = byType[b.type] || []).push(b);
-    }
-    // Sort each type's batches by id for deterministic allocation
-    for (const t of TYPES_TO_PLAN) {
-      if (byType[t]) byType[t].sort((a, b) => a.id.localeCompare(b.id));
-    }
-    // Interleave: take 1st of each type, then 2nd of each, then 3rd, ...
-    const ordered: Batch[] = [];
-    let i = 0;
-    let added = true;
-    while (added) {
-      added = false;
-      for (const t of TYPES_TO_PLAN) {
-        if (byType[t] && byType[t][i]) {
-          ordered.push(byType[t][i]);
-          added = true;
-        }
-      }
-      i++;
-    }
-    // Allocate pots in order
-    for (let k = 0; k < ordered.length; k++) {
+    // Sort by demand desc; ties broken by id for determinism
+    const sorted = [...dayBatches].sort((a, b) => {
+      const da = calcReq(a);
+      const db = calcReq(b);
+      if (da !== db) return db - da;
+      return a.id.localeCompare(b.id);
+    });
+    for (let k = 0; k < sorted.length; k++) {
       const cap = sortedPotsDesc[k] ?? smallestPot;
-      caps.set(ordered[k].id, cap);
+      caps.set(sorted[k].id, cap);
     }
   }
   return caps;
@@ -320,11 +330,27 @@ function diffDaysIso(aIso: string, bIso: string): number {
 /**
  * A batch with cookDate = X is servable starting at dinner of X (lunch of X is
  * too early — cooking happens during the day). Any later day is fine.
+ *
+ * Centraal exception: food is delivered to Centraal every morning, so a
+ * West-cooked batch reaches Centraal only the next day — Centraal services
+ * for West-cooked food need slotDate > cookDate (no same-day Centraal).
+ * Centraal-cooked batches (rare) follow the standard same-day-dinner rule.
  */
-export function isServableBy(cookDateDdmmyyyy: string | null, slotIsoDate: string, slotMeal: Meal): boolean {
+export function isServableBy(
+  cookDateDdmmyyyy: string | null,
+  slotIsoDate: string,
+  slotMeal: Meal,
+  slotLoc: Location = 'west',
+  batchLocation: Location = 'west',
+): boolean {
   const cookIso = cookDateToIso(cookDateDdmmyyyy);
   if (!cookIso) return false;
   if (slotIsoDate < cookIso) return false;
+  // West-cooked food at Centraal: must wait for next-morning delivery
+  if (slotLoc === 'centraal' && batchLocation === 'west') {
+    return slotIsoDate > cookIso;
+  }
+  // Otherwise: standard rule (same-day dinner OK, any later day OK)
   if (slotIsoDate > cookIso) return true;
   return slotMeal === 'dinner';
 }
@@ -386,7 +412,7 @@ export function assignServicesPass1(
   allBatches: Batch[],
   window: PlanDay[],
   calcReq: (b: Batch) => number,
-  potCaps?: Map<string, number>,
+  getGuestsFn?: (loc: Location, isoDate: string, meal: Meal) => number,
 ): { servicesAdded: number; batchesTouched: number } {
   const cookedSorted = allBatches
     .filter(b => TYPES_TO_PLAN.includes(b.type))
@@ -399,9 +425,10 @@ export function assignServicesPass1(
   const touched = new Set<string>();
 
   for (const batch of cookedSorted) {
-    // Effective ceiling = stock for cooked batches, capped further by pot size if known
-    const potCap = potCaps?.get(batch.id);
-    const ceiling = potCap != null ? Math.min(batch.stock, potCap) : batch.stock;
+    // Ceiling = real-stock limit. Pot caps are no longer enforced during
+    // assignment — they're computed AFTER all passes complete (demand-based
+    // allocation). Over-pot batches surface as warnings.
+    const ceiling = batch.stock;
     let surplus = ceiling - calcReq(batch);
     if (surplus <= 0) continue;
 
@@ -411,7 +438,9 @@ export function assignServicesPass1(
 
       for (const slot of day.slots) {
         if (slot.isPast) continue;
-        if (!isServableBy(batch.cookDate, day.isoDate, slot.meal)) continue;
+        // Skip slots with no expected guests — no point assigning food where nobody eats.
+        if (getGuestsFn && getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
+        if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, batch.location)) continue;
         if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal)) continue;
         if (countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) continue;
 
@@ -464,13 +493,20 @@ export function assignServicesPass2(
   allBatches: Batch[],
   window: PlanDay[],
   calcReq: (b: Batch) => number,
-  potCaps?: Map<string, number>,
+  getGuestsFn?: (loc: Location, isoDate: string, meal: Meal) => number,
+  /** Soft concentration cap. When set, Pass 2 piles services onto the most-
+   *  loaded sibling batch up to this size, so smaller siblings stay tiny
+   *  (and trigger the too-small-batch warning). Without this hint, falls
+   *  back to even (least-loaded) spread. */
+  biggestPotLiters?: number,
 ): { servicesAdded: number } {
   let added = 0;
 
   for (const day of window) {
     for (const slot of day.slots) {
       if (slot.isPast) continue;
+      // Skip 0-guest slots — see Pass 1 comment.
+      if (getGuestsFn && getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
 
       for (const type of TYPES_TO_PLAN) {
         const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
@@ -479,7 +515,7 @@ export function assignServicesPass2(
 
         for (let i = 0; i < remaining; i++) {
           const placed = tryFillOnePosition(
-            allBatches, type, slot.loc, day.isoDate, slot.meal, calcReq, potCaps,
+            allBatches, type, slot.loc, day.isoDate, slot.meal, calcReq, biggestPotLiters,
           );
           if (placed) added++;
           else break;  // no candidate fit — leave the rest of this slot's positions empty
@@ -494,7 +530,7 @@ export function assignServicesPass2(
 /**
  * Find the best candidate for a single (slot, type) position and assign it.
  * Returns true if a batch was placed. Tries successive candidates if the top
- * pick fails the capacity check (stock OR pot cap exceeded).
+ * pick fails the stock check for cooked batches.
  */
 function tryFillOnePosition(
   allBatches: Batch[],
@@ -503,7 +539,7 @@ function tryFillOnePosition(
   isoDate: string,
   meal: Meal,
   calcReq: (b: Batch) => number,
-  potCaps?: Map<string, number>,
+  biggestPotLiters?: number,
 ): boolean {
   // Build candidate list (excluded: wrong type, already-in-slot, frozen, stale-cooked, unservable).
   let candidates = allBatches.filter(b => {
@@ -511,13 +547,13 @@ function tryFillOnePosition(
     if (!b.cookDate) return false;
     if (b.storage === 'Frozen') return false;
     if (alreadyInSlot(b, loc, isoDate, meal)) return false;
-    if (!isServableBy(b.cookDate, isoDate, meal)) return false;
+    if (!isServableBy(b.cookDate, isoDate, meal, loc, b.location)) return false;
     if (b.stock > 0 && isStaleAtSlot(b.cookDate, isoDate)) return false;
     return true;
   });
 
   while (candidates.length > 0) {
-    // Sort: newest cookDate first; tiebreak: cooked > uncooked at same date.
+    // Sort: newest cookDate first (variety); tiebreak: cooked > uncooked.
     candidates.sort((a, b) => {
       const aIso = cookDateToIso(a.cookDate)!;
       const bIso = cookDateToIso(b.cookDate)!;
@@ -531,28 +567,41 @@ function tryFillOnePosition(
     const topIso = cookDateToIso(top.cookDate)!;
     const topCooked = top.stock > 0 ? 'cooked' : 'uncooked';
 
-    // Among same (cookDate, cooked-status) candidates, pick the one with the
-    // FEWEST services already assigned. This replaces the previous round-robin
-    // index — same fairness intent, but actually balanced even when the bucket
-    // shrinks mid-slot. Tiebreak by source order (stable sort).
+    // Within same (cookDate, cooked-status) bucket, pick the MOST-LOADED
+    // batch under the big-pot ceiling (concentrate to fill one batch fully
+    // before adding to siblings). If all bucket members are over the ceiling,
+    // fall back to least-loaded to spread overflow.
+    // This naturally produces "min batch size" behavior — services pile onto
+    // the leading batch first, smaller siblings stay tiny (and trigger the
+    // too-small-batch warning to prompt cook to skip those cooks).
     const sameBucket = candidates
-      .filter(c => cookDateToIso(c.cookDate) === topIso && (c.stock > 0 ? 'cooked' : 'uncooked') === topCooked)
-      .sort((a, b) => a.services.length - b.services.length);
-    const chosen = sameBucket[0];
+      .filter(c => cookDateToIso(c.cookDate) === topIso && (c.stock > 0 ? 'cooked' : 'uncooked') === topCooked);
+    let chosen: Batch;
+    if (biggestPotLiters != null) {
+      const underBig = sameBucket.filter(c => calcReq(c) < biggestPotLiters);
+      if (underBig.length > 0) {
+        underBig.sort((a, b) => {
+          if (a.services.length !== b.services.length) return b.services.length - a.services.length;
+          return a.id.localeCompare(b.id);
+        });
+        chosen = underBig[0];
+      } else {
+        // All at/over big-pot — spread overflow
+        sameBucket.sort((a, b) => a.services.length - b.services.length);
+        chosen = sameBucket[0];
+      }
+    } else {
+      // No equipment hint — even spread
+      sameBucket.sort((a, b) => a.services.length - b.services.length);
+      chosen = sameBucket[0];
+    }
 
-    // Tentatively assign and check capacity.
-    // Effective ceiling = min(stock for cooked, pot cap if known). Uncooked
-    // batches have unlimited stock conceptually but still respect pot cap.
-    const potCap = potCaps?.get(chosen.id);
-    const ceilings: number[] = [];
-    if (chosen.stock > 0) ceilings.push(chosen.stock);
-    if (potCap != null) ceilings.push(potCap);
-    const ceiling = ceilings.length > 0 ? Math.min(...ceilings) : Infinity;
-
+    // Tentatively assign and check capacity. Only stock matters here — pot
+    // sizing is decided post-assignment based on actual demand.
     chosen.services.push({ loc, date: isoDate, meal });
-    if (calcReq(chosen) > ceiling) {
+    if (chosen.stock > 0 && calcReq(chosen) > chosen.stock) {
       chosen.services.pop();
-      // This batch can't take more services — drop it and try the next candidate.
+      // Cooked batch hit its stock limit — drop it and try the next candidate.
       candidates = candidates.filter(c => c !== chosen);
       continue;
     }
@@ -588,12 +637,16 @@ export function assignServicesPass3(
   allBatches: Batch[],
   window: PlanDay[],
   calcReq: (b: Batch) => number,
+  getGuestsFn?: (loc: Location, isoDate: string, meal: Meal) => number,
+  biggestPotLiters?: number,
 ): { servicesAdded: number } {
   let added = 0;
 
   for (const day of window) {
     for (const slot of day.slots) {
       if (slot.isPast) continue;
+      // Skip 0-guest slots — see Pass 1 comment.
+      if (getGuestsFn && getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
 
       for (const type of TYPES_TO_PLAN) {
         const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
@@ -606,7 +659,7 @@ export function assignServicesPass3(
             if (!b.cookDate) return false;
             if (b.storage === 'Frozen') return false;
             if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal)) return false;
-            if (!isServableBy(b.cookDate, day.isoDate, slot.meal)) return false;
+            if (!isServableBy(b.cookDate, day.isoDate, slot.meal, slot.loc, b.location)) return false;
             if (b.stock > 0 && isStaleAtSlot(b.cookDate, day.isoDate)) return false;
             // Cooked: tentative-add and undo to verify we don't exceed STOCK
             // (real food limit; pot cap is intentionally ignored here).
@@ -620,10 +673,17 @@ export function assignServicesPass3(
           });
           if (candidates.length === 0) break;
 
-          // Least-loaded wins — keeps the over-cap pain spread evenly across
-          // sibling batches rather than dumping it on one.
-          candidates.sort((a, b) => a.services.length - b.services.length);
-          const chosen = candidates[0];
+          // Pass 3 sort: newest cookDate first, then most-loaded under
+          // bigPot (concentrate within bucket), least-loaded over bigPot.
+          const bigPot2 = biggestPotLiters ?? Infinity;
+          candidates.sort((a, b) => {
+            const aIso = cookDateToIso(a.cookDate)!;
+            const bIso = cookDateToIso(b.cookDate)!;
+            if (aIso !== bIso) return aIso > bIso ? -1 : 1;
+            const aHeadroom = calcReq(a) < bigPot2;
+            return aHeadroom ? (b.services.length - a.services.length) : (a.services.length - b.services.length);
+          });
+          const chosen: Batch = candidates[0];
           chosen.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
           added++;
         }
@@ -649,7 +709,15 @@ export function fixMyMenu(): void {
   );
   if (!ok) return;
 
-  // Step 0: cleanup orphan placeholders from previous runs
+  // Step −1: strip every future service entry. Past services (already served)
+  // stay; everything else gets re-decided by the assignment passes below.
+  // This makes the algorithm REDISTRIBUTIVE rather than purely additive —
+  // existing pinned assignments are reshuffled if the algorithm finds a
+  // better arrangement.
+  stripFutureServices(S.batches);
+
+  // Step 0: cleanup orphan placeholders from previous runs (now that future
+  // services are stripped, generated empty placeholders are easier to spot).
   const orphans = findOrphanPlaceholders(S.batches);
   if (orphans.length > 0) {
     const orphanIds = new Set(orphans.map(b => b.id));
@@ -671,33 +739,37 @@ export function fixMyMenu(): void {
   }
 
   // Rebuild the planner index BEFORE running the assigner — calcRequired uses
-  // S.planner to count peer batches per slot, and Pass 2's capacity check
-  // depends on it being current.
+  // S.planner to count peer batches per slot.
   rebuildPlanner();
-
-  // Allocate kitchen pots to in-window batches (biggest pot to first batch of
-  // each type, alternating types). Both passes respect these caps.
-  const inWindowBatches = S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type));
-  const potCaps = allocatePotCaps(inWindowBatches, S.kitchenEquipment);
 
   // Step 4 — Pass 1: extend cooked batches forward through the window.
-  const pass1 = assignServicesPass1(S.batches, planWindow, calcRequired, potCaps);
-  // Pass 1 added new service entries; rebuild planner so peer counts are
-  // accurate when Pass 2 evaluates eligibility.
+  // All passes skip 0-guest slots — no point planning food where nobody eats.
+  // Pot capacity is NOT enforced during assignment — pots get allocated by
+  // demand AFTER all passes complete (see allocatePotCaps below).
+  const pass1 = assignServicesPass1(S.batches, planWindow, calcRequired, getGuests);
   rebuildPlanner();
 
-  // Step 4 — Pass 2: fill remaining empty positions with the 2-newest rule
-  // (respecting pot caps).
-  const pass2 = assignServicesPass2(S.batches, planWindow, calcRequired, potCaps);
+  // Step 4 — Pass 2: fill remaining empty positions with the 2-newest rule.
+  // Pass the small-pot-threshold + biggest-pot size as soft concentration
+  // hints: spread evenly while batches are still small (<80L), then pile
+  // demand into one batch up to 140L so the rest stay induction-eligible.
+  const biggestPot = S.kitchenEquipment && S.kitchenEquipment.pots.length > 0
+    ? Math.max(...S.kitchenEquipment.pots)
+    : undefined;
+  const pass2 = assignServicesPass2(S.batches, planWindow, calcRequired, getGuests, biggestPot);
   rebuildPlanner();
 
-  // Step 4 — Pass 3: fill anything still empty, IGNORING pot caps. Better to
-  // overflow a pot (warning territory) than to leave a slot empty when food
-  // exists to fill it. Filling > variety > pot-cap.
-  const pass3 = assignServicesPass3(S.batches, planWindow, calcRequired);
-
-  // Final refresh and persist.
+  // Step 4 — Pass 3: fill anything still empty. Uses the same Sun-bias and
+  // most-loaded-under-bigPot logic as Pass 2 so it doesn't undo concentration.
+  const pass3 = assignServicesPass3(S.batches, planWindow, calcRequired, getGuests, biggestPot);
   rebuildPlanner();
+
+  // Step 4.5 — Allocate kitchen pots to batches by ACTUAL demand.
+  // Biggest pot goes to the batch that needs the most food. This way the
+  // 140L pot is never wasted on a low-demand batch just because it sorts
+  // first by id. Over-pot batches are flagged by collectWarnings.
+  const inWindowBatches = S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type));
+  const potCaps = allocatePotCaps(inWindowBatches, S.kitchenEquipment, calcRequired);
 
   // Step 5: collect warnings (after rebuild so calcRequired sees current peers)
   const warnings = collectWarnings(
@@ -730,7 +802,8 @@ export type WarningCategory =
   | 'stale-with-stock'
   | 'over-pot-cap'
   | 'burner-overload'
-  | 'catering-no-dishes';
+  | 'catering-no-dishes'
+  | 'undeliverable-centraal';
 
 export interface Warning {
   category: WarningCategory;
@@ -747,8 +820,7 @@ export type WarningAction =
   | { kind: 'use-frozen'; batchId: string; batchName: string }
   | { kind: 'add-emergency-cook'; type: DishType; loc: Location; date: string; meal: Meal }
   | { kind: 'assign-anyway'; batchId: string }
-  | { kind: 'move-to-freezer'; batchId: string }
-  | { kind: 'add-extra-batch'; cookDate: string; type: DishType };
+  | { kind: 'move-to-freezer'; batchId: string };
 
 export function collectWarnings(
   allBatches: Batch[],
@@ -783,9 +855,12 @@ export function collectWarnings(
             actions.push({ kind: 'add-emergency-cook', type, loc: slot.loc, date: day.isoDate, meal: slot.meal });
           }
           const typeLabel = type === 'Main course' ? 'main' : 'soup';
+          const locLabel = slot.loc === 'centraal' ? 'Centraal' : 'West';
           warnings.push({
             category: 'under-filled-slot',
-            message: `${day.dayName} ${slot.meal} ${slot.loc} — ${filled} of ${SLOTS_PER_TYPE} ${typeLabel}${missing > 1 ? 's' : ''} assigned`,
+            message: missing === 2
+              ? `${day.dayName} ${slot.meal} at ${locLabel} has no ${typeLabel} planned. Pick something to serve.`
+              : `${day.dayName} ${slot.meal} at ${locLabel} only has 1 ${typeLabel} — guests usually choose between 2.`,
             anchor: { kind: 'slot', loc: slot.loc, date: day.isoDate, meal: slot.meal },
             actions: actions.length > 0 ? actions : undefined,
           });
@@ -801,9 +876,10 @@ export function collectWarnings(
     if (b.storage === 'Frozen') continue;
     const demand = calcReq(b);
     if (demand > b.stock) {
+      const short = (demand - b.stock).toFixed(1);
       warnings.push({
         category: 'cooked-stockout',
-        message: `"${b.name}" cooked ${b.cookDate || '?'} — needs ${demand.toFixed(1)}L, only ${b.stock}L cooked`,
+        message: `${b.name} will run out — about ${short}L short across the services it covers. The last service might run dry.`,
         anchor: { kind: 'batch', batchId: b.id },
       });
     }
@@ -817,7 +893,7 @@ export function collectWarnings(
     if (!isStaleAtSlot(b.cookDate, dateToIso(getToday()))) continue;
     warnings.push({
       category: 'stale-with-stock',
-      message: `"${b.name}" cooked ${b.cookDate} — ${b.stock}L left, getting stale`,
+      message: `${b.name} is getting old — cooked ${b.cookDate}, ${b.stock}L still left. Either feature it on today's menu, or freeze it before it spoils.`,
       anchor: { kind: 'batch', batchId: b.id },
       actions: [
         { kind: 'assign-anyway', batchId: b.id },
@@ -826,23 +902,23 @@ export function collectWarnings(
     });
   }
 
-  // 4. Over-pot-cap: batch projected demand exceeds its allocated pot size.
-  // The algorithm tries to prevent this in Pass 2, but Pass 1's stock-driven
-  // extension or pre-existing manual assignments can still produce it.
+  // 4. Over-pot-cap: batch projected demand exceeds the biggest pot in the
+  // kitchen. We only warn when food won't fit in ANY single pot — within-
+  // kitchen reallocation (this batch got a 100L instead of a 140L) is the
+  // cook's call and not surfaced here. Showed once in the modal; the batch
+  // tile in the planner displays a "TOO BIG" indicator separately.
+  const biggestPotInKitchen = equipment && equipment.pots.length > 0
+    ? Math.max(...equipment.pots) : Infinity;
   for (const b of allBatches) {
     if (!TYPES_TO_PLAN.includes(b.type)) continue;
     if (b.storage === 'Frozen') continue;
-    const cap = potCaps.get(b.id);
-    if (cap == null) continue;
+    if (!b.cookDate) continue;
     const demand = calcReq(b);
-    if (demand > cap && b.cookDate) {
+    if (demand > biggestPotInKitchen) {
       warnings.push({
         category: 'over-pot-cap',
-        message: `"${b.name}" cooked ${b.cookDate} — needs ${demand.toFixed(1)}L, biggest pot fits ${cap}L. Add a second cook to split?`,
+        message: `${b.name} needs ${demand.toFixed(1)}L but your biggest pot is only ${biggestPotInKitchen}L. Cook it in two pots, or scale back what it covers.`,
         anchor: { kind: 'batch', batchId: b.id },
-        actions: [
-          { kind: 'add-extra-batch', cookDate: b.cookDate, type: b.type },
-        ],
       });
     }
   }
@@ -865,15 +941,38 @@ export function collectWarnings(
         if (cap != null && cap > threshold) bigPotCount++;
       }
       if (bigPotCount > equipment.gasBurners) {
+        const cookIso = cookDateToIso(day) || '';
+        const dayLabel = cookIso ? dateToDayName(cookIso) : day;
+        const overflow = bigPotCount - equipment.gasBurners;
         warnings.push({
           category: 'burner-overload',
-          message: `${day}: ${bigPotCount} batches need pots > ${threshold}L but you only have ${equipment.gasBurners} gas burner${equipment.gasBurners === 1 ? '' : 's'}`,
+          message: `${dayLabel} ${day}: ${bigPotCount} dishes need a gas burner but you only have ${equipment.gasBurners}. ${overflow} dish${overflow === 1 ? '' : 'es'} will have to wait — cook the slow ones first, then swap burners.`,
         });
       }
     }
   }
 
-  // 6. Caterings in window with no dishes assigned.
+  // 6. Undeliverable Centraal services: West-cooked batch with a Centraal
+  // service on the same day as cookDate. Food is delivered to Centraal in the
+  // morning, so anything cooked today can't reach Centraal until tomorrow.
+  // Catches manual pre-existing assignments that violate the rule.
+  for (const b of allBatches) {
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (!b.cookDate || b.location !== 'west') continue;
+    const cookIso = cookDateToIso(b.cookDate);
+    if (!cookIso) continue;
+    const violating = (b.services || []).filter(s => s.loc === 'centraal' && s.date === cookIso);
+    if (violating.length > 0) {
+      const meals = violating.map(s => s.meal).join(' + ');
+      warnings.push({
+        category: 'undeliverable-centraal',
+        message: `${b.name} is set to serve at Centraal ${meals} on the same day it's cooked. Centraal gets food delivered the morning AFTER cooking — it won't arrive in time. Move it to a later day or cook it earlier.`,
+        anchor: { kind: 'batch', batchId: b.id },
+      });
+    }
+  }
+
+  // 7. Caterings in window with no dishes assigned.
   const todayIso = dateToIso(getToday());
   const horizonEnd = dateToIso(new Date(getToday().getTime() + (PLANNING_HORIZON_DAYS - 1) * 86400000));
   for (const c of caterings) {
@@ -883,9 +982,10 @@ export function collectWarnings(
     if (!cIso) continue;
     if (cIso < todayIso || cIso > horizonEnd) continue;
     if (!c.dishes || c.dishes.length === 0) {
+      const dayLabel = dateToDayName(cIso);
       warnings.push({
         category: 'catering-no-dishes',
-        message: `Catering on ${c.date} has no dishes assigned`,
+        message: `Catering on ${dayLabel} ${c.date} doesn't have any dishes picked yet. What are they getting?`,
         anchor: { kind: 'catering', cateringId: c.id },
       });
     }
@@ -909,10 +1009,9 @@ let _lastReport: ResultsReport | null = null;
 function actionLabel(a: WarningAction): string {
   switch (a.kind) {
     case 'use-frozen': return `Use frozen ${a.batchName}`;
-    case 'add-emergency-cook': return 'Add emergency cook';
+    case 'add-emergency-cook': return 'Add emergency dish';
     case 'assign-anyway': return 'Assign anyway';
     case 'move-to-freezer': return 'Move to freezer';
-    case 'add-extra-batch': return 'Add extra batch';
   }
 }
 
@@ -931,6 +1030,31 @@ function renderWarningRow(w: Warning, idx: number): string {
   </div>`;
 }
 
+// Category presentation order — most urgent (food won't reach guests) at top,
+// least urgent (admin tasks) at bottom. Each category has a short header and
+// a one-line explanation a line cook can act on.
+const CATEGORY_ORDER: WarningCategory[] = [
+  'undeliverable-centraal',  // wrong assignment, needs immediate fix
+  'cooked-stockout',         // real food shortage, will run out
+  'under-filled-slot',       // need to plan more food
+  'over-pot-cap',            // pot doesn't fit, must split
+  'burner-overload',         // can cook in shifts (less urgent)
+  'stale-with-stock',        // decision needed (use or freeze)
+  'catering-no-dishes',      // admin
+];
+
+function categoryHeader(c: WarningCategory): { title: string; hint: string } {
+  switch (c) {
+    case 'undeliverable-centraal': return { title: '🚚 Won\'t arrive in time', hint: 'Centraal gets food delivered the morning after it\'s cooked.' };
+    case 'cooked-stockout':        return { title: '🥣 Will run out of food', hint: 'Already cooked but not enough for the planned services.' };
+    case 'under-filled-slot':      return { title: '📋 Slots need more food', hint: 'Each service usually has 2 soups + 2 mains.' };
+    case 'over-pot-cap':           return { title: '🍲 Won\'t fit in one pot', hint: 'Cook it in two pots so it fits.' };
+    case 'burner-overload':        return { title: '🔥 Not enough gas burners', hint: 'You\'ll need to cook in shifts that day.' };
+    case 'stale-with-stock':       return { title: '⏰ Old food still around', hint: 'Either use it today or freeze it before it spoils.' };
+    case 'catering-no-dishes':     return { title: '📝 Caterings without dishes', hint: 'Pick what they\'re getting from the menu.' };
+  }
+}
+
 function showResultsModal(report: ResultsReport): void {
   _lastReport = report;
   const { cleaned, created, assigned, placeholderNames, warnings } = report;
@@ -940,10 +1064,29 @@ function showResultsModal(report: ResultsReport): void {
   if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);
   if (summary.length === 0) summary.push(`<div>Menu already covers the cook rhythm — nothing to do.</div>`);
 
+  // Sort warnings by category order, preserving original index for action handlers.
+  const indexed = warnings.map((w, i) => ({ w, i }));
+  indexed.sort((a, b) => CATEGORY_ORDER.indexOf(a.w.category) - CATEGORY_ORDER.indexOf(b.w.category));
+
+  // Group by category, render each with a section header
+  const sections: string[] = [];
+  let lastCat: WarningCategory | null = null;
+  let currentRows: string[] = [];
+  for (const { w, i } of indexed) {
+    if (w.category !== lastCat) {
+      if (currentRows.length > 0) sections.push(currentRows.join(''));
+      const { title, hint } = categoryHeader(w.category);
+      currentRows = [`<div class="fix-menu-section-hdr"><div class="fix-menu-section-title">${esc(title)}</div><div class="fix-menu-section-hint">${esc(hint)}</div></div>`];
+      lastCat = w.category;
+    }
+    currentRows.push(renderWarningRow(w, i));
+  }
+  if (currentRows.length > 0) sections.push(currentRows.join(''));
+
   const warningsHtml = warnings.length === 0
     ? `<div class="fix-menu-clean">No issues — menu looks good 🎉</div>`
-    : `<div class="fix-menu-warnings-hdr">⚠️ ${warnings.length} issue${warnings.length === 1 ? '' : 's'} to look at</div>
-       <div class="fix-menu-warnings-list">${warnings.map((w, i) => renderWarningRow(w, i)).join('')}</div>`;
+    : `<div class="fix-menu-warnings-hdr">⚠️ ${warnings.length} thing${warnings.length === 1 ? '' : 's'} to look at</div>
+       <div class="fix-menu-warnings-list">${sections.join('')}</div>`;
 
   const html = `
     <div class="modal-content fix-menu-results" onclick="event.stopPropagation()">
@@ -967,23 +1110,36 @@ export function fixMenuGoto(idx: number): void {
   const w = _lastReport.warnings[idx];
   if (!w?.anchor) return;
   closeModal();
-  // Defer slightly so closeModal's animation doesn't interfere with scroll
+  // Switch to the right planner sub-tab so the target element is in the DOM.
+  const win = window as unknown as { setPlannerSubTab?: (tab: string) => void };
+  const setTab = (tab: string) => { if (typeof win.setPlannerSubTab === 'function') win.setPlannerSubTab(tab); };
+  if (w.anchor.kind === 'slot') {
+    setTab(w.anchor.loc);
+  } else if (w.anchor.kind === 'batch') {
+    const anchor = w.anchor;  // narrow for closure
+    const b = S.batches.find(x => x.id === anchor.batchId);
+    setTab(b?.location === 'centraal' ? 'centraal' : 'west');
+  } else if (w.anchor.kind === 'catering') {
+    setTab('caterings');
+  }
+  // Wait for re-render before searching for the target element.
   setTimeout(() => {
     let target: Element | null = null;
     if (w.anchor!.kind === 'slot') {
-      target = document.querySelector(`[data-loc="${w.anchor.loc}"][data-date="${w.anchor.date}"][data-meal="${w.anchor.meal}"]`);
+      target = document.querySelector(`.slot[data-loc="${w.anchor.loc}"][data-date="${w.anchor.date}"][data-meal="${w.anchor.meal}"]`);
     } else if (w.anchor!.kind === 'batch') {
-      target = document.getElementById(`batch-${w.anchor.batchId}`)
-            || document.querySelector(`[data-batch-id="${w.anchor.batchId}"]`);
+      target = document.querySelector(`.batch-tile[data-id="${w.anchor.batchId}"]`);
     } else if (w.anchor!.kind === 'catering') {
-      target = document.querySelector(`[data-catering-id="${w.anchor.cateringId}"]`);
+      // Caterings list rows have an Edit button referencing the id — find via that
+      const editBtn = document.querySelector(`button[onclick="openEditCatering('${w.anchor.cateringId}')"]`);
+      target = editBtn?.closest('div, li, tr') || editBtn;
     }
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'center' });
       target.classList.add('slot-highlight');
       setTimeout(() => target.classList.remove('slot-highlight'), 2000);
     }
-  }, 100);
+  }, 250);
 }
 
 export function fixMenuAction(idx: number, encoded: string): void {
@@ -1056,6 +1212,26 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
     case 'add-emergency-cook': {
       const dayName = dateToDayName(a.date);
       const typeLabel = a.type === 'Main course' ? 'Main' : 'Soup';
+      const todayStr = dateToStr(getToday());
+      // Reuse an existing emergency batch for same type+day if there is one,
+      // rather than creating a fresh batch per click. Otherwise multiple
+      // warning clicks pile up duplicate placeholders that each cover one
+      // service — wasteful, and inflates the burner-overload count.
+      const existing = S.batches.find(b =>
+        b.type === a.type
+        && b.cookDate === todayStr
+        && b.cookNotes === 'Emergency morning cook'
+        && !alreadyInSlot(b, a.loc, a.date, a.meal)
+      );
+      if (existing) {
+        existing.services.push({ loc: a.loc, date: a.date, meal: a.meal });
+        removeWarningRow(idx);
+        rebuildPlanner();
+        rerenderCurrentView();
+        scheduleSave();
+        toast(`Added ${dayName} ${a.meal} ${a.loc} to existing emergency ${typeLabel.toLowerCase()}`);
+        return;
+      }
       const newBatch: Batch = {
         id: newId(),
         name: `${dayName} ${typeLabel} (Emergency)`,
@@ -1063,7 +1239,7 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
         stock: 0, serving: 280, storage: 'Gastro',
         location: 'west', inTransit: false,
         allergens: [], extraAllergens: [], orderFor: false, parentId: null,
-        cookDate: dateToStr(getToday()),
+        cookDate: todayStr,
         recipeSheetId: null, recipeVolume: null, recipeIngredients: null,
         note: '',
         services: [{ loc: a.loc, date: a.date, meal: a.meal }],
@@ -1078,42 +1254,6 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
       rerenderCurrentView();
       scheduleSave();
       toast(`Added emergency ${typeLabel.toLowerCase()} for ${dayName} ${a.meal} ${a.loc}`);
-      return;
-    }
-    case 'add-extra-batch': {
-      const cookIso = cookDateToIso(a.cookDate);
-      if (!cookIso) return;
-      const computedDayName = dateToDayName(cookIso);
-      const typeLabel = a.type === 'Main course' ? 'Main' : 'Soup';
-      // Count existing same-day same-type batches to derive an index name
-      const existingCount = S.batches.filter(b => b.cookDate === a.cookDate && b.type === a.type).length;
-      const newBatch: Batch = {
-        id: newId(),
-        name: `${computedDayName} ${typeLabel} ${existingCount + 1}`,
-        type: a.type,
-        stock: 0, serving: 280, storage: 'Gastro',
-        location: 'west', inTransit: false,
-        allergens: [], extraAllergens: [], orderFor: false, parentId: null,
-        cookDate: a.cookDate,
-        recipeSheetId: null, recipeVolume: null, recipeIngredients: null,
-        note: '',
-        services: [],
-        createdAt: new Date().toISOString(),
-        recipeId: null, actualIngredients: null,
-        cookNotes: '', stockDeducted: false,
-        generated: true,
-      };
-      S.batches.push(newBatch);
-      removeWarningRow(idx);
-      // Re-run only the assignment passes so the new batch picks up services
-      const planWindow = buildPlanningWindow(getToday());
-      const inWindowBatches = S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type));
-      const potCaps = allocatePotCaps(inWindowBatches, S.kitchenEquipment);
-      assignServicesPass2(S.batches, planWindow, calcRequired, potCaps);
-      rebuildPlanner();
-      rerenderCurrentView();
-      scheduleSave();
-      toast(`Added second ${typeLabel.toLowerCase()} for ${computedDayName} — services redistributed`);
       return;
     }
   }

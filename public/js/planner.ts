@@ -147,7 +147,7 @@ export function renderLocationPlan(loc: string) {
         const slotClick = assigning
           ? `assignBatchToSlot('${loc}','${isoDate}','${meal}')`
           : `openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')`;
-        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}${assignTarget}" onclick="${slotClick}" ondragover="slotDragOver(event)" ondragleave="slotDragLeave(event)" ondrop="slotDrop(event,'${loc}','${isoDate}','${meal}')">`;
+        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}${assignTarget}" data-loc="${loc}" data-date="${isoDate}" data-meal="${meal}" data-type="${tg.key}" onclick="${slotClick}" ondragover="slotDragOver(event)" ondragleave="slotDragLeave(event)" ondrop="slotDrop(event,'${loc}','${isoDate}','${meal}')">`;
         slotDishes.forEach(dish => {
           const trClass = dish.inTransit ? ' chip-tr-border' : '';
           const servedClass = slotServed ? ' dish-chip-served' : '';

@@ -63,7 +63,7 @@ After running, cooks replace placeholders with real recipes at their own pace us
 const COOK_RHYTHM: Record<string, { soup: number; main: number }> = {
   Sun: { soup: 3, main: 3 },  // big cook day — many volunteers
   Mon: { soup: 0, main: 1 },  // light day, lives off Sunday
-  Tue: { soup: 1, main: 0 },  // light day, lives off Sunday
+  Tue: { soup: 1, main: 1 },  // back to a regular day
   Wed: { soup: 1, main: 1 },
   Thu: { soup: 1, main: 1 },
   Fri: { soup: 1, main: 1 },
@@ -117,11 +117,10 @@ If `gap > 0`, create `gap` placeholder Batches. Use the full Batch shape — inc
 ```typescript
 {
   id: newId(),
-  // Lowercase typeLabel + cookDate suffix: "Wed soup cooking 06/05/2026",
-  // "Sun soup 1 cooking 03/05/2026" — distinguishes placeholders from real
-  // recipes (which start with capitals) and keeps multi-week placeholders
-  // unambiguous.
-  name: `${dayName} ${typeLabel.toLowerCase()}${gap > 1 ? ` ${i+1}` : ''} cooking ${cookDateStr}`,
+  // Lowercase typeLabel + dd/mm suffix: "Wed soup 06/05", "Sun soup 1 03/05".
+  // Distinguishes placeholders from real recipes (which start with capitals)
+  // and keeps multi-week placeholders unambiguous without bloating the name.
+  name: `${dayName} ${typeLabel.toLowerCase()}${gap > 1 ? ` ${i+1}` : ''} ${ddmm(cookDateStr)}`,
   type,                          // 'Soup' | 'Main course'
   stock: 0,
   serving: 280,
@@ -169,7 +168,9 @@ while surplus > 0 and batch not stale:
 
 When Pass 1 stops with surplus remaining, that's a "consider freezing" warning candidate (Step 5).
 
-**Pass 2 — fill remaining empty positions with the 2-newest rule (respecting pot caps).**
+**Pass 2 — fill remaining empty positions with the 2-newest rule.**
+
+Pot capacity is NOT enforced during Pass 1/2/3 — kitchen pots are allocated POST-assignment by demand (see Step 4.5). This means the biggest pot always goes to the batch that needs it most, instead of being assigned by id-sort luck.
 
 Iterate every service slot in chronological order (Centraal before West within the same date+meal). For each slot, for each type:
 

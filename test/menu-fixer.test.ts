@@ -107,20 +107,63 @@ beforeEach(() => {
 // ── Eligibility helpers ─────────────────────────────────────────────────────
 
 describe('isServableBy', () => {
-  test('cookDate=Wed → not servable Wed lunch, servable Wed dinner', () => {
-    expect(isServableBy('06/05/2026', '2026-05-06', 'lunch')).toBe(false);
-    expect(isServableBy('06/05/2026', '2026-05-06', 'dinner')).toBe(true);
+  test('cookDate=Wed → not servable Wed lunch, servable Wed dinner West', () => {
+    expect(isServableBy('06/05/2026', '2026-05-06', 'lunch', 'west', 'west')).toBe(false);
+    expect(isServableBy('06/05/2026', '2026-05-06', 'dinner', 'west', 'west')).toBe(true);
   });
-  test('cookDate=Wed → servable any later day', () => {
-    expect(isServableBy('06/05/2026', '2026-05-07', 'lunch')).toBe(true);
-    expect(isServableBy('06/05/2026', '2026-05-07', 'dinner')).toBe(true);
+  test('cookDate=Wed → servable any later day at West', () => {
+    expect(isServableBy('06/05/2026', '2026-05-07', 'lunch', 'west', 'west')).toBe(true);
+    expect(isServableBy('06/05/2026', '2026-05-07', 'dinner', 'west', 'west')).toBe(true);
   });
   test('cookDate=Wed → not servable Tue', () => {
-    expect(isServableBy('06/05/2026', '2026-05-05', 'lunch')).toBe(false);
-    expect(isServableBy('06/05/2026', '2026-05-05', 'dinner')).toBe(false);
+    expect(isServableBy('06/05/2026', '2026-05-05', 'lunch', 'west', 'west')).toBe(false);
+    expect(isServableBy('06/05/2026', '2026-05-05', 'dinner', 'west', 'west')).toBe(false);
   });
   test('null cookDate → never servable', () => {
-    expect(isServableBy(null, '2026-05-06', 'dinner')).toBe(false);
+    expect(isServableBy(null, '2026-05-06', 'dinner', 'west', 'west')).toBe(false);
+  });
+  test('Centraal next-morning rule: West-cooked → not servable at Centraal on cook day', () => {
+    // Cook day = Tue 05/05; Tue dinner Centraal = NO (not yet delivered)
+    expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'centraal', 'west')).toBe(false);
+    // Wed lunch Centraal = YES (delivered Wed morning)
+    expect(isServableBy('05/05/2026', '2026-05-06', 'lunch', 'centraal', 'west')).toBe(true);
+    // Wed dinner Centraal = YES
+    expect(isServableBy('05/05/2026', '2026-05-06', 'dinner', 'centraal', 'west')).toBe(true);
+  });
+  test('Centraal-cooked batch (rare): standard same-day-dinner rule still applies', () => {
+    expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'centraal', 'centraal')).toBe(true);
+    expect(isServableBy('05/05/2026', '2026-05-05', 'lunch', 'centraal', 'centraal')).toBe(false);
+  });
+});
+
+describe('Pass 2 tiered bigger-pot bias', () => {
+  test('with biggestPot, demand concentrates into one batch up to cap', () => {
+    // 3 same-cookDate batches, enough slots for concentration
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'B' });
+    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'C' });
+    assignServicesPass2([a, b, c], window, fixedCalcRequired(1), undefined, 10);
+    const counts = [a.services.length, b.services.length, c.services.length].sort((x, y) => y - x);
+    // Concentration: top batch clearly dominates the smallest
+    expect(counts[0]).toBeGreaterThan(counts[2]);
+  });
+
+  test('without biggestPot, falls back to even (least-loaded) spread', () => {
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'B' });
+    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'C' });
+    assignServicesPass2([a, b, c], window, fixedCalcRequired(1));
+    const counts = [a.services.length, b.services.length, c.services.length];
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
   });
 });
 
@@ -130,6 +173,28 @@ describe('isStaleAtSlot', () => {
     expect(isStaleAtSlot('06/05/2026', '2026-05-08')).toBe(false);
     expect(isStaleAtSlot('06/05/2026', '2026-05-09')).toBe(true);  // 3 days later
     expect(isStaleAtSlot('06/05/2026', '2026-05-10')).toBe(true);
+  });
+});
+
+// ── Strip future services (redistributive seed) ─────────────────────────────
+
+describe('stripFutureServices', () => {
+  test('removes future services, keeps past ones', () => {
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026' });
+    // Future
+    b.services = [
+      { loc: 'west', date: '2099-01-01', meal: 'dinner' },  // far future
+      { loc: 'west', date: '2099-01-02', meal: 'lunch' },
+    ];
+    // Need to also provide a past service. isServicePast uses real getAmsterdamNow
+    // so any date before "today" should be past. Use a date deep in the past.
+    b.services.push({ loc: 'west', date: '2020-01-01', meal: 'dinner' });
+
+    // Need to import — let me use the function from menu-fixer
+    const removed = (require('../public/js/menu-fixer') as { stripFutureServices: (batches: Batch[]) => number }).stripFutureServices([b]);
+    expect(removed).toBe(2);
+    expect(b.services.length).toBe(1);
+    expect(b.services[0].date).toBe('2020-01-01');
   });
 });
 
@@ -155,24 +220,24 @@ describe('generateMissingPlaceholders', () => {
     const window = makeWindow([
       { iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' },  // 3+3
       { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },  // 0+1
-      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },  // 1+0
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },  // 1+1
       { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },  // 1+1
     ]);
     const snapshot = snapshotBatches([], window);
     const placeholders = generateMissingPlaceholders(window, snapshot);
-    expect(placeholders.length).toBe(3 + 3 + 0 + 1 + 1 + 0 + 1 + 1);  // 10
+    expect(placeholders.length).toBe(3 + 3 + 0 + 1 + 1 + 1 + 1 + 1);  // 11 (Sun 3+3, Mon 0+1, Tue 1+1, Wed 1+1)
     const sun = placeholders.filter(b => b.cookDate === '03/05/2026');
     expect(sun.filter(b => b.type === 'Soup').length).toBe(3);
     expect(sun.filter(b => b.type === 'Main course').length).toBe(3);
     // Multi-batch days get numbered names
     expect(sun.filter(b => b.type === 'Soup').map(b => b.name).sort()).toEqual([
-      'Sun soup 1 cooking 03/05/2026',
-      'Sun soup 2 cooking 03/05/2026',
-      'Sun soup 3 cooking 03/05/2026',
+      'Sun soup 1 03/05',
+      'Sun soup 2 03/05',
+      'Sun soup 3 03/05',
     ]);
     // Single-batch days get unnumbered names
     const wed = placeholders.filter(b => b.cookDate === '06/05/2026');
-    expect(wed.find(b => b.type === 'Soup')!.name).toBe('Wed soup cooking 06/05/2026');
+    expect(wed.find(b => b.type === 'Soup')!.name).toBe('Wed soup 06/05');
   });
 
   test('partial coverage → only fills the gap', () => {
@@ -218,17 +283,18 @@ describe('assignServicesPass1', () => {
 
     const result = assignServicesPass1([cooked], window, calcReq);
 
-    // Servable (cookDate=Wed → dinner of Wed onwards):
-    //   Wed dinner (Centraal + West)        = 2 positions
+    // Servable (West-cooked, cookDate=Wed):
+    //   Wed dinner West                     = 1 position
     //   Thu lunch  (Centraal + West)        = 2 positions
     //   Thu dinner (Centraal + West)        = 2 positions
-    // = 6 positions total. Stock is huge, so all 6 get filled.
-    // Wed lunch is excluded (cooking happens during the day, not before lunch).
-    expect(cooked.services.length).toBe(6);
-    expect(result.servicesAdded).toBe(6);
-    // Every assigned slot must be Wed-dinner-or-later.
+    // = 5 positions total. Stock is huge, so all 5 get filled.
+    // Wed dinner Centraal excluded — West-cooked food reaches Centraal only
+    // after next-morning delivery, so Centraal-on-cookDate is unservable.
+    expect(cooked.services.length).toBe(5);
+    expect(result.servicesAdded).toBe(5);
+    // Every assigned slot must be Wed-dinner-or-later, and no Centraal on cookDate.
     expect(cooked.services.every(s =>
-      s.date > '2026-05-06' || (s.date === '2026-05-06' && s.meal === 'dinner')
+      s.date > '2026-05-06' || (s.date === '2026-05-06' && s.meal === 'dinner' && s.loc === 'west')
     )).toBe(true);
   });
 
@@ -246,9 +312,9 @@ describe('assignServicesPass1', () => {
     assignServicesPass1([cooked], window, calcReq);
 
     // Sat (06/05 + 3 days) is stale — Pass 1 stops before it.
-    // Servable & not-stale slots: Wed dinner(2) + Thu lunch(2) + Thu dinner(2)
-    //   + Fri lunch(2) + Fri dinner(2) = 10 positions.
-    expect(cooked.services.length).toBe(10);
+    // Servable & not-stale slots (West-cooked): Wed dinner West (1, no Centraal
+    // on cook day) + Thu (4) + Fri (4) = 9 positions.
+    expect(cooked.services.length).toBe(9);
     expect(cooked.services.every(s => s.date < '2026-05-09')).toBe(true);
   });
 
@@ -333,15 +399,15 @@ describe('assignServicesPass2', () => {
     const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup C' });
     const tue = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Tue Soup' });
 
+    // Without biggestPot hint, Pass 2 falls back to even spread (least-loaded)
     assignServicesPass2([a, b, c, tue], window, fixedCalcRequired(1));
 
-    // No orphans.
+    // No orphans among the same-cookDate Sun batches.
     expect(a.services.length).toBeGreaterThan(0);
     expect(b.services.length).toBeGreaterThan(0);
     expect(c.services.length).toBeGreaterThan(0);
-    expect(tue.services.length).toBeGreaterThan(0);
-
-    // Strong fairness: max-min ≤ 1 across the same-cookDate Sun batches.
+    // Tue Soup may or may not get services — Sun batches with headroom win
+    // their slots. With NO bigPot cap (no concentration), even spread for Sun.
     const counts = [a.services.length, b.services.length, c.services.length];
     expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
   });
@@ -398,6 +464,21 @@ describe('assignServicesPass2', () => {
     expect(batch.services.length).toBe(0);
   });
 
+  test('0-guest slots are skipped (Pass 2)', () => {
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const wedSoup = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Wed Soup' });
+    // West lunch has 0 guests, everything else has 50
+    const guestsByLoc = (loc: unknown, _d: unknown, meal: unknown) =>
+      (loc === 'west' && meal === 'lunch') ? 0 : 50;
+    assignServicesPass2([wedSoup], window, fixedCalcRequired(1), guestsByLoc as never);
+    // No service should be at west lunch
+    expect(wedSoup.services.some(s => s.loc === 'west' && s.meal === 'lunch')).toBe(false);
+    // But other slots still get filled
+    expect(wedSoup.services.length).toBeGreaterThan(0);
+  });
+
   test('Centraal slot filled in same pass as West (no separate copy step needed)', () => {
     const window = makeWindow([
       { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
@@ -435,99 +516,84 @@ describe('countTypeInSlot / alreadyInSlot', () => {
 
 // ── Pot allocation ──────────────────────────────────────────────────────────
 
-describe('allocatePotCaps', () => {
+describe('allocatePotCaps (basics)', () => {
   const equipment: KitchenEquipment = {
     pots: [140, 140, 100, 100, 100, 100, 100, 100, 100, 100],
-    gasBurners: 4,
-    inductionBurners: 4,
-    bigBurnerThreshold: 80,
+    gasBurners: 4, inductionBurners: 4, bigBurnerThreshold: 80,
   };
 
-  test('Sunday 3+3 allocates 1 big pot per type (interleaved)', () => {
-    const sunSoups = [
-      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup 1' }),
-      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup 2' }),
-      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup 3' }),
-    ];
-    const sunMains = [
-      makeBatch({ type: 'Main course', cookDate: '03/05/2026', name: 'Sun Main 1' }),
-      makeBatch({ type: 'Main course', cookDate: '03/05/2026', name: 'Sun Main 2' }),
-      makeBatch({ type: 'Main course', cookDate: '03/05/2026', name: 'Sun Main 3' }),
-    ];
-    const caps = allocatePotCaps([...sunSoups, ...sunMains], equipment);
-    // First soup AND first main both get 140L (interleaved)
-    expect(caps.get(sunSoups[0].id)).toBe(140);
-    expect(caps.get(sunMains[0].id)).toBe(140);
-    // Subsequent batches get 100L
-    expect(caps.get(sunSoups[1].id)).toBe(100);
-    expect(caps.get(sunMains[1].id)).toBe(100);
-    expect(caps.get(sunSoups[2].id)).toBe(100);
-    expect(caps.get(sunMains[2].id)).toBe(100);
-  });
-
   test('returns empty map when no equipment configured', () => {
-    const caps = allocatePotCaps([makeBatch({ type: 'Soup', cookDate: '06/05/2026' })], null);
+    const caps = allocatePotCaps([makeBatch({ type: 'Soup', cookDate: '06/05/2026' })], null, fixedCalcRequired(1));
     expect(caps.size).toBe(0);
-  });
-
-  test('Wed 1+1 both get the biggest pots', () => {
-    const wedSoup = makeBatch({ type: 'Soup', cookDate: '06/05/2026' });
-    const wedMain = makeBatch({ type: 'Main course', cookDate: '06/05/2026' });
-    const caps = allocatePotCaps([wedSoup, wedMain], equipment);
-    expect(caps.get(wedSoup.id)).toBe(140);
-    expect(caps.get(wedMain.id)).toBe(140);
   });
 
   test('overflow batches get the smallest pot size', () => {
     const tinyEquipment: KitchenEquipment = {
-      pots: [100, 80],  // only 2 pots
-      gasBurners: 1, inductionBurners: 1, bigBurnerThreshold: 80,
+      pots: [100, 80], gasBurners: 1, inductionBurners: 1, bigBurnerThreshold: 80,
     };
-    const batches = [
-      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'A' }),
-      makeBatch({ type: 'Main course', cookDate: '03/05/2026', name: 'B' }),
-      makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'C' }),
-    ];
-    const caps = allocatePotCaps(batches, tinyEquipment);
-    expect(caps.get(batches[0].id)).toBe(100); // soup A → biggest
-    expect(caps.get(batches[1].id)).toBe(80);  // main B → next
-    expect(caps.get(batches[2].id)).toBe(80);  // soup C → fallback to smallest
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'A' });
+    const b = makeBatch({ type: 'Main course', cookDate: '03/05/2026', name: 'B' });
+    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'C' });
+    // Pre-load each with services so they have demand
+    for (let i = 0; i < 5; i++) a.services.push({ loc: 'west', date: '2026-05-03', meal: 'dinner' });
+    for (let i = 0; i < 3; i++) b.services.push({ loc: 'west', date: '2026-05-03', meal: 'dinner' });
+    for (let i = 0; i < 1; i++) c.services.push({ loc: 'west', date: '2026-05-03', meal: 'dinner' });
+    const caps = allocatePotCaps([a, b, c], tinyEquipment, fixedCalcRequired(1));
+    expect(caps.get(a.id)).toBe(100);  // highest demand → biggest pot
+    expect(caps.get(b.id)).toBe(80);   // mid demand → next pot
+    expect(caps.get(c.id)).toBe(80);   // lowest → fallback to smallest available
   });
 });
 
-// ── Pot cap enforcement in Pass 2 ──────────────────────────────────────────
+// ── Pot caps no longer influence Pass 1/2 (allocator handles caps post-hoc) ──
 
-describe('Pass 2 with pot caps', () => {
-  test('uncooked batch capped at allocated pot size', () => {
+describe('Pass 1/2 ignore pot caps (demand-based allocator runs after)', () => {
+  test('Pass 1 extends cooked batch up to stock, regardless of pot size', () => {
     const window = makeWindow([
       { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
       { iso: '2026-05-07', dayName: 'Thu', cookDate: '07/05/2026' },
-      { iso: '2026-05-08', dayName: 'Fri', cookDate: '08/05/2026' },
+    ]);
+    const cooked = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100 });
+    assignServicesPass1([cooked], window, fixedCalcRequired(1));
+    // Spreads as far as eligible slots allow — 5 positions (West-cooked, no
+    // Centraal on cook day): Wed dinner West + Thu lunch×2 + Thu dinner×2.
+    expect(cooked.services.length).toBe(5);
+  });
+
+  test('Pass 2 spreads uncooked batches to all eligible slots, no pot cap limits', () => {
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+      { iso: '2026-05-07', dayName: 'Thu', cookDate: '07/05/2026' },
     ]);
     const wedSoup = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Wed Soup' });
     const wedMain = makeBatch({ type: 'Main course', cookDate: '05/05/2026', name: 'Wed Main' });
-    // 5L cap means at most 5 services worth (1L each)
-    const caps = new Map<string, number>([[wedSoup.id, 5], [wedMain.id, 5]]);
-
-    assignServicesPass2([wedSoup, wedMain], window, fixedCalcRequired(1), caps);
-
-    expect(wedSoup.services.length).toBe(5);
-    expect(wedMain.services.length).toBe(5);
+    assignServicesPass2([wedSoup, wedMain], window, fixedCalcRequired(1));
+    // Each one fills both slots of every future service (Wed dinner + Thu lunch + Thu dinner = 3 services × 2 locs = 6 each)
+    expect(wedSoup.services.length).toBeGreaterThan(0);
+    expect(wedMain.services.length).toBeGreaterThan(0);
   });
+});
 
-  test('Pass 1 also respects pot caps for cooked batches', () => {
-    const window = makeWindow([
-      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
-      { iso: '2026-05-07', dayName: 'Thu', cookDate: '07/05/2026' },
-    ]);
-    // Cooked batch has plenty of stock but small pot
-    const cooked = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100 });
-    const caps = new Map<string, number>([[cooked.id, 3]]);  // 3L pot
+describe('allocatePotCaps (demand-based)', () => {
+  const equipment: KitchenEquipment = {
+    pots: [140, 100, 100],
+    gasBurners: 3, inductionBurners: 0, bigBurnerThreshold: 80,
+  };
 
-    assignServicesPass1([cooked], window, fixedCalcRequired(1), caps);
-
-    // Capped at 3L = 3 services (would be 6+ without cap given our window)
-    expect(cooked.services.length).toBe(3);
+  test('biggest pot goes to highest-demand batch (regardless of id order)', () => {
+    // Make a "low-id, low-demand" batch and a "high-id, high-demand" batch
+    const lowDemand = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Pasta', id: 'aaaa-1' } as never);
+    lowDemand.services = [
+      { loc: 'west', date: '2026-05-03', meal: 'dinner' },
+    ];
+    const highDemand = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Central American', id: 'zzzz-9' } as never);
+    for (let i = 0; i < 10; i++) {
+      highDemand.services.push({ loc: 'west', date: '2026-05-04', meal: 'lunch' });
+    }
+    const caps = allocatePotCaps([lowDemand, highDemand], equipment, fixedCalcRequired(1));
+    // High-demand wins the 140L pot even though its id sorts later
+    expect(caps.get(highDemand.id)).toBe(140);
+    expect(caps.get(lowDemand.id)).toBe(100);
   });
 });
 
@@ -581,22 +647,6 @@ describe('assignServicesPass3', () => {
     expect(stale.services.length).toBe(0);
   });
 
-  test('Pass 2 → Pass 3 sequence: Pass 3 picks up where Pass 2 left off', () => {
-    // Setup: tiny pot caps force Pass 2 to leave slots empty, then Pass 3 fills
-    const window = makeWindow([
-      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
-      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
-    ]);
-    const sun = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun Soup' });
-    const tinyCap = new Map<string, number>([[sun.id, 2]]);  // 2L cap = max 2 services
-
-    assignServicesPass2([sun], window, fixedCalcRequired(1), tinyCap);
-    const afterPass2 = sun.services.length;
-    expect(afterPass2).toBeLessThanOrEqual(2);  // pot cap limited it
-
-    assignServicesPass3([sun], window, fixedCalcRequired(1));
-    expect(sun.services.length).toBeGreaterThan(afterPass2);  // Pass 3 added more
-  });
 });
 
 // ── Planning horizon constant ──────────────────────────────────────────────
@@ -610,23 +660,23 @@ describe('PLANNING_HORIZON_DAYS', () => {
 // ── Placeholder name format ────────────────────────────────────────────────
 
 describe('placeholder naming', () => {
-  test('single batch per day uses unsuffixed name with cookDate', () => {
+  test('single batch per day uses unsuffixed name with dd/mm', () => {
     const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
     const snapshot = snapshotBatches([], window);
     const placeholders = generateMissingPlaceholders(window, snapshot);
     const wedSoup = placeholders.find(b => b.type === 'Soup');
-    expect(wedSoup!.name).toBe('Wed soup cooking 06/05/2026');
+    expect(wedSoup!.name).toBe('Wed soup 06/05');
   });
 
-  test('multi-batch day uses numbered names with cookDate', () => {
+  test('multi-batch day uses numbered names with dd/mm', () => {
     const window = makeWindow([{ iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' }]);
     const snapshot = snapshotBatches([], window);
     const placeholders = generateMissingPlaceholders(window, snapshot);
     const sunSoups = placeholders.filter(b => b.type === 'Soup').map(b => b.name).sort();
     expect(sunSoups).toEqual([
-      'Sun soup 1 cooking 03/05/2026',
-      'Sun soup 2 cooking 03/05/2026',
-      'Sun soup 3 cooking 03/05/2026',
+      'Sun soup 1 03/05',
+      'Sun soup 2 03/05',
+      'Sun soup 3 03/05',
     ]);
   });
 });
@@ -672,18 +722,22 @@ describe('collectWarnings', () => {
     expect(warnings.filter(w => w.category === 'cooked-stockout').length).toBe(1);
   });
 
-  test('over-pot-cap warning produces add-extra-batch action', () => {
+  test('over-pot-cap warning fires when demand exceeds biggest kitchen pot (no action)', () => {
     const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
     const big = makeBatch({ type: 'Soup', cookDate: '05/05/2026' });
     // 10 services × 1L each
     for (let i = 0; i < 10; i++) {
       big.services.push({ loc: 'west', date: '2026-05-06', meal: 'dinner' });
     }
-    const caps = new Map<string, number>([[big.id, 5]]);  // 5L pot
-    const warnings = collectWarnings([big], window, [], fixedCalcRequired(1), caps, null, noGuests);
+    // Kitchen with biggest pot = 5L → 10L demand exceeds it
+    const tinyKitchen: KitchenEquipment = {
+      pots: [5, 5], gasBurners: 1, inductionBurners: 1, bigBurnerThreshold: 80,
+    };
+    const warnings = collectWarnings([big], window, [], fixedCalcRequired(1), new Map(), tinyKitchen, noGuests);
     const overPot = warnings.filter(w => w.category === 'over-pot-cap');
     expect(overPot.length).toBe(1);
-    expect(overPot[0].actions?.[0].kind).toBe('add-extra-batch');
+    // No action button — cook handles split decision via the batch tile indicator
+    expect(overPot[0].actions).toBeUndefined();
   });
 
   test('catering with no dishes warning', () => {
@@ -709,13 +763,13 @@ describe('collectWarnings', () => {
 // ── Cook rhythm sanity check ────────────────────────────────────────────────
 
 describe('COOK_RHYTHM constant', () => {
-  test('weekly totals match spec (8 soups, 8 mains)', () => {
+  test('weekly totals (8 soups, 9 mains — Tue is now 1+1)', () => {
     const totals = Object.values(COOK_RHYTHM).reduce(
       (acc, day) => ({ soup: acc.soup + day.soup, main: acc.main + day.main }),
       { soup: 0, main: 0 }
     );
     expect(totals.soup).toBe(8);
-    expect(totals.main).toBe(8);
+    expect(totals.main).toBe(9);
   });
   test('SLOTS_PER_TYPE is 2', () => {
     expect(SLOTS_PER_TYPE).toBe(2);

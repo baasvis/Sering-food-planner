@@ -315,3 +315,13 @@
   .fix-menu-warning-actions{display:flex;gap:6px;flex-wrap:wrap;}
   .fix-menu-goto, .fix-menu-action{font-size:11px;padding:3px 9px;}
   .slot-highlight{outline:3px solid var(--yellow,#facc15)!important;outline-offset:2px;transition:outline 0.3s ease;}
+
+  /* Section headers grouping warnings by category */
+  .fix-menu-section-hdr{margin:14px 0 6px;padding:6px 10px;background:var(--bg-3,#f3f4f6);border-radius:6px;}
+  .fix-menu-section-hdr:first-child{margin-top:0;}
+  .fix-menu-section-title{font-weight:600;font-size:13px;color:var(--text);}
+  .fix-menu-section-hint{font-size:11px;color:var(--text-muted,#6b7280);margin-top:2px;line-height:1.4;}
+
+  /* "Too big" badge on batch tiles — fires when batch demand > biggest pot */
+  .batch-too-big-badge{background:var(--orange-bg,#fed7aa);color:var(--orange,#c2410c);font-size:10px;padding:1px 6px;border-radius:8px;font-weight:500;white-space:nowrap;}
+
