@@ -709,6 +709,38 @@ describe('countTypeInSlot / alreadyInSlot', () => {
     expect(alreadyInSlot(a, 'west', '2026-05-06', 'dinner')).toBe(true);
     expect(alreadyInSlot(a, 'west', '2026-05-06', 'lunch')).toBe(false);
   });
+
+  test('counts split-family as ONE option, not two — guests see one menu choice', () => {
+    // Tomato Soup West (parent) + Tomato Soup (split) Centraal (child) at the
+    // same slot are physically two batches but ONE menu option for guests.
+    // The slot capacity check should treat them as 1, leaving room for a
+    // second different soup.
+    const tomatoParent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 60, location: 'west', name: 'Tomato Soup' });
+    const tomatoSplit = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 30, location: 'centraal', name: 'Tomato Soup (split)' });
+    tomatoSplit.parentId = tomatoParent.id;
+    const miso = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, name: 'Miso' });
+
+    [tomatoParent, tomatoSplit, miso].forEach(b =>
+      b.services.push({ loc: 'centraal', date: '2026-05-04', meal: 'dinner' }));
+
+    // 3 physical batches at the slot, but 2 unique families (Tomato + Miso).
+    expect(countTypeInSlot([tomatoParent, tomatoSplit, miso], 'Soup', 'centraal', '2026-05-04', 'dinner')).toBe(2);
+  });
+
+  test('alreadyInSlot is family-aware: split sibling at the slot blocks the other', () => {
+    // Symmetrical regression: when Tomato Soup West is at Mon dinner Centraal,
+    // the algorithm shouldn't place Tomato Soup (split) Centraal at the same
+    // slot — they're the same option for guests.
+    const parent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 60, location: 'west', name: 'Tomato' });
+    const split = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 30, location: 'centraal', name: 'Tomato (split)' });
+    split.parentId = parent.id;
+    parent.services.push({ loc: 'centraal', date: '2026-05-04', meal: 'dinner' });
+
+    // Without family-awareness, split.alreadyInSlot would return false. With
+    // it (passing allBatches), parent's presence blocks split.
+    expect(alreadyInSlot(split, 'centraal', '2026-05-04', 'dinner')).toBe(false);  // single-batch check
+    expect(alreadyInSlot(split, 'centraal', '2026-05-04', 'dinner', [parent, split])).toBe(true);  // family-aware
+  });
 });
 
 // ── Pot allocation ──────────────────────────────────────────────────────────

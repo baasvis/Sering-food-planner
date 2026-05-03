@@ -1,7 +1,7 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet } from './utils';
 import { pushUndo } from './undo';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder } from './core';
+import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getFamilyMembers, getFamilyStock } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
@@ -277,6 +277,18 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
     ? `<span class="batch-too-big-badge" title="Needs ${projected.toFixed(1)}L but biggest pot is ${biggestPot}L — cook in 2 pots">⚠️ Too big</span>`
     : '';
 
+  // Family-aware split indicator: when this batch is part of a split family
+  // (parent + ship-off children sharing a recipe), show how much of the same
+  // recipe is sitting at the OTHER location. Helps the cook see the full
+  // picture: "I have 50L of Tomato here, and another 30L is at Centraal."
+  const family = getFamilyMembers(d, S.batches);
+  const otherLocStock = family
+    .filter(f => f.id !== d.id && f.location !== d.location)
+    .reduce((sum, f) => sum + (f.stock || 0), 0);
+  const familyBadge = (family.length > 1 && otherLocStock > 0)
+    ? `<span class="batch-family-badge" title="Part of a split — same recipe is also stocked at the other location. Total family stock: ${getFamilyStock(d, S.batches).toFixed(1)}L.">↔ ${otherLocStock}L @ ${d.location === 'west' ? 'C' : 'W'}</span>`
+    : '';
+
   // Compact row
   let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${splitCls}${assignCls}${expandCls}" data-testid="batch-tile" data-id="${d.id}" draggable="true" ondragstart="batchDragStart(event,'${d.id}')" ondragend="batchDragEnd(event)">
     <div class="batch-tile-compact" onclick="toggleBatchExpand('${d.id}')">
@@ -286,6 +298,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
       <span class="batch-status ${isBatchCooked(d) ? (isDishStale(d) ? 'status-stale' : 'status-cooked') : 'status-tocook'}">${isBatchCooked(d) ? (isDishStale(d) ? 'Stale' : 'Cooked') : 'To cook'}</span>
       <span class="batch-tile-cook">${batchCookLabel(d)}</span>
       <span class="batch-tile-stock ${cls}">${d.stock || 0}L <small>${str}</small></span>
+      ${familyBadge}
       ${tooBigBadge}
       <span class="batch-tile-logistics ${logisticsBadgeClass(d)}" style="font-size:10px;">${logisticsShort(d)}</span>
       ${d.inTransit ? '<span class="batch-transit-badge">In transit</span>' : ''}

@@ -7,7 +7,7 @@
 import type { Batch, DishType, Location, Meal, KitchenEquipment } from '@shared/types';
 import { S } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './utils';
-import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired, getGuests } from './core';
+import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired, getGuests, getRootId } from './core';
 import { rerenderCurrentView } from './navigate';
 import { showModal, closeModal, esc } from './modal';
 
@@ -371,25 +371,46 @@ export function isStaleAtSlot(cookDateDdmmyyyy: string | null, slotIsoDate: stri
 }
 
 /**
- * How many batches of `type` currently have a service entry matching the
- * given (loc, isoDate, meal) slot. Counts the LIVE state of `batches.services`
- * so it picks up assignments added earlier in the same pass.
+ * How many DISTINCT batch families of `type` currently have a service entry
+ * at the given slot. A "family" = a parent batch + its split children (linked
+ * via parentId). From a guest's menu point of view they're a single option,
+ * even though they exist as separate batches for logistics.
+ *
+ * Counts the LIVE state of `batches.services` so it picks up assignments
+ * added earlier in the same pass.
  */
 export function countTypeInSlot(batches: Batch[], type: DishType, loc: Location, isoDate: string, meal: Meal): number {
-  let n = 0;
+  const familyRoots = new Set<string>();
   for (const b of batches) {
     if (b.type !== type) continue;
     if (!b.services || b.services.length === 0) continue;
-    for (const s of b.services) {
-      if (s.loc === loc && s.date === isoDate && s.meal === meal) { n++; break; }
-    }
+    if (!b.services.some(s => s.loc === loc && s.date === isoDate && s.meal === meal)) continue;
+    familyRoots.add(getRootId(b, batches));
   }
-  return n;
+  return familyRoots.size;
 }
 
-/** True if the batch already has a service entry exactly matching this slot. */
-export function alreadyInSlot(batch: Batch, loc: Location, isoDate: string, meal: Meal): boolean {
-  return (batch.services || []).some(s => s.loc === loc && s.date === isoDate && s.meal === meal);
+/**
+ * True if `batch` (or any member of its family — parent or split sibling) is
+ * already at the given slot. Family-aware so the algorithm doesn't put both
+ * Tomato Soup West and Tomato Soup (split) Centraal at the same slot — from
+ * a guest's perspective that's the same option twice.
+ *
+ * `allBatches` is optional to keep backward-compat with isolated unit tests
+ * (single-batch check). When passed, the family-aware check kicks in.
+ */
+export function alreadyInSlot(batch: Batch, loc: Location, isoDate: string, meal: Meal, allBatches?: Batch[]): boolean {
+  const matchSlot = (b: Batch) => (b.services || []).some(s => s.loc === loc && s.date === isoDate && s.meal === meal);
+  if (matchSlot(batch)) return true;
+  if (!allBatches) return false;
+  // Check siblings/parent in the family
+  const rootId = getRootId(batch, allBatches);
+  for (const other of allBatches) {
+    if (other.id === batch.id) continue;
+    if (getRootId(other, allBatches) !== rootId) continue;
+    if (matchSlot(other)) return true;
+  }
+  return false;
 }
 
 /** Lexically-comparable cookDate value for sorting (oldest first when ascending). */
@@ -455,7 +476,7 @@ export function assignServicesPass1(
         // Skip slots with no expected guests — no point assigning food where nobody eats.
         if (getGuestsFn && getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
         if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, batch.location)) continue;
-        if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal)) continue;
+        if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal, allBatches)) continue;
         if (countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) continue;
 
         // Tentatively assign, then check capacity. If overcommitted, undo.
@@ -560,7 +581,7 @@ function tryFillOnePosition(
     if (b.type !== type) return false;
     if (!b.cookDate) return false;
     if (b.storage === 'Frozen') return false;
-    if (alreadyInSlot(b, loc, isoDate, meal)) return false;
+    if (alreadyInSlot(b, loc, isoDate, meal, allBatches)) return false;
     if (!isServableBy(b.cookDate, isoDate, meal, loc, b.location)) return false;
     if (b.stock > 0 && isStaleAtSlot(b.cookDate, isoDate)) return false;
     return true;
@@ -722,7 +743,7 @@ export function assignServicesPass3(
             if (b.type !== type) return false;
             if (!b.cookDate) return false;
             if (b.storage === 'Frozen') return false;
-            if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal)) return false;
+            if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal, allBatches)) return false;
             if (!isServableBy(b.cookDate, day.isoDate, slot.meal, slot.loc, b.location)) return false;
             if (b.stock > 0 && isStaleAtSlot(b.cookDate, day.isoDate)) return false;
             // Cooked: tentative-add and undo to verify we don't exceed STOCK
@@ -847,7 +868,7 @@ export function assignServicesPass4(
         if (slot.isPast) continue;
         if (getGuestsFn && getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
         if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, batch.location)) continue;
-        if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal)) continue;
+        if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal, allBatches)) continue;
         const filled = countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal);
         if (filled >= FINISH_OFF_CAP) continue;
 
@@ -1409,7 +1430,7 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
         for (const slot of day.slots) {
           if (slot.isPast) continue;
           if (countTypeInSlot(S.batches, b.type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) continue;
-          if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal)) continue;
+          if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal, S.batches)) continue;
           b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
           placed = true;
           toast(`Assigned ${b.name} to ${day.dayName} ${slot.meal} ${slot.loc}`);
@@ -1438,7 +1459,7 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
         b.type === a.type
         && b.cookDate === todayStr
         && b.cookNotes === 'Emergency morning cook'
-        && !alreadyInSlot(b, a.loc, a.date, a.meal)
+        && !alreadyInSlot(b, a.loc, a.date, a.meal, S.batches)
       );
       if (existing) {
         existing.services.push({ loc: a.loc, date: a.date, meal: a.meal });

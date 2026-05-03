@@ -324,4 +324,8 @@
 
   /* "Too big" badge on batch tiles — fires when batch demand > biggest pot */
   .batch-too-big-badge{background:var(--orange-bg,#fed7aa);color:var(--orange,#c2410c);font-size:10px;padding:1px 6px;border-radius:8px;font-weight:500;white-space:nowrap;}
+  /* "Split family" badge — fires when this batch is part of a parent+split
+     family with stock at the OTHER location too. Helps the cook see the
+     full family picture (e.g. "Tomato Soup West, ↔ 30L @ C"). */
+  .batch-family-badge{background:var(--blue-bg,#dbeafe);color:var(--blue,#1d4ed8);font-size:10px;padding:1px 6px;border-radius:8px;font-weight:500;white-space:nowrap;cursor:help;}
 

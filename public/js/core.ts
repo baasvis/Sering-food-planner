@@ -13,6 +13,42 @@ export function isBatchCooked(d: Batch): boolean {
   return (d.stock || 0) > 0;
 }
 
+// ── Batch family (parent + splits) ─────────────────────────────────────────
+//
+// When a cook splits a batch (Tomato Soup West → ships half to Centraal),
+// the ship-off becomes a new batch with `parentId` pointing to the original.
+// All members share the same recipe, and from a guest's menu point of view
+// they're a single option. Family helpers let the algorithm treat them as
+// one logical unit (count as 1 menu option, share stock for capacity checks)
+// while keeping per-physical-batch tracking for logistics.
+//
+// Splits are 1-level deep today — each child's parentId points directly to
+// the root. The helpers walk the chain anyway, so future deeper splits
+// would still work.
+
+/** Returns the root batch id of `b`'s family (or `b.id` if `b` has no parent). */
+export function getRootId(b: Batch, allBatches: Batch[]): string {
+  let cur = b;
+  // Cap at 8 hops to prevent any cycle from infinite-looping.
+  for (let i = 0; i < 8 && cur.parentId; i++) {
+    const parent = allBatches.find(x => x.id === cur.parentId);
+    if (!parent) break;
+    cur = parent;
+  }
+  return cur.id;
+}
+
+/** Returns all batches in `b`'s family (including `b` itself). */
+export function getFamilyMembers(b: Batch, allBatches: Batch[]): Batch[] {
+  const rootId = getRootId(b, allBatches);
+  return allBatches.filter(x => getRootId(x, allBatches) === rootId);
+}
+
+/** Sum of stock across the whole family. */
+export function getFamilyStock(b: Batch, allBatches: Batch[]): number {
+  return getFamilyMembers(b, allBatches).reduce((sum, x) => sum + (x.stock || 0), 0);
+}
+
 export function locationBadge(d: Batch): string {
   if (d.location === 'centraal') {
     return `<span class="badge b-centraal">Sering Centraal</span>`;
