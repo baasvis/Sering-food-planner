@@ -849,16 +849,19 @@ describe('assignServicesPass3', () => {
 // ── Pass 4 (finish-off, allows up to 3 peers) ──────────────────────────────
 
 describe('assignServicesPass4', () => {
-  test('Pass 4 adds a 3rd peer to a 2/2 slot when a cooked batch has surplus', () => {
+  test('Pass 4 adds a 3rd peer to a 2/2 slot when a small-surplus cooked batch needs to drain', () => {
     // Setup: a slot is already at 2/2 with two cooked batches. A third
-    // cooked batch has plenty of stock left and needs to drain. Pass 4
-    // should pile it onto the slot as a 3rd option.
+    // cooked batch has a SMALL leftover (under FINISH_OFF_MAX_SERVINGS = 80
+    // servings worth) and needs to drain. Pass 4 piles it onto the slot
+    // as a 3rd option to use up the last little bit.
     const window = makeWindow([
       { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
     ]);
     const a = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'A' });
     const b = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'B' });
-    const c = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'C' });
+    // Small-surplus batch: 10L stock at 280g serving = ~36 servings,
+    // well under the 80-serving threshold.
+    const c = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 10, name: 'C' });
     // Pre-fill Wed dinner West with A+B (Pass 1/2/3 result).
     a.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
     b.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
@@ -871,6 +874,26 @@ describe('assignServicesPass4', () => {
     );
     expect(cAtSlot).toBe(true);
     expect(result.servicesAdded).toBeGreaterThan(0);
+  });
+
+  test('Pass 4 SKIPS batches with big surplus (over-cook situation, not finish-off)', () => {
+    // A cooked batch with way too much stock left isn't a "last little bit"
+    // candidate. Cook should reduce next week's volume, not have the algorithm
+    // pile it as a 3rd peer at every meal (which makes every service 3-deep).
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const a = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'B' });
+    // 100L stock × 280g serving = 357 servings — way over 80.
+    const c = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'C' });
+    a.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
+    b.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
+
+    assignServicesPass4([a, b, c], window, fixedCalcRequired(1));
+
+    // C should NOT land at the slot — it's over the finish-off threshold.
+    expect(c.services.length).toBe(0);
   });
 
   test('Pass 4 does NOT touch slots that are still under-filled (1/2 or 0/2)', () => {

@@ -791,6 +791,12 @@ export function assignServicesPass3(
  */
 const FINISH_OFF_CAP = SLOTS_PER_TYPE + 1;  // 3 = 2 main options + 1 extra
 
+/** Pass 4 only fires for "last little bit" surpluses — anything bigger means
+ *  the cook should reduce next week's volume, not pile it onto extra slots
+ *  (which makes every meal 3-deep). 80 servings × the batch's serving size
+ *  is the cutoff: ≈22.4L for a 280g soup, ≈6.4L for a 80g pasta dish. */
+const FINISH_OFF_MAX_SERVINGS = 80;
+
 export function assignServicesPass4(
   allBatches: Batch[],
   window: PlanDay[],
@@ -812,6 +818,10 @@ export function assignServicesPass4(
     const ceiling = batch.stock;
     let surplus = ceiling - calcReq(batch);
     if (surplus <= 0) continue;
+    // Skip batches with too much leftover — those are over-cook situations
+    // for the cook to address next week, not "drain via 3rd peer" candidates.
+    const servingL = (batch.serving || 280) / 1000;
+    if (surplus / servingL >= FINISH_OFF_MAX_SERVINGS) continue;
 
     walk: for (const day of window) {
       if (isStaleAtSlot(batch.cookDate, day.isoDate)) break walk;
