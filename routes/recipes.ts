@@ -729,8 +729,8 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
   tr.flexible td { font-style: italic; color: #534ab7; }
   td.amt { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; width: 60px; }
   td.unit { white-space: nowrap; width: 60px; color: #666; font-size: 10.5px; }
-  .ing-cols { column-count: ${twoColIngredients ? 2 : 1}; column-gap: 18px; }
-  .ing-cols table { break-inside: avoid; }
+  .ing-cols { display: flex; gap: 18px; align-items: flex-start; }
+  .ing-cols > table { flex: 1; min-width: 0; }
   .steps { counter-reset: step; padding: 0; list-style: none; }
   .steps li { counter-increment: step; padding: ${compact ? '3px 0 3px 22px' : '5px 0 5px 26px'}; position: relative; border-bottom: 1px solid #f0f0f0; break-inside: avoid; }
   .steps li::before { content: counter(step); position: absolute; left: 0; width: ${compact ? '17px' : '19px'}; height: ${compact ? '17px' : '19px'}; background: #1a1a18; color: #fff; border-radius: 50%; font-size: ${compact ? '9px' : '10px'}; font-weight: 600; display: flex; align-items: center; justify-content: center; top: ${compact ? '4px' : '5px'}; }
@@ -775,16 +775,23 @@ ${scaleFactor !== 1 ? `<div class="scale-note">Scaled ${scaleFactor > 1 ? 'up' :
 ${ingredients.length > 0 ? `
 <h2>Ingredients</h2>
 <div class="ing-cols">
-<table>
+${(() => {
+  const renderTable = (rows: typeof ingredients) => `<table>
   <thead><tr><th>Ingredient</th><th class="amt">Amounts</th><th class="unit">Unit</th></tr></thead>
   <tbody>
-    ${ingredients.map(i => `<tr${i.isFlexible ? ' class="flexible"' : ''}>
+    ${rows.map(i => `<tr${i.isFlexible ? ' class="flexible"' : ''}>
       <td>${esc(i.name)}${i.allergens ? ` <span style="font-size:9px;color:#993c1d;">(${esc(i.allergens)})</span>` : ''}</td>
       <td class="amt">${i.amount}</td>
       <td class="unit">${esc(i.unit)}</td>
     </tr>`).join('')}
   </tbody>
-</table>
+</table>`;
+  if (twoColIngredients) {
+    const half = Math.ceil(ingredients.length / 2);
+    return renderTable(ingredients.slice(0, half)) + renderTable(ingredients.slice(half));
+  }
+  return renderTable(ingredients);
+})()}
 </div>` : ''}
 
 ${prepSteps.length > 0 ? `

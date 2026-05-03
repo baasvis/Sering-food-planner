@@ -109,6 +109,7 @@
 /* Review sections (detail modal) */
 .re-review-section{margin-bottom:14px;padding:10px 12px;background:var(--bg2);border-radius:var(--radius);border:1px solid var(--border);}
 .re-review-section strong{font-size:12px;text-transform:uppercase;letter-spacing:.3px;color:var(--text2);display:block;margin-bottom:6px;}
+.re-review-section .re-section-title-row strong{margin-bottom:0;}
 .re-review-ingredients{display:flex;flex-direction:column;gap:2px;}
 .re-review-ing{display:flex;justify-content:space-between;font-size:13px;padding:2px 0;}
 .re-review-amt{font-size:12px;color:var(--text2);}
