@@ -772,22 +772,26 @@ export function assignServicesPass3(
 // ── Step 4 — Pass 4: finish-off pass (allow up to 3 peers per slot) ────────
 
 /**
- * After Pass 1/2/3 have done their best within the SLOTS_PER_TYPE = 2 cap,
- * cooked batches that still have unused stock get a "finish-off" pass.
- * This pass relaxes the per-slot cap from 2 to 3, letting a leftover batch
- * piggyback as a 3rd option on a slot that already has its 2 main choices.
+ * After Pass 1/2/3 have done their best within the SLOTS_PER_TYPE = 2 cap
+ * AND the no-overshoot stock check, cooked batches that still have a
+ * little leftover stock get a "finish-off" pass. This pass:
+ *   - Allows piling onto slots up to FINISH_OFF_CAP (= 3) peers, so a
+ *     leftover batch can ride along as a 3rd option on a 2/2 slot.
+ *   - Also fills under-filled slots (1/2 with a placeholder) with a real
+ *     cooked batch, replacing the cook of the placeholder if leftover
+ *     stock can cover the slot.
+ *   - Tolerates a slight stock overshoot (FINISH_OFF_OVERSHOOT_TOLERANCE)
+ *     because the user prefers a small over-commitment to leaving
+ *     leftovers in the walk-in to spoil.
  *
- * Use case: kitchen cooked 65L of Miso & ginger soup on Sunday but the
- * menu only used 30L of it across Mon–Tue. Without this pass the leftover
- * 35L sits in the walk-in and either freezes or spoils. With it, Miso
- * shows up as an "extra" option at a slot that's already covered.
+ * Limited to "last little bit" surpluses (FINISH_OFF_MAX_SERVINGS) so the
+ * algorithm doesn't pile every over-cooked batch onto every service.
  *
  * Still respects:
- *   - stock cap (real food limit, not pot cap)
  *   - frozen / stale exclusions
  *   - servability and 0-guest skip
  *   - in-slot duplicates
- *   - 3-deep cap (don't stack 4+ different soups on one service)
+ *   - 3-deep cap (don't stack 4+ different options on one service)
  */
 const FINISH_OFF_CAP = SLOTS_PER_TYPE + 1;  // 3 = 2 main options + 1 extra
 
@@ -796,6 +800,11 @@ const FINISH_OFF_CAP = SLOTS_PER_TYPE + 1;  // 3 = 2 main options + 1 extra
  *  (which makes every meal 3-deep). 80 servings × the batch's serving size
  *  is the cutoff: ≈22.4L for a 280g soup, ≈6.4L for a 80g pasta dish. */
 const FINISH_OFF_MAX_SERVINGS = 80;
+
+/** Pass 4 tolerates a small stock overshoot — better to over-commit a little
+ *  than to leave finish-off leftovers in the walk-in. 25% slack, surfaced
+ *  to the cook via the existing cooked-stockout warning. */
+const FINISH_OFF_OVERSHOOT_TOLERANCE = 0.25;
 
 export function assignServicesPass4(
   allBatches: Batch[],
@@ -813,15 +822,23 @@ export function assignServicesPass4(
 
   let added = 0;
   const touched = new Set<string>();
+  const overshootCeiling = (b: Batch) => b.stock * (1 + FINISH_OFF_OVERSHOOT_TOLERANCE);
 
+  // Two-tier walk per batch:
+  //   Tier A — fill UNDER-FILLED slots (filled < SLOTS_PER_TYPE). No surplus
+  //     threshold: any batch with stock can help cover an empty slot. Daan
+  //     reported Tue dinner West sitting at 1/2 with placeholder while
+  //     Tomato/Zucchini soup leftover was untouched — without Tier A, the
+  //     batches were skipped because their START surplus was over the
+  //     "last little bit" threshold.
+  //   Tier B — pile onto 2/2 slots as 3rd peer. Only "last little bit"
+  //     surpluses qualify (< FINISH_OFF_MAX_SERVINGS), to avoid making every
+  //     meal 3-deep when batches are massively over-cooked.
   for (const batch of cookedSorted) {
-    const ceiling = batch.stock;
-    let surplus = ceiling - calcReq(batch);
+    let surplus = batch.stock - calcReq(batch);
     if (surplus <= 0) continue;
-    // Skip batches with too much leftover — those are over-cook situations
-    // for the cook to address next week, not "drain via 3rd peer" candidates.
     const servingL = (batch.serving || 280) / 1000;
-    if (surplus / servingL >= FINISH_OFF_MAX_SERVINGS) continue;
+    const startSurplusServings = surplus / servingL;
 
     walk: for (const day of window) {
       if (isStaleAtSlot(batch.cookDate, day.isoDate)) break walk;
@@ -831,22 +848,23 @@ export function assignServicesPass4(
         if (getGuestsFn && getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
         if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, batch.location)) continue;
         if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal)) continue;
-        // Higher cap than the other passes — only fire when the slot is
-        // already covered by the main 2 options AND there's room for an extra.
         const filled = countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal);
-        if (filled < SLOTS_PER_TYPE) continue;        // not yet "finished" — Pass 2/3 should fill
-        if (filled >= FINISH_OFF_CAP) continue;       // already at 3-deep, no more room
+        if (filled >= FINISH_OFF_CAP) continue;
+
+        // Tier B gate: 2/2 slot + over-threshold batch → skip (don't 3-deep
+        // every meal just because the cook over-produced this week).
+        if (filled >= SLOTS_PER_TYPE && startSurplusServings >= FINISH_OFF_MAX_SERVINGS) continue;
 
         batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-        const overshot = calcReq(batch) > ceiling;
+        const overshot = calcReq(batch) > overshootCeiling(batch);
         if (overshot) {
           batch.services.pop();
-          break walk;
+          continue;
         }
 
         added++;
         touched.add(batch.id);
-        surplus = ceiling - calcReq(batch);
+        surplus = batch.stock - calcReq(batch);
         if (surplus <= 0) break walk;
       }
     }

@@ -896,16 +896,25 @@ describe('assignServicesPass4', () => {
     expect(c.services.length).toBe(0);
   });
 
-  test('Pass 4 does NOT touch slots that are still under-filled (1/2 or 0/2)', () => {
-    // If a slot still has room as 1st or 2nd peer, Pass 4 leaves it for
-    // Pass 1/2/3 to fill (cleaner for the cook to add main options first).
+  test('Pass 4 ALSO fills under-filled slots (1/2) when finish-off batch can cover', () => {
+    // Pass 1/2/3 may leave a slot 1/2 because the only candidate had a peer
+    // that ALSO didn't fit alone. With Pass 4's overshoot tolerance, a small
+    // leftover batch can ride along as the 2nd peer, filling the slot.
     const window = makeWindow([
       { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
     ]);
-    const c = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'C' });
-    // No pre-fills → all slots are 0/2.
-    assignServicesPass4([c], window, fixedCalcRequired(1));
-    expect(c.services.length).toBe(0);
+    const tueSoup = makeBatch({ type: 'Soup', cookDate: '05/05/2026', stock: 0, name: 'Tue Soup' });
+    tueSoup.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];  // 1/2 (placeholder)
+    // Small-surplus cooked batch — qualifies for finish-off.
+    const leftover = makeBatch({ type: 'Soup', cookDate: '05/05/2026', stock: 5, name: 'Leftover' });
+
+    assignServicesPass4([tueSoup, leftover], window, fixedCalcRequired(1));
+
+    // Leftover should land at Wed dinner West to bring the slot to 2/2.
+    const leftoverAtSlot = (leftover.services || []).some(s =>
+      s.loc === 'west' && s.date === '2026-05-06' && s.meal === 'dinner'
+    );
+    expect(leftoverAtSlot).toBe(true);
   });
 
   test('Pass 4 caps at 3 peers — never adds a 4th', () => {
