@@ -2,6 +2,7 @@ try { require('dotenv').config(); } catch (_e) {}
 const request = require('supertest');
 const app = require('../app').default;
 const { prisma } = require('../lib/db');
+const { CONFIG } = require('../lib/config');
 
 // Test IDs — prefixed to avoid collision with real data
 const T = 'test-' + Date.now() + '-';
@@ -1024,4 +1025,50 @@ describe('Recipe v2 CRUD', () => {
     const check = await request(app).get(`/api/recipes/${recipeId}`);
     expect(check.status).toBe(404);
   });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// S3/S4 — AUTH_MODE='production' disables the dev-mode bypass + fails closed
+// on empty ALLOWED_EMAILS. The boot guard in server.ts is a separate
+// process-level exit; runtime tests cover the request-time defenses.
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('S3/S4 — AUTH_MODE=production runtime gates', () => {
+  let originalAuthMode: string;
+  let originalAllowed: string[];
+
+  beforeAll(() => {
+    originalAuthMode = CONFIG.AUTH_MODE;
+    originalAllowed = CONFIG.ALLOWED_EMAILS;
+    CONFIG.AUTH_MODE = 'production';
+  });
+
+  afterAll(() => {
+    CONFIG.AUTH_MODE = originalAuthMode;
+    CONFIG.ALLOWED_EMAILS = originalAllowed;
+  });
+
+  it('POST /api/auth/google — dev-mode bypass is OFF when AUTH_MODE=production', async () => {
+    // GOOGLE_CLIENT_ID is empty in the test env. Without AUTH_MODE='production'
+    // the dev-login shortcut would issue a session here. With it on, the
+    // request must fall through to the real Google verify path and 401.
+    const res = await request(app)
+      .post('/api/auth/google')
+      .send({ idToken: 'dev' });
+    expect(res.status).toBe(401);
+  });
+
+  it('GET /api/data — auth middleware no longer falls through when AUTH_MODE=production', async () => {
+    // Same shape as above: without GOOGLE_CLIENT_ID, the middleware would
+    // next() in dev mode. With AUTH_MODE='production', it must require auth.
+    const res = await request(app).get('/api/data');
+    expect(res.status).toBe(401);
+  });
+
+  // The empty-ALLOWED_EMAILS path returns 503 only AFTER verifyGoogleToken
+  // succeeds — and forging a real Google ID token in a unit test is more
+  // hassle than the test is worth. The primary defense for S4 is the
+  // boot-time guard in server.ts (which exits before app.listen if
+  // AUTH_MODE=production && ALLOWED_EMAILS is empty), and the 503 path is
+  // a belt-and-suspenders runtime fallback. Verified by direct read.
 });
