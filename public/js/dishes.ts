@@ -1,7 +1,7 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet } from './utils';
 import { pushUndo } from './undo';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getFamilyMembers, getFamilyStock } from './core';
+import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getFamilyMembers, getFamilyStock, getRootId } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
@@ -149,19 +149,170 @@ export function renderDishGroups(dishes: Batch[]) {
 
   if (toCook.length) {
     html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--amber);"></div>To cook <span class="dish-section-count">(${toCook.length})</span></div>`;
-    html += toCook.map(d => renderBatchTile(d)).join('');
+    html += renderFamilyGrouped(toCook);
   }
 
   if (cooked.length) {
     html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--green);"></div>Cooked <span class="dish-section-count">(${cooked.length})</span></div>`;
-    html += cooked.map(d => renderBatchTile(d)).join('');
+    html += renderFamilyGrouped(cooked);
   }
 
   if (frozen.length) {
     html += `<div class="dish-section-hdr"><div class="dish-section-dot" style="background:var(--blue);"></div>Frozen <span class="dish-section-count">(${frozen.length})</span></div>`;
-    html += frozen.map(d => renderBatchTile(d)).join('');
+    html += renderFamilyGrouped(frozen);
   }
 
+  return html;
+}
+
+/**
+ * Renders a "merged" tile representing 2+ family members at the same physical
+ * location. Cook sees ONE row with the combined stock — but expanding the
+ * tile reveals the individual physical batches underneath (so per-batch
+ * actions like delete/edit still work).
+ *
+ * Stock and surplus are summed. The largest member acts as the "primary"
+ * batch for the row's chrome (name, type, status). The expanded view shows
+ * the breakdown.
+ */
+function renderMergedSameLocationTile(members: Batch[], tileOpts?: BatchTileOptions | boolean): string {
+  // Pick the largest-stock member as the "primary" — its name/type/status
+  // drive the visible row chrome. Ties broken by id for determinism.
+  const sorted = [...members].sort((a, b) => (b.stock || 0) - (a.stock || 0) || a.id.localeCompare(b.id));
+  const primary = sorted[0];
+  const totalStock = members.reduce((sum, m) => sum + (m.stock || 0), 0);
+  const totalReq = members.reduce((sum, m) => sum + calcRequired(m), 0);
+  const diff = Math.round((totalStock - totalReq) * 10) / 10;
+  const diffStr = (diff >= 0 ? '+' : '') + diff + 'L';
+  const diffCls = diff < 0 ? 'stock-miss' : diff < 5 ? 'stock-low' : 'stock-ok';
+  const inTransitMembers = members.filter(m => m.inTransit);
+  const transitL = inTransitMembers.reduce((s, m) => s + (m.stock || 0), 0);
+  const transitNote = inTransitMembers.length > 0
+    ? `<span class="batch-merged-transit-note">+${transitL}L just arrived</span>` : '';
+  const breakdown = members.map(m =>
+    `<li>${esc(m.name)} — ${m.stock || 0}L${m.inTransit ? ' (in transit)' : ''}, cooked ${m.cookDate || '—'}</li>`
+  ).join('');
+  const expandedKey = 'merged-' + members.map(m => m.id).join('-');
+  const isExpanded = S.expandedBatches.has(expandedKey);
+  const locCls = primary.location === 'centraal' ? 'loc-centraal' : 'loc-west';
+  return `<div class="batch-tile batch-tile-merged ${locCls}${isExpanded ? ' expanded' : ''}" data-merged-ids="${members.map(m => m.id).join(',')}">
+    <div class="batch-tile-compact" onclick="toggleBatchExpand('${expandedKey}')">
+      <div class="sel-box"></div>
+      <span class="batch-type-dot batch-type-${(primary.type||'Soup').toLowerCase().replace(/ /g,'-')}"></span>
+      <span class="batch-tile-name">${esc(primary.name)} <span class="batch-merged-count">(${members.length} merged)</span></span>
+      <span class="batch-status status-cooked">Combined</span>
+      <span class="batch-tile-stock ${diffCls}">${totalStock.toFixed(1)}L <small>${diffStr}</small></span>
+      ${transitNote}
+      <span class="batch-tile-logistics ${logisticsBadgeClass(primary)}" style="font-size:10px;">${logisticsShort(primary)}</span>
+      <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
+    </div>
+    ${isExpanded ? `<div class="batch-merged-detail">
+      <div class="batch-merged-detail-hdr">${members.length} physical batches at ${primary.location === 'centraal' ? 'Centraal' : 'West'}:</div>
+      <ul class="batch-merged-list">${breakdown}</ul>
+      <div class="batch-merged-individual">
+        ${members.map(m => renderBatchTile(m, tileOpts)).join('')}
+      </div>
+    </div>` : ''}
+  </div>`;
+}
+
+/**
+ * Wraps batches that belong to the same split family in a `.batch-family-card`
+ * container (with a header showing the family's combined stock), so the cook
+ * sees parent + split as one logical card. Single-member families render bare.
+ *
+ * Same-location members (e.g. a freshly-arrived in-transit batch landing
+ * alongside an existing batch at Centraal) get rendered together in one
+ * sub-section so they read as one location's portion of the family.
+ *
+ * `tileOpts` is forwarded to renderBatchTile so the planner pools can pass
+ * `showAssign: true` for the in-pool tiles.
+ */
+export function renderFamilyGrouped(dishes: Batch[], tileOpts?: BatchTileOptions | boolean): string {
+  // Bucket by family root, preserving the input order.
+  const families: { rootId: string; members: Batch[] }[] = [];
+  const indexByRoot = new Map<string, number>();
+  for (const d of dishes) {
+    const rootId = getRootId(d, S.batches);
+    let idx = indexByRoot.get(rootId);
+    if (idx === undefined) {
+      idx = families.length;
+      indexByRoot.set(rootId, idx);
+      families.push({ rootId, members: [] });
+    }
+    families[idx].members.push(d);
+  }
+  let html = '';
+  for (const { members } of families) {
+    if (members.length === 1) {
+      html += renderBatchTile(members[0], tileOpts);
+      continue;
+    }
+    // Order: parent first, then splits.
+    const sorted = [...members].sort((a, b) => {
+      if (!a.parentId && b.parentId) return -1;
+      if (a.parentId && !b.parentId) return 1;
+      return a.id.localeCompare(b.id);
+    });
+    const familyName = (sorted.find(m => !m.parentId) || sorted[0]).name.replace(/\s*\(split\)\s*$/i, '').trim();
+    // Group members by physical location so same-location batches (e.g. an
+    // in-transit batch that just arrived alongside an existing one) appear
+    // folded into one section, while still letting the cook see them per-row.
+    // In-transit members render in their CURRENT location bucket since
+    // physically that's still where they are.
+    const byLoc: Record<string, Batch[]> = { west: [], centraal: [] };
+    for (const m of sorted) {
+      const key = m.location === 'centraal' ? 'centraal' : 'west';
+      byLoc[key].push(m);
+    }
+    // Family total splits arrived (physically here) from in-transit (still
+    // moving, will land soon). Cook sees both numbers without ambiguity.
+    const arrivedStock = (loc: 'west' | 'centraal') =>
+      byLoc[loc].filter(m => !m.inTransit).reduce((s, m) => s + (m.stock || 0), 0);
+    const incomingStock = sorted.filter(m => m.inTransit).reduce((s, m) => s + (m.stock || 0), 0);
+    const arrivedTotal = arrivedStock('west') + arrivedStock('centraal');
+    const totalLine = incomingStock > 0
+      ? `${arrivedTotal.toFixed(1)}L here + ${incomingStock.toFixed(1)}L in transit`
+      : `${arrivedTotal.toFixed(1)}L total`;
+    html += `<div class="batch-family-card">
+      <div class="batch-family-header">
+        <span class="batch-family-icon">⛓</span>
+        <span class="batch-family-title">${esc(familyName)} family</span>
+        <span class="batch-family-total">${totalLine}</span>
+        <span class="batch-family-breakdown">${arrivedStock('west')}L @W &middot; ${arrivedStock('centraal')}L @C</span>
+      </div>`;
+    for (const loc of ['west', 'centraal'] as const) {
+      const locMembers = byLoc[loc];
+      if (locMembers.length === 0) continue;
+      const locLabel = loc === 'centraal' ? 'Centraal' : 'West';
+      // Split each location bucket into ARRIVED (inTransit=false) vs INCOMING
+      // (inTransit=true). The merged display sums ONLY arrived stock — an
+      // in-transit batch isn't physically here yet, so it shows below the
+      // merged tile as a separate "incoming" line. Once the cook marks it
+      // arrived, it folds into the merged total automatically.
+      const arrived = locMembers.filter(m => !m.inTransit);
+      const incoming = locMembers.filter(m => m.inTransit);
+      const incomingL = incoming.reduce((s, m) => s + (m.stock || 0), 0);
+      const incomingNote = incoming.length > 0
+        ? ` <span class="batch-family-loc-transit">· +${incomingL.toFixed(1)}L in transit</span>`
+        : '';
+      html += `<div class="batch-family-loc">
+        <div class="batch-family-loc-hdr">At ${locLabel}${incomingNote}</div>
+        <div class="batch-family-members">`;
+      // SAME-LOCATION MERGE for arrived batches.
+      if (arrived.length === 1) {
+        html += renderBatchTile(arrived[0], tileOpts);
+      } else if (arrived.length > 1) {
+        html += renderMergedSameLocationTile(arrived, tileOpts);
+      }
+      // In-transit batches render separately, NOT merged into the arrived
+      // total (they're not physically here yet). Cook sees them as pending
+      // arrivals.
+      for (const m of incoming) html += renderBatchTile(m, tileOpts);
+      html += `</div></div>`;
+    }
+    html += `</div>`;
+  }
   return html;
 }
 

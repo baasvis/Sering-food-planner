@@ -324,12 +324,73 @@
 
   /* "Too big" badge on batch tiles — fires when batch demand > biggest pot */
   .batch-too-big-badge{background:var(--orange-bg,#fed7aa);color:var(--orange,#c2410c);font-size:10px;padding:1px 6px;border-radius:8px;font-weight:500;white-space:nowrap;}
-  /* Family group: parent batch + split children rendered adjacent inside one
-     wrapper. The visual pairing IS the relationship — left bracket + shared
-     background means the cook sees "these are one logical dish" at a glance,
-     so per-tile family-stock badges are unnecessary. */
-  .batch-family-group{position:relative;border-left:3px solid var(--purple,#a78bfa);border-radius:6px;background:rgba(167,139,250,0.04);padding:2px 0 2px 6px;margin:4px 0;display:flex;flex-direction:column;gap:2px;}
-  .batch-family-group .batch-tile{margin:0;}
+  /* Family card: parent + split children wrapped in a clearly-bordered card
+     with a header that summarises the whole family. The card spans BOTH
+     columns of the dish-list grid via grid-column:1/-1, so members stack
+     vertically inside instead of being scattered across grid cells. The
+     header shows the combined stock + per-location breakdown so the cook
+     immediately sees the whole picture. */
+  .batch-family-card{
+    grid-column: 1 / -1;
+    border: 2px solid var(--purple,#a78bfa);
+    border-radius: 10px;
+    background: rgba(167,139,250,0.06);
+    padding: 6px;
+    margin: 6px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .batch-family-header{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 6px 4px;
+    border-bottom: 1px dashed var(--purple,#a78bfa);
+    flex-wrap: wrap;
+  }
+  .batch-family-icon{ color: var(--purple,#6d28d9); font-size: 14px; }
+  .batch-family-title{ font-weight: 600; color: var(--purple,#6d28d9); font-size: 12px; }
+  .batch-family-total{ font-weight: 600; font-size: 12px; color: var(--text); }
+  .batch-family-breakdown{ font-size: 11px; color: var(--text-muted,#6b7280); }
+  .batch-family-members{ display: flex; flex-direction: column; gap: 2px; }
+  .batch-family-members .batch-tile{ margin: 0; }
+  /* Per-location sub-section inside a family card. Same-location members
+     (incl. an in-transit batch that just arrived) are listed under the
+     same header so it reads as one location's portion. */
+  .batch-family-loc{ display: flex; flex-direction: column; gap: 2px; padding: 4px 0 2px; }
+  .batch-family-loc-hdr{
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted,#6b7280);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 0 6px;
+  }
+  .batch-family-loc-transit{
+    color: var(--purple,#6d28d9);
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  /* "Merged" tile — represents 2+ family members at the same location as one
+     row. Click expands to show the underlying physical batches. */
+  .batch-tile-merged{ border: 1px dashed var(--purple,#a78bfa); background: rgba(167,139,250,0.08); }
+  .batch-merged-count{ font-size: 10px; color: var(--purple,#6d28d9); font-weight: 500; margin-left: 4px; }
+  .batch-merged-transit-note{
+    background: var(--blue-bg,#dbeafe);
+    color: var(--blue,#1d4ed8);
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .batch-merged-detail{ padding: 8px 10px; border-top: 1px dashed var(--purple,#a78bfa); }
+  .batch-merged-detail-hdr{ font-size: 11px; font-weight: 600; color: var(--text-muted,#6b7280); margin-bottom: 4px; }
+  .batch-merged-list{ font-size: 11px; color: var(--text-muted,#6b7280); margin: 0 0 8px 0; padding-left: 18px; }
+  .batch-merged-individual{ display: flex; flex-direction: column; gap: 2px; }
+  .batch-merged-individual .batch-tile{ margin: 0; opacity: 0.85; }
   /* Tiny role tag — "Parent" or "Split" — kept on tile so tile alone is still
      readable when ungrouped (e.g. orders screen, replace-batch picker). */
   .batch-family-role{font-size:9px;font-weight:600;padding:1px 5px;border-radius:6px;text-transform:uppercase;letter-spacing:0.4px;cursor:help;}

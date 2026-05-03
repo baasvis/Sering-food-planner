@@ -3,7 +3,7 @@ import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStora
 import { newId, scheduleSave, toast, toastError } from './utils';
 import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate } from './core';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
-import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, renderSplitBar, cleanCateringRefs } from './dishes';
+import { renderBatchTile, renderFamilyGrouped, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, renderSplitBar, cleanCateringRefs } from './dishes';
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
 import { showModal, closeModal, esc, setOpenInventoryFn } from './modal';
 import { renderCaterings } from './caterings';
@@ -217,7 +217,7 @@ export function renderTypeBatchPool(loc: string, typeKey: string, typeLabel: str
     const frozen = poolBatches.filter(d => d.storage === 'Frozen');
 
     const renderGroup = (batches: Batch[]) => {
-      return `<div class="batch-tile-grid">${batches.map(d => renderBatchTile(d, true)).join('')}</div>`;
+      return `<div class="batch-tile-grid">${renderFamilyGrouped(batches, true)}</div>`;
     };
 
     if (toCook.length) {
@@ -259,7 +259,7 @@ export function renderShowAllBatches(loc: string) {
     const frozen = poolBatches.filter(d => d.storage === 'Frozen');
 
     const renderGroup = (batches: Batch[]) => {
-      return `<div class="batch-tile-grid">${batches.map(d => renderBatchTile(d, true)).join('')}</div>`;
+      return `<div class="batch-tile-grid">${renderFamilyGrouped(batches, true)}</div>`;
     };
 
     if (toCook.length) {
