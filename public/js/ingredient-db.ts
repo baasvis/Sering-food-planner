@@ -162,14 +162,15 @@ export function saveInlineStock(ingId: string, location: string, val: string) {
     dbIng.stock[location] = { amount, date: new Date().toISOString().slice(0, 10) };
   }
 
-  // Debounced save to backend
+  // Debounced save to backend. apiPost throws on non-2xx (instead of the
+  // bare-fetch silent fail the audit flagged as T4) — pipe to toastError so
+  // a kitchen-network blip is visible instead of a UI value that "looks
+  // saved" but never persisted.
   clearTimeout(_inlineStockTimeout);
   _inlineStockTimeout = setTimeout(() => {
-    fetch('/api/ingredients/stock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ingredientId: ingId, location, amount }),
-    }).catch(e => console.error('Stock save failed:', e));
+    apiPost('/api/ingredients/stock', { ingredientId: ingId, location, amount }).catch((e: unknown) => {
+      toastError('Stock save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    });
   }, 600);
 }
 
