@@ -185,12 +185,12 @@ function renderMergedSameLocationTile(members: Batch[], tileOpts?: BatchTileOpti
   const diff = Math.round((totalStock - totalReq) * 10) / 10;
   const diffStr = (diff >= 0 ? '+' : '') + diff + 'L';
   const diffCls = diff < 0 ? 'stock-miss' : diff < 5 ? 'stock-low' : 'stock-ok';
-  const inTransitMembers = members.filter(m => m.inTransit);
-  const transitL = inTransitMembers.reduce((s, m) => s + (m.stock || 0), 0);
-  const transitNote = inTransitMembers.length > 0
-    ? `<span class="batch-merged-transit-note">+${transitL}L just arrived</span>` : '';
+  // Note: callers (renderFamilyGrouped) only pass ARRIVED members here.
+  // In-transit batches are rendered separately so they don't get folded
+  // into the merged total. We list cookDates in the breakdown to help the
+  // cook spot mixed-cookDate merges (rare but possible).
   const breakdown = members.map(m =>
-    `<li>${esc(m.name)} — ${m.stock || 0}L${m.inTransit ? ' (in transit)' : ''}, cooked ${m.cookDate || '—'}</li>`
+    `<li>${esc(m.name)} — ${m.stock || 0}L, cooked ${m.cookDate || '—'}</li>`
   ).join('');
   const expandedKey = 'merged-' + members.map(m => m.id).join('-');
   const isExpanded = S.expandedBatches.has(expandedKey);
@@ -202,7 +202,6 @@ function renderMergedSameLocationTile(members: Batch[], tileOpts?: BatchTileOpti
       <span class="batch-tile-name">${esc(primary.name)} <span class="batch-merged-count">(${members.length} merged)</span></span>
       <span class="batch-status status-cooked">Combined</span>
       <span class="batch-tile-stock ${diffCls}">${totalStock.toFixed(1)}L <small>${diffStr}</small></span>
-      ${transitNote}
       <span class="batch-tile-logistics ${logisticsBadgeClass(primary)}" style="font-size:10px;">${logisticsShort(primary)}</span>
       <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
     </div>
@@ -429,7 +428,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
     : '';
 
   // Family-aware role marker: family relationship is conveyed by visual
-  // grouping in the dish list (.batch-family-group wraps adjacent siblings),
+  // grouping in the dish list (.batch-family-card wraps the whole family),
   // so individual tiles only need a small role label — "parent" or "split".
   // Removed the per-tile stock-at-other-loc badge to declutter.
   const family = getFamilyMembers(d, S.batches);

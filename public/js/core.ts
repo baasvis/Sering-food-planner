@@ -6,7 +6,7 @@ import type { Batch, Service, Catering, CateringDish, RecipeIngredient, Location
 import { scheduleSave, apiPost, toast } from './utils';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
-import { renderBatchTile } from './dishes';
+import { renderBatchTile, renderFamilyGrouped } from './dishes';
 import { locName } from '@shared/location';
 
 export function isBatchCooked(d: Batch): boolean {
@@ -26,14 +26,25 @@ export function isBatchCooked(d: Batch): boolean {
 // the root. The helpers walk the chain anyway, so future deeper splits
 // would still work.
 
-/** Returns the root batch id of `b`'s family (or `b.id` if `b` has no parent). */
+/** Returns the root batch id of `b`'s family (or `b.id` if `b` has no parent).
+ *
+ *  Cycle-safe: tracks visited ids and bails the moment a cycle is detected.
+ *  Without that, two members of a hypothetical A→B→A cycle would return
+ *  different "roots" depending on parity of the iteration, and family
+ *  grouping/`alreadyInSlot` would silently fall apart. On cycle, returns the
+ *  lexicographically smallest id touched so the choice is deterministic. */
 export function getRootId(b: Batch, allBatches: Batch[]): string {
+  const visited = new Set<string>();
   let cur = b;
-  // Cap at 8 hops to prevent any cycle from infinite-looping.
-  for (let i = 0; i < 8 && cur.parentId; i++) {
+  while (cur.parentId && !visited.has(cur.id)) {
+    visited.add(cur.id);
     const parent = allBatches.find(x => x.id === cur.parentId);
     if (!parent) break;
     cur = parent;
+  }
+  if (cur.parentId && visited.has(cur.id)) {
+    // Cycle detected — pick the smallest id from the loop for stability.
+    return [...visited, cur.id].sort()[0];
   }
   return cur.id;
 }
@@ -121,53 +132,15 @@ export function renderDishListSplit(dishes: Batch[]): string {
   let html = '';
   if (uncooked.length > 0) {
     html += `<div class="cook-group-hdr uncooked-hdr">To cook (${uncooked.length})</div>`;
-    html += renderFamilyGroupedTiles(uncooked);
+    // renderFamilyGrouped (defined in dishes.ts) wraps split families in a
+    // .batch-family-card with per-location sections + same-loc merging +
+    // arrived-vs-in-transit split. Single-member families render bare.
+    // Single source of truth for family-aware tile rendering.
+    html += renderFamilyGrouped(uncooked);
   }
   if (cooked.length > 0) {
     html += `<div class="cook-group-hdr cooked-hdr">Cooked (${cooked.length})</div>`;
-    html += renderFamilyGroupedTiles(cooked);
-  }
-  return html;
-}
-
-/**
- * Renders batch tiles with split-family members visually grouped: each
- * family wrapped in a `.batch-family-group` div so a CSS bracket / shared
- * background can show the relationship without per-tile badge text.
- *
- * Single-member families (most batches) render bare so they read like before.
- * Multi-member families render as: parent first, then split children, all
- * inside a wrapper that the CSS treats as one logical card.
- */
-function renderFamilyGroupedTiles(dishes: Batch[]): string {
-  // Bucket by family root, preserving the input order.
-  const families: { rootId: string; members: Batch[] }[] = [];
-  const indexByRoot = new Map<string, number>();
-  for (const d of dishes) {
-    const rootId = getRootId(d, S.batches);
-    let idx = indexByRoot.get(rootId);
-    if (idx === undefined) {
-      idx = families.length;
-      indexByRoot.set(rootId, idx);
-      families.push({ rootId, members: [] });
-    }
-    families[idx].members.push(d);
-  }
-  let html = '';
-  for (const { members } of families) {
-    if (members.length === 1) {
-      html += renderBatchTile(members[0]);
-      continue;
-    }
-    // Sort family members: parent first (no parentId), then children.
-    const sorted = [...members].sort((a, b) => {
-      if (!a.parentId && b.parentId) return -1;
-      if (a.parentId && !b.parentId) return 1;
-      return a.id.localeCompare(b.id);
-    });
-    html += `<div class="batch-family-group">`;
-    for (const m of sorted) html += renderBatchTile(m);
-    html += `</div>`;
+    html += renderFamilyGrouped(cooked);
   }
   return html;
 }

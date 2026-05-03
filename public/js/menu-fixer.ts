@@ -753,9 +753,16 @@ export function assignServicesPass3(
             // SLOTS_PER_TYPE peers. See the calcReqOptimistic comment.
             if (b.stock > 0) {
               b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-              const fits = calcReq(b) <= b.stock
-                || calcReqOptimistic(b, allBatches) <= b.stock;
-              b.services.pop();
+              // try/finally so a throwing calcReq can't leave the speculative
+              // service stuck on the batch — without it a NaN/missing-slot
+              // exception would permanently grow b.services on every retry.
+              let fits: boolean;
+              try {
+                fits = calcReq(b) <= b.stock
+                  || calcReqOptimistic(b, allBatches) <= b.stock;
+              } finally {
+                b.services.pop();
+              }
               if (!fits) return false;
             }
             return true;
