@@ -278,13 +278,12 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
     : '';
 
   // Family-aware split indicator: when this batch is part of a split family
-  // (parent + ship-off children sharing a recipe), show how much of the same
-  // recipe is sitting at the OTHER location AND in which direction the food
-  // flowed. The PARENT (no parentId) was the original cook and shipped a
-  // portion away → "sending". The SPLIT (has parentId) is the recipient of
-  // the ship-off → "pulling from". Asymmetry helps the cook see at a glance:
-  //   • parent tile  →  "→ 40L sent to C"   (this batch shipped out)
-  //   • split tile   →  "← 85.5L from W"    (this batch came from over there)
+  // (parent + ship-off children sharing a recipe), show what's still at the
+  // OTHER location. Important: the SPLIT batch's own stock IS what already
+  // came over — the "from" amount on the parent is the ship-off size, but
+  // on the split it's whatever is still STAYING at the parent's location.
+  //   • parent tile (West)    →  "→ 40L sent to C"      (shipped 40L out)
+  //   • split tile (Centraal) →  "← 85.5L still at W"   (parent kept 85.5L)
   const family = getFamilyMembers(d, S.batches);
   const otherLoc = d.location === 'west' ? 'centraal' : 'west';
   const otherLocStock = family
@@ -294,7 +293,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
   const familyBadge = (family.length > 1 && otherLocStock > 0)
     ? (isParent
         ? `<span class="batch-family-badge family-sending" title="This is the parent batch. ${otherLocStock}L of the same recipe was split off and shipped to ${otherLoc === 'centraal' ? 'Centraal' : 'West'}. Total family stock: ${getFamilyStock(d, S.batches).toFixed(1)}L.">→ ${otherLocStock}L sent to ${otherLoc === 'centraal' ? 'C' : 'W'}</span>`
-        : `<span class="batch-family-badge family-receiving" title="This is a split — the recipe was originally cooked at ${otherLoc === 'west' ? 'West' : 'Centraal'} and ${otherLocStock}L is still over there. Total family stock: ${getFamilyStock(d, S.batches).toFixed(1)}L.">← ${otherLocStock}L from ${otherLoc === 'west' ? 'W' : 'C'}</span>`)
+        : `<span class="batch-family-badge family-receiving" title="This batch was split off from a parent at ${otherLoc === 'west' ? 'West' : 'Centraal'}. The parent still has ${otherLocStock}L over there — this badge is just a heads-up that the same recipe is also stocked elsewhere. Total family stock: ${getFamilyStock(d, S.batches).toFixed(1)}L.">← ${otherLocStock}L still at ${otherLoc === 'west' ? 'W' : 'C'}</span>`)
     : '';
 
   // Compact row
