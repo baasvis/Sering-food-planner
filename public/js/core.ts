@@ -121,11 +121,53 @@ export function renderDishListSplit(dishes: Batch[]): string {
   let html = '';
   if (uncooked.length > 0) {
     html += `<div class="cook-group-hdr uncooked-hdr">To cook (${uncooked.length})</div>`;
-    uncooked.forEach((d: Batch) => { html += renderBatchTile(d); });
+    html += renderFamilyGroupedTiles(uncooked);
   }
   if (cooked.length > 0) {
     html += `<div class="cook-group-hdr cooked-hdr">Cooked (${cooked.length})</div>`;
-    cooked.forEach((d: Batch) => { html += renderBatchTile(d); });
+    html += renderFamilyGroupedTiles(cooked);
+  }
+  return html;
+}
+
+/**
+ * Renders batch tiles with split-family members visually grouped: each
+ * family wrapped in a `.batch-family-group` div so a CSS bracket / shared
+ * background can show the relationship without per-tile badge text.
+ *
+ * Single-member families (most batches) render bare so they read like before.
+ * Multi-member families render as: parent first, then split children, all
+ * inside a wrapper that the CSS treats as one logical card.
+ */
+function renderFamilyGroupedTiles(dishes: Batch[]): string {
+  // Bucket by family root, preserving the input order.
+  const families: { rootId: string; members: Batch[] }[] = [];
+  const indexByRoot = new Map<string, number>();
+  for (const d of dishes) {
+    const rootId = getRootId(d, S.batches);
+    let idx = indexByRoot.get(rootId);
+    if (idx === undefined) {
+      idx = families.length;
+      indexByRoot.set(rootId, idx);
+      families.push({ rootId, members: [] });
+    }
+    families[idx].members.push(d);
+  }
+  let html = '';
+  for (const { members } of families) {
+    if (members.length === 1) {
+      html += renderBatchTile(members[0]);
+      continue;
+    }
+    // Sort family members: parent first (no parentId), then children.
+    const sorted = [...members].sort((a, b) => {
+      if (!a.parentId && b.parentId) return -1;
+      if (a.parentId && !b.parentId) return 1;
+      return a.id.localeCompare(b.id);
+    });
+    html += `<div class="batch-family-group">`;
+    for (const m of sorted) html += renderBatchTile(m);
+    html += `</div>`;
   }
   return html;
 }

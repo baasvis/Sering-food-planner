@@ -277,23 +277,15 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
     ? `<span class="batch-too-big-badge" title="Needs ${projected.toFixed(1)}L but biggest pot is ${biggestPot}L — cook in 2 pots">⚠️ Too big</span>`
     : '';
 
-  // Family-aware split indicator: when this batch is part of a split family
-  // (parent + ship-off children sharing a recipe), show what's still at the
-  // OTHER location. Important: the SPLIT batch's own stock IS what already
-  // came over — the "from" amount on the parent is the ship-off size, but
-  // on the split it's whatever is still STAYING at the parent's location.
-  //   • parent tile (West)    →  "→ 40L sent to C"      (shipped 40L out)
-  //   • split tile (Centraal) →  "← 85.5L still at W"   (parent kept 85.5L)
+  // Family-aware role marker: family relationship is conveyed by visual
+  // grouping in the dish list (.batch-family-group wraps adjacent siblings),
+  // so individual tiles only need a small role label — "parent" or "split".
+  // Removed the per-tile stock-at-other-loc badge to declutter.
   const family = getFamilyMembers(d, S.batches);
-  const otherLoc = d.location === 'west' ? 'centraal' : 'west';
-  const otherLocStock = family
-    .filter(f => f.id !== d.id && f.location !== d.location)
-    .reduce((sum, f) => sum + (f.stock || 0), 0);
+  const isFamilyMember = family.length > 1;
   const isParent = !d.parentId;
-  const familyBadge = (family.length > 1 && otherLocStock > 0)
-    ? (isParent
-        ? `<span class="batch-family-badge family-sending" title="This is the parent batch. ${otherLocStock}L of the same recipe was split off and shipped to ${otherLoc === 'centraal' ? 'Centraal' : 'West'}. Total family stock: ${getFamilyStock(d, S.batches).toFixed(1)}L.">→ ${otherLocStock}L sent to ${otherLoc === 'centraal' ? 'C' : 'W'}</span>`
-        : `<span class="batch-family-badge family-receiving" title="This batch was split off from a parent at ${otherLoc === 'west' ? 'West' : 'Centraal'}. The parent still has ${otherLocStock}L over there — this badge is just a heads-up that the same recipe is also stocked elsewhere. Total family stock: ${getFamilyStock(d, S.batches).toFixed(1)}L.">← ${otherLocStock}L still at ${otherLoc === 'west' ? 'W' : 'C'}</span>`)
+  const familyRoleBadge = isFamilyMember
+    ? `<span class="batch-family-role ${isParent ? 'role-parent' : 'role-split'}" title="${isParent ? 'Parent batch — original cook. Split children appear grouped with this tile.' : `Split — shipped from the parent at ${d.location === 'west' ? 'Centraal' : 'West'}. Grouped with the parent in the dish list.`}">${isParent ? 'Parent' : 'Split'}</span>`
     : '';
 
   // Compact row
@@ -305,10 +297,10 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
       <span class="batch-status ${isBatchCooked(d) ? (isDishStale(d) ? 'status-stale' : 'status-cooked') : 'status-tocook'}">${isBatchCooked(d) ? (isDishStale(d) ? 'Stale' : 'Cooked') : 'To cook'}</span>
       <span class="batch-tile-cook">${batchCookLabel(d)}</span>
       <span class="batch-tile-stock ${cls}">${d.stock || 0}L <small>${str}</small></span>
-      ${familyBadge}
+      ${familyRoleBadge}
       ${tooBigBadge}
       <span class="batch-tile-logistics ${logisticsBadgeClass(d)}" style="font-size:10px;">${logisticsShort(d)}</span>
-      ${d.inTransit ? '<span class="batch-transit-badge">In transit</span>' : ''}
+      ${d.inTransit ? `<span class="batch-transit-badge" title="Currently being transported to ${d.location === 'centraal' ? 'Centraal' : 'West'} — ${d.stock || 0}L on the move.">→ ${d.stock || 0}L in transit</span>` : ''}
       ${opts.showAssign && !S.assigningBatchId ? `<button class="batch-assign-btn" onclick="event.stopPropagation();startAssignMode('${d.id}')">Assign</button>` : ''}
       <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
     </div>`;
