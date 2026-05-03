@@ -11,7 +11,7 @@ Format: `[STATUS] <ID> — <one-line summary>`
 - [PR #24](https://github.com/baasvis/Sering-food-planner/pull/24) **A10/T7** — dbReadAll error swallowing.
 - [PR #25](https://github.com/baasvis/Sering-food-planner/pull/25) **U1+U3+U4** — ARIA quick wins.
 - [PR #26](https://github.com/baasvis/Sering-food-planner/pull/26) **T4** — fire-and-forget stock save.
-- [PR pending] **S6** — Bearer compare via `crypto.timingSafeEqual` in `routes/coverage.ts`. 5 new tests.
+- [PR #27](https://github.com/baasvis/Sering-food-planner/pull/27) **S6** — Bearer compare via `crypto.timingSafeEqual` in `routes/coverage.ts`. 5 new tests.
 
 ## In progress
 - (picking next finding)
