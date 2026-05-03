@@ -617,8 +617,21 @@ function tryFillOnePosition(
 
     // Tentatively assign and check capacity. Only stock matters here — pot
     // sizing is decided post-assignment based on actual demand.
+    //
+    // Two-tier capacity check:
+    //   1. If real-peer demand fits → accept.
+    //   2. Else, retry assuming the slot will eventually reach SLOTS_PER_TYPE
+    //      peers (optimistic peer-split). Without (2), a slot that needs 2
+    //      batches together to be feasible (Tomato W + Miso W at Tue dinner
+    //      C, 240 guests — neither fits solo, both fit at 33.6L each) stays
+    //      empty forever, because position 1's tentative add sees solo
+    //      demand and overshoots. If the expected peer never arrives, the
+    //      cooked-stockout warning surfaces the under-supply.
     chosen.services.push({ loc, date: isoDate, meal });
-    if (chosen.stock > 0 && calcReq(chosen) > chosen.stock) {
+    const fits = chosen.stock <= 0
+      || calcReq(chosen) <= chosen.stock
+      || calcReqOptimistic(chosen, allBatches) <= chosen.stock;
+    if (!fits) {
       chosen.services.pop();
       // Cooked batch hit its stock limit — drop it and try the next candidate.
       candidates = candidates.filter(c => c !== chosen);
@@ -629,6 +642,38 @@ function tryFillOnePosition(
   }
 
   return false;
+}
+
+/**
+ * Optimistic capacity check used by Pass 2 and Pass 3. Sums the batch's
+ * demand across its services, but splits each slot's guest load by
+ * max(realPeers, SLOTS_PER_TYPE) instead of just realPeers. This lets a
+ * tight-stock batch fit a slot that ONLY works as a paired placement —
+ * the algorithm trusts that another candidate will join as the peer.
+ *
+ * Catering hold uses the actual catering-side peer split (no optimism
+ * there — a catering's dish list is what it is).
+ */
+function calcReqOptimistic(b: Batch, allBatches: Batch[]): number {
+  let total = 0;
+  for (const svc of b.services || []) {
+    if (isServicePast(svc)) continue;
+    const realPeers = allBatches.filter(other =>
+      other.type === b.type
+      && (other.services || []).some(s => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal),
+    ).length;
+    const peers = Math.max(realPeers, SLOTS_PER_TYPE);
+    const g = getGuests(svc.loc, svc.date, svc.meal);
+    total += (g / peers) * ((b.serving || 280) / 1000);
+  }
+  for (const c of (S.caterings || [])) {
+    const cd = (c.dishes || []).find(cd => cd.dishId === b.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter(d => d.type === b.type).length;
+      total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((b.serving || 280) / 1000);
+    }
+  }
+  return Math.round(total * 10) / 10;
 }
 
 // ── Step 4 — Pass 3: fill remaining empty positions, IGNORE pot caps ──────
@@ -682,11 +727,15 @@ export function assignServicesPass3(
             if (b.stock > 0 && isStaleAtSlot(b.cookDate, day.isoDate)) return false;
             // Cooked: tentative-add and undo to verify we don't exceed STOCK
             // (real food limit; pot cap is intentionally ignored here).
+            // Two-tier capacity check (matches Pass 2): real-peer demand,
+            // OR optimistic-peer demand assuming the slot reaches
+            // SLOTS_PER_TYPE peers. See the calcReqOptimistic comment.
             if (b.stock > 0) {
               b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-              const overshot = calcReq(b) > b.stock;
+              const fits = calcReq(b) <= b.stock
+                || calcReqOptimistic(b, allBatches) <= b.stock;
               b.services.pop();
-              if (overshot) return false;
+              if (!fits) return false;
             }
             return true;
           });
@@ -718,6 +767,82 @@ export function assignServicesPass3(
   }
 
   return { servicesAdded: added };
+}
+
+// ── Step 4 — Pass 4: finish-off pass (allow up to 3 peers per slot) ────────
+
+/**
+ * After Pass 1/2/3 have done their best within the SLOTS_PER_TYPE = 2 cap,
+ * cooked batches that still have unused stock get a "finish-off" pass.
+ * This pass relaxes the per-slot cap from 2 to 3, letting a leftover batch
+ * piggyback as a 3rd option on a slot that already has its 2 main choices.
+ *
+ * Use case: kitchen cooked 65L of Miso & ginger soup on Sunday but the
+ * menu only used 30L of it across Mon–Tue. Without this pass the leftover
+ * 35L sits in the walk-in and either freezes or spoils. With it, Miso
+ * shows up as an "extra" option at a slot that's already covered.
+ *
+ * Still respects:
+ *   - stock cap (real food limit, not pot cap)
+ *   - frozen / stale exclusions
+ *   - servability and 0-guest skip
+ *   - in-slot duplicates
+ *   - 3-deep cap (don't stack 4+ different soups on one service)
+ */
+const FINISH_OFF_CAP = SLOTS_PER_TYPE + 1;  // 3 = 2 main options + 1 extra
+
+export function assignServicesPass4(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+  getGuestsFn?: (loc: Location, isoDate: string, meal: Meal) => number,
+): { servicesAdded: number; batchesTouched: number } {
+  const cookedSorted = allBatches
+    .filter(b => TYPES_TO_PLAN.includes(b.type))
+    .filter(b => b.stock > 0)
+    .filter(b => b.cookDate)
+    .filter(b => b.storage !== 'Frozen')
+    // Oldest cookDate first — finish off the older food before the newer.
+    .sort((a, b) => cookDateSortKey(a).localeCompare(cookDateSortKey(b)));
+
+  let added = 0;
+  const touched = new Set<string>();
+
+  for (const batch of cookedSorted) {
+    const ceiling = batch.stock;
+    let surplus = ceiling - calcReq(batch);
+    if (surplus <= 0) continue;
+
+    walk: for (const day of window) {
+      if (isStaleAtSlot(batch.cookDate, day.isoDate)) break walk;
+
+      for (const slot of day.slots) {
+        if (slot.isPast) continue;
+        if (getGuestsFn && getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
+        if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, batch.location)) continue;
+        if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal)) continue;
+        // Higher cap than the other passes — only fire when the slot is
+        // already covered by the main 2 options AND there's room for an extra.
+        const filled = countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal);
+        if (filled < SLOTS_PER_TYPE) continue;        // not yet "finished" — Pass 2/3 should fill
+        if (filled >= FINISH_OFF_CAP) continue;       // already at 3-deep, no more room
+
+        batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+        const overshot = calcReq(batch) > ceiling;
+        if (overshot) {
+          batch.services.pop();
+          break walk;
+        }
+
+        added++;
+        touched.add(batch.id);
+        surplus = ceiling - calcReq(batch);
+        if (surplus <= 0) break walk;
+      }
+    }
+  }
+
+  return { servicesAdded: added, batchesTouched: touched.size };
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────
@@ -804,6 +929,12 @@ export function fixMyMenu(): void {
   const pass3 = assignServicesPass3(S.batches, planWindow, calcReqLive, getGuests, biggestPot);
   rebuildPlanner();
 
+  // Step 4.4 — Pass 4 (finish-off): cooked batches with leftover stock get
+  // added as a 3rd peer to slots that are already 2/2. Drains the surplus
+  // that would otherwise sit in the walk-in until it freezes or spoils.
+  const pass4 = assignServicesPass4(S.batches, planWindow, calcReqLive, getGuests);
+  rebuildPlanner();
+
   // Step 4.5 — Allocate kitchen pots to batches by ACTUAL demand.
   // Biggest pot goes to the batch that needs the most food. This way the
   // 140L pot is never wasted on a low-demand batch just because it sorts
@@ -828,7 +959,7 @@ export function fixMyMenu(): void {
   showResultsModal({
     cleaned: orphans.length,
     created: newPlaceholders.length,
-    assigned: pass1.servicesAdded + pass2.servicesAdded + pass3.servicesAdded,
+    assigned: pass1.servicesAdded + pass2.servicesAdded + pass3.servicesAdded + pass4.servicesAdded,
     placeholderNames: newPlaceholders.map(p => p.name),
     warnings,
   });
