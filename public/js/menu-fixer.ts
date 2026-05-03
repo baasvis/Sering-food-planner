@@ -581,17 +581,19 @@ function tryFillOnePosition(
     const topIso = cookDateToIso(top.cookDate)!;
     const topCooked = top.stock > 0 ? 'cooked' : 'uncooked';
 
-    // Within same (cookDate, cooked-status) bucket, pick the MOST-LOADED
-    // batch under the big-pot ceiling (concentrate to fill one batch fully
-    // before adding to siblings). If all bucket members are over the ceiling,
-    // fall back to least-loaded to spread overflow.
-    // This naturally produces "min batch size" behavior — services pile onto
-    // the leading batch first, smaller siblings stay tiny (and trigger the
-    // too-small-batch warning to prompt cook to skip those cooks).
+    // Within same (cookDate, cooked-status) bucket, choose between two sort
+    // strategies:
+    //   - COOKED bucket: most-loaded first, up to the big-pot cap (concentrate
+    //     real stock onto one batch before requiring another cook).
+    //   - UNCOOKED bucket: least-loaded first (even spread). All placeholders
+    //     for the same day-and-type are physically interchangeable — the cook
+    //     chooses batch sizes after the fact. Concentrating one placeholder
+    //     to 140L while leaving its siblings empty produces the wrong cook
+    //     plan (one giant cook + zero-volume "ghost" entries).
     const sameBucket = candidates
       .filter(c => cookDateToIso(c.cookDate) === topIso && (c.stock > 0 ? 'cooked' : 'uncooked') === topCooked);
     let chosen: Batch;
-    if (biggestPotLiters != null) {
+    if (topCooked === 'cooked' && biggestPotLiters != null) {
       const underBig = sameBucket.filter(c => calcReq(c) < biggestPotLiters);
       if (underBig.length > 0) {
         underBig.sort((a, b) => {
@@ -605,8 +607,11 @@ function tryFillOnePosition(
         chosen = sameBucket[0];
       }
     } else {
-      // No equipment hint — even spread
-      sameBucket.sort((a, b) => a.services.length - b.services.length);
+      // Uncooked bucket OR no equipment hint — even spread (least-loaded).
+      sameBucket.sort((a, b) => {
+        if (a.services.length !== b.services.length) return a.services.length - b.services.length;
+        return a.id.localeCompare(b.id);
+      });
       chosen = sameBucket[0];
     }
 
@@ -687,15 +692,22 @@ export function assignServicesPass3(
           });
           if (candidates.length === 0) break;
 
-          // Pass 3 sort: newest cookDate first, then most-loaded under
-          // bigPot (concentrate within bucket), least-loaded over bigPot.
+          // Pass 3 sort: newest cookDate first. Within same cookDate:
+          //   - cooked batch with headroom under bigPot → most-loaded
+          //     (concentrate real stock onto one batch).
+          //   - everything else (uncooked placeholders, or cooked batches over
+          //     bigPot) → least-loaded (even spread). Same reasoning as Pass 2:
+          //     identical placeholders should distribute evenly so the cook
+          //     ends up with same-sized batches, not one giant + one empty.
           const bigPot2 = biggestPotLiters ?? Infinity;
           candidates.sort((a, b) => {
             const aIso = cookDateToIso(a.cookDate)!;
             const bIso = cookDateToIso(b.cookDate)!;
             if (aIso !== bIso) return aIso > bIso ? -1 : 1;
-            const aHeadroom = calcReq(a) < bigPot2;
-            return aHeadroom ? (b.services.length - a.services.length) : (a.services.length - b.services.length);
+            const aConcentrate = a.stock > 0 && calcReq(a) < bigPot2;
+            const bConcentrate = b.stock > 0 && calcReq(b) < bigPot2;
+            if (aConcentrate !== bConcentrate) return aConcentrate ? -1 : 1;
+            return aConcentrate ? (b.services.length - a.services.length) : (a.services.length - b.services.length);
           });
           const chosen: Batch = candidates[0];
           chosen.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });

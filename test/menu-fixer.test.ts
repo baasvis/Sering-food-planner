@@ -172,16 +172,18 @@ describe('isServableBy', () => {
 });
 
 describe('Pass 2 tiered bigger-pot bias', () => {
-  test('with biggestPot, demand concentrates into one batch up to cap', () => {
-    // 3 same-cookDate batches, enough slots for concentration
+  test('with biggestPot, COOKED batches concentrate into one batch up to cap', () => {
+    // Concentration only applies to COOKED batches (use real stock first
+    // before requiring another cook). 3 same-cookDate cooked Soups, enough
+    // slots for concentration.
     const window = makeWindow([
       { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
       { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
       { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
     ]);
-    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'A' });
-    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'B' });
-    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'C' });
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 100, name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 100, name: 'B' });
+    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 100, name: 'C' });
     assignServicesPass2([a, b, c], window, fixedCalcRequired(1), undefined, 10);
     const counts = [a.services.length, b.services.length, c.services.length].sort((x, y) => y - x);
     // Concentration: top batch clearly dominates the smallest
@@ -528,6 +530,30 @@ describe('assignServicesPass2', () => {
     const frozen = makeBatch({ type: 'Soup', cookDate: '01/05/2026', stock: 5, storage: 'Frozen', name: 'Frozen Pea' });
     assignServicesPass2([frozen], window, fixedCalcRequired(1));
     expect(frozen.services.length).toBe(0);
+  });
+
+  test('Pass 2: 3 same-day uncooked placeholders distribute evenly, not concentrated', () => {
+    // Regression for the "Sun soup 1 = 0 services / Sun soup 2 = 6 / Sun soup 3
+    // = 5" bug. The old concentration sort piled services onto whichever
+    // placeholder happened to be picked first, until it reached the big-pot
+    // cap (140L). For uncooked placeholders with stock=0, that produced one
+    // giant cook plan + zero-volume "ghost" siblings. They should distribute
+    // evenly so the cook ends up with 3 same-sized batches.
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // 3 sibling placeholders for the same Sunday (cooked yesterday relative to window).
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup B' });
+    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup C' });
+
+    // With biggestPot hint AND uncooked siblings, my fix forces even spread.
+    assignServicesPass2([a, b, c], window, fixedCalcRequired(1), undefined, 140);
+
+    const counts = [a.services.length, b.services.length, c.services.length];
+    // Range must be at most 1 (true even spread; round-robin permits one extra).
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
   });
 
   test('Pass 2: tight-stock batch fits when peer-split halves demand at the slot', () => {
