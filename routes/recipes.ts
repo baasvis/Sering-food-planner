@@ -608,10 +608,9 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
     const name = ing.isFlexible
       ? (ing.flexLabel || 'Flexible ingredient')
       : (ing.ingredient?.name || 'Unknown');
-    const rawScaled = Math.round(ing.rawAmount * scaleFactor * 10) / 10;
-    const cookedScaled = ing.cookedAmount != null ? Math.round(ing.cookedAmount * scaleFactor * 10) / 10 : null;
+    const amountScaled = Math.round(ing.rawAmount * scaleFactor * 10) / 10;
     const allergens = ing.ingredient?.allergens || '';
-    return { name, rawAmount: rawScaled, cookedAmount: cookedScaled, unit: ing.unit, isFlexible: ing.isFlexible, allergens };
+    return { name, amount: amountScaled, unit: ing.unit, isFlexible: ing.isFlexible, allergens };
   });
 
   const prepSteps = (recipe.prepSteps as unknown as Array<{ step: number; text: string; note?: string }>) || [];
@@ -621,7 +620,17 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
   const servings = recipe.recipeVolume && recipe.servingSize
     ? Math.round((recipe.recipeVolume * 1000) / recipe.servingSize * scaleFactor)
     : null;
-  const hasPhoto = !!recipe.photoUrl;
+
+  // Length-based density tiers so the page always fits on a single A4.
+  // Drop photo first, then storage box, then shrink font / use 2-col ingredient list.
+  const ingCount = ingredients.length;
+  const stepCount = prepSteps.length;
+  const longBody = ingCount >= 14 || stepCount >= 12;
+  const veryLongBody = ingCount >= 18 || stepCount >= 16 || (ingCount + stepCount) >= 28;
+  const showPhoto = !!recipe.photoUrl && !longBody;
+  const showStorage = !veryLongBody;
+  const compact = veryLongBody;
+  const twoColIngredients = ingCount >= 14;
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -629,29 +638,34 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
 <meta charset="utf-8">
 <title>${esc(recipe.name)} — De Sering Recipe</title>
 <style>
-  @page { size: A4; margin: 18mm 15mm; }
+  @page { size: A4; margin: ${compact ? '12mm' : '15mm'} ${compact ? '12mm' : '14mm'}; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 12px; line-height: 1.5; color: #1a1a18; }
-  h1 { font-size: 22px; margin-bottom: 4px; }
-  h2 { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #555; margin: 16px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-  .header { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
-  .header-photo { width: 100px; height: 100px; object-fit: cover; border-radius: 6px; }
-  .meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: #666; margin-bottom: 8px; }
-  .meta span { background: #f0f0f0; padding: 2px 8px; border-radius: 10px; }
-  .allergens { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
-  .allergen { background: #fce4e4; color: #993c1d; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
-  th { text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; color: #888; padding: 4px 6px; border-bottom: 2px solid #ccc; }
-  td { padding: 4px 6px; border-bottom: 1px solid #eee; }
+  html, body { height: auto; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: ${compact ? '10.5px' : '12px'}; line-height: ${compact ? '1.35' : '1.45'}; color: #1a1a18; }
+  h1 { font-size: ${compact ? '18px' : '22px'}; margin-bottom: 2px; }
+  h2 { font-size: ${compact ? '12px' : '13px'}; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #555; margin: ${compact ? '8px 0 4px' : '10px 0 6px'}; border-bottom: 1px solid #ddd; padding-bottom: 3px; page-break-after: avoid; }
+  .header { display: flex; gap: 14px; align-items: flex-start; margin-bottom: ${compact ? '6px' : '10px'}; }
+  .header-photo { width: ${compact ? '78px' : '90px'}; height: ${compact ? '78px' : '90px'}; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10px; color: #666; margin-bottom: 6px; }
+  .meta span { background: #f0f0f0; padding: 1px 7px; border-radius: 10px; }
+  .allergens { display: flex; gap: 3px; flex-wrap: wrap; margin-bottom: 0; }
+  .allergen { background: #fce4e4; color: #993c1d; font-size: 9.5px; padding: 1px 7px; border-radius: 10px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: ${compact ? '10.5px' : '12px'}; margin-bottom: ${compact ? '6px' : '10px'}; }
+  th { text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; color: #888; padding: ${compact ? '2px 4px' : '3px 5px'}; border-bottom: 2px solid #ccc; }
+  td { padding: ${compact ? '2px 4px' : '3px 5px'}; border-bottom: 1px solid #eee; vertical-align: top; }
   tr.flexible td { font-style: italic; color: #534ab7; }
+  td.amt { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; width: 60px; }
+  td.unit { white-space: nowrap; width: 60px; color: #666; font-size: 10.5px; }
+  .ing-cols { display: flex; gap: 18px; align-items: flex-start; }
+  .ing-cols > table { flex: 1; min-width: 0; }
   .steps { counter-reset: step; padding: 0; list-style: none; }
-  .steps li { counter-increment: step; padding: 6px 0 6px 28px; position: relative; border-bottom: 1px solid #f0f0f0; }
-  .steps li::before { content: counter(step); position: absolute; left: 0; width: 20px; height: 20px; background: #1a1a18; color: #fff; border-radius: 50%; font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center; top: 7px; }
-  .step-note { font-size: 11px; color: #ba7517; font-style: italic; margin-top: 2px; }
-  .storage-box { background: #f7f6f3; border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px; }
-  .storage-box strong { display: block; font-size: 11px; text-transform: uppercase; color: #888; margin-bottom: 4px; }
-  .footer { margin-top: 16px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 10px; color: #999; display: flex; justify-content: space-between; }
-  ${scaleFactor !== 1 ? '.scale-note { background: #e6f1fb; color: #185fa5; padding: 6px 10px; border-radius: 6px; font-size: 11px; margin-bottom: 12px; font-weight: 500; }' : ''}
+  .steps li { counter-increment: step; padding: ${compact ? '3px 0 3px 22px' : '5px 0 5px 26px'}; position: relative; border-bottom: 1px solid #f0f0f0; break-inside: avoid; }
+  .steps li::before { content: counter(step); position: absolute; left: 0; width: ${compact ? '17px' : '19px'}; height: ${compact ? '17px' : '19px'}; background: #1a1a18; color: #fff; border-radius: 50%; font-size: ${compact ? '9px' : '10px'}; font-weight: 600; display: flex; align-items: center; justify-content: center; top: ${compact ? '4px' : '5px'}; }
+  .step-note { font-size: ${compact ? '10px' : '11px'}; color: #ba7517; font-style: italic; margin-top: 1px; }
+  .storage-box { background: #f7f6f3; border: 1px solid #e0e0e0; border-radius: 6px; padding: 6px 10px; margin-bottom: 6px; font-size: 11px; }
+  .storage-box strong { display: block; font-size: 10px; text-transform: uppercase; color: #888; margin-bottom: 2px; }
+  .footer { margin-top: 10px; padding-top: 6px; border-top: 1px solid #ddd; font-size: 9px; color: #999; display: flex; justify-content: space-between; }
+  ${scaleFactor !== 1 ? '.scale-note { background: #e6f1fb; color: #185fa5; padding: 4px 8px; border-radius: 5px; font-size: 10.5px; margin-bottom: 8px; font-weight: 500; }' : ''}
   @media print {
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .no-print { display: none; }
@@ -667,8 +681,8 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
 <button class="print-btn no-print" onclick="window.print()">Print (Ctrl+P)</button>
 
 <div class="header">
-  ${hasPhoto ? `<img src="/api/recipes/${recipe.id}/photo" class="header-photo" />` : ''}
-  <div>
+  ${showPhoto ? `<img src="/api/recipes/${recipe.id}/photo" class="header-photo" />` : ''}
+  <div style="flex:1;min-width:0;">
     <h1>${esc(recipe.name)}</h1>
     <div class="meta">
       <span>${esc(recipe.type)}</span>
@@ -687,17 +701,25 @@ ${scaleFactor !== 1 ? `<div class="scale-note">Scaled ${scaleFactor > 1 ? 'up' :
 
 ${ingredients.length > 0 ? `
 <h2>Ingredients</h2>
-<table>
-  <thead><tr><th>Ingredient</th><th>Raw amount</th><th>Cooked amount</th><th>Unit</th></tr></thead>
+<div class="ing-cols">
+${(() => {
+  const renderTable = (rows: typeof ingredients) => `<table>
+  <thead><tr><th>Ingredient</th><th class="amt">Amounts</th><th class="unit">Unit</th></tr></thead>
   <tbody>
-    ${ingredients.map(i => `<tr${i.isFlexible ? ' class="flexible"' : ''}>
+    ${rows.map(i => `<tr${i.isFlexible ? ' class="flexible"' : ''}>
       <td>${esc(i.name)}${i.allergens ? ` <span style="font-size:9px;color:#993c1d;">(${esc(i.allergens)})</span>` : ''}</td>
-      <td>${i.rawAmount}</td>
-      <td>${i.cookedAmount ?? '—'}</td>
-      <td>${esc(i.unit)}</td>
+      <td class="amt">${i.amount}</td>
+      <td class="unit">${esc(i.unit)}</td>
     </tr>`).join('')}
   </tbody>
-</table>` : ''}
+</table>`;
+  if (twoColIngredients) {
+    const half = Math.ceil(ingredients.length / 2);
+    return renderTable(ingredients.slice(0, half)) + renderTable(ingredients.slice(half));
+  }
+  return renderTable(ingredients);
+})()}
+</div>` : ''}
 
 ${prepSteps.length > 0 ? `
 <h2>Prep Steps</h2>
@@ -705,9 +727,9 @@ ${prepSteps.length > 0 ? `
   ${prepSteps.map(ps => `<li>${esc(ps.text)}${ps.note ? `<div class="step-note">${esc(ps.note)}</div>` : ''}</li>`).join('')}
 </ol>` : ''}
 
-${recipe.coolingMethod || recipe.storageMethod ? `
+${showStorage && (recipe.coolingMethod || recipe.storageMethod) ? `
 <h2>Storage</h2>
-<div style="display:flex;gap:10px;flex-wrap:wrap;">
+<div style="display:flex;gap:8px;flex-wrap:wrap;">
   ${recipe.coolingMethod ? `<div class="storage-box" style="flex:1;min-width:200px;"><strong>Cooling</strong>${esc(recipe.coolingMethod)}</div>` : ''}
   ${recipe.storageMethod ? `<div class="storage-box" style="flex:1;min-width:200px;"><strong>Storage</strong>${esc(recipe.storageMethod)}</div>` : ''}
 </div>` : ''}

@@ -819,10 +819,17 @@ export async function reSaveRecipe(markComplete: boolean) {
 
 let _detailRecipe: RecipeFull | null = null;
 let _detailScale = 1;
+let _detailShowCooked = false;
 
 function renderDetailModal(r: RecipeFull) {
   _detailRecipe = r;
   _detailScale = 1;
+  _detailShowCooked = false;
+  _renderDetailContent();
+}
+
+export function detailToggleCooked() {
+  _detailShowCooked = !_detailShowCooked;
   _renderDetailContent();
 }
 
@@ -894,9 +901,19 @@ function _renderDetailContent() {
 
       ${r.ingredients.length > 0 ? `
         <div class="re-review-section">
-          <strong>Ingredients (${r.ingredients.length})</strong>
+          <div class="re-section-title-row">
+            <strong>Ingredients (${r.ingredients.length})</strong>
+            <button class="btn btn-sm" onclick="detailToggleCooked()" title="Toggle cooked-amount column">
+              ${_detailShowCooked ? 'Hide cooked' : 'Show cooked'}
+            </button>
+          </div>
           <table class="re-detail-table">
-            <thead><tr><th>Ingredient</th><th>Raw</th><th>Cooked</th><th>Unit</th></tr></thead>
+            <thead><tr>
+              <th>Ingredient</th>
+              <th>${_detailShowCooked ? 'Raw' : 'Amount'}</th>
+              ${_detailShowCooked ? '<th>Cooked</th>' : ''}
+              <th>Unit</th>
+            </tr></thead>
             <tbody>
               ${r.ingredients.map(ing => {
                 const scaledRaw = scale !== 1 ? roundForUnit(ing.rawAmount * scale, ing.unit) : ing.rawAmount;
@@ -904,7 +921,7 @@ function _renderDetailContent() {
                 return `<tr${ing.isFlexible ? ' style="font-style:italic;color:var(--purple);"' : ''}>
                 <td>${ing.isFlexible ? esc(ing.flexLabel || 'Flexible') + ' (' + esc(ing.flexCategory || '') + ')' : esc(ing.ingredientName || 'Unknown')}</td>
                 <td>${scaledRaw}</td>
-                <td>${scaledCooked ?? '—'}</td>
+                ${_detailShowCooked ? `<td>${scaledCooked ?? '—'}</td>` : ''}
                 <td>${esc(ing.unit)}</td>
               </tr>`;
               }).join('')}
@@ -1212,13 +1229,20 @@ function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock
   const scaleFactor = br.recipeVolume > 0 ? (br.targetLiters / br.recipeVolume) : 1;
   const canScale = br.recipeVolume > 0;
 
+  const notesHTML = `
+    <div class="re-section">
+      <div class="re-section-title">Cook notes</div>
+      <textarea class="re-inline-input br-notes-textarea" rows="3"
+        onchange="brUpdateNotes(this.value)" placeholder="Any notes about this cook...">${esc(br.cookNotes)}</textarea>
+    </div>`;
+
   return `
     <div class="br-header">
-      <div style="flex:1;">
-        <h3 style="margin:0;">${esc(batch.name)}</h3>
-        <span style="font-size:12px;color:var(--text2);">Batch recipe &mdash; ${batch.stock}L</span>
+      <div class="br-header-title">
+        <h3>${esc(batch.name)}</h3>
+        <span class="br-header-sub">Batch recipe &mdash; ${batch.stock}L</span>
       </div>
-      <div style="display:flex;gap:6px;align-items:center;">
+      <div class="br-header-actions">
         <button class="btn btn-sm" onclick="brToggleFullscreen()" title="${br.isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}">
           ${br.isFullscreen ? '&#x2715; Exit fullscreen' : '&#x26F6; Fullscreen'}
         </button>
@@ -1233,39 +1257,39 @@ function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock
         onchange="brUpdateTargetLiters(+this.value)" style="width:70px;" />
       <span>L</span>
       ${portions !== null ? `
-        <span style="color:var(--text2);">&nbsp;|&nbsp;</span>
+        <span class="br-scale-sep">|</span>
         <label>Portions:</label>
         <input type="number" class="re-inline-input re-inline-num" value="${portions}" min="1" step="1"
           onchange="brUpdateTargetPortions(+this.value)" style="width:70px;" />
       ` : ''}
-      <span class="br-scale-info">(recipe: ${br.recipeVolume}L, scale: ${scaleFactor.toFixed(1)}x)</span>
+      <span class="br-scale-info">recipe ${br.recipeVolume}L &middot; scale ${scaleFactor.toFixed(1)}&times;</span>
     </div>` : `<div class="br-scale-row"><span style="color:var(--text2);font-size:12px;">Set recipe volume to enable scaling</span></div>`}
     <div class="br-body">
-      <div class="re-section">
-        <div class="re-section-title">Ingredients</div>
-        <table class="re-ing-table">
-          <thead><tr>
-            <th class="re-th-num">#</th>
-            <th class="re-th-name">Ingredient</th>
-            <th class="re-th-amt">Amount</th>
-            <th class="re-th-unit">Unit</th>
-            <th class="re-th-actions"></th>
-          </tr></thead>
-          <tbody>${ingRows}</tbody>
-        </table>
-        ${addIngHTML}
-        ${removedHTML}
+      <div class="br-grid">
+        <div class="br-col br-col-ingredients">
+          <div class="re-section">
+            <div class="re-section-title">Ingredients</div>
+            <table class="re-ing-table">
+              <thead><tr>
+                <th class="re-th-num">#</th>
+                <th class="re-th-name">Ingredient</th>
+                <th class="re-th-amt">Amount</th>
+                <th class="re-th-unit">Unit</th>
+                <th class="re-th-actions"></th>
+              </tr></thead>
+              <tbody>${ingRows}</tbody>
+            </table>
+            ${addIngHTML}
+            ${removedHTML}
+          </div>
+        </div>
+        <div class="br-col br-col-prep">
+          ${prepHTML || `<div class="re-section"><div class="re-section-title">Prep steps</div><div style="font-size:12px;color:var(--text2);">No prep steps recorded.</div></div>`}
+          ${notesHTML}
+        </div>
       </div>
 
-      ${prepHTML}
-
-      <div class="re-section">
-        <div class="re-section-title">Cook notes</div>
-        <textarea class="re-inline-input" rows="2" style="height:auto;resize:vertical;"
-          onchange="brUpdateNotes(this.value)" placeholder="Any notes about this cook...">${esc(br.cookNotes)}</textarea>
-      </div>
-
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin:8px 0 12px;">
+      <label class="br-deduct-row">
         <input type="checkbox" ${br.deductStock ? 'checked' : ''} onchange="brToggleDeduct(this.checked)" />
         Deduct ingredients from stock after saving
       </label>
