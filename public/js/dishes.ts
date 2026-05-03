@@ -279,14 +279,22 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
 
   // Family-aware split indicator: when this batch is part of a split family
   // (parent + ship-off children sharing a recipe), show how much of the same
-  // recipe is sitting at the OTHER location. Helps the cook see the full
-  // picture: "I have 50L of Tomato here, and another 30L is at Centraal."
+  // recipe is sitting at the OTHER location AND in which direction the food
+  // flowed. The PARENT (no parentId) was the original cook and shipped a
+  // portion away → "sending". The SPLIT (has parentId) is the recipient of
+  // the ship-off → "pulling from". Asymmetry helps the cook see at a glance:
+  //   • parent tile  →  "→ 40L sent to C"   (this batch shipped out)
+  //   • split tile   →  "← 85.5L from W"    (this batch came from over there)
   const family = getFamilyMembers(d, S.batches);
+  const otherLoc = d.location === 'west' ? 'centraal' : 'west';
   const otherLocStock = family
     .filter(f => f.id !== d.id && f.location !== d.location)
     .reduce((sum, f) => sum + (f.stock || 0), 0);
+  const isParent = !d.parentId;
   const familyBadge = (family.length > 1 && otherLocStock > 0)
-    ? `<span class="batch-family-badge" title="Part of a split — same recipe is also stocked at the other location. Total family stock: ${getFamilyStock(d, S.batches).toFixed(1)}L.">↔ ${otherLocStock}L @ ${d.location === 'west' ? 'C' : 'W'}</span>`
+    ? (isParent
+        ? `<span class="batch-family-badge family-sending" title="This is the parent batch. ${otherLocStock}L of the same recipe was split off and shipped to ${otherLoc === 'centraal' ? 'Centraal' : 'West'}. Total family stock: ${getFamilyStock(d, S.batches).toFixed(1)}L.">→ ${otherLocStock}L sent to ${otherLoc === 'centraal' ? 'C' : 'W'}</span>`
+        : `<span class="batch-family-badge family-receiving" title="This is a split — the recipe was originally cooked at ${otherLoc === 'west' ? 'West' : 'Centraal'} and ${otherLocStock}L is still over there. Total family stock: ${getFamilyStock(d, S.batches).toFixed(1)}L.">← ${otherLocStock}L from ${otherLoc === 'west' ? 'W' : 'C'}</span>`)
     : '';
 
   // Compact row
