@@ -8,7 +8,7 @@ Format: `[STATUS] <ID> — <one-line summary>`
 - [PR #21](https://github.com/baasvis/Sering-food-planner/pull/21) **T18** — silent stock-deduct in batch recipe save. Helper extracted + tests + toastError.
 - [PR #22](https://github.com/baasvis/Sering-food-planner/pull/22) **S2** — stored XSS via id field. Regex on all entity validators + ingredient routes.
 - [PR #23](https://github.com/baasvis/Sering-food-planner/pull/23) **S3+S4+S5** — boot-time `AUTH_MODE` guard, S5 marked already-resolved by Slice 11.
-- [PR pending] **A10/T7** — dbReadAll error swallowing. Removed try/catch, errors now surface as 500 + frontend showDataError banner. Regression test added.
+- [PR #24](https://github.com/baasvis/Sering-food-planner/pull/24) **A10/T7** — dbReadAll error swallowing. Removed try/catch, errors now surface as 500 + frontend showDataError banner. Regression test added.
 
 ## In progress
 - (picking next finding)
