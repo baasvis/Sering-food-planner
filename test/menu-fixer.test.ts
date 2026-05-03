@@ -100,6 +100,31 @@ function fixedCalcRequired(perService = 1, holds: Map<string, number> = new Map(
   };
 }
 
+/**
+ * A peer-aware calcRequired stub. Demand at each service is `guestsPerSlot`
+ * divided by the number of same-type batches currently sharing that slot
+ * (live count from the passed-in `allBatches`, not from any cache).
+ *
+ * This mirrors the production calcRequired's peer-splitting behavior, which
+ * the cheap `fixedCalcRequired` ignores. Use this when a test needs to verify
+ * that the algorithm correctly accounts for peer-split capacity (e.g. a tight-
+ * stock batch that fits only when a peer is at the same slot).
+ */
+function peerAwareCalcRequired(allBatches: Batch[], guestsPerSlot: number, servingGrams = 280) {
+  return (dish: Batch): number => {
+    let total = 0;
+    for (const svc of dish.services || []) {
+      const peers = allBatches.filter(b =>
+        b.type === dish.type
+        && (b.services || []).some(s => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal),
+      );
+      const count = Math.max(peers.length, 1);
+      total += (guestsPerSlot / count) * (servingGrams / 1000);
+    }
+    return Math.round(total * 10) / 10;
+  };
+}
+
 beforeEach(() => {
   _idCounter = 0;
   localStorage.clear();
@@ -413,6 +438,33 @@ describe('assignServicesPass1', () => {
     // Only 2 services fit (5L stock - 3L catering = 2L for services).
     expect(cooked.services.length).toBe(2);
   });
+
+  test('Pass 1: tight-stock batch fits a slot where a peer is already present', () => {
+    // Regression for the stale-S.planner peer-counting bug. Setup mimics the
+    // "Pasta al Pesto (split)" case: a peer batch has already been placed at
+    // a slot (e.g. by an earlier batch's Pass 1 walk). The tight-stock batch
+    // walks Pass 1, considers the same slot. Solo demand exceeds its stock,
+    // but with the peer split it fits. A stale calcReq would mis-count peers
+    // and pop the add; a live calcReq sees the actual 2-peer situation.
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    // 130 guests × 80g = 10.4L solo, 5.2L when split with one peer.
+    const peer = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 40, serving: 80, name: 'Peer' });
+    peer.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];  // pre-placed
+    const tight = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 8, serving: 80, name: 'Tight' });
+    const all = [peer, tight];
+    const liveCalcReq = peerAwareCalcRequired(all, 130, 80);
+
+    assignServicesPass1(all, window, liveCalcReq);
+
+    // Tight should land at Wed dinner West despite stock 8L < solo demand 10.4L,
+    // because Peer is already there → demand splits to 5.2L.
+    const tightInSlot = (tight.services || []).some(s =>
+      s.date === '2026-05-06' && s.meal === 'dinner' && s.loc === 'west'
+    );
+    expect(tightInSlot).toBe(true);
+  });
 });
 
 // ── Step 4: Pass 2 (2-newest) ──────────────────────────────────────────────
@@ -476,6 +528,40 @@ describe('assignServicesPass2', () => {
     const frozen = makeBatch({ type: 'Soup', cookDate: '01/05/2026', stock: 5, storage: 'Frozen', name: 'Frozen Pea' });
     assignServicesPass2([frozen], window, fixedCalcRequired(1));
     expect(frozen.services.length).toBe(0);
+  });
+
+  test('Pass 2: tight-stock batch fits when peer-split halves demand at the slot', () => {
+    // Regression for the "Pasta al Pesto (split)" case: a Centraal batch with
+    // just enough stock for half a slot (when sharing with a peer) but not
+    // enough to be solo. With a stale planner the capacity check mis-counts
+    // peers and rejects the add; with a live planner it accepts.
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    // The big batch goes in first (Pass 1 sims this). Pasta-equivalent has
+    // tight stock and only fits when paired.
+    const big = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 40, location: 'centraal', name: 'Big' });
+    big.services = [{ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }];  // pre-placed by Pass 1
+    const tight = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 10, location: 'centraal', name: 'Tight' });
+    const all = [big, tight];
+    // 130 guests × 280g = 36.4L solo, 18.2L if 2 peers split
+    // Tight has 10L: cannot solo, but fits a 18.2L share is too much...
+    // Use 130 guests at 80g serving instead (Pasta-style): 10.4L solo, 5.2L split.
+    const lightServingTight = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 8, serving: 80, location: 'centraal', name: 'Pasta-tight' });
+    all.length = 0;
+    all.push(big, lightServingTight);
+    big.services = [{ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }];
+
+    const liveCalcReq = peerAwareCalcRequired(all, 130, 80);
+
+    // Pass 2 walks every (slot, type, position) and tries to fill.
+    // Wed dinner Centraal Main has 1/2 → second position should pick lightServingTight.
+    assignServicesPass2(all, window, liveCalcReq);
+
+    const tightInSlot = (lightServingTight.services || []).some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-06' && s.meal === 'dinner'
+    );
+    expect(tightInSlot).toBe(true);
   });
 
   test('cooked batch at stock limit gets skipped (next candidate picked)', () => {

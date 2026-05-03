@@ -756,11 +756,25 @@ export function fixMyMenu(): void {
   // S.planner to count peer batches per slot.
   rebuildPlanner();
 
+  // The pass functions tentatively-add a service then immediately call calcReq
+  // to check capacity. Without this wrapper, calcReq reads a stale S.planner
+  // that doesn't include the just-pushed service, so the "peer count" for the
+  // new slot is missing one entry. With two batches at a slot, peers come back
+  // as 1 instead of 2 — demand is computed at solo rates, the add overshoots
+  // stock, and the slot ends up empty even though it would fit fine when peers
+  // actually split the demand. Rebuilding before every calcReq is cheap (~150
+  // ops × ~300 calls per fixMyMenu run) and keeps the contract of calcReq
+  // unchanged elsewhere.
+  const calcReqLive = (b: Batch): number => {
+    rebuildPlanner();
+    return calcRequired(b);
+  };
+
   // Step 4 — Pass 1: extend cooked batches forward through the window.
   // All passes skip 0-guest slots — no point planning food where nobody eats.
   // Pot capacity is NOT enforced during assignment — pots get allocated by
   // demand AFTER all passes complete (see allocatePotCaps below).
-  const pass1 = assignServicesPass1(S.batches, planWindow, calcRequired, getGuests);
+  const pass1 = assignServicesPass1(S.batches, planWindow, calcReqLive, getGuests);
   rebuildPlanner();
 
   // Step 4 — Pass 2: fill remaining empty positions with the 2-newest rule.
@@ -770,12 +784,12 @@ export function fixMyMenu(): void {
   const biggestPot = S.kitchenEquipment && S.kitchenEquipment.pots.length > 0
     ? Math.max(...S.kitchenEquipment.pots)
     : undefined;
-  const pass2 = assignServicesPass2(S.batches, planWindow, calcRequired, getGuests, biggestPot);
+  const pass2 = assignServicesPass2(S.batches, planWindow, calcReqLive, getGuests, biggestPot);
   rebuildPlanner();
 
   // Step 4 — Pass 3: fill anything still empty. Uses the same Sun-bias and
   // most-loaded-under-bigPot logic as Pass 2 so it doesn't undo concentration.
-  const pass3 = assignServicesPass3(S.batches, planWindow, calcRequired, getGuests, biggestPot);
+  const pass3 = assignServicesPass3(S.batches, planWindow, calcReqLive, getGuests, biggestPot);
   rebuildPlanner();
 
   // Step 4.5 — Allocate kitchen pots to batches by ACTUAL demand.
