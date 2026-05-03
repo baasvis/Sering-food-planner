@@ -326,10 +326,17 @@ function diffDaysIso(aIso: string, bIso: string): number {
  * A batch with cookDate = X is servable starting at dinner of X (lunch of X is
  * too early — cooking happens during the day). Any later day is fine.
  *
- * Centraal exception: food is delivered to Centraal every morning, so a
- * West-cooked batch reaches Centraal only the next day — Centraal services
- * for West-cooked food need slotDate > cookDate (no same-day Centraal).
- * Centraal-cooked batches (rare) follow the standard same-day-dinner rule.
+ * Location rules (`batchLocation` = where the food physically IS, not where it
+ * was cooked):
+ *   - West-located batch + Centraal slot → next-morning delivery only
+ *     (West cooks, food rides the morning van to Centraal). Same-day Centraal
+ *     dinner is too early.
+ *   - Centraal-located batch + West slot → NEVER. There's no reverse delivery,
+ *     so once food is at Centraal it stays there. Without this rule the
+ *     algorithm cheerfully assigns Centraal stock (often a "(split)" batch
+ *     deliberately sent to Centraal) to West services, which is a logistics
+ *     impossibility AND starves Centraal of its own dedicated stock.
+ *   - Same-location: standard same-day-dinner rule.
  */
 export function isServableBy(
   cookDateDdmmyyyy: string | null,
@@ -341,11 +348,13 @@ export function isServableBy(
   const cookIso = cookDateToIso(cookDateDdmmyyyy);
   if (!cookIso) return false;
   if (slotIsoDate < cookIso) return false;
-  // West-cooked food at Centraal: must wait for next-morning delivery
+  // Centraal-located food cannot flow back to West — no reverse delivery.
+  if (slotLoc === 'west' && batchLocation === 'centraal') return false;
+  // West-cooked food at Centraal: must wait for next-morning delivery.
   if (slotLoc === 'centraal' && batchLocation === 'west') {
     return slotIsoDate > cookIso;
   }
-  // Otherwise: standard rule (same-day dinner OK, any later day OK)
+  // Same-location: standard rule (same-day dinner OK, any later day OK).
   if (slotIsoDate > cookIso) return true;
   return slotMeal === 'dinner';
 }
@@ -414,7 +423,17 @@ export function assignServicesPass1(
     .filter(b => b.stock > 0)
     .filter(b => b.cookDate)
     .filter(b => b.storage !== 'Frozen')
-    .sort((a, b) => cookDateSortKey(a).localeCompare(cookDateSortKey(b)));
+    .sort((a, b) => {
+      // Primary: oldest cookDate first (use up older food before newer)
+      const ck = cookDateSortKey(a).localeCompare(cookDateSortKey(b));
+      if (ck !== 0) return ck;
+      // Secondary: Centraal-located batches before West. They have a smaller
+      // pool of eligible slots (Centraal-only — see isServableBy), so they
+      // need first pick before West batches consume Centraal slots.
+      if (a.location !== b.location) return a.location === 'centraal' ? -1 : 1;
+      // Tertiary: id for determinism so reruns produce the same plan.
+      return a.id.localeCompare(b.id);
+    });
 
   let added = 0;
   const touched = new Set<string>();
@@ -798,7 +817,8 @@ export type WarningCategory =
   | 'over-pot-cap'
   | 'burner-overload'
   | 'catering-no-dishes'
-  | 'undeliverable-centraal';
+  | 'undeliverable-centraal'
+  | 'centraal-batch-at-west';
 
 export interface Warning {
   category: WarningCategory;
@@ -967,6 +987,23 @@ export function collectWarnings(
     }
   }
 
+  // 6b. Centraal-located batch with a West service. Symmetric to (6) — there's
+  // no van going Centraal→West, so a Centraal batch can't physically reach a
+  // West slot. Catches manual assignments that violate the no-reverse-flow
+  // rule. (Pass 1/2/3 honour the rule via isServableBy and never create these.)
+  for (const b of allBatches) {
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (b.location !== 'centraal') continue;
+    const violating = (b.services || []).filter(s => s.loc === 'west');
+    if (violating.length > 0) {
+      warnings.push({
+        category: 'centraal-batch-at-west',
+        message: `${b.name} is at Centraal but is set to serve at West (${violating.length} service${violating.length === 1 ? '' : 's'}). There's no transport from Centraal back to West — either move the batch, or move the service.`,
+        anchor: { kind: 'batch', batchId: b.id },
+      });
+    }
+  }
+
   // 7. Caterings in window with no dishes assigned.
   const todayIso = dateToIso(getToday());
   const horizonEnd = dateToIso(new Date(getToday().getTime() + (PLANNING_HORIZON_DAYS - 1) * 86400000));
@@ -1030,6 +1067,7 @@ function renderWarningRow(w: Warning, idx: number): string {
 // a one-line explanation a line cook can act on.
 const CATEGORY_ORDER: WarningCategory[] = [
   'undeliverable-centraal',  // wrong assignment, needs immediate fix
+  'centraal-batch-at-west',  // wrong assignment (no reverse delivery)
   'cooked-stockout',         // real food shortage, will run out
   'under-filled-slot',       // need to plan more food
   'over-pot-cap',            // pot doesn't fit, must split
@@ -1041,6 +1079,7 @@ const CATEGORY_ORDER: WarningCategory[] = [
 function categoryHeader(c: WarningCategory): { title: string; hint: string } {
   switch (c) {
     case 'undeliverable-centraal': return { title: '🚚 Won\'t arrive in time', hint: 'Centraal gets food delivered the morning after it\'s cooked.' };
+    case 'centraal-batch-at-west': return { title: '↩️ No transport back to West', hint: 'Once food is at Centraal, it stays there — there\'s no return van.' };
     case 'cooked-stockout':        return { title: '🥣 Will run out of food', hint: 'Already cooked but not enough for the planned services.' };
     case 'under-filled-slot':      return { title: '📋 Slots need more food', hint: 'Each service usually has 2 soups + 2 mains.' };
     case 'over-pot-cap':           return { title: '🍲 Won\'t fit in one pot', hint: 'Cook it in two pots so it fits.' };

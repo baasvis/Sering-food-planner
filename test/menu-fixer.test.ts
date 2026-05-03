@@ -135,6 +135,15 @@ describe('isServableBy', () => {
     expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'centraal', 'centraal')).toBe(true);
     expect(isServableBy('05/05/2026', '2026-05-05', 'lunch', 'centraal', 'centraal')).toBe(false);
   });
+  test('No reverse delivery: Centraal-located batch is NEVER servable at a West slot', () => {
+    // A "(split)" batch deliberately sent to Centraal stays at Centraal — there's
+    // no van going back the other way. Without this rule, the algorithm would
+    // assign Centraal stock to West slots, which is logistically impossible AND
+    // starves Centraal of its own dedicated stock.
+    expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'west', 'centraal')).toBe(false);
+    expect(isServableBy('05/05/2026', '2026-05-06', 'lunch', 'west', 'centraal')).toBe(false);
+    expect(isServableBy('05/05/2026', '2026-05-07', 'dinner', 'west', 'centraal')).toBe(false);
+  });
 });
 
 describe('Pass 2 tiered bigger-pot bias', () => {
@@ -341,6 +350,53 @@ describe('assignServicesPass1', () => {
     const frozen = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 10, storage: 'Frozen' });
     assignServicesPass1([frozen], window, fixedCalcRequired(1));
     expect(frozen.services.length).toBe(0);
+  });
+
+  test('Pass 1: Centraal-located batch ONLY extends to Centraal slots (no reverse delivery)', () => {
+    // Regression for the "(split)" bug: a batch physically at Centraal must
+    // not be assigned to West services. Without the rule, the algorithm
+    // gleefully serves Centraal stock at West, which is logistically
+    // impossible AND starves Centraal of its dedicated stock.
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+      { iso: '2026-05-07', dayName: 'Thu', cookDate: '07/05/2026' },
+    ]);
+    const cookedAtCentraal = makeBatch({
+      type: 'Soup',
+      cookDate: '06/05/2026',
+      stock: 100,
+      location: 'centraal',
+    });
+    assignServicesPass1([cookedAtCentraal], window, fixedCalcRequired(1));
+    // No services should land at West.
+    expect(cookedAtCentraal.services.every(s => s.loc === 'centraal')).toBe(true);
+    // Centraal-cooked: same-day dinner OK, plus Thu lunch + Thu dinner.
+    expect(cookedAtCentraal.services.length).toBe(3);
+  });
+
+  test('Pass 1: Centraal-located batches are processed before West to claim Centraal slots', () => {
+    // Without the priority sort, processing order depends on input order
+    // (insert order from the DB). When West batches happen to be processed
+    // first, they consume Centraal slots and leave Centraal-located batches
+    // empty-handed even though Centraal is the only place they can serve.
+    const window = makeWindow([
+      { iso: '2026-05-07', dayName: 'Thu', cookDate: '07/05/2026' },
+    ]);
+    // Same cookDate, same type — only the location differs. West is in the
+    // input first; without the new sort it would grab Thu Centraal slots.
+    const westBatch     = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, location: 'west',     name: 'West'     });
+    const centraalBatch = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, location: 'centraal', name: 'Centraal' });
+
+    assignServicesPass1([westBatch, centraalBatch], window, fixedCalcRequired(1));
+
+    // Centraal batch must claim BOTH Centraal slots (Thu lunch + Thu dinner) —
+    // it can't serve anywhere else. West batch can still co-occupy the second
+    // Centraal-slot position; the point of the priority sort is that the
+    // Centraal batch gets in first, not that West is excluded.
+    const centraalServices = centraalBatch.services.filter(s => s.loc === 'centraal');
+    expect(centraalServices.length).toBe(2);
+    // And the Centraal batch must NOT have any West services.
+    expect(centraalBatch.services.every(s => s.loc === 'centraal')).toBe(true);
   });
 
   test('Pass 1 catering hold reduces extension headroom', () => {
@@ -746,6 +802,18 @@ describe('collectWarnings', () => {
     const catering = { id: 'c1', date: '06/05/2026', dishes: [] };
     const warnings = collectWarnings([], window, [catering], fixedCalcRequired(1), new Map(), null, noGuests);
     expect(warnings.filter(w => w.category === 'catering-no-dishes').length).toBe(1);
+  });
+
+  test('centraal-batch-at-west warning fires when a Centraal batch has West services', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const wronglyPlaced = makeBatch({ type: 'Soup', cookDate: '05/05/2026', stock: 10, location: 'centraal' });
+    wronglyPlaced.services = [
+      { loc: 'west', date: '2026-05-06', meal: 'dinner' },  // wrong! no van back to west
+    ];
+    const warnings = collectWarnings([wronglyPlaced], window, [], fixedCalcRequired(1), new Map(), null, noGuests);
+    const violations = warnings.filter(w => w.category === 'centraal-batch-at-west');
+    expect(violations.length).toBe(1);
+    expect(violations[0].anchor).toEqual({ kind: 'batch', batchId: wronglyPlaced.id });
   });
 
   test('burner overload warning when too many big-pot batches per cook day', () => {
