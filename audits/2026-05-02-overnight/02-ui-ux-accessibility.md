@@ -14,6 +14,7 @@ I did **not** boot the dev server and run axe-core, NVDA, or a real-device check
 ## Findings
 
 ### U1 — Zero ARIA attributes anywhere in the frontend
+**PARTIALLY RESOLVED on 2026-05-03 (branch `claude/u1-u3-u4-aria-acfca7`)**: applied the three quick wins from the audit's suggested-fix list. `aria-live="polite" role="status"` on `#toast` (index.html) and `#save-indicator` (init.ts) so screen readers announce save state and toast text. Modal got `role="dialog" aria-modal="true" tabindex="-1"` and a focus shift on open (modal.ts) so it's announced as a dialog and the underlying screen is treated as inert. Verified live in preview. Deferred: `aria-label` on icon-only buttons (top-bar theme toggle, feedback FAB, tutorial FAB) — separate PR.
 - **Severity**: High (for accessibility), Medium (for current users)
 - **Location**: All of [public/js/](public/js/) and [public/index.html](public/index.html). Confirmed by `grep -rn "aria-\|role=" public/` returning nothing.
 - **What**: Every screen is a stack of `<div>`s and `<button>`s with text labels. The bottom nav, top nav, dish grid, planner grid, modal dialogs, and toasts all rely entirely on visual signal (color, position) for state. The toast region is not announced. The modal isn't a `dialog` element and has no `role="dialog"` / `aria-modal`. The save indicator (`<div class="save-dot saved" id="save-dot"></div>` + `<span id="save-text">Saved</span>`) has no `aria-live` so screen readers don't know when "Saving…" → "Save failed" occurs.
@@ -33,6 +34,7 @@ I did **not** boot the dev server and run axe-core, NVDA, or a real-device check
 - **Confidence**: High.
 
 ### U3 — Modal pattern doesn't trap focus or restore it
+**PARTIALLY RESOLVED on 2026-05-03 (branch `claude/u1-u3-u4-aria-acfca7`)**: modal now gets focus on open (the wrapper has `tabindex="-1"` and `requestAnimationFrame` calls `.focus()` after insertion). `role="dialog"` + `aria-modal="true"` are also set. Deferred: full focus-trap (Tab/Shift+Tab cycle within modal) and focus-restore-on-close to the opener element — those need a heavier refactor of the modal lifecycle and belong in a separate PR.
 - **Severity**: High (a11y), Medium (UX)
 - **Location**: [public/js/modal.ts:11-24](public/js/modal.ts), [public/js/init.ts:88-96](public/js/init.ts).
 - **What**: `showModal()` injects HTML into `#modal-root`. There is no focus trap. Pressing Tab inside an open modal eventually moves focus into the underlying screen (which is still keyboard-active because the modal is just an overlay div, not `inert`). When the modal closes, focus is not restored to the element that opened it — it lands on `<body>`, so the next Tab walks from the start of the page. The only Esc handler is on the `keydown` listener in `init.ts`, which calls `closeModal()` — fine, but doesn't restore focus either.
@@ -41,6 +43,7 @@ I did **not** boot the dev server and run axe-core, NVDA, or a real-device check
 - **Confidence**: High.
 
 ### U4 — `maximum-scale=1.0` in viewport meta blocks pinch-zoom
+**RESOLVED on 2026-05-03 (branch `claude/u1-u3-u4-aria-acfca7`)**: dropped `maximum-scale=1.0` from `public/index.html`. Pinch-zoom is no longer blocked. The original justification (preventing iOS auto-zoom on input focus) is best handled at the input-css level (`font-size: 16px` on inputs) — separate PR if/when needed.
 - **Severity**: Medium (a11y violation)
 - **Location**: [public/index.html:5](public/index.html).
 - **What**: `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">`. This blocks the user from pinch-zooming on mobile.

@@ -58,7 +58,7 @@ export function buildNav() {
     ${NAV_SCREENS.map((s: any, i: any) =>
       `<button class="nav-btn${i === 0 ? ' active' : ''}" data-screen="${s.id}" onclick="showScreen('${s.id}')">${s.topLabel}</button>`
     ).join('')}
-    <div class="save-indicator" id="save-indicator">
+    <div class="save-indicator" id="save-indicator" role="status" aria-live="polite">
       <div class="save-dot saved" id="save-dot"></div>
       <span id="save-text">Saved</span>
     </div>
