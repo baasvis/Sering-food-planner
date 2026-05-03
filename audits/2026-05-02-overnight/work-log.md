@@ -10,7 +10,7 @@ Format: `[STATUS] <ID> — <one-line summary>`
 - [PR #23](https://github.com/baasvis/Sering-food-planner/pull/23) **S3+S4+S5** — boot-time `AUTH_MODE` guard, S5 already-resolved.
 - [PR #24](https://github.com/baasvis/Sering-food-planner/pull/24) **A10/T7** — dbReadAll error swallowing.
 - [PR #25](https://github.com/baasvis/Sering-food-planner/pull/25) **U1+U3+U4** — ARIA quick wins.
-- [PR pending] **T4** — fire-and-forget stock save. Both `ingredient-db.ts` + `orders.ts` now route through `apiPost` and pipe failures to `toastError`.
+- [PR #26](https://github.com/baasvis/Sering-food-planner/pull/26) **T4** — fire-and-forget stock save. Both `ingredient-db.ts` + `orders.ts` now route through `apiPost` and pipe failures to `toastError`.
 
 ## In progress
 - (picking next finding)
