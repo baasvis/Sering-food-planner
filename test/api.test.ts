@@ -82,6 +82,24 @@ describe('GET /api/data', () => {
     expect(res.body).toHaveProperty('transportItems');
     expect(Array.isArray(res.body.batches)).toBe(true);
   });
+
+  // Audit A10/T7: dbReadAll used to swallow any DB error and return empty
+  // arrays (200 + no data). The frontend rendered an "empty kitchen" that
+  // looked identical to a fresh install. Now the error is thrown and the
+  // global error handler returns 500 — the frontend's apiGet shows the
+  // persistent error banner instead of silently lying.
+  it('returns 500 (not 200 with empties) when the DB throws', async () => {
+    const original = prisma.batch.findMany;
+    prisma.batch.findMany = () => { throw new Error('simulated DB failure'); };
+    try {
+      const res = await request(app).get('/api/data');
+      expect(res.status).toBe(500);
+      // The 200-with-empty-arrays regression is the bug we're guarding against.
+      expect(res.body.batches).toBeUndefined();
+    } finally {
+      prisma.batch.findMany = original;
+    }
+  });
 });
 
 describe('POST /api/data', () => {

@@ -239,74 +239,74 @@ async function writeTransport(tx: TxClient, items: TransportItem[]): Promise<voi
 // ── High-level database operations ──
 
 export async function dbReadAll(): Promise<DataResponse> {
-  try {
-    const [batchRows, guestRows, cateringRows, transportRows, recipeV2Rows] = await Promise.all([
-      prisma.batch.findMany(),
-      prisma.guest.findMany(),
-      // Legacy recipeIndex table kept in DB as backup but no longer served to frontend
-      prisma.catering.findMany(),
-      prisma.transportItem.findMany(),
-      prisma.recipe.findMany({ include: { ingredients: { orderBy: { sortOrder: 'asc' } } } }),
-    ]);
+  // Audit A10/T7: do NOT wrap this in try/catch returning empty defaults.
+  // A swallowed DB error returned a 200 with empty arrays, which the planner
+  // rendered as "no batches, no recipes" — visually identical to a fresh
+  // install. Throw instead, asyncHandler routes to the global 500 handler,
+  // and the frontend's apiGet shows the persistent error banner via
+  // showDataError (public/js/utils.ts).
+  const [batchRows, guestRows, cateringRows, transportRows, recipeV2Rows] = await Promise.all([
+    prisma.batch.findMany(),
+    prisma.guest.findMany(),
+    // Legacy recipeIndex table kept in DB as backup but no longer served to frontend
+    prisma.catering.findMany(),
+    prisma.transportItem.findMany(),
+    prisma.recipe.findMany({ include: { ingredients: { orderBy: { sortOrder: 'asc' } } } }),
+  ]);
 
-    const batches: Batch[] = batchRows.map(b => ({
-      id: b.id,
-      name: b.name,
-      type: b.type as Batch['type'],
-      stock: b.stock,
-      serving: b.serving,
-      storage: b.storage as Batch['storage'],
-      location: b.location as Batch['location'],
-      inTransit: b.inTransit,
-      allergens: b.allergens,
-      extraAllergens: b.extraAllergens,
-      orderFor: b.orderFor,
-      cookDate: b.cookDate,
-      recipeSheetId: b.recipeSheetId,
-      recipeVolume: b.recipeVolume,
-      recipeIngredients: (b.recipeIngredients ?? null) as Batch['recipeIngredients'],
-      parentId: b.parentId,
-      note: b.note,
-      services: Array.isArray(b.services) ? (b.services as unknown as Service[]) : [],
-      createdAt: b.createdAt,
-      recipeId: b.recipeId,
-      actualIngredients: (b.actualIngredients ?? null) as ActualIngredient[] | null,
-      cookNotes: b.cookNotes,
-      stockDeducted: b.stockDeducted,
-      generated: b.generated,
-    }));
+  const batches: Batch[] = batchRows.map(b => ({
+    id: b.id,
+    name: b.name,
+    type: b.type as Batch['type'],
+    stock: b.stock,
+    serving: b.serving,
+    storage: b.storage as Batch['storage'],
+    location: b.location as Batch['location'],
+    inTransit: b.inTransit,
+    allergens: b.allergens,
+    extraAllergens: b.extraAllergens,
+    orderFor: b.orderFor,
+    cookDate: b.cookDate,
+    recipeSheetId: b.recipeSheetId,
+    recipeVolume: b.recipeVolume,
+    recipeIngredients: (b.recipeIngredients ?? null) as Batch['recipeIngredients'],
+    parentId: b.parentId,
+    note: b.note,
+    services: Array.isArray(b.services) ? (b.services as unknown as Service[]) : [],
+    createdAt: b.createdAt,
+    recipeId: b.recipeId,
+    actualIngredients: (b.actualIngredients ?? null) as ActualIngredient[] | null,
+    cookNotes: b.cookNotes,
+    stockDeducted: b.stockDeducted,
+    generated: b.generated,
+  }));
 
-    const guests = getDefaultGuests();
-    for (const row of guestRows) {
-      if (guests[row.location] && guests[row.location][row.day]) {
-        guests[row.location][row.day].lunch = row.lunch;
-        guests[row.location][row.day].dinner = row.dinner;
-      }
+  const guests = getDefaultGuests();
+  for (const row of guestRows) {
+    if (guests[row.location] && guests[row.location][row.day]) {
+      guests[row.location][row.day].lunch = row.lunch;
+      guests[row.location][row.day].dinner = row.dinner;
     }
-
-    const caterings: Catering[] = cateringRows.map(c => ({
-      id: c.id,
-      name: c.name,
-      date: c.date,
-      guestCount: c.guestCount,
-      deliveryMode: c.deliveryMode,
-      dishes: (c.dishes ?? []) as unknown as Catering['dishes'],
-      logisticsNotes: c.logisticsNotes,
-    }));
-
-    const transportItems: TransportItem[] = transportRows.map(t => ({ id: t.id, text: t.text }));
-
-    const recipes: RecipeFull[] = recipeV2Rows.map(toRecipeFull);
-    // Denormalize ingredient names/allergens/cost so S.recipes on the frontend
-    // has usable display data (otherwise batch recipe editor shows "Unknown").
-    await denormalizeRecipeIngredients(recipes);
-
-    return { batches, guests, recipes, caterings, transportItems };
-  } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : 'Unknown error';
-    console.error('dbReadAll error:', message);
-    return { batches: [], guests: getDefaultGuests(), recipes: [], caterings: [], transportItems: [] };
   }
+
+  const caterings: Catering[] = cateringRows.map(c => ({
+    id: c.id,
+    name: c.name,
+    date: c.date,
+    guestCount: c.guestCount,
+    deliveryMode: c.deliveryMode,
+    dishes: (c.dishes ?? []) as unknown as Catering['dishes'],
+    logisticsNotes: c.logisticsNotes,
+  }));
+
+  const transportItems: TransportItem[] = transportRows.map(t => ({ id: t.id, text: t.text }));
+
+  const recipes: RecipeFull[] = recipeV2Rows.map(toRecipeFull);
+  // Denormalize ingredient names/allergens/cost so S.recipes on the frontend
+  // has usable display data (otherwise batch recipe editor shows "Unknown").
+  await denormalizeRecipeIngredients(recipes);
+
+  return { batches, guests, recipes, caterings, transportItems };
 }
 
 export async function dbWriteAll(batches: Batch[], guests: GuestsData, caterings: Catering[], transportItems: TransportItem[]): Promise<void> {

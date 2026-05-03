@@ -86,6 +86,7 @@
 - **Confidence**: High.
 
 ### T7 — `dbReadAll` returns empty defaults on failure (cross-reference A10)
+**RESOLVED on 2026-05-03 (branch `claude/a10-dbreadall-acfca7`)**: see A10 in `01-architecture.md`. Regression test added.
 - **Severity**: Medium
 - **Location**: [lib/db.ts:308-313](lib/db.ts).
 - **What**: Already covered as A10 in architecture audit. Listed here because reliability-domain readers will look for "DB error visibility": this is the failure mode that looks like silence but is actually catastrophic ("the kitchen sees empty data, assumes someone deleted everything").
