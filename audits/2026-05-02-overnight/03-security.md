@@ -93,6 +93,7 @@
 - **Confidence**: High.
 
 ### S6 — Bearer token compared with `===` (not constant-time)
+**RESOLVED on 2026-05-03 (branch `claude/s6-bearer-timing-acfca7`)**: `routes/coverage.ts` now compares the bearer with `crypto.timingSafeEqual` (length guard first, since timingSafeEqual throws on mismatch). 5 new tests cover unset key (503), wrong-length and wrong-value bearer (both 401), missing header (401), and the happy path (200). Risk was small — the realistic timing channel is dominated by TLS jitter — but the swap is cheap.
 - **Severity**: Low
 - **Location**: [routes/coverage.ts:27](routes/coverage.ts).
 - **What**: `if (auth !== \`Bearer ${apiKey}\`) { return 401 }`. JS string equality is short-circuit and (theoretically) timing-leaky; with HTTPS/TLS jitter and ~50-100ms RTT to Railway, the timing channel is extremely small but nonzero.
