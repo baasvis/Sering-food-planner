@@ -18,7 +18,4 @@
   .ri-add-url{width:100%;font-size:13px;height:36px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 10px;background:var(--bg);color:var(--text);}
   .ri-table-wrap{overflow-x:auto;}
 
-  /* Batch recipe scale row */
-  .br-scale-row{display:flex;align-items:center;gap:8px;padding:8px 12px;margin:0 0 4px;background:var(--bg2);border-radius:var(--radius);font-size:13px;}
-  .br-scale-row label{font-weight:500;white-space:nowrap;}
-  .br-scale-info{font-size:11px;color:var(--text2);margin-left:auto;}
+  /* Note: .br-scale-row styles live in recipe-editor.css now. */
