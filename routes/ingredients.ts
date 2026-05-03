@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import fs from 'fs';
 import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
 import { Prisma } from '@prisma/client';
-import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, withWriteLock } from '../lib/db';
+import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, withWriteLock, checkId } from '../lib/db';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
@@ -71,6 +71,13 @@ router.get('/full', asyncHandler(async (_req: Request, res: Response) => {
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const ingredients = req.body;
   if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'Expected array' });
+  // Audit S2: id flows into onclick handlers via esc() today, but a future
+  // un-escaped renderer would re-open the XSS vector. Reject malformed ids
+  // at the boundary (matches the per-entity validators in lib/db.ts).
+  for (let i = 0; i < ingredients.length; i++) {
+    const err = checkId(ingredients[i].id, `ingredients[${i}].id`);
+    if (err) return res.status(400).json({ error: err });
+  }
   await withWriteLock(async () => {
   await prisma.$transaction([
     prisma.ingredient.deleteMany(),
@@ -178,6 +185,8 @@ router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
 router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
   const ingredient = req.body;
   if (!ingredient || !ingredient.name) return res.status(400).json({ error: 'name required' });
+  const idErr = checkId(req.params.id, 'id');
+  if (idErr) return res.status(400).json({ error: idErr });
   const orderPrice = ingredient.orderPrice != null ? parseFloat(ingredient.orderPrice) || null : null;
   const orderUnitSize = parseFloat(ingredient.orderUnitSize) || 0;
   const data = {
