@@ -51,7 +51,6 @@
 - **Confidence**: High — I have not run a live exploit, but the validator code path is unambiguous and the rendering pattern is a 1:1 match for known XSS vectors.
 
 ### S3 — In dev mode, *every* `/api/*` request is unauthenticated
-**RESOLVED on 2026-05-03 (branch `claude/s3-s4-auth-mode-acfca7`)**: introduced `AUTH_MODE` env var (default `'dev'`). When `AUTH_MODE=production`: server.ts refuses to boot if `GOOGLE_CLIENT_ID` is empty (no longer falls back to dev-mode bypass), and `routes/auth.ts` disables both the dev-login shortcut and the auth middleware bypass. Decoupled from `NODE_ENV` so `npm run preview` keeps working with dev login. When `NODE_ENV=production` but `AUTH_MODE` isn't set, server.ts prints a loud warning so the omission shows up in Railway deploy logs. Documented in `SETUP_GUIDE.md` and `CLAUDE.md`. **Action item: set `AUTH_MODE=production` in the Railway prod env after merge.** Until then, the warning fires and the original behaviour is preserved.
 - **Severity**: High (deploy risk), Low (today)
 - **Location**: [routes/auth.ts:88](routes/auth.ts), [routes/auth.ts:49-54](routes/auth.ts).
 - **What**: The auth middleware:
@@ -72,7 +71,6 @@
 - **Confidence**: High.
 
 ### S4 — `ALLOWED_EMAILS` empty silently allows anyone with a Google account
-**RESOLVED on 2026-05-03 (branch `claude/s3-s4-auth-mode-acfca7`)** alongside S3. With `AUTH_MODE=production`: server.ts refuses to boot if `ALLOWED_EMAILS` is empty, and the runtime auth handler returns 503 belt-and-suspenders if it ever reaches the empty-allowlist branch in production mode. In dev/staging, an empty allowlist still allows logins but logs a clear warning each time.
 - **Severity**: Medium
 - **Location**: [routes/auth.ts:58](routes/auth.ts), documented in [SETUP_GUIDE.md](SETUP_GUIDE.md) as "Recommended."
 - **What**: `if (CONFIG.ALLOWED_EMAILS.length > 0 && !CONFIG.ALLOWED_EMAILS.includes(user.email))` — if the env var is empty, anyone who completes the Google OAuth flow gets a session.
@@ -81,7 +79,6 @@
 - **Confidence**: High.
 
 ### S5 — In-memory session store grows unbounded and never expires
-**RESOLVED in Slice 11 (commit `da1c831`, "persist auth sessions to Postgres")**: the in-memory `Map` was replaced by a Postgres `sessions` table with `expiresAt` per row, lazy expiry on read (`routes/auth.ts:57-62`), and a daily cron sweep (`server.ts:84-94`, `cleanupExpiredSessions()`). Survives deploys + can't grow unbounded. Out of scope for the current audit work.
 - **Severity**: Medium
 - **Location**: [routes/auth.ts:13](routes/auth.ts), [lib/config.ts:67-74](lib/config.ts).
 - **What**: `const sessions = new Map<string, AppUser>();` is a process-local Map. The cookie has `maxAge: 7 * 24 * 60 * 60 * 1000` (7 days), so the *cookie* expires, but the Map entry keeps the user record forever. `logout` does delete the entry; cookie expiry does not (browser stops sending the cookie, server has no signal to remove the row).

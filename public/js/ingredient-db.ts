@@ -202,7 +202,6 @@ export function renderIngredientDbTab() {
       <div style="display:flex;gap:8px;align-items:center;">
         <button class="btn btn-sm" onclick="openAddIngredientModal()">+ Add ingredient</button>
         <button class="btn btn-sm" onclick="openStorageLocationsModal()">Storage locations</button>
-        <button class="btn btn-sm" onclick="openMigrationModal()">Migrate DB</button>
         <label class="btn btn-sm" style="cursor:pointer;">
           Upload Hanos XLSX
           <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="handleSupplierUpload(this.files[0])" />
@@ -1449,71 +1448,6 @@ export function removeStorageSpot(areaIdx: number, spotIdx: number) {
   toast('Spot removed');
 }
 
-// ── Migration Modal ───────────────────────────────────────────
-
-export function openMigrationModal() {
-  const modalHtml = `
-    <div style="padding:20px;max-width:500px;">
-      <h3 style="margin:0 0 16px;">Migrate Ingredient Database</h3>
-      <p style="font-size:12px;color:var(--text2);margin:0 0 12px;">
-        Upload the old ingredient CSV and Hanos CSV to rebuild the database. English names from the old DB will be preserved where order codes match. Only ingredients found in the Hanos list will be kept.
-      </p>
-      <div style="display:grid;gap:12px;">
-        <div>
-          <label class="ing-edit-label">Old Ingredient Database CSV</label>
-          <input type="file" accept=".csv" id="migrate-old-csv" />
-        </div>
-        <div>
-          <label class="ing-edit-label">Hanos CSV (prices export)</label>
-          <input type="file" accept=".csv" id="migrate-hanos-csv" />
-        </div>
-        <div id="migrate-status" style="font-size:12px;color:var(--text2);"></div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;">
-          <button class="btn btn-sm" onclick="closeModal()">Cancel</button>
-          <button class="btn btn-sm" onclick="runMigration(true)">Dry run</button>
-          <button class="btn btn-sm" style="background:var(--green);color:white;" onclick="runMigration(false)">Run migration</button>
-        </div>
-      </div>
-    </div>`;
-  showModal(modalHtml);
-}
-
-export async function runMigration(dryRun: boolean) {
-  const oldFile = (document.getElementById('migrate-old-csv') as HTMLInputElement).files?.[0];
-  const hanosFile = (document.getElementById('migrate-hanos-csv') as HTMLInputElement).files?.[0];
-  if (!hanosFile) { toastError('Hanos CSV is required'); return; }
-
-  const status = document.getElementById('migrate-status');
-  if (status) status.textContent = dryRun ? 'Running dry run...' : 'Running migration...';
-
-  const formData = new FormData();
-  if (oldFile) formData.append('oldCsv', oldFile);
-  formData.append('hanosCsv', hanosFile);
-
-  try {
-    const url = '/api/ingredients/migrate' + (dryRun ? '?dryRun=true' : '');
-    const r = await fetch(url, { method: 'POST', body: formData });
-    if (!r.ok) throw new Error((await r.json()).error || 'Migration failed');
-    const result = await r.json();
-
-    if (dryRun) {
-      if (status) status.innerHTML = `<strong>Dry run result:</strong><br>
-        Total: ${result.total} ingredients<br>
-        Matched (old name kept): ${result.matched}<br>
-        Hanos only (Dutch name): ${result.hanosOnly}<br>
-        Active (ordered in last year): ${result.active}<br>
-        Inactive: ${result.inactive}<br>
-        <span style="color:var(--green);">Ready to run for real.</span>`;
-    } else {
-      if (status) status.innerHTML = `<strong style="color:var(--green);">Migration complete!</strong><br>
-        ${result.total} ingredients saved. ${result.matched} matched with old DB.`;
-      S.ingredientDbFullyLoaded = false;
-      loadIngredientDb();
-      toast('Migration complete: ' + result.total + ' ingredients');
-    }
-  } catch (e: unknown) {
-    const errMsg = e instanceof Error ? e.message : 'Unknown error';
-    if (status) status.innerHTML = `<span style="color:var(--red);">Error: ${esc(errMsg)}</span>`;
-    toastError('Migration failed: ' + errMsg);
-  }
-}
+// Note: openMigrationModal / runMigration were deleted in May 2026 along
+// with the backend route — the Sheets→Postgres ingredient migration is
+// done. See audit follow-up T19a in audits/2026-05-02-overnight/99-followups.md.
