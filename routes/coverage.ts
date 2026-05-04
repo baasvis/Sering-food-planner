@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import express, { Request, Response } from 'express';
+import crypto from 'crypto';
 import { prisma } from '../lib/db';
 import { asyncHandler } from '../lib/config';
 import { analyzeCoverage } from '../lib/telemetry-coverage';
@@ -24,7 +25,14 @@ router.get('/snapshot', asyncHandler(async (req: Request, res: Response) => {
     return;
   }
   const auth = req.header('authorization') ?? '';
-  if (auth !== `Bearer ${apiKey}`) {
+  // Audit S6: timing-safe equality. The risk is small (TLS jitter dominates
+  // the timing channel) but the swap is cheap. timingSafeEqual throws on
+  // length mismatch, so guard with a length check first; the length itself
+  // is not secret.
+  const expected = `Bearer ${apiKey}`;
+  const authBuf = Buffer.from(auth);
+  const expectedBuf = Buffer.from(expected);
+  if (authBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(authBuf, expectedBuf)) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }

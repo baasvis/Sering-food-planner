@@ -88,7 +88,6 @@ Skipped (or only spot-read): the bigger frontend modules (`orders.ts` 1971 LOC, 
 - **Confidence**: High.
 
 ### A10 — `dbReadAll` swallows DB errors and returns empty defaults
-**RESOLVED on 2026-05-03 (branch `claude/a10-dbreadall-acfca7`)**: removed the try/catch that returned `{batches:[], guests:..., recipes:[], caterings:[], transportItems:[]}` on any error. Errors now bubble via asyncHandler → global error handler → 500, and the frontend's `apiGet` triggers the persistent `showDataError` banner. New regression test in `test/api.test.ts` monkeypatches `prisma.batch.findMany` to throw and asserts the route returns 500 instead of the silent 200-with-empties. Cross-referenced as T7 in the tests audit.
 - **Severity**: Medium
 - **Location**: [lib/db.ts:308-313](lib/db.ts).
 - **What**: `dbReadAll` wraps every read in a single try/catch. On *any* failure (DB down, query timeout, Prisma client crash) it logs to stderr and returns an empty `DataResponse`. The frontend then renders an "empty kitchen" — no batches, no recipes — which looks identical to a freshly seeded DB.

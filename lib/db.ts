@@ -19,9 +19,27 @@ const VALID_LOCATIONS = ['west', 'centraal'];
 const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const VALID_MEALS = ['lunch', 'dinner'];
 
+// Audit S2: ids flow into onclick="" attributes via raw template-literal
+// interpolation in the frontend. Constrain to UUID-shaped (alphanumerics,
+// hyphen, underscore) so a write-side payload like `'); alert(1); //` is
+// rejected at the API boundary instead of stored and reflected at render.
+// Existing prod + staging IDs (1256 + 1251 rows checked 2026-05-03) all match.
+const VALID_ID_PATTERN = /^[a-zA-Z0-9_-]{1,200}$/;
+
+/** Validate an id-shaped string field. Pass `field` for a useful error. */
+export function checkId(value: unknown, field: string): string | null {
+  if (typeof value !== 'string' || !VALID_ID_PATTERN.test(value)) {
+    return `invalid ${field}`;
+  }
+  return null;
+}
+
 export function validateBatch(b: Batch, prefix = ''): string | null {
   const p = prefix ? `${prefix}: ` : '';
   if (!b.id || typeof b.id !== 'string') return `${p}missing or invalid id`;
+  if (!VALID_ID_PATTERN.test(b.id)) return `${p}invalid id charset`;
+  if (b.parentId !== null && b.parentId !== undefined && !VALID_ID_PATTERN.test(b.parentId)) return `${p}invalid parentId charset`;
+  if (b.recipeId !== null && b.recipeId !== undefined && !VALID_ID_PATTERN.test(b.recipeId)) return `${p}invalid recipeId charset`;
   if (!b.name || typeof b.name !== 'string' || b.name.length > 200) return `${p}invalid name`;
   if (!VALID_TYPES.includes(b.type)) return `${p}invalid type "${b.type}"`;
   if (typeof b.stock !== 'number' || b.stock < 0 || b.stock > 99999) return `${p}invalid stock`;
@@ -70,6 +88,7 @@ export function validateGuests(guests: GuestsData): string | null {
 export function validateCatering(c: Catering, prefix = ''): string | null {
   const p = prefix ? `${prefix}: ` : '';
   if (!c.id || typeof c.id !== 'string') return `${p}missing or invalid id`;
+  if (!VALID_ID_PATTERN.test(c.id)) return `${p}invalid id charset`;
   if (typeof c.name !== 'string' || c.name.length > 200) return `${p}invalid name`;
   if (c.date !== null && c.date !== undefined && (typeof c.date !== 'string' || (c.date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(c.date)))) {
     return `${p}invalid date (expected YYYY-MM-DD)`;
@@ -79,6 +98,7 @@ export function validateCatering(c: Catering, prefix = ''): string | null {
   if (!Array.isArray(c.dishes)) return `${p}dishes must be an array`;
   for (const d of c.dishes) {
     if (!d.dishId || typeof d.dishId !== 'string') return `${p}dish missing dishId`;
+    if (!VALID_ID_PATTERN.test(d.dishId)) return `${p}dish has invalid dishId charset`;
     if (typeof d.name !== 'string' || d.name.length > 200) return `${p}dish has invalid name`;
     if (typeof d.type !== 'string') return `${p}dish has invalid type`;
   }
@@ -103,6 +123,7 @@ export function validateCaterings(caterings: Catering[]): string | null {
 export function validateTransportItem(t: TransportItem, prefix = ''): string | null {
   const p = prefix ? `${prefix}: ` : '';
   if (!t.id || typeof t.id !== 'string') return `${p}missing or invalid id`;
+  if (!VALID_ID_PATTERN.test(t.id)) return `${p}invalid id charset`;
   if (typeof t.text !== 'string' || t.text.length > 500) return `${p}invalid text`;
   return null;
 }
@@ -126,7 +147,7 @@ export function validateIdList(ids: unknown, fieldName: string, max = 500): stri
   if (!Array.isArray(ids)) return `${fieldName} must be an array`;
   if (ids.length > max) return `${fieldName}: too many ids (max ${max})`;
   for (let i = 0; i < ids.length; i++) {
-    if (typeof ids[i] !== 'string' || (ids[i] as string).length === 0 || (ids[i] as string).length > 200) {
+    if (typeof ids[i] !== 'string' || !VALID_ID_PATTERN.test(ids[i] as string)) {
       return `${fieldName}[${i}]: invalid id`;
     }
   }
@@ -810,14 +831,16 @@ export async function calcRecipeNutrition(
 /** Validate a recipe for required fields. Catches the servingSize=0 edge case
  *  that previously caused division-by-zero in hydrateRecipeForDetail. */
 export function validateRecipe(r: {
+  id?: unknown;
   name?: string;
   type?: string;
   servingSize?: number;
   recipeVolume?: number | null;
-  ingredients?: Array<{ rawAmount?: unknown; cookedAmount?: unknown; unit?: unknown; ingredientId?: unknown; isFlexible?: unknown }>;
+  ingredients?: Array<{ id?: unknown; rawAmount?: unknown; cookedAmount?: unknown; unit?: unknown; ingredientId?: unknown; isFlexible?: unknown }>;
   extraAllergens?: unknown;
   prepSteps?: Array<{ step?: unknown; text?: unknown }>;
 }): string | null {
+  if (r.id !== undefined && r.id !== null && (typeof r.id !== 'string' || !VALID_ID_PATTERN.test(r.id))) return 'invalid id';
   if (!r.name || typeof r.name !== 'string' || r.name.length > 200) return 'invalid name';
   if (r.type && !VALID_TYPES.includes(r.type)) return `invalid type "${r.type}"`;
   if (r.servingSize !== undefined && (typeof r.servingSize !== 'number' || r.servingSize < 1 || r.servingSize > 9999)) return 'invalid servingSize';
@@ -832,10 +855,11 @@ export function validateRecipe(r: {
     if (r.ingredients.length > 200) return 'too many ingredients (max 200)';
     for (let i = 0; i < r.ingredients.length; i++) {
       const ing = r.ingredients[i];
+      if (ing.id !== undefined && ing.id !== null && (typeof ing.id !== 'string' || !VALID_ID_PATTERN.test(ing.id))) return `ingredient ${i}: invalid id`;
       if (typeof ing.rawAmount !== 'number' || ing.rawAmount < 0 || ing.rawAmount > 999999) return `ingredient ${i}: invalid rawAmount`;
       if (ing.cookedAmount !== undefined && ing.cookedAmount !== null && (typeof ing.cookedAmount !== 'number' || ing.cookedAmount < 0 || ing.cookedAmount > 999999)) return `ingredient ${i}: invalid cookedAmount`;
       if (ing.unit !== undefined && (typeof ing.unit !== 'string' || ing.unit.length > 20)) return `ingredient ${i}: invalid unit`;
-      if (ing.ingredientId !== undefined && ing.ingredientId !== null && typeof ing.ingredientId !== 'string') return `ingredient ${i}: invalid ingredientId`;
+      if (ing.ingredientId !== undefined && ing.ingredientId !== null && (typeof ing.ingredientId !== 'string' || !VALID_ID_PATTERN.test(ing.ingredientId))) return `ingredient ${i}: invalid ingredientId`;
       if (ing.isFlexible !== undefined && typeof ing.isFlexible !== 'boolean') return `ingredient ${i}: isFlexible must be boolean`;
     }
   }

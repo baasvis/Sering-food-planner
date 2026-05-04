@@ -2,6 +2,7 @@ try { require('dotenv').config(); } catch (_e) {}
 const request = require('supertest');
 const app = require('../app').default;
 const { prisma } = require('../lib/db');
+const { CONFIG } = require('../lib/config');
 
 // Test IDs — prefixed to avoid collision with real data
 const T = 'test-' + Date.now() + '-';
@@ -99,6 +100,53 @@ describe('GET /api/data', () => {
     } finally {
       prisma.batch.findMany = original;
     }
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// S6 — bearer compare uses crypto.timingSafeEqual; behaviour must still
+// reject mismatched / missing / wrong-length tokens with 401 (and 503 when
+// the env var is unset).
+// ──────────────────────────────────────────────────────────────────────────
+describe('S6 — coverage bearer compare', () => {
+  let originalKey: string | undefined;
+
+  beforeAll(() => { originalKey = process.env.COVERAGE_API_KEY; });
+  afterAll(() => {
+    if (originalKey === undefined) delete process.env.COVERAGE_API_KEY;
+    else process.env.COVERAGE_API_KEY = originalKey;
+  });
+
+  it('returns 503 when COVERAGE_API_KEY is unset', async () => {
+    delete process.env.COVERAGE_API_KEY;
+    const res = await request(app).get('/api/coverage/snapshot').set('Authorization', 'Bearer anything');
+    expect(res.status).toBe(503);
+  });
+
+  it('returns 401 for a wrong bearer (same length as expected)', async () => {
+    process.env.COVERAGE_API_KEY = 'correct-key-1234';
+    const res = await request(app).get('/api/coverage/snapshot').set('Authorization', 'Bearer wrong-key-12345');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 for a wrong bearer (different length)', async () => {
+    // crypto.timingSafeEqual throws on mismatched lengths; the length-guard
+    // before it must catch this without crashing.
+    process.env.COVERAGE_API_KEY = 'correct-key-1234';
+    const res = await request(app).get('/api/coverage/snapshot').set('Authorization', 'Bearer x');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 for missing Authorization header', async () => {
+    process.env.COVERAGE_API_KEY = 'correct-key-1234';
+    const res = await request(app).get('/api/coverage/snapshot');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 200 for the correct bearer', async () => {
+    process.env.COVERAGE_API_KEY = 'correct-key-1234';
+    const res = await request(app).get('/api/coverage/snapshot').set('Authorization', 'Bearer correct-key-1234');
+    expect(res.status).toBe(200);
   });
 });
 
@@ -278,6 +326,111 @@ describe('Ingredients API', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
   });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// T19a — bulk POST /api/ingredients must NOT wipe recipe→ingredient FKs.
+// Previously the route did `deleteMany + createMany` which fired the SET
+// NULL trigger on `recipe_ingredients.ingredient_id` for every row. Fix
+// uses INSERT … ON CONFLICT DO UPDATE so existing rows are touched in-
+// place — UPDATE doesn't fire the trigger.
+// ──────────────────────────────────────────────────────────────────────────
+describe('T19a — bulk ingredient save preserves recipe FK pointers', () => {
+  const t19aIngId = T + 't19a-ing';
+  const t19aRecipeId = T + 't19a-recipe';
+  const t19aRowId = T + 't19a-ri';
+
+  beforeAll(async () => {
+    // Seed a real ingredient + a recipe linking to it (FK non-NULL).
+    await prisma.ingredient.create({
+      data: {
+        id: t19aIngId,
+        name: 'T19a Test Ingredient',
+        category: 'Vegetables & Fruit',
+        unit: 'Grams',
+        active: true,
+      },
+    });
+    await prisma.recipe.create({
+      data: {
+        id: t19aRecipeId,
+        name: 'T19a Recipe',
+        type: 'Soup',
+        servingSize: 280,
+        recipeVolume: 1.0,
+        autoAllergens: [],
+        extraAllergens: [],
+        prepSteps: [],
+        coolingMethod: '',
+        storageMethod: '',
+        isComplete: true,
+        versions: [],
+        createdBy: 'test',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ingredients: {
+          create: [{
+            id: t19aRowId,
+            ingredientId: t19aIngId,
+            sortOrder: 0,
+            rawAmount: 100,
+            unit: 'Grams',
+            isFlexible: false,
+            suggestedNames: [],
+          }],
+        },
+      },
+    });
+    // Sanity check: FK is non-NULL before we start.
+    const before = await prisma.recipeIngredientRow.findUnique({ where: { id: t19aRowId } });
+    expect(before?.ingredientId).toBe(t19aIngId);
+  });
+
+  afterAll(async () => {
+    await prisma.recipeIngredientRow.deleteMany({ where: { recipeId: t19aRecipeId } });
+    await prisma.recipe.deleteMany({ where: { id: t19aRecipeId } });
+    await prisma.ingredient.deleteMany({ where: { id: t19aIngId } });
+  });
+
+  // Bulk endpoint touches the entire ingredient table (~1.1k rows on
+  // staging) — way over Jest's 5s default.
+  it('POST /api/ingredients — recipe FKs survive a full bulk save', async () => {
+    // Send the complete current ingredient set, unchanged. Same shape
+    // applySupplierUpdate sends from the frontend.
+    const all = await prisma.ingredient.findMany();
+    const payload = all.map(i => ({
+      ...i,
+      stock: i.stock || {},
+    }));
+
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // The critical assertion: the FK pointer on the recipe-ingredient row
+    // is STILL pointing at our test ingredient. If the deleteMany shape
+    // ever creeps back, the SET NULL trigger would null this and the
+    // assertion fails immediately.
+    const after = await prisma.recipeIngredientRow.findUnique({ where: { id: t19aRowId } });
+    expect(after?.ingredientId).toBe(t19aIngId);
+  }, 60_000);
+
+  it('POST /api/ingredients — broader: zero new NULLs across the whole table', async () => {
+    // Stronger check: count NULL FKs before and after — the count should
+    // be unchanged. Catches the wipe even if the test ingredient survives
+    // for some other reason. Note: on staging where every recipe-
+    // ingredient row was already wiped (T19a's pre-fix damage, 618/618
+    // NULL), this assertion is trivial — the first test is the load-
+    // bearing one. On a clean test DB or on prod (where 604/625 rows are
+    // still linked at the time of this fix), it actually exercises the
+    // full surface.
+    const nullsBefore = await prisma.recipeIngredientRow.count({ where: { ingredientId: null } });
+    const all = await prisma.ingredient.findMany();
+    const payload = all.map(i => ({ ...i, stock: i.stock || {} }));
+    await request(app).post('/api/ingredients').send(payload);
+    const nullsAfter = await prisma.recipeIngredientRow.count({ where: { ingredientId: null } });
+    expect(nullsAfter).toBe(nullsBefore);
+  }, 60_000);
 });
 
 // ── Ingredient Stock ──
@@ -1034,6 +1187,55 @@ describe('Recipe v2 CRUD', () => {
     expect(res.status).toBe(404);
   });
 
+  // ── S8: photo upload mimetype hardening ──
+  // 1x1 transparent PNG (smallest valid PNG, 67 bytes)
+  const PNG_BYTES = Buffer.from(
+    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da6300010000000500010d0a2db40000000049454e44ae426082',
+    'hex',
+  );
+  // SVG with an inline script — the kind of payload S8 is meant to block.
+  const SVG_XSS = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+
+  it('POST /api/recipes/:id/photo — accepts whitelisted mimetype (png)', async () => {
+    const res = await request(app)
+      .post(`/api/recipes/${recipeId}/photo`)
+      .attach('photo', PNG_BYTES, { filename: 'a.png', contentType: 'image/png' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it('GET /api/recipes/:id/photo — sets nosniff and inline disposition with controlled filename', async () => {
+    const res = await request(app).get(`/api/recipes/${recipeId}/photo`);
+    expect(res.status).toBe(200);
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['content-disposition']).toBe(`inline; filename="recipe-${recipeId}.png"`);
+    // Express appends `; charset=utf-8` automatically; the major/minor type
+     // is what matters (and what nosniff anchors to).
+    expect(res.headers['content-type']).toMatch(/^image\/png/);
+  });
+
+  it('POST /api/recipes/:id/photo — rejects image/svg+xml (XSS payload)', async () => {
+    const res = await request(app)
+      .post(`/api/recipes/${recipeId}/photo`)
+      .attach('photo', SVG_XSS, { filename: 'bad.svg', contentType: 'image/svg+xml' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/jpg|png|webp|gif/i);
+  });
+
+  it('POST /api/recipes/:id/photo — rejects non-image mimetypes', async () => {
+    const res = await request(app)
+      .post(`/api/recipes/${recipeId}/photo`)
+      .attach('photo', Buffer.from('plain text'), { filename: 'a.txt', contentType: 'text/plain' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/:id/photo — case-insensitive mimetype match', async () => {
+    const res = await request(app)
+      .post(`/api/recipes/${recipeId}/photo`)
+      .attach('photo', PNG_BYTES, { filename: 'a.PNG', contentType: 'IMAGE/PNG' });
+    expect(res.status).toBe(200);
+  });
+
   it('DELETE /api/recipes/:id — deletes recipe', async () => {
     const res = await request(app).delete(`/api/recipes/${recipeId}`);
     expect(res.status).toBe(200);
@@ -1041,5 +1243,184 @@ describe('Recipe v2 CRUD', () => {
 
     const check = await request(app).get(`/api/recipes/${recipeId}`);
     expect(check.status).toBe(404);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// S3/S4 — AUTH_MODE='production' disables the dev-mode bypass + fails closed
+// on empty ALLOWED_EMAILS. The boot guard in server.ts is a separate
+// process-level exit; runtime tests cover the request-time defenses.
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('S3/S4 — AUTH_MODE=production runtime gates', () => {
+  let originalAuthMode: string;
+  let originalAllowed: string[];
+
+  beforeAll(() => {
+    originalAuthMode = CONFIG.AUTH_MODE;
+    originalAllowed = CONFIG.ALLOWED_EMAILS;
+    CONFIG.AUTH_MODE = 'production';
+  });
+
+  afterAll(() => {
+    CONFIG.AUTH_MODE = originalAuthMode;
+    CONFIG.ALLOWED_EMAILS = originalAllowed;
+  });
+
+  it('POST /api/auth/google — dev-mode bypass is OFF when AUTH_MODE=production', async () => {
+    // GOOGLE_CLIENT_ID is empty in the test env. Without AUTH_MODE='production'
+    // the dev-login shortcut would issue a session here. With it on, the
+    // request must fall through to the real Google verify path and 401.
+    const res = await request(app)
+      .post('/api/auth/google')
+      .send({ idToken: 'dev' });
+    expect(res.status).toBe(401);
+  });
+
+  it('GET /api/data — auth middleware no longer falls through when AUTH_MODE=production', async () => {
+    // Same shape as above: without GOOGLE_CLIENT_ID, the middleware would
+    // next() in dev mode. With AUTH_MODE='production', it must require auth.
+    const res = await request(app).get('/api/data');
+    expect(res.status).toBe(401);
+  });
+
+  // The empty-ALLOWED_EMAILS path returns 503 only AFTER verifyGoogleToken
+  // succeeds — and forging a real Google ID token in a unit test is more
+  // hassle than the test is worth. The primary defense for S4 is the
+  // boot-time guard in server.ts (which exits before app.listen if
+  // AUTH_MODE=production && ALLOWED_EMAILS is empty), and the 503 path is
+  // a belt-and-suspenders runtime fallback. Verified by direct read.
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// S2 — stored XSS via the `id` field. Validators reject any id that doesn't
+// match /^[a-zA-Z0-9_-]{1,200}$/ so a payload-shaped id (`'); alert(1); //`)
+// can't be planted at the API boundary and reflected unescaped from the
+// onclick="" interpolations in caterings.ts / dishes.ts / planner.ts.
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('S2 — id charset validation rejects XSS-shaped ids', () => {
+  const XSS_ID = "');alert(1);('";
+  const baseBatch = {
+    name: 'XSS Test', type: 'Soup', stock: 0, serving: 280,
+    storage: 'Gastro', location: 'west', services: [],
+  };
+
+  it('POST /api/batches — rejects id with quote/paren', async () => {
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id: XSS_ID });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid id/i);
+  });
+
+  it('POST /api/batches — rejects id with HTML angle brackets', async () => {
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id: T + '<script>' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/batches — accepts a UUID-shaped id (control)', async () => {
+    const id = T + 's2-control-' + Math.random().toString(36).slice(2, 8);
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id });
+    expect(res.status).toBe(201);
+    await prisma.batch.deleteMany({ where: { id } });
+  });
+
+  it('POST /api/data/patch — rejects malicious id inside batches[]', async () => {
+    const res = await request(app).post('/api/data/patch').send({
+      batches: [{ ...baseBatch, id: XSS_ID }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/data/patch — rejects malicious id inside deletedBatches[]', async () => {
+    const res = await request(app).post('/api/data/patch').send({
+      deletedBatches: [XSS_ID],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/data/patch — rejects malicious dish.dishId inside caterings', async () => {
+    const res = await request(app).post('/api/data/patch').send({
+      caterings: [{
+        id: T + 's2-cat',
+        name: 'Catering',
+        date: null,
+        guestCount: 0,
+        deliveryMode: 'pickup',
+        dishes: [{ dishId: XSS_ID, name: 'X', type: 'Soup' }],
+        logisticsNotes: '',
+      }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes — rejects malicious body.id', async () => {
+    const res = await request(app).post('/api/recipes').send({
+      id: XSS_ID,
+      name: 'XSS Recipe',
+      type: 'Soup',
+      servingSize: 280,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes — rejects malicious ingredient.ingredientId', async () => {
+    const res = await request(app).post('/api/recipes').send({
+      name: 'XSS Recipe Ing',
+      type: 'Soup',
+      servingSize: 280,
+      ingredients: [{
+        id: T + 's2-ri',
+        ingredientId: XSS_ID,
+        sortOrder: 0,
+        rawAmount: 100,
+        unit: 'Grams',
+        isFlexible: false,
+        suggestedNames: [],
+      }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes — rejects malicious recipe-ingredient row id', async () => {
+    const res = await request(app).post('/api/recipes').send({
+      name: 'XSS Recipe Row Id',
+      type: 'Soup',
+      servingSize: 280,
+      ingredients: [{
+        id: XSS_ID,
+        sortOrder: 0,
+        rawAmount: 100,
+        unit: 'Grams',
+        isFlexible: false,
+        suggestedNames: [],
+      }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/ingredients/:id — rejects malicious id in URL path', async () => {
+    const res = await request(app)
+      .post('/api/ingredients/' + encodeURIComponent(XSS_ID))
+      .send({ id: XSS_ID, name: 'X', unit: 'Grams', active: true });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/ingredients (bulk) — rejects array entry with malicious id', async () => {
+    const res = await request(app).post('/api/ingredients').send([
+      { id: XSS_ID, name: 'X', unit: 'Grams', active: true },
+    ]);
+    expect(res.status).toBe(400);
+  });
+
+  // Backslash and Unicode line-separator probes — `esc()` doesn't strip
+  // either, so these would survive a future un-escaped renderer.
+  it('POST /api/batches — rejects backslash-escaped quote', async () => {
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id: "a\\';alert(1);//" });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/batches — rejects U+2028 line separator', async () => {
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id: "a alert(1)" });
+    expect(res.status).toBe(400);
   });
 });
