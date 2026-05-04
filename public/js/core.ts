@@ -348,15 +348,43 @@ export function getGuests(loc: string, dateStr: string, meal: Meal | string): nu
   return ((S.guests[lk] || {})[dn] || {} as any)[meal] || 0;
 }
 
+/**
+ * Family-aware demand share at a slot.
+ *
+ * Old behaviour: demand at slot = guests / num_physical_batches_of_same_type.
+ * This silently double-counts when a single recipe is physically present as
+ * multiple batches (e.g. Tomato West parent + Tomato Centraal split both at
+ * Mon dinner C). Guests see ONE Tomato Soup option on the menu — not two —
+ * so the algorithm should split the slot's demand by FAMILIES, not by raw
+ * batches. Within a family, the family's portion splits evenly across the
+ * physical batches that have that slot in their services list.
+ *
+ * Returns { perBatch, families }: `perBatch` is what THIS dish should be
+ * charged at this slot (= guests / families / family-members-at-slot ×
+ * serving), `families` is the menu-option count (useful for breakdown text).
+ */
+function familyAwareSlotDemand(dish: Batch, svc: Service): { perBatch: number; families: number } {
+  const g = getGuests(svc.loc, svc.date, svc.meal);
+  if (g <= 0) return { perBatch: 0, families: 0 };
+  const k = `${svc.loc}-${svc.date}-${svc.meal}`;
+  const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
+  // Count unique family roots at the slot — that's the menu-option count.
+  const familyRoots = new Set<string>();
+  for (const p of peers) familyRoots.add(getRootId(p, S.batches));
+  const families = Math.max(familyRoots.size, 1);
+  // Within MY family, count how many batches share this slot — the family's
+  // demand portion gets split evenly across them.
+  const myRoot = getRootId(dish, S.batches);
+  const myFamilyAtSlot = peers.filter(p => getRootId(p, S.batches) === myRoot).length || 1;
+  const perBatch = (g / families / myFamilyAtSlot) * ((dish.serving || 280) / 1000);
+  return { perBatch, families };
+}
+
 export function calcRequired(dish: Batch): number {
   let total = 0;
   (dish.services || []).forEach((svc: Service) => {
     if (isServicePast(svc)) return; // Skip served services — no longer pulling stock
-    const g = getGuests(svc.loc, svc.date, svc.meal);
-    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
-    const count = Math.max(peers.length, 1);
-    total += (g / count) * ((dish.serving || 280) / 1000);
+    total += familyAwareSlotDemand(dish, svc).perBatch;
   });
   // Add catering requirements (split by same-type peers)
   (S.caterings || []).forEach((c: Catering) => {
@@ -384,11 +412,8 @@ export function calcRequiredBreakdown(dish: Batch): string[] {
       lines.push(`\u2713 ${dayName} ${meal} ${loc} (served)`);
       return;
     }
-    const g = getGuests(svc.loc, svc.date, svc.meal);
-    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
-    const count = Math.max(peers.length, 1);
-    const liters = Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
+    const { perBatch } = familyAwareSlotDemand(dish, svc);
+    const liters = Math.round(perBatch * 10) / 10;
     if (liters > 0) {
       lines.push(`${liters}L \u2014 ${dayName} ${meal} ${loc}`);
     }
@@ -411,7 +436,13 @@ export function calcTotalGuests(dish: Batch): number {
     const total = getGuests(svc.loc, svc.date, svc.meal);
     const k = `${svc.loc}-${svc.date}-${svc.meal}`;
     const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
-    g += total / Math.max(peers.length, 1);
+    // Same family-aware split as calcRequired (see familyAwareSlotDemand).
+    const familyRoots = new Set<string>();
+    for (const p of peers) familyRoots.add(getRootId(p, S.batches));
+    const families = Math.max(familyRoots.size, 1);
+    const myRoot = getRootId(dish, S.batches);
+    const myFamilyAtSlot = peers.filter(p => getRootId(p, S.batches) === myRoot).length || 1;
+    g += total / families / myFamilyAtSlot;
   });
   // Add catering guests (split by same-type peers)
   (S.caterings || []).forEach((c: Catering) => {
@@ -520,6 +551,15 @@ export function cycleLocation(id: string): void {
   if (d.location === 'west') d.location = 'centraal';
   else d.location = 'west';
   d.inTransit = false;
+  // The batch effectively "arrived" at a new location — fold it into any
+  // existing same-family same-loc record so cooks don't end up with
+  // duplicates of the same recipe at one place.
+  const consolidation = consolidateFamilies(S.batches);
+  if (consolidation.removed.length > 0) {
+    S.batches = consolidation.kept;
+    if (!S.deletedBatches) S.deletedBatches = [];
+    for (const id of consolidation.removed) S.deletedBatches.push(id);
+  }
   rebuildPlanner();
   scheduleSave();
   rerenderCurrentView();

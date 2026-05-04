@@ -1,7 +1,7 @@
 import type { Batch, RecipeFull, DishType, Location, Meal, Service } from '@shared/types';
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError } from './utils';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate } from './core';
+import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate, consolidateFamilies } from './core';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderBatchTile, renderFamilyGrouped, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, renderSplitBar, cleanCateringRefs } from './dishes';
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
@@ -442,9 +442,22 @@ export function markSelectedArrived() {
   });
   S.selected.clear();
   if (count > 0) {
+    // Auto-merge: now that the batches arrived, fold them into any existing
+    // same-family same-location records (Daan's spec: "should become fully
+    // one"). Without this the cook ends up with N copies of the same recipe
+    // at the destination — exactly the mess we just cleaned up.
+    const consolidation = consolidateFamilies(S.batches);
+    let mergedNote = '';
+    if (consolidation.removed.length > 0) {
+      S.batches = consolidation.kept;
+      if (!S.deletedBatches) S.deletedBatches = [];
+      for (const id of consolidation.removed) S.deletedBatches.push(id);
+      mergedNote = ` (merged ${consolidation.removed.length} into existing batches)`;
+    }
+    rebuildPlanner();
     scheduleSave();
     rerenderCurrentView();
-    toast(`${count} batch${count > 1 ? 'es' : ''} marked as arrived`);
+    toast(`${count} batch${count > 1 ? 'es' : ''} marked as arrived${mergedNote}`);
   }
 }
 

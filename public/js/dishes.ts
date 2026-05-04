@@ -1,7 +1,7 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet } from './utils';
 import { pushUndo } from './undo';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getFamilyMembers, getFamilyStock, getRootId } from './core';
+import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getFamilyMembers, getFamilyStock, getRootId, consolidateFamilies } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
@@ -667,7 +667,18 @@ export function inlineEdit(id: string, field: string, value: string) {
     // Auto-set cook date when stock first entered
     if (d.stock > 0 && !d.cookDate) d.cookDate = dateToStr(getToday());
   }
-  else if (field === 'location') { d.location = value as Location; d.inTransit = false; }
+  else if (field === 'location') {
+    d.location = value as Location;
+    d.inTransit = false;
+    // Same as cycleLocation — collapse same-family same-loc duplicates the
+    // location change may have created.
+    const consolidation = consolidateFamilies(S.batches);
+    if (consolidation.removed.length > 0) {
+      S.batches = consolidation.kept;
+      if (!S.deletedBatches) S.deletedBatches = [];
+      for (const id of consolidation.removed) S.deletedBatches.push(id);
+    }
+  }
   else if (field === 'note') { d.note = value; }
   rebuildPlanner();
   scheduleSave();
