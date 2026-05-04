@@ -2,13 +2,13 @@ import express, { Request, Response } from 'express';
 import fs from 'fs';
 import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
 import { Prisma } from '@prisma/client';
-import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, withWriteLock } from '../lib/db';
+import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, withWriteLock, checkId } from '../lib/db';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
 const router = express.Router();
 
-// Mount import sub-router (upload-supplier, migrate)
+// Mount import sub-router (upload-supplier)
 router.use('/', ingredientsImportRouter);
 
 // Helper: load ingredients from Postgres or fall back to seed file
@@ -65,47 +65,141 @@ router.get('/full', asyncHandler(async (_req: Request, res: Response) => {
   res.json(ingredients);
 }));
 
-// Bulk save all ingredients (delete-all/create-all — frontend always sends
-// the complete set). withWriteLock serialises against any concurrent ingredient
-// edit so a single-row save during a bulk replace can't be silently dropped.
+// Audit T19a: column-by-column upsert spec. Used by the bulk POST below.
+// Listed in the same order as the SQL placeholder/values arrays — keep
+// them in lockstep when adding/removing columns. The `cast` is applied
+// to the placeholder in the VALUES clause so Postgres knows to parse JSON
+// strings as JSONB.
+const INGREDIENT_UPSERT_COLUMNS: Array<{ name: string; cast: string }> = [
+  { name: 'id', cast: '' },
+  { name: 'name', cast: '' },
+  { name: 'supplier_name', cast: '' },
+  { name: 'types', cast: '::jsonb' },
+  { name: 'category', cast: '' },
+  { name: 'unit', cast: '' },
+  { name: 'supplier', cast: '' },
+  { name: 'order_code', cast: '' },
+  { name: 'order_unit', cast: '' },
+  { name: 'order_price', cast: '' },
+  { name: 'price_level', cast: '' },
+  { name: 'price_history', cast: '::jsonb' },
+  { name: 'price_alert', cast: '' },
+  { name: 'storage_locations', cast: '::jsonb' },
+  { name: 'stock', cast: '::jsonb' },
+  { name: 'nutrition', cast: '::jsonb' },
+  { name: 'allergens', cast: '' },
+  { name: 'notes', cast: '' },
+  { name: 'active', cast: '' },
+  { name: 'order_unit_size', cast: '' },
+  { name: 'price_per_100', cast: '' },
+  { name: 'measure_mode', cast: '' },
+  { name: 'target_stock', cast: '::jsonb' },
+];
+
+function ingredientUpsertValues(ing: Ingredient): unknown[] {
+  const orderPrice = ing.orderPrice != null ? parseFloat(String(ing.orderPrice)) || null : null;
+  const orderUnitSize = parseFloat(String(ing.orderUnitSize)) || 0;
+  const pricePer100 = (orderPrice && orderUnitSize > 0)
+    ? Math.round((orderPrice / orderUnitSize) * 10000) / 100
+    : 0;
+  // ORDER MUST MATCH INGREDIENT_UPSERT_COLUMNS EXACTLY.
+  return [
+    ing.id,
+    ing.name || '',
+    ing.supplierName || '',
+    JSON.stringify(ing.types || []),
+    ing.category || '',
+    ing.unit || 'Grams',
+    ing.supplier || '',
+    ing.orderCode || '',
+    ing.orderUnit || '',
+    orderPrice,
+    ing.priceLevel || '',
+    JSON.stringify(ing.priceHistory || []),
+    !!ing.priceAlert,
+    JSON.stringify(ing.storageLocations || {}),
+    JSON.stringify(ing.stock || {}),
+    JSON.stringify(ing.nutrition || {}),
+    ing.allergens || '',
+    ing.notes || '',
+    ing.active !== false,
+    orderUnitSize,
+    pricePer100,
+    ing.measureMode || 'weight',
+    JSON.stringify(ing.targetStock || {}),
+  ];
+}
+
+// Bulk save all ingredients — frontend always sends the complete set
+// (supplier-XLSX import via applySupplierUpdate). withWriteLock serialises
+// against any concurrent ingredient edit so a single-row save during a bulk
+// replace can't be silently dropped.
+//
+// Audit T19a: the previous shape was `deleteMany + createMany`. The FK
+// `recipe_ingredients.ingredient_id` is `ON DELETE SET NULL`, so the
+// deleteMany trigger NULLed every recipe→ingredient link, and the
+// immediate createMany did NOT restore them. Result: every supplier
+// import silently severed all recipe→ingredient pointers. Staging was
+// 100% wiped (618/618 NULL); prod 21/625 NULL.
+//
+// Fix: a single `INSERT … ON CONFLICT (id) DO UPDATE` statement preserves
+// existing rows in place (UPDATE never fires the SET NULL trigger). Rows
+// the frontend has removed are still pruned by a targeted deleteMany —
+// SET NULL fires only for those, which is correct (they're truly gone).
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const ingredients = req.body;
   if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'Expected array' });
+  // Audit S2: id flows into onclick handlers via esc() today, but a future
+  // un-escaped renderer would re-open the XSS vector. Reject malformed ids
+  // at the boundary (matches the per-entity validators in lib/db.ts).
+  for (let i = 0; i < ingredients.length; i++) {
+    const err = checkId(ingredients[i].id, `ingredients[${i}].id`);
+    if (err) return res.status(400).json({ error: err });
+  }
   await withWriteLock(async () => {
-  await prisma.$transaction([
-    prisma.ingredient.deleteMany(),
-    prisma.ingredient.createMany({
-      data: ingredients.map((ing: Ingredient) => {
-        const orderPrice = ing.orderPrice != null ? parseFloat(String(ing.orderPrice)) || null : null;
-        const orderUnitSize = parseFloat(String(ing.orderUnitSize)) || 0;
-        return {
-          id: ing.id,
-          name: ing.name || '',
-          supplierName: ing.supplierName || '',
-          types: ing.types || [],
-          category: ing.category || '',
-          measureMode: ing.measureMode || 'weight',
-          unit: ing.unit || 'Grams',
-          supplier: ing.supplier || '',
-          orderCode: ing.orderCode || '',
-          orderUnit: ing.orderUnit || '',
-          orderPrice,
-          orderUnitSize,
-          priceLevel: ing.priceLevel || '',
-          pricePer100: (orderPrice && orderUnitSize > 0) ? Math.round((orderPrice / orderUnitSize) * 10000) / 100 : 0,
-          priceHistory: ing.priceHistory || [],
-          priceAlert: !!ing.priceAlert,
-          storageLocations: ing.storageLocations || {},
-          stock: (ing.stock || {}) as unknown as Prisma.InputJsonValue,
-          targetStock: ing.targetStock || {},
-          nutrition: ing.nutrition || {},
-          allergens: ing.allergens || '',
-          notes: ing.notes || '',
-          active: ing.active !== false,
-        };
-      }),
-    }),
-  ]);
+    await prisma.$transaction(async (tx) => {
+      const incomingIds = new Set(ingredients.map((i: Ingredient) => i.id));
+
+      // Delete only ingredients the frontend has dropped from the set —
+      // the SET NULL trigger fires for these, but those recipes are also
+      // genuinely missing the ingredient now, so NULL is the right answer.
+      const existing = await tx.ingredient.findMany({ select: { id: true } });
+      const toDelete = existing.filter(e => !incomingIds.has(e.id)).map(e => e.id);
+      if (toDelete.length > 0) {
+        await tx.ingredient.deleteMany({ where: { id: { in: toDelete } } });
+      }
+
+      if (ingredients.length === 0) return;
+
+      // Build a single INSERT … ON CONFLICT DO UPDATE. Parameterised values
+      // (no SQL injection surface). 23 columns × N rows; each cell is one
+      // bind parameter, with a per-column `::jsonb` cast where needed so
+      // Postgres parses the JSON strings.
+      //
+      // Postgres caps bind params at 65,535 — at 23 cols/row that's a
+      // ~2,849 row ceiling. Current load is ~1,162 ingredients on staging
+      // so we have headroom; add chunked batching here if the table ever
+      // grows past ~2,500 rows.
+      const cols = INGREDIENT_UPSERT_COLUMNS;
+      const allValues: unknown[] = [];
+      const rowPlaceholders: string[] = [];
+      for (let r = 0; r < ingredients.length; r++) {
+        const offset = r * cols.length;
+        const cells = cols.map((c, i) => `$${offset + i + 1}${c.cast}`).join(', ');
+        rowPlaceholders.push(`(${cells})`);
+        allValues.push(...ingredientUpsertValues(ingredients[r] as Ingredient));
+      }
+      const colList = cols.map(c => `"${c.name}"`).join(', ');
+      const updateSet = cols
+        .filter(c => c.name !== 'id')
+        .map(c => `"${c.name}" = EXCLUDED."${c.name}"`)
+        .join(', ');
+      const sql =
+        `INSERT INTO ingredients (${colList}) VALUES ${rowPlaceholders.join(', ')} ` +
+        `ON CONFLICT (id) DO UPDATE SET ${updateSet}`;
+
+      await tx.$executeRawUnsafe(sql, ...allValues);
+    });
   });
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients`);
@@ -178,6 +272,8 @@ router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
 router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
   const ingredient = req.body;
   if (!ingredient || !ingredient.name) return res.status(400).json({ error: 'name required' });
+  const idErr = checkId(req.params.id, 'id');
+  if (idErr) return res.status(400).json({ error: idErr });
   const orderPrice = ingredient.orderPrice != null ? parseFloat(ingredient.orderPrice) || null : null;
   const orderUnitSize = parseFloat(ingredient.orderUnitSize) || 0;
   const data = {
