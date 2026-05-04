@@ -54,7 +54,6 @@ scripts/
   fix-raw-amounts.ts          — One-off recipe ingredient backfill
   import-standard-inventory.js — CSV → DB importer
   import-storage-locations.js  — CSV → DB importer
-  migrate-ingredients.js      — Legacy Sheets → DB ingredient migration
   seed-staging.js             — Copy prod → staging DB
   tebi-scraper.js             — Playwright scraper (called by tebi-sync-worker)
   tebi-sync-worker.js         — Node child process spawned by lib/tebi-sync.ts
@@ -152,6 +151,7 @@ npm run typecheck      # tsc --noEmit on backend
 
 Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
+`AUTH_MODE=production` (set on the Railway prod env, not in dev/staging) makes server.ts refuse to boot if `GOOGLE_CLIENT_ID` or `ALLOWED_EMAILS` is empty, and disables the dev-mode bypass in `routes/auth.ts`. Decoupled from `NODE_ENV` so `npm run preview` (which sets `NODE_ENV=production`) keeps using dev login.
 Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`).
 Optional: `COVERAGE_API_KEY` for the weekly e2e coverage agent — required for `GET /api/coverage/snapshot` (returns 503 if unset). The endpoint is mounted before `requireAuth` so a remote agent can fetch with a `Bearer <key>` header instead of a session cookie.
 Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Ledger 1 (Sering West, default ledger `723192`). For the second account/ledger (TestTafel + Centraal, `724466`), set `TEBI_LEDGER_ID_2=724466` and `TEBI_EMAIL_2` + `TEBI_PASSWORD_2`.
@@ -215,7 +215,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Recipe v2: `GET /api/recipes`, `GET /api/recipes/:id`, `POST /api/recipes`, `PATCH /api/recipes/:id`, `DELETE /api/recipes/:id`. Photo: `POST/DELETE /api/recipes/:id/photo`. Versioning: `POST /api/recipes/:id/version`. Print: `GET /api/recipes/:id/print`. Cost recalc: `POST /api/recipes/recalculate-costs`.
 - Recipe ingredient suggestion: `GET /api/ingredients/suggest?category=X&loc=west` — lives in `routes/recipes.ts`, mounted under `/api`. Don't look for it in `routes/ingredients.ts`.
 - Ingredient endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`, `/api/ingredients/stock`, `/api/ingredients/stock/bulk`, `/api/ingredients/target-stock`
-- Ingredient migration: `POST /api/ingredients/migrate` (accepts oldCsv + hanosCsv, supports `?dryRun=true`). Supplier upload: `POST /api/ingredients/upload-supplier` (XLSX).
+- Supplier upload: `POST /api/ingredients/upload-supplier` (XLSX).
 - Ingredient DB stores JSON fields: `types`, `storageLocations`, `stock`, `nutrition`, `priceHistory`, `targetStock` (Prisma Json type)
 - Ingredient constants in state.ts: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `PRICE_LEVELS`
 - Storage config: `GET/POST /api/storage-config` — per-location areas with colors, order, and spots (persisted as JSON)

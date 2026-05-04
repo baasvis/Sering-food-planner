@@ -43,7 +43,6 @@
 - **Confidence**: High.
 
 ### T4 — Silent-failure pattern in ingredient/order stock saves
-**RESOLVED on 2026-05-03 (branch `claude/t4-stock-save-acfca7`)**: both call sites (`public/js/ingredient-db.ts:165-174`, `public/js/orders.ts:1536-1545`) now route through `apiPost` instead of bare `fetch().catch(console.error)`. On non-2xx the rejection is converted to a `toastError('Stock save failed: ...')` so a flaky-network situation in the kitchen is visible instead of a UI value that "looks saved" but never persisted. Verified bundled JS no longer contains the bare-fetch pattern or a `console.error` for "Stock save failed".
 - **Severity**: Medium
 - **Location**: [public/js/ingredient-db.ts:167-173](public/js/ingredient-db.ts), [public/js/orders.ts:1539-1543](public/js/orders.ts).
 - **What**: 
