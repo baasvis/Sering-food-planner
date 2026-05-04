@@ -15,6 +15,7 @@ import {
   assignServicesPass1,
   assignServicesPass2,
   assignServicesPass3,
+  assignServicesPass4,
   allocatePotCaps,
   collectWarnings,
   buildPlanningWindow,
@@ -100,6 +101,31 @@ function fixedCalcRequired(perService = 1, holds: Map<string, number> = new Map(
   };
 }
 
+/**
+ * A peer-aware calcRequired stub. Demand at each service is `guestsPerSlot`
+ * divided by the number of same-type batches currently sharing that slot
+ * (live count from the passed-in `allBatches`, not from any cache).
+ *
+ * This mirrors the production calcRequired's peer-splitting behavior, which
+ * the cheap `fixedCalcRequired` ignores. Use this when a test needs to verify
+ * that the algorithm correctly accounts for peer-split capacity (e.g. a tight-
+ * stock batch that fits only when a peer is at the same slot).
+ */
+function peerAwareCalcRequired(allBatches: Batch[], guestsPerSlot: number, servingGrams = 280) {
+  return (dish: Batch): number => {
+    let total = 0;
+    for (const svc of dish.services || []) {
+      const peers = allBatches.filter(b =>
+        b.type === dish.type
+        && (b.services || []).some(s => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal),
+      );
+      const count = Math.max(peers.length, 1);
+      total += (guestsPerSlot / count) * (servingGrams / 1000);
+    }
+    return Math.round(total * 10) / 10;
+  };
+}
+
 beforeEach(() => {
   _idCounter = 0;
   localStorage.clear();
@@ -135,19 +161,30 @@ describe('isServableBy', () => {
     expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'centraal', 'centraal')).toBe(true);
     expect(isServableBy('05/05/2026', '2026-05-05', 'lunch', 'centraal', 'centraal')).toBe(false);
   });
+  test('No reverse delivery: Centraal-located batch is NEVER servable at a West slot', () => {
+    // A "(split)" batch deliberately sent to Centraal stays at Centraal — there's
+    // no van going back the other way. Without this rule, the algorithm would
+    // assign Centraal stock to West slots, which is logistically impossible AND
+    // starves Centraal of its own dedicated stock.
+    expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'west', 'centraal')).toBe(false);
+    expect(isServableBy('05/05/2026', '2026-05-06', 'lunch', 'west', 'centraal')).toBe(false);
+    expect(isServableBy('05/05/2026', '2026-05-07', 'dinner', 'west', 'centraal')).toBe(false);
+  });
 });
 
 describe('Pass 2 tiered bigger-pot bias', () => {
-  test('with biggestPot, demand concentrates into one batch up to cap', () => {
-    // 3 same-cookDate batches, enough slots for concentration
+  test('with biggestPot, COOKED batches concentrate into one batch up to cap', () => {
+    // Concentration only applies to COOKED batches (use real stock first
+    // before requiring another cook). 3 same-cookDate cooked Soups, enough
+    // slots for concentration.
     const window = makeWindow([
       { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
       { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
       { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
     ]);
-    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'A' });
-    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'B' });
-    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'C' });
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 100, name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 100, name: 'B' });
+    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 100, name: 'C' });
     assignServicesPass2([a, b, c], window, fixedCalcRequired(1), undefined, 10);
     const counts = [a.services.length, b.services.length, c.services.length].sort((x, y) => y - x);
     // Concentration: top batch clearly dominates the smallest
@@ -343,6 +380,53 @@ describe('assignServicesPass1', () => {
     expect(frozen.services.length).toBe(0);
   });
 
+  test('Pass 1: Centraal-located batch ONLY extends to Centraal slots (no reverse delivery)', () => {
+    // Regression for the "(split)" bug: a batch physically at Centraal must
+    // not be assigned to West services. Without the rule, the algorithm
+    // gleefully serves Centraal stock at West, which is logistically
+    // impossible AND starves Centraal of its dedicated stock.
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+      { iso: '2026-05-07', dayName: 'Thu', cookDate: '07/05/2026' },
+    ]);
+    const cookedAtCentraal = makeBatch({
+      type: 'Soup',
+      cookDate: '06/05/2026',
+      stock: 100,
+      location: 'centraal',
+    });
+    assignServicesPass1([cookedAtCentraal], window, fixedCalcRequired(1));
+    // No services should land at West.
+    expect(cookedAtCentraal.services.every(s => s.loc === 'centraal')).toBe(true);
+    // Centraal-cooked: same-day dinner OK, plus Thu lunch + Thu dinner.
+    expect(cookedAtCentraal.services.length).toBe(3);
+  });
+
+  test('Pass 1: Centraal-located batches are processed before West to claim Centraal slots', () => {
+    // Without the priority sort, processing order depends on input order
+    // (insert order from the DB). When West batches happen to be processed
+    // first, they consume Centraal slots and leave Centraal-located batches
+    // empty-handed even though Centraal is the only place they can serve.
+    const window = makeWindow([
+      { iso: '2026-05-07', dayName: 'Thu', cookDate: '07/05/2026' },
+    ]);
+    // Same cookDate, same type — only the location differs. West is in the
+    // input first; without the new sort it would grab Thu Centraal slots.
+    const westBatch     = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, location: 'west',     name: 'West'     });
+    const centraalBatch = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, location: 'centraal', name: 'Centraal' });
+
+    assignServicesPass1([westBatch, centraalBatch], window, fixedCalcRequired(1));
+
+    // Centraal batch must claim BOTH Centraal slots (Thu lunch + Thu dinner) —
+    // it can't serve anywhere else. West batch can still co-occupy the second
+    // Centraal-slot position; the point of the priority sort is that the
+    // Centraal batch gets in first, not that West is excluded.
+    const centraalServices = centraalBatch.services.filter(s => s.loc === 'centraal');
+    expect(centraalServices.length).toBe(2);
+    // And the Centraal batch must NOT have any West services.
+    expect(centraalBatch.services.every(s => s.loc === 'centraal')).toBe(true);
+  });
+
   test('Pass 1 catering hold reduces extension headroom', () => {
     const window = makeWindow([
       { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
@@ -356,6 +440,33 @@ describe('assignServicesPass1', () => {
 
     // Only 2 services fit (5L stock - 3L catering = 2L for services).
     expect(cooked.services.length).toBe(2);
+  });
+
+  test('Pass 1: tight-stock batch fits a slot where a peer is already present', () => {
+    // Regression for the stale-S.planner peer-counting bug. Setup mimics the
+    // "Pasta al Pesto (split)" case: a peer batch has already been placed at
+    // a slot (e.g. by an earlier batch's Pass 1 walk). The tight-stock batch
+    // walks Pass 1, considers the same slot. Solo demand exceeds its stock,
+    // but with the peer split it fits. A stale calcReq would mis-count peers
+    // and pop the add; a live calcReq sees the actual 2-peer situation.
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    // 130 guests × 80g = 10.4L solo, 5.2L when split with one peer.
+    const peer = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 40, serving: 80, name: 'Peer' });
+    peer.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];  // pre-placed
+    const tight = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 8, serving: 80, name: 'Tight' });
+    const all = [peer, tight];
+    const liveCalcReq = peerAwareCalcRequired(all, 130, 80);
+
+    assignServicesPass1(all, window, liveCalcReq);
+
+    // Tight should land at Wed dinner West despite stock 8L < solo demand 10.4L,
+    // because Peer is already there → demand splits to 5.2L.
+    const tightInSlot = (tight.services || []).some(s =>
+      s.date === '2026-05-06' && s.meal === 'dinner' && s.loc === 'west'
+    );
+    expect(tightInSlot).toBe(true);
   });
 });
 
@@ -420,6 +531,91 @@ describe('assignServicesPass2', () => {
     const frozen = makeBatch({ type: 'Soup', cookDate: '01/05/2026', stock: 5, storage: 'Frozen', name: 'Frozen Pea' });
     assignServicesPass2([frozen], window, fixedCalcRequired(1));
     expect(frozen.services.length).toBe(0);
+  });
+
+  test('Pass 2: 3 same-day uncooked placeholders distribute evenly, not concentrated', () => {
+    // Regression for the "Sun soup 1 = 0 services / Sun soup 2 = 6 / Sun soup 3
+    // = 5" bug. The old concentration sort piled services onto whichever
+    // placeholder happened to be picked first, until it reached the big-pot
+    // cap (140L). For uncooked placeholders with stock=0, that produced one
+    // giant cook plan + zero-volume "ghost" siblings. They should distribute
+    // evenly so the cook ends up with 3 same-sized batches.
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // 3 sibling placeholders for the same Sunday (cooked yesterday relative to window).
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup B' });
+    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup C' });
+
+    // With biggestPot hint AND uncooked siblings, my fix forces even spread.
+    assignServicesPass2([a, b, c], window, fixedCalcRequired(1), undefined, 140);
+
+    const counts = [a.services.length, b.services.length, c.services.length];
+    // Range must be at most 1 (true even spread; round-robin permits one extra).
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+  });
+
+  test('Pass 2: tight-stock batch fits when peer-split halves demand at the slot', () => {
+    // Regression for the "Pasta al Pesto (split)" case: a Centraal batch with
+    // just enough stock for half a slot (when sharing with a peer) but not
+    // enough to be solo. With a stale planner the capacity check mis-counts
+    // peers and rejects the add; with a live planner it accepts.
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    // The big batch goes in first (Pass 1 sims this). Pasta-equivalent has
+    // tight stock and only fits when paired.
+    const big = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 40, location: 'centraal', name: 'Big' });
+    big.services = [{ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }];  // pre-placed by Pass 1
+    const tight = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 10, location: 'centraal', name: 'Tight' });
+    const all = [big, tight];
+    // 130 guests × 280g = 36.4L solo, 18.2L if 2 peers split
+    // Tight has 10L: cannot solo, but fits a 18.2L share is too much...
+    // Use 130 guests at 80g serving instead (Pasta-style): 10.4L solo, 5.2L split.
+    const lightServingTight = makeBatch({ type: 'Main course', cookDate: '06/05/2026', stock: 8, serving: 80, location: 'centraal', name: 'Pasta-tight' });
+    all.length = 0;
+    all.push(big, lightServingTight);
+    big.services = [{ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }];
+
+    const liveCalcReq = peerAwareCalcRequired(all, 130, 80);
+
+    // Pass 2 walks every (slot, type, position) and tries to fill.
+    // Wed dinner Centraal Main has 1/2 → second position should pick lightServingTight.
+    assignServicesPass2(all, window, liveCalcReq);
+
+    const tightInSlot = (lightServingTight.services || []).some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-06' && s.meal === 'dinner'
+    );
+    expect(tightInSlot).toBe(true);
+  });
+
+  test('Pass 2: optimistic peer-split lets 2 batches together fill an empty slot neither could fill alone', () => {
+    // Regression for the "Tue dinner Centraal Soup, 240 guests, 0/2 empty"
+    // case. Tomato (W) and Miso (W) each have ~33L of unused stock — enough
+    // for half the slot (33.6L per batch when split 2 ways) but not enough
+    // for the whole slot (67.2L solo). Without optimistic peer-split, the
+    // first tentative add overshoots and the slot stays empty.
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    // 240 guests × 280g = 67.2L solo, 33.6L when split 2 ways.
+    // Each batch has ~33L of unused stock (we simulate this by giving them
+    // stock just under solo demand but well over half-demand).
+    const a = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 35, name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 35, name: 'B' });
+    const all = [a, b];
+    const liveCalcReq = peerAwareCalcRequired(all, 240);
+
+    assignServicesPass2(all, window, liveCalcReq);
+
+    // Both should land at Wed dinner West together (the only slot where 240
+    // guests appear in our test setup — makeWindow's slots all share that
+    // demand from peerAwareCalcRequired's stub).
+    const aWedDinW = (a.services || []).some(s => s.date === '2026-05-06' && s.meal === 'dinner' && s.loc === 'west');
+    const bWedDinW = (b.services || []).some(s => s.date === '2026-05-06' && s.meal === 'dinner' && s.loc === 'west');
+    expect(aWedDinW && bWedDinW).toBe(true);
   });
 
   test('cooked batch at stock limit gets skipped (next candidate picked)', () => {
@@ -512,6 +708,38 @@ describe('countTypeInSlot / alreadyInSlot', () => {
 
     expect(alreadyInSlot(a, 'west', '2026-05-06', 'dinner')).toBe(true);
     expect(alreadyInSlot(a, 'west', '2026-05-06', 'lunch')).toBe(false);
+  });
+
+  test('counts split-family as ONE option, not two — guests see one menu choice', () => {
+    // Tomato Soup West (parent) + Tomato Soup (split) Centraal (child) at the
+    // same slot are physically two batches but ONE menu option for guests.
+    // The slot capacity check should treat them as 1, leaving room for a
+    // second different soup.
+    const tomatoParent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 60, location: 'west', name: 'Tomato Soup' });
+    const tomatoSplit = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 30, location: 'centraal', name: 'Tomato Soup (split)' });
+    tomatoSplit.parentId = tomatoParent.id;
+    const miso = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, name: 'Miso' });
+
+    [tomatoParent, tomatoSplit, miso].forEach(b =>
+      b.services.push({ loc: 'centraal', date: '2026-05-04', meal: 'dinner' }));
+
+    // 3 physical batches at the slot, but 2 unique families (Tomato + Miso).
+    expect(countTypeInSlot([tomatoParent, tomatoSplit, miso], 'Soup', 'centraal', '2026-05-04', 'dinner')).toBe(2);
+  });
+
+  test('alreadyInSlot is family-aware: split sibling at the slot blocks the other', () => {
+    // Symmetrical regression: when Tomato Soup West is at Mon dinner Centraal,
+    // the algorithm shouldn't place Tomato Soup (split) Centraal at the same
+    // slot — they're the same option for guests.
+    const parent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 60, location: 'west', name: 'Tomato' });
+    const split = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 30, location: 'centraal', name: 'Tomato (split)' });
+    split.parentId = parent.id;
+    parent.services.push({ loc: 'centraal', date: '2026-05-04', meal: 'dinner' });
+
+    // Without family-awareness, split.alreadyInSlot would return false. With
+    // it (passing allBatches), parent's presence blocks split.
+    expect(alreadyInSlot(split, 'centraal', '2026-05-04', 'dinner')).toBe(false);  // single-batch check
+    expect(alreadyInSlot(split, 'centraal', '2026-05-04', 'dinner', [parent, split])).toBe(true);  // family-aware
   });
 });
 
@@ -650,6 +878,128 @@ describe('assignServicesPass3', () => {
 
 });
 
+// ── Pass 4 (finish-off, allows up to 3 peers) ──────────────────────────────
+
+describe('assignServicesPass4', () => {
+  test('Pass 4 adds a 3rd peer to a 2/2 slot when a small-surplus cooked batch needs to drain', () => {
+    // Setup: a slot is already at 2/2 with two cooked batches. A third
+    // cooked batch has a SMALL leftover (under FINISH_OFF_MAX_SERVINGS = 80
+    // servings worth) and needs to drain. Pass 4 piles it onto the slot
+    // as a 3rd option to use up the last little bit.
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const a = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'B' });
+    // Small-surplus batch: 10L stock at 280g serving = ~36 servings,
+    // well under the 80-serving threshold.
+    const c = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 10, name: 'C' });
+    // Pre-fill Wed dinner West with A+B (Pass 1/2/3 result).
+    a.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
+    b.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
+
+    const result = assignServicesPass4([a, b, c], window, fixedCalcRequired(1));
+
+    // C should land at the same slot as the 3rd peer.
+    const cAtSlot = (c.services || []).some(s =>
+      s.loc === 'west' && s.date === '2026-05-06' && s.meal === 'dinner'
+    );
+    expect(cAtSlot).toBe(true);
+    expect(result.servicesAdded).toBeGreaterThan(0);
+  });
+
+  test('Pass 4 SKIPS batches with big surplus (over-cook situation, not finish-off)', () => {
+    // A cooked batch with way too much stock left isn't a "last little bit"
+    // candidate. Cook should reduce next week's volume, not have the algorithm
+    // pile it as a 3rd peer at every meal (which makes every service 3-deep).
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const a = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'B' });
+    // 100L stock × 280g serving = 357 servings — way over 80.
+    const c = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'C' });
+    a.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
+    b.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
+
+    assignServicesPass4([a, b, c], window, fixedCalcRequired(1));
+
+    // C should NOT land at the slot — it's over the finish-off threshold.
+    expect(c.services.length).toBe(0);
+  });
+
+  test('Pass 4 ALSO fills under-filled slots (1/2) when finish-off batch can cover', () => {
+    // Pass 1/2/3 may leave a slot 1/2 because the only candidate had a peer
+    // that ALSO didn't fit alone. With Pass 4's overshoot tolerance, a small
+    // leftover batch can ride along as the 2nd peer, filling the slot.
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const tueSoup = makeBatch({ type: 'Soup', cookDate: '05/05/2026', stock: 0, name: 'Tue Soup' });
+    tueSoup.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];  // 1/2 (placeholder)
+    // Small-surplus cooked batch — qualifies for finish-off.
+    const leftover = makeBatch({ type: 'Soup', cookDate: '05/05/2026', stock: 5, name: 'Leftover' });
+
+    assignServicesPass4([tueSoup, leftover], window, fixedCalcRequired(1));
+
+    // Leftover should land at Wed dinner West to bring the slot to 2/2.
+    const leftoverAtSlot = (leftover.services || []).some(s =>
+      s.loc === 'west' && s.date === '2026-05-06' && s.meal === 'dinner'
+    );
+    expect(leftoverAtSlot).toBe(true);
+  });
+
+  test('Pass 4 caps at 3 peers — never adds a 4th', () => {
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const a = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'B' });
+    const c = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'C' });
+    const d = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'D' });
+    // Slot already at 3/3 (2 main + 1 finish-off) — D should not be added.
+    [a, b, c].forEach(x => x.services.push({ loc: 'west', date: '2026-05-06', meal: 'dinner' }));
+    assignServicesPass4([a, b, c, d], window, fixedCalcRequired(1));
+    const dAtSlot = (d.services || []).some(s =>
+      s.loc === 'west' && s.date === '2026-05-06' && s.meal === 'dinner'
+    );
+    expect(dAtSlot).toBe(false);
+  });
+
+  test('Pass 4 still respects stock cap (no overshoot)', () => {
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    // Tiny-stock batch — already at limit, Pass 4 must not push past stock.
+    const tight = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 1, name: 'Tight' });
+    tight.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];  // 1L used
+    // Pre-fill Wed lunch West with 2 dummy peers so Pass 4 sees a 2/2 slot.
+    const a = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'B' });
+    [a, b].forEach(x => x.services.push({ loc: 'west', date: '2026-05-06', meal: 'dinner' }));
+
+    assignServicesPass4([tight, a, b], window, fixedCalcRequired(1));
+
+    // tight already had 1 service (1L). It can't add another without overshoot.
+    expect(tight.services.length).toBe(1);
+  });
+
+  test('Pass 4 skips uncooked placeholders (only cooked batches drain via finish-off)', () => {
+    const window = makeWindow([
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const a = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'B' });
+    const placeholder = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 0, name: 'Placeholder' });
+    [a, b].forEach(x => x.services.push({ loc: 'west', date: '2026-05-06', meal: 'dinner' }));
+
+    assignServicesPass4([a, b, placeholder], window, fixedCalcRequired(1));
+
+    // Placeholder has stock=0, so it's not a "leftover" to drain.
+    expect(placeholder.services.length).toBe(0);
+  });
+});
+
 // ── Planning horizon constant ──────────────────────────────────────────────
 
 describe('PLANNING_HORIZON_DAYS', () => {
@@ -746,6 +1096,18 @@ describe('collectWarnings', () => {
     const catering = { id: 'c1', date: '06/05/2026', dishes: [] };
     const warnings = collectWarnings([], window, [catering], fixedCalcRequired(1), new Map(), null, noGuests);
     expect(warnings.filter(w => w.category === 'catering-no-dishes').length).toBe(1);
+  });
+
+  test('centraal-batch-at-west warning fires when a Centraal batch has West services', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const wronglyPlaced = makeBatch({ type: 'Soup', cookDate: '05/05/2026', stock: 10, location: 'centraal' });
+    wronglyPlaced.services = [
+      { loc: 'west', date: '2026-05-06', meal: 'dinner' },  // wrong! no van back to west
+    ];
+    const warnings = collectWarnings([wronglyPlaced], window, [], fixedCalcRequired(1), new Map(), null, noGuests);
+    const violations = warnings.filter(w => w.category === 'centraal-batch-at-west');
+    expect(violations.length).toBe(1);
+    expect(violations[0].anchor).toEqual({ kind: 'batch', batchId: wronglyPlaced.id });
   });
 
   test('burner overload warning when too many big-pot batches per cook day', () => {
