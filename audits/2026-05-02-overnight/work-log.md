@@ -15,7 +15,7 @@ Format: `[STATUS] <ID> — <one-line summary>`
 - [PR #28](https://github.com/baasvis/Sering-food-planner/pull/28) **S8** — photo upload mimetype whitelist + nosniff + Content-Disposition.
 - [PR #29](https://github.com/baasvis/Sering-food-planner/pull/29) **S7** — helmet middleware. CSP deferred.
 - [PR #30](https://github.com/baasvis/Sering-food-planner/pull/30) **T19** — bulk supplier-XLSX import triggers recipe cost recalc. Discovered T19a (FK-wipe data corruption) — filed as follow-up.
-- [PR pending] **D2** — xlsx 0.18.5 → CDN-hosted 0.20.3 (closes 2 High CVEs).
+- [PR #31](https://github.com/baasvis/Sering-food-planner/pull/31) **D2** — xlsx 0.18.5 → CDN-hosted 0.20.3 (closes 2 High CVEs).
 
 ## In progress
 - (picking next finding)
