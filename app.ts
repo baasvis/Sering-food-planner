@@ -17,6 +17,11 @@ app.set('trust proxy', 1);
 //     CSP). With the default CSP enabled, the planner won't render.
 //   - crossOriginEmbedderPolicy: the login screen loads the Google Sign-In
 //     SDK from accounts.google.com which is not COEP-compatible.
+// And one is loosened:
+//   - crossOriginOpenerPolicy: `same-origin-allow-popups` instead of the
+//     `same-origin` default. Google Sign-In opens accounts.google.com in a
+//     popup and posts the credential back via window.opener; strict COOP
+//     severs that handle and the popup renders blank.
 // Everything else stays on:
 //   - HSTS (1y, includeSubDomains)
 //   - X-Frame-Options: SAMEORIGIN — blocks clickjacking on destructive actions
@@ -29,6 +34,7 @@ app.set('trust proxy', 1);
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   referrerPolicy: { policy: 'same-origin' },
 }));
