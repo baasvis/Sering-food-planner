@@ -1130,3 +1130,136 @@ describe('Recipe v2 CRUD', () => {
     expect(check.status).toBe(404);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// S2 — stored XSS via the `id` field. Validators reject any id that doesn't
+// match /^[a-zA-Z0-9_-]{1,200}$/ so a payload-shaped id (`'); alert(1); //`)
+// can't be planted at the API boundary and reflected unescaped from the
+// onclick="" interpolations in caterings.ts / dishes.ts / planner.ts.
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('S2 — id charset validation rejects XSS-shaped ids', () => {
+  const XSS_ID = "');alert(1);('";
+  const baseBatch = {
+    name: 'XSS Test', type: 'Soup', stock: 0, serving: 280,
+    storage: 'Gastro', location: 'west', services: [],
+  };
+
+  it('POST /api/batches — rejects id with quote/paren', async () => {
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id: XSS_ID });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid id/i);
+  });
+
+  it('POST /api/batches — rejects id with HTML angle brackets', async () => {
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id: T + '<script>' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/batches — accepts a UUID-shaped id (control)', async () => {
+    const id = T + 's2-control-' + Math.random().toString(36).slice(2, 8);
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id });
+    expect(res.status).toBe(201);
+    await prisma.batch.deleteMany({ where: { id } });
+  });
+
+  it('POST /api/data/patch — rejects malicious id inside batches[]', async () => {
+    const res = await request(app).post('/api/data/patch').send({
+      batches: [{ ...baseBatch, id: XSS_ID }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/data/patch — rejects malicious id inside deletedBatches[]', async () => {
+    const res = await request(app).post('/api/data/patch').send({
+      deletedBatches: [XSS_ID],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/data/patch — rejects malicious dish.dishId inside caterings', async () => {
+    const res = await request(app).post('/api/data/patch').send({
+      caterings: [{
+        id: T + 's2-cat',
+        name: 'Catering',
+        date: null,
+        guestCount: 0,
+        deliveryMode: 'pickup',
+        dishes: [{ dishId: XSS_ID, name: 'X', type: 'Soup' }],
+        logisticsNotes: '',
+      }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes — rejects malicious body.id', async () => {
+    const res = await request(app).post('/api/recipes').send({
+      id: XSS_ID,
+      name: 'XSS Recipe',
+      type: 'Soup',
+      servingSize: 280,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes — rejects malicious ingredient.ingredientId', async () => {
+    const res = await request(app).post('/api/recipes').send({
+      name: 'XSS Recipe Ing',
+      type: 'Soup',
+      servingSize: 280,
+      ingredients: [{
+        id: T + 's2-ri',
+        ingredientId: XSS_ID,
+        sortOrder: 0,
+        rawAmount: 100,
+        unit: 'Grams',
+        isFlexible: false,
+        suggestedNames: [],
+      }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes — rejects malicious recipe-ingredient row id', async () => {
+    const res = await request(app).post('/api/recipes').send({
+      name: 'XSS Recipe Row Id',
+      type: 'Soup',
+      servingSize: 280,
+      ingredients: [{
+        id: XSS_ID,
+        sortOrder: 0,
+        rawAmount: 100,
+        unit: 'Grams',
+        isFlexible: false,
+        suggestedNames: [],
+      }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/ingredients/:id — rejects malicious id in URL path', async () => {
+    const res = await request(app)
+      .post('/api/ingredients/' + encodeURIComponent(XSS_ID))
+      .send({ id: XSS_ID, name: 'X', unit: 'Grams', active: true });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/ingredients (bulk) — rejects array entry with malicious id', async () => {
+    const res = await request(app).post('/api/ingredients').send([
+      { id: XSS_ID, name: 'X', unit: 'Grams', active: true },
+    ]);
+    expect(res.status).toBe(400);
+  });
+
+  // Backslash and Unicode line-separator probes — `esc()` doesn't strip
+  // either, so these would survive a future un-escaped renderer.
+  it('POST /api/batches — rejects backslash-escaped quote', async () => {
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id: "a\\';alert(1);//" });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/batches — rejects U+2028 line separator', async () => {
+    const res = await request(app).post('/api/batches').send({ ...baseBatch, id: "a alert(1)" });
+    expect(res.status).toBe(400);
+  });
+});
