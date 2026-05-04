@@ -933,12 +933,11 @@ export function renderCombinedOrderTab() {
   }
 
   // Add standard inventory items — pass target (not deficit) so the combined order's
-  // own stock subtraction runs once, not twice.
+  // own stock subtraction runs once, not twice. Include items with enough stock too —
+  // the row shows "✓ enough" but stays visible so users see the full picture.
   getStandardInventoryItems(curLoc).forEach(ing => {
     const target = ing.targetStock[curLoc] || 0;
     if (target <= 0) return;
-    const currentStock = (ing.stock && ing.stock[curLoc]) ? (ing.stock[curLoc].amount || 0) : 0;
-    if (currentStock >= target) return;
     addToMap(ing.name, target, true, null);
   });
 
@@ -1665,8 +1664,6 @@ export function buildCombinedOrderData() {
   getStandardInventoryItems(curLoc).forEach(ing => {
     const target = ing.targetStock[curLoc] || 0;
     if (target <= 0) return;
-    const currentStock = (ing.stock && ing.stock[curLoc]) ? (ing.stock[curLoc].amount || 0) : 0;
-    if (currentStock >= target) return;
     addToMap(ing.name, target, true, null);
   });
 
