@@ -490,6 +490,19 @@ router.get('/recipes/:id/versions', asyncHandler(async (req: Request, res: Respo
   res.json({ name: recipe.name, versions: recipe.versions as unknown as RecipeVersionSnapshot[] });
 }));
 
+// Audit S8: whitelist of safe raster image mimetypes. Multer reads the
+// mimetype from the client-supplied Content-Type header — startsWith('image/')
+// would let `image/svg+xml` through, and SVGs can carry inline <script>
+// payloads that execute when the file is rendered as a document. Confirmed
+// staging+prod have zero existing photos at the time of this change so no
+// migration needed for non-conforming legacy rows.
+const PHOTO_MIME_WHITELIST: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
+
 // Upload photo
 router.post('/recipes/:id/photo', upload.single('photo'), asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
@@ -498,7 +511,10 @@ router.post('/recipes/:id/photo', upload.single('photo'), asyncHandler(async (re
 
   const file = (req as Request & { file?: { mimetype: string; buffer: Buffer } }).file;
   if (!file) return res.status(400).json({ error: 'No photo uploaded' });
-  if (!file.mimetype.startsWith('image/')) return res.status(400).json({ error: 'File must be an image' });
+  const normalizedMime = (file.mimetype || '').toLowerCase();
+  if (!PHOTO_MIME_WHITELIST[normalizedMime]) {
+    return res.status(400).json({ error: 'Photo must be jpg, png, webp, or gif' });
+  }
 
   const photoData = new Uint8Array(file.buffer);
   const photoUrl = `/api/recipes/${id}/photo`;
@@ -508,12 +524,12 @@ router.post('/recipes/:id/photo', upload.single('photo'), asyncHandler(async (re
       create: {
         id: `photo-${id}`,
         recipeId: id,
-        mimeType: file.mimetype,
+        mimeType: normalizedMime,
         data: photoData,
         createdAt: new Date().toISOString(),
       },
       update: {
-        mimeType: file.mimetype,
+        mimeType: normalizedMime,
         data: photoData,
       },
     });
@@ -523,12 +539,21 @@ router.post('/recipes/:id/photo', upload.single('photo'), asyncHandler(async (re
   res.json({ ok: true, photoUrl });
 }));
 
-// Serve photo
+// Serve photo. Defense-in-depth alongside the upload whitelist:
+//   - X-Content-Type-Options: nosniff stops a browser from reinterpreting
+//     the bytes as something other than the declared image/* type.
+//   - Content-Disposition: inline + a controlled filename means a direct
+//     navigation renders inline (still our intent) but the filename never
+//     comes from user input.
+// (Audit S8.)
 router.get('/recipes/:id/photo', asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
   const photo = await prisma.recipePhoto.findUnique({ where: { recipeId: id } });
   if (!photo) return res.status(404).json({ error: 'No photo' });
+  const ext = PHOTO_MIME_WHITELIST[(photo.mimeType || '').toLowerCase()] || 'bin';
   res.set('Content-Type', photo.mimeType);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Content-Disposition', `inline; filename="recipe-${id}.${ext}"`);
   res.set('Cache-Control', 'public, max-age=86400');
   res.send(photo.data);
 }));
