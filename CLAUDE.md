@@ -251,4 +251,3 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Don't remove withWriteLock from write endpoints
 - Don't run `npm test` against production — use `DATABASE_URL_TEST`
 - Don't surface raw `errMsg(e)` to clients in error handlers — use `safeErrMsg(e)` so credentials in upstream error bodies don't leak
-- Don't run anything in `prisma/archive/` against production — those scripts call `deleteMany()` on every major table

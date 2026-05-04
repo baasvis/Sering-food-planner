@@ -182,7 +182,6 @@ See `CLAUDE.md` "Project Structure" for the full file map. Quick orientation:
 - **Shared types**: `shared/types.ts`
 - **Migration history**: `prisma/migrations/`
 - **One-shot scripts**: `scripts/` (read the file headers before running anything)
-- **Archived scripts**: `prisma/archive/` — historical migrations, **do not run against prod** (they call `deleteMany()` on every major table)
 - **End-to-end tests**: `e2e/*.spec.ts` (Playwright). `playwright.config.ts` at the repo root.
 - **CI workflows**: `.github/workflows/` — `test.yml` (typecheck + Jest on push/PR), `weekly-coverage.yml` (weekly e2e + agent), `sync-staging.yml` (manual prod→staging copy).
 
@@ -192,4 +191,4 @@ See `CLAUDE.md` "Project Structure" for the full file map. Quick orientation:
 
 Production data lives on Railway PostgreSQL — Railway provides automated point-in-time backups. There is no Google Sheet, no spreadsheet history, no other authoritative store.
 
-Before any schema migration that drops or renames columns, take a manual `pg_dump` snapshot of the staging DB at minimum. The `prisma/archive/` directory and the audit plan have more notes.
+Before any schema migration that drops or renames columns, take a manual `pg_dump` snapshot of the staging DB at minimum.

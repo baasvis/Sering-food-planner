@@ -237,7 +237,7 @@ Skipped (or only spot-read): the bigger frontend modules (`orders.ts` 1971 LOC, 
 - **Suggested fix**: Refactor `login()` to accept credentials as parameters. Removes the env-var mutation entirely.
 - **Confidence**: High.
 
-### A22 — `prisma/archive/import-xlsx.js` is "dead by accident" and would resurrect if a Dish/Service model is ever re-added
+### A22 — `prisma/archive/import-xlsx.js` is "dead by accident" and would resurrect if a Dish/Service model is ever re-added — RESOLVED
 - **Severity**: Low (today), High (latent landmine)
 - **Location**: [prisma/archive/import-xlsx.js:43-55](prisma/archive/import-xlsx.js).
 - **What**: First operation is `await prisma.service.deleteMany()` followed by `prisma.dish.deleteMany()`. Both models were dropped from the schema during the v2 migration. So today `prisma.service` is `undefined` and the script throws synchronously before any other deleteMany runs. That's safe — *because it crashes*. If a future schema change re-introduces a `Service` or `Dish` model (unlikely but plausible — the v2 architecture might add a `Service` aggregate one day), suddenly the script would run successfully and wipe Ingredient, RecipeIndex, Catering, TransportItem, GuestHistory, GuestHistoryMeta, GuestsNextWeeks, Log, Feedback, StandardInventory.
@@ -246,6 +246,7 @@ Skipped (or only spot-read): the bigger frontend modules (`orders.ts` 1971 LOC, 
   1. Delete `prisma/archive/import-xlsx.js` and `migrate-from-sheets.js` outright. The Sheets→PG migration is complete; these are dead historical artifacts. Git keeps them in history if anyone needs to look.
   2. If preserving them matters, add `if (!process.argv.includes('--i-really-want-this')) { console.error('Refusing to run archived migration without --i-really-want-this'); process.exit(1); }` at the top.
 - **Confidence**: High.
+- **Resolution (2026-05-03)**: Took option 1 — deleted both `prisma/archive/import-xlsx.archived.js` and `prisma/archive/migrate-from-sheets.archived.js`. The directory is gone. Git history (`git log --diff-filter=D -- prisma/archive/`) preserves them if anyone ever needs them. Also dropped the now-stale CLAUDE.md "Don't run anything in `prisma/archive/`" warning, the `prisma/archive/` references in SETUP_GUIDE.md, and the matching allowlist entry in `.claude/settings.local.json`. Same fix closes D16 and S21.
 
 ### A23 — Add Dish modal Recipes tab uses `S.recipeIndex` (legacy empty), Replace Batch correctly uses `S.recipes`
 - **Severity**: (Cross-reference for A17, A5)

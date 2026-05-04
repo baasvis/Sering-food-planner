@@ -191,10 +191,11 @@
 - **Suggested fix**: Add `tebi-error*.png` to `.gitignore`. Move the path to `/tmp/...` in the scraper.
 - **Confidence**: High.
 
-### D16 — `prisma/archive/` scripts still in repo, with destructive operations referencing dropped models
+### D16 — `prisma/archive/` scripts still in repo, with destructive operations referencing dropped models — RESOLVED
 - **Severity**: Low (cross-ref A22, S21)
 - **Location**: [prisma/archive/](prisma/archive/).
 - **What**: Two archive scripts (`import-xlsx.js`, `migrate-from-sheets.js`) reference `prisma.dish` and `prisma.service` — models that no longer exist. They throw on first call. Today this means the scripts are inert. If a future schema change reintroduces those models, the scripts would suddenly run and wipe most production tables.
 - **Why it matters**: Latent landmine; cleanup-vs-history trade-off.
 - **Suggested fix**: Delete the archive scripts. Git keeps the history if anyone needs to look. Or add explicit `--i-really-want-this` arg-check at top. See A22 for full discussion.
 - **Confidence**: High.
+- **Resolution (2026-05-03)**: See A22.
