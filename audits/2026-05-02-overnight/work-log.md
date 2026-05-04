@@ -14,7 +14,7 @@ Format: `[STATUS] <ID> — <one-line summary>`
 - [PR #27](https://github.com/baasvis/Sering-food-planner/pull/27) **S6** — timing-safe Bearer compare.
 - [PR #28](https://github.com/baasvis/Sering-food-planner/pull/28) **S8** — photo upload mimetype whitelist + nosniff + Content-Disposition.
 - [PR #29](https://github.com/baasvis/Sering-food-planner/pull/29) **S7** — helmet middleware (HSTS, frame-options, nosniff, referrer-policy). CSP deferred.
-- [PR pending] **T19** — bulk supplier-XLSX import now triggers recipe cost recalc. Discovered the deeper FK-wipe bug (T19a) while implementing — filed as a follow-up since the safe rewrite needs more design.
+- [PR #30](https://github.com/baasvis/Sering-food-planner/pull/30) **T19** — bulk supplier-XLSX import now triggers recipe cost recalc. Discovered the deeper FK-wipe bug (T19a) while implementing — filed as a follow-up since the safe rewrite needs more design.
 
 ## Discovered
 - **T19a (high-severity data corruption)** — bulk POST `/api/ingredients` does `deleteMany + createMany` and `recipe_ingredients.ingredient_id` is `ON DELETE SET NULL`. Every supplier-XLSX import wipes recipe→ingredient links. Staging is 100% NULL (618/618), prod is 3.4% (21/625). Needs a separate PR with raw `INSERT … ON CONFLICT DO UPDATE`. Documented in `99-followups.md`.
