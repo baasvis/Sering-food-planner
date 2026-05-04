@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>De Sering — Food Planner</title>
 <!-- Google Sign-In SDK -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -39,7 +39,7 @@
 </div>
 <nav class="bottom-nav" id="bottom-nav"></nav>
 <div id="modal-root"></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <button class="feedback-fab" id="feedback-fab" onclick="openFeedback()" style="display:none;">
   <span class="fab-icon">&#9997;</span> Feedback
 </button>
