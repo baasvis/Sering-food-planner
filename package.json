@@ -35,7 +35,7 @@
     "node-cron": "^4.2.1",
     "playwright": "~1.58.2",
     "prisma": "~6.19.2",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "jest": {
     "transform": {
