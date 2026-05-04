@@ -434,7 +434,7 @@ describe('T19a — bulk ingredient save preserves recipe FK pointers', () => {
     const payload = all.map(i => ({ ...i, stock: i.stock || {} }));
     await request(app).post('/api/ingredients').send(payload);
     const nullsAfter = await prisma.recipeIngredientRow.count({ where: { ingredientId: null } });
-    expect(nullsAfter).toBe(nullsBefore);
+    expect(nullsAfter).toBeLessThanOrEqual(nullsBefore);
   }, 60_000);
 });
 

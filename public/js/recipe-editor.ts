@@ -1457,21 +1457,23 @@ export async function brSave() {
     batch.stockDeducted = br.deductStock;
 
     if (br.deductStock) {
-      const stockUpdates: Array<{ id: string; amount: number }> = [];
-      actualIngredients.forEach(ai => {
-        if (ai.ingredientId) {
-          const grams = toGrams(ai.amount, ai.unit);
-          stockUpdates.push({ id: ai.ingredientId, amount: -grams });
-        }
-      });
+      // /api/ingredients/stock/bulk SETS absolute stock per ingredient (it's
+      // the stocktake endpoint), so we read current stock locally, subtract
+      // the cooked amount, and send the new absolute value. (T18 fix.)
+      const stockUpdates = computeStockDeductionUpdates(actualIngredients, batch.location, S.ingredientDb);
       if (stockUpdates.length > 0) {
         try {
-          await apiPost('/api/ingredients/stock/bulk', {
-            location: batch.location,
-            updates: stockUpdates.map(u => ({ ingredientId: u.id, amount: u.amount })),
+          await apiPost('/api/ingredients/stock/bulk', stockUpdates);
+          const today = new Date().toISOString().slice(0, 10);
+          stockUpdates.forEach(u => {
+            const dbIng = S.ingredientDb.find(i => i.id === u.ingredientId);
+            if (dbIng) {
+              if (!dbIng.stock) dbIng.stock = {} as Ingredient['stock'];
+              (dbIng.stock as Record<string, { amount: number; date: string }>)[u.location] = { amount: u.amount, date: today };
+            }
           });
         } catch (e: unknown) {
-          console.warn('Failed to deduct stock:', e);
+          toastError('Stock deduction failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
         }
       }
     }
@@ -1485,4 +1487,26 @@ export async function brSave() {
   } catch (e: unknown) {
     toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
+}
+
+// Exported for unit tests. Pure: takes the cooked-actuals + the batch's
+// location + the ingredient DB; returns the array of {ingredientId, location,
+// amount} updates for /api/ingredients/stock/bulk, where `amount` is the new
+// absolute stock value (current minus cooked grams). The bulk endpoint SETS
+// stock, it does not deduct, so the read-modify-write happens here.
+export function computeStockDeductionUpdates(
+  actualIngredients: Array<{ ingredientId: string; amount: number; unit: string }>,
+  location: string,
+  ingredientDb: Ingredient[],
+): Array<{ ingredientId: string; location: string; amount: number }> {
+  const updates: Array<{ ingredientId: string; location: string; amount: number }> = [];
+  for (const ai of actualIngredients) {
+    if (!ai.ingredientId) continue;
+    const grams = toGrams(ai.amount, ai.unit);
+    if (!grams) continue;
+    const dbIng = ingredientDb.find(i => i.id === ai.ingredientId);
+    const current = (dbIng?.stock as Record<string, { amount: number; date: string }> | undefined)?.[location]?.amount ?? 0;
+    updates.push({ ingredientId: ai.ingredientId, location, amount: current - grams });
+  }
+  return updates;
 }
