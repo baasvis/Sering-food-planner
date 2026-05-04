@@ -85,6 +85,53 @@ describe('GET /api/data', () => {
   });
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+// S6 — bearer compare uses crypto.timingSafeEqual; behaviour must still
+// reject mismatched / missing / wrong-length tokens with 401 (and 503 when
+// the env var is unset).
+// ──────────────────────────────────────────────────────────────────────────
+describe('S6 — coverage bearer compare', () => {
+  let originalKey: string | undefined;
+
+  beforeAll(() => { originalKey = process.env.COVERAGE_API_KEY; });
+  afterAll(() => {
+    if (originalKey === undefined) delete process.env.COVERAGE_API_KEY;
+    else process.env.COVERAGE_API_KEY = originalKey;
+  });
+
+  it('returns 503 when COVERAGE_API_KEY is unset', async () => {
+    delete process.env.COVERAGE_API_KEY;
+    const res = await request(app).get('/api/coverage/snapshot').set('Authorization', 'Bearer anything');
+    expect(res.status).toBe(503);
+  });
+
+  it('returns 401 for a wrong bearer (same length as expected)', async () => {
+    process.env.COVERAGE_API_KEY = 'correct-key-1234';
+    const res = await request(app).get('/api/coverage/snapshot').set('Authorization', 'Bearer wrong-key-12345');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 for a wrong bearer (different length)', async () => {
+    // crypto.timingSafeEqual throws on mismatched lengths; the length-guard
+    // before it must catch this without crashing.
+    process.env.COVERAGE_API_KEY = 'correct-key-1234';
+    const res = await request(app).get('/api/coverage/snapshot').set('Authorization', 'Bearer x');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 for missing Authorization header', async () => {
+    process.env.COVERAGE_API_KEY = 'correct-key-1234';
+    const res = await request(app).get('/api/coverage/snapshot');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 200 for the correct bearer', async () => {
+    process.env.COVERAGE_API_KEY = 'correct-key-1234';
+    const res = await request(app).get('/api/coverage/snapshot').set('Authorization', 'Bearer correct-key-1234');
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('POST /api/data', () => {
   // Legacy endpoint was the destructive delete-all/create-all path. Now returns
   // 410 Gone — clients must use POST /api/data/patch instead.
