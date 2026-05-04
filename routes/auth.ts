@@ -82,8 +82,11 @@ router.post('/google', asyncHandler(async (req: Request, res: Response) => {
   const { idToken } = req.body;
   if (!idToken) return res.status(400).json({ error: 'idToken required' });
 
-  // Dev mode: no GOOGLE_CLIENT_ID configured
-  if (!CONFIG.GOOGLE_CLIENT_ID) {
+  // Dev mode: GOOGLE_CLIENT_ID empty AND AUTH_MODE != 'production'. The
+  // AUTH_MODE check (audit S3/S4) means a prod deploy that loses
+  // GOOGLE_CLIENT_ID via env-var rotation can't silently fall through to
+  // the dev shortcut — server.ts refuses to boot in that state.
+  if (!CONFIG.GOOGLE_CLIENT_ID && CONFIG.AUTH_MODE !== 'production') {
     const devUser: AppUser = { email: 'dev@local', name: 'Dev Mode', picture: null };
     const sessionId = await createSession(devUser);
     res.cookie('session', sessionId, cookieOpts());
@@ -92,7 +95,18 @@ router.post('/google', asyncHandler(async (req: Request, res: Response) => {
 
   try {
     const user = await verifyGoogleToken(idToken);
-    if (CONFIG.ALLOWED_EMAILS.length > 0 && !CONFIG.ALLOWED_EMAILS.includes(user.email)) {
+    // Defense-in-depth (audit S4): in production, an empty ALLOWED_EMAILS
+    // means deny-all (the boot guard in server.ts also refuses to start in
+    // this state, but the runtime check ensures fail-closed if the boot
+    // guard is ever weakened).
+    if (CONFIG.ALLOWED_EMAILS.length === 0) {
+      if (CONFIG.AUTH_MODE === 'production') {
+        console.error('Login denied: ALLOWED_EMAILS is empty in AUTH_MODE=production');
+        return res.status(503).json({ error: 'not_configured', message: 'Auth is not configured. Contact your admin.' });
+      }
+      // Dev/staging: keep today's behaviour — log a clear warning instead.
+      console.warn(`Allowing login for ${user.email} — ALLOWED_EMAILS is empty (dev mode).`);
+    } else if (!CONFIG.ALLOWED_EMAILS.includes(user.email)) {
       console.warn(`Login denied for ${user.email} — not in ALLOWED_EMAILS`);
       return res.status(403).json({ error: 'not_allowed', message: 'Je account heeft geen toegang. Vraag je teamleider om je e-mail toe te voegen.' });
     }
@@ -124,7 +138,11 @@ router.get('/me', asyncHandler(async (req: Request, res: Response) => {
 // Middleware: protect all /api/* except auth + health
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (req.path.startsWith('/auth/') || req.path === '/health') { next(); return; }
-  if (!CONFIG.GOOGLE_CLIENT_ID) { next(); return; } // dev mode bypass
+  // Dev mode bypass: only when GOOGLE_CLIENT_ID is empty AND AUTH_MODE is
+  // not 'production'. server.ts refuses to boot if AUTH_MODE='production'
+  // and GOOGLE_CLIENT_ID is empty, so the prod-with-rotated-env-var
+  // scenario can't reach this fallthrough. (Audit S3/S4.)
+  if (!CONFIG.GOOGLE_CLIENT_ID && CONFIG.AUTH_MODE !== 'production') { next(); return; }
   // getSessionUser is now async (Postgres lookup). The middleware contract
   // can't itself be async without breaking Express's type definitions, so we
   // resolve the promise and forward via the next() callback.

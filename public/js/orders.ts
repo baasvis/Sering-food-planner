@@ -1533,14 +1533,15 @@ export function persistIngredientStock(ingredientName: string, amount: number) {
   if (!db.stock) db.stock = {};
   db.stock[loc] = { amount: amountNum, date: new Date().toISOString().slice(0, 10) };
 
-  // Debounced save to backend
+  // Debounced save to backend. apiPost throws on non-2xx (instead of the
+  // bare-fetch silent fail the audit flagged as T4) — pipe to toastError so
+  // a kitchen-network blip is visible instead of a UI value that "looks
+  // saved" but never persisted.
   clearTimeout(_stockSaveTimeout);
   _stockSaveTimeout = setTimeout(() => {
-    fetch('/api/ingredients/stock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ingredientId: db.id, location: loc, amount: amountNum }),
-    }).catch(e => console.error('Stock save failed:', e));
+    apiPost('/api/ingredients/stock', { ingredientId: db.id, location: loc, amount: amountNum }).catch((e: unknown) => {
+      toastError('Stock save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    });
   }, 600);
 }
 

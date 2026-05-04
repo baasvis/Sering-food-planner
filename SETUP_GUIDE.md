@@ -30,7 +30,8 @@ Create `.env` in the repo root. The file is gitignored.
 | `DATABASE_URL` | **Yes** | Postgres URL — `postgresql://user:pass@host:port/db` |
 | `DATABASE_URL_TEST` | For tests | Separate Postgres for `npm test`. Test runner refuses to use a known prod host. Staging is fine. |
 | `GOOGLE_CLIENT_ID` | Production only | Google OAuth client ID. Without it, the server runs in **dev mode** — anyone can log in via the "Dev mode login" button on the login screen. |
-| `ALLOWED_EMAILS` | Recommended | Comma-separated emails permitted to log in. If empty when `GOOGLE_CLIENT_ID` is set, **anyone with a Google account can log in**. |
+| `ALLOWED_EMAILS` | Recommended | Comma-separated emails permitted to log in. Empty in dev/staging means anyone with a Google account can log in (with a console warning). Empty in `AUTH_MODE=production` returns 503 to deny access. |
+| `AUTH_MODE` | **Set on production deploys** | `dev` (default) or `production`. When `production`: server.ts refuses to boot if `GOOGLE_CLIENT_ID` or `ALLOWED_EMAILS` is empty, and `routes/auth.ts` disables the dev-mode bypass. Decoupled from `NODE_ENV` so local `npm run preview` (which sets `NODE_ENV=production` to serve `dist/client`) keeps using dev login. **Set `AUTH_MODE=production` in the Railway env** to enable the boot guard there. |
 | `ANTHROPIC_API_KEY` | Optional | Enables the AI insights cron (data-quality checks summarised by Claude). |
 | `AI_ANALYSIS_CRON` | Optional | Default `0 7 * * *` (daily 07:00). Standard cron syntax. |
 | `AI_ANALYSIS_MODEL` | Optional | Default `claude-sonnet-4-6`. |
