@@ -84,6 +84,29 @@ describe('GET /api/data', () => {
   });
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+// S7 — helmet sets baseline security headers on every response. CSP and
+// COEP are deliberately off (would break inline-onclick / Google SDK);
+// HSTS, frame-options, nosniff, referrer-policy must be present.
+// ──────────────────────────────────────────────────────────────────────────
+describe('S7 — security headers (helmet)', () => {
+  it('GET /api/health — sets HSTS, X-Frame-Options, nosniff, Referrer-Policy', async () => {
+    const res = await request(app).get('/api/health');
+    expect(res.status).toBe(200);
+    expect(res.headers['strict-transport-security']).toMatch(/max-age=\d+/);
+    expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['referrer-policy']).toBe('same-origin');
+  });
+
+  it('does NOT set a Content-Security-Policy header (deferred until S2 onclick refactor)', async () => {
+    const res = await request(app).get('/api/health');
+    // Asserting absence so we notice if a future helmet upgrade re-enables
+    // CSP by default — that would silently break the planner.
+    expect(res.headers['content-security-policy']).toBeUndefined();
+  });
+});
+
 describe('POST /api/data', () => {
   // Legacy endpoint was the destructive delete-all/create-all path. Now returns
   // 410 Gone — clients must use POST /api/data/patch instead.

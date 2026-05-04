@@ -101,6 +101,7 @@
 - **Confidence**: High that the timing-attack risk is small here; suggesting fix anyway because it's cheap.
 
 ### S7 — No security headers (CSP, X-Frame-Options, HSTS, X-Content-Type-Options, Referrer-Policy)
+**PARTIALLY RESOLVED on 2026-05-04 (branch `claude/s7-helmet-acfca7`)**: added `helmet@8` to `app.ts` middleware. HSTS (1y, includeSubDomains), `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, and helmet's other defaults are now set on every response. `contentSecurityPolicy` and `crossOriginEmbedderPolicy` are deliberately disabled — the inline `onclick=""` pattern would break under default CSP, and the Google Sign-In SDK is not COEP-compatible. CSP is the deferred follow-up tied to S2's onclick refactor (delegated handlers). Verified live in preview: all five headers present, app shell still loads, dev login still works. Two new tests in `test/api.test.ts` pin the headers AND assert CSP is absent (so a future helmet upgrade that re-enables CSP by default would fail-loud).
 - **Severity**: Medium
 - **Location**: [app.ts](app.ts) — express-only setup, no `helmet()` middleware.
 - **What**: Greps for `helmet`, `Content-Security-Policy`, `X-Frame-Options`, `Strict-Transport`, etc. all return zero matches. Railway's edge layer terminates TLS but does not add HSTS or CSP headers by default.
