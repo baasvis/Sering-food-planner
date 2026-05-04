@@ -11,6 +11,12 @@ export const CONFIG = {
   GOOGLE_CREDENTIALS: process.env.GOOGLE_CREDENTIALS || '{}',
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
   ALLOWED_EMAILS: (process.env.ALLOWED_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean),
+  // Audit S3/S4: explicit auth-mode opt-in. When 'production', the dev-mode
+  // bypass in routes/auth.ts is disabled and server.ts refuses to boot if
+  // GOOGLE_CLIENT_ID or ALLOWED_EMAILS is empty. Decoupled from NODE_ENV so
+  // local `npm run preview` (NODE_ENV=production for serving dist/client) can
+  // keep using the dev-login flow. Default 'dev'.
+  AUTH_MODE: (process.env.AUTH_MODE === 'production' ? 'production' : 'dev') as 'production' | 'dev',
   HANOS_CLIENT_SECRET: process.env.HANOS_CLIENT_SECRET || '',
   HANOS_USER_WEST: process.env.HANOS_USER_WEST || '',
   HANOS_PASS_WEST: process.env.HANOS_PASS_WEST || '',

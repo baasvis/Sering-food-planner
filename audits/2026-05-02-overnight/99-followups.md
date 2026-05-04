@@ -126,3 +126,19 @@ For the elevated A17 (S.recipeIndex empty in three surfaces):
 - [ ] Open dishes overview → click "+ New batch" → search field. Confirm "No recipes in index yet."
 - [ ] Decide between "patch with S.recipes" (quick) and "sunset Recipe v1" (preferred).
 
+---
+
+## Discovered while implementing fixes
+
+### T19a — `POST /api/ingredients` bulk save wipes recipe → ingredient FKs (data-corruption)
+**RESOLVED on 2026-05-04 (branch `claude/t19a-fk-preserve-acfca7`)**: bulk POST now uses a single `INSERT … ON CONFLICT (id) DO UPDATE` raw SQL via `tx.$executeRawUnsafe`. UPDATE doesn't fire the SET NULL trigger so existing recipe→ingredient FKs are preserved across bulk saves. Rows the frontend dropped from the set are still pruned via a targeted `deleteMany` (SET NULL fires only for those — correct, they're truly gone). Verified live in preview against staging: 1162-row bulk POST returns 200, NULL count in recipe_ingredients unchanged. Two regression tests in `test/api.test.ts`.
+
+- **Severity**: **High** (silent data corruption on a regular user action)
+- **Originally discovered**: while implementing T19 — bulk POST `deleteMany + createMany` interacted with `recipe_ingredients.ingredient_id ON DELETE SET NULL`, NULLing every recipe-ingredient pointer on every supplier import. Staging was 100% NULL (618/618), prod 21/625 at the time.
+
+#### Recovery for the existing NULLed rows (separate follow-up)
+Not part of this PR. 21 NULL rows on prod, 618 on staging at the time of this fix. Recipe `versions[]` (`shared/types.ts:131-137`) snapshots ingredients with their original `ingredientId`, so a recovery script can walk each recipe's most recent version snapshot and restore `recipe_ingredients.ingredient_id` from there. Rows in recipes that have never been versioned can't be recovered automatically.
+
+#### Sibling bug (separate follow-up)
+[routes/ingredients-import.ts:327-330](routes/ingredients-import.ts) — `POST /api/ingredients/migrate` (legacy Sheets→DB) does the same `prisma.$transaction([deleteMany, createMany])`. Mostly historical (one-shot migration) but if re-run on prod it would re-trigger the FK wipe. Apply the same `INSERT … ON CONFLICT DO UPDATE` pattern, or remove the route if the migration is truly done.
+

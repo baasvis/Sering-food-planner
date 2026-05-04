@@ -1,7 +1,8 @@
 import type { Batch, RecipeFull, DishType, Location, Meal, Service } from '@shared/types';
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError } from './utils';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate, consolidateFamilies } from './core';
+import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate, consolidateFamilies, getRootId, getFamilyMembers } from './core';
+import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderBatchTile, renderFamilyGrouped, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, renderSplitBar, cleanCateringRefs } from './dishes';
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
@@ -152,13 +153,54 @@ export function renderLocationPlan(loc: string) {
           ? `assignBatchToSlot('${loc}','${isoDate}','${meal}')`
           : `openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')`;
         html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}${assignTarget}" data-loc="${loc}" data-date="${isoDate}" data-meal="${meal}" data-type="${tg.key}" onclick="${slotClick}" ondragover="slotDragOver(event)" ondragleave="slotDragLeave(event)" ondrop="slotDrop(event,'${loc}','${isoDate}','${meal}')">`;
+        // Group slot dishes by family root — guests see one menu option per
+        // family, not one per physical batch. So Tomato Soup (W parent) +
+        // Tomato Soup (split C) at the same slot render as ONE chip. The
+        // chip's × removes the service from EVERY family member at this slot.
+        const familyAtSlot = new Map<string, typeof slotDishes>();
         slotDishes.forEach(dish => {
-          const trClass = dish.inTransit ? ' chip-tr-border' : '';
-          const servedClass = slotServed ? ' dish-chip-served' : '';
-          const fromOther = dish.location && dish.location !== loc;
-          const fromTag = fromOther ? `<span class="chip-from">&larr; ${dish.location === 'west' ? 'West' : 'Centraal'}</span>` : '';
-          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(dish.name)}"><span class="chip-nm">${esc(dish.name)}</span>${fromTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
+          const root = getRootId(dish, S.batches);
+          if (!familyAtSlot.has(root)) familyAtSlot.set(root, []);
+          familyAtSlot.get(root)!.push(dish);
         });
+        for (const members of familyAtSlot.values()) {
+          // Primary = parent (no parentId) if present, else first member.
+          const primary = members.find(m => !m.parentId) || members[0];
+          const familyName = primary.name.replace(/\s*\(split\)\s*$/i, '').trim();
+          const anyInTransit = members.some(m => m.inTransit);
+          const trClass = anyInTransit ? ' chip-tr-border' : '';
+          const servedClass = slotServed ? ' dish-chip-served' : '';
+          // From-tag: when this menu option draws stock from a DIFFERENT
+          // location than the slot, hint at it. With multiple family
+          // members the chip can pull from both — show the off-loc total.
+          // The off-loc label is determined relative to the SLOT (not the
+          // primary), since that's what the cook sees: "the slot is at C,
+          // some of its supply is at W".
+          const offLocStock = members
+            .filter(m => m.location !== loc)
+            .reduce((s, m) => s + (m.stock || 0), 0);
+          const fromOther = offLocStock > 0;
+          const offLocLabel = loc === 'west' ? 'C' : 'W';
+          // For a single off-loc member, keep the original "← West" / "← Centraal"
+          // arrow (matches the original chip behaviour for solo cross-loc dishes).
+          // For mixed (some at slot loc, some off), show "+ XL @ Other".
+          const memberLocs = new Set(members.map(m => m.location));
+          let fromTag = '';
+          if (fromOther && memberLocs.size === 1) {
+            fromTag = `<span class="chip-from">&larr; ${members[0].location === 'west' ? 'West' : 'Centraal'}</span>`;
+          } else if (fromOther) {
+            fromTag = `<span class="chip-from">+${offLocStock}L @ ${offLocLabel}</span>`;
+          }
+          const memberIds = members.map(m => m.id).join(',');
+          const memberCountTag = members.length > 1 ? ` <small class="chip-multi">×${members.length}</small>` : '';
+          const tooltip = members.length > 1
+            ? `${familyName} family · ${members.length} physical batches contribute (${members.map(m => `${m.stock||0}L @ ${m.location[0].toUpperCase()}`).join(' + ')})`
+            : familyName;
+          const removeHandler = members.length > 1
+            ? `removeFamilyFromSlot('${memberIds}','${loc}','${isoDate}','${meal}')`
+            : `removeDishFromSlot('${primary.id}','${loc}','${isoDate}','${meal}')`;
+          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(tooltip)}"><span class="chip-nm">${esc(familyName)}${memberCountTag}</span>${fromTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();${removeHandler}">&#10005;</span>`}</div>`;
+        }
         if (!assigning) {
           html += `<div class="add-slot-btn" data-testid="slot-add-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div>`;
         }
@@ -319,15 +361,50 @@ export function slotDrop(e: DragEvent, loc: string, date: string, meal: string) 
   if (!batchId) return;
   const batch = S.batches.find(d => d.id === batchId);
   if (!batch) return;
-  const already = (batch.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal);
-  if (already) { toast('Already assigned to this slot'); return; }
-  if (!batch.services) batch.services = [];
-  batch.services.push({ loc, date, meal });
   S.draggingBatchId = null;
+  const added = assignFamilyToSlot(batch, loc, date, meal);
+  if (added.length === 0) {
+    toast('Already assigned to this slot');
+    return;
+  }
   rebuildPlanner();
   scheduleSave();
   rerenderCurrentView();
-  toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
+  // Toast: family-aware language. If only the dragged batch got the
+  // service, behave like the old toast. If siblings also got pulled in,
+  // call out the family.
+  if (added.length === 1) {
+    toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
+  } else {
+    const familyName = batch.name.replace(/\s*\(split\)\s*$/i, '').trim();
+    toast(`${familyName} family assigned to ${dateToDayName(date)} ${meal} (${added.length} batches)`);
+  }
+}
+
+/**
+ * Family-aware service assignment. When the cook assigns ANY batch to a slot,
+ * also assign every OTHER family member that can physically reach that slot
+ * (per isServableBy). Otherwise the lone-assigned batch absorbs the entire
+ * family's share of the slot's demand and goes negative on stock — forcing
+ * the cook to manually assign each family member separately.
+ *
+ * Returns the list of batches that received a NEW service entry. Members
+ * that already had it, or can't reach the slot, are skipped.
+ *
+ * Frozen batches are excluded (they don't auto-rotate).
+ */
+export function assignFamilyToSlot(seed: Batch, loc: string, date: string, meal: string): Batch[] {
+  const family = getFamilyMembers(seed, S.batches);
+  const added: Batch[] = [];
+  for (const m of family) {
+    if (m.storage === 'Frozen') continue;
+    if ((m.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal)) continue;
+    if (!isServableBy(m.cookDate, date, meal as 'lunch'|'dinner', loc as 'west'|'centraal', m.location)) continue;
+    if (!m.services) m.services = [];
+    m.services.push({ loc, date, meal } as Service);
+    added.push(m);
+  }
+  return added;
 }
 
 // ── ASSIGN MODE ─────────────────────────────────────────
@@ -346,19 +423,21 @@ export function assignBatchToSlot(loc: string, date: string, meal: string) {
   if (!batchId) return;
   const batch = S.batches.find(d => d.id === batchId);
   if (!batch) { S.assigningBatchId = null; return; }
-  // Check if already assigned to this slot
-  const already = (batch.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal);
-  if (already) {
+  S.assigningBatchId = null;
+  const added = assignFamilyToSlot(batch, loc, date, meal);
+  if (added.length === 0) {
     toast('Already assigned to this slot');
     return;
   }
-  if (!batch.services) batch.services = [];
-  batch.services.push({ loc, date, meal });
-  S.assigningBatchId = null;
   rebuildPlanner();
   scheduleSave();
   rerenderCurrentView();
-  toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
+  if (added.length === 1) {
+    toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
+  } else {
+    const familyName = batch.name.replace(/\s*\(split\)\s*$/i, '').trim();
+    toast(`${familyName} family assigned to ${dateToDayName(date)} ${meal} (${added.length} batches)`);
+  }
 }
 
 // ── TRANSPORT VIEW ───────────────────────────────────────
@@ -465,6 +544,23 @@ export function markSelectedArrived() {
 export function removeDishFromSlot(dishId: string, loc: string, date: string, meal: string) {
   const dish = S.batches.find(d => d.id === dishId);
   if (dish) { dish.services = (dish.services || []).filter(s => !(s.loc === loc && s.date === date && s.meal === meal)); }
+  rebuildPlanner(); rerenderCurrentView(); scheduleSave();
+}
+
+/**
+ * Family-aware chip removal: when the cook clicks × on a merged family chip,
+ * clear the slot's service entry from EVERY contributing physical batch.
+ * Without this, removing the chip would only clear one batch and the chip
+ * would stay because the other family member still has the service.
+ */
+export function removeFamilyFromSlot(memberIdsCsv: string, loc: string, date: string, meal: string) {
+  const ids = memberIdsCsv.split(',');
+  for (const id of ids) {
+    const dish = S.batches.find(d => d.id === id);
+    if (dish) {
+      dish.services = (dish.services || []).filter(s => !(s.loc === loc && s.date === date && s.meal === meal));
+    }
+  }
   rebuildPlanner(); rerenderCurrentView(); scheduleSave();
 }
 

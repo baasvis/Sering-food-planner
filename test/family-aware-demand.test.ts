@@ -11,7 +11,7 @@
  */
 
 import type { Batch, DishType, Location, Service, StorageType } from '../shared/types';
-import { calcRequired } from '../public/js/core';
+import { calcRequired, recomputeFamilyAllocations } from '../public/js/core';
 import { S } from '../public/js/state';
 
 let _id = 0;
@@ -56,13 +56,17 @@ function rebuildPlanner(batches: Batch[]) {
       S.planner[k].push(b);
     }
   }
+  // Refresh the greedy family allocation cache that calcRequired reads from.
+  recomputeFamilyAllocations();
 }
 
 beforeEach(() => {
   _id = 0;
-  // Seed S.guests so getGuests returns 130 for Mon dinner Centraal
+  // Seed S.guests for every weekday so the multi-slot test can rely on
+  // 130 guests at every dinner.
+  const dinner130 = (d: string) => ({ [d]: { lunch: 90, dinner: 130 } });
   S.guests = {
-    centraal: { Mon: { lunch: 90, dinner: 130 } } as any,
+    centraal: { ...dinner130('Mon'), ...dinner130('Tue'), ...dinner130('Wed'), ...dinner130('Thu'), ...dinner130('Fri') } as any,
     west: { Mon: { lunch: 100, dinner: 110 } } as any,
   };
   S.batches = [];
@@ -72,15 +76,15 @@ beforeEach(() => {
 });
 
 describe('family-aware calcRequired', () => {
-  test('Tomato family at slot counts as ONE menu option (not as N physical batches)', () => {
-    // Slot: Mon dinner Centraal, 130 guests
-    // 3 physical Soup batches at the slot:
-    //   - Tomato West (parent, 50L)
-    //   - Tomato Centraal (split, 20L) — same family as parent
+  test('Single Centraal slot — greedy drains the same-loc split first', () => {
+    // Slot: Mon dinner Centraal, 130 guests. Tomato family at the slot:
+    //   - Tomato West (parent, 50L) — off-loc relative to slot
+    //   - Tomato Centraal (split, 20L) — SAME-loc as slot
     //   - Courgette Centraal (50L) — different family
-    // From guests' view: 2 menu options (Tomato + Courgette).
-    // Each menu option gets 130/2 = 65 guests.
-    // Within Tomato family (2 batches), 65/2 = 32.5 guests each → 9.1L each.
+    // Family share = 130/2 × 280g = 18.2L.
+    // GREEDY: same-loc first. Split (20L) absorbs the full 18.2L of family
+    // demand at this slot — its remaining stock drops to 1.8L. Parent gets
+    // charged 0L because the split alone can cover the slot.
     const tomatoParent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, location: 'west', name: 'Tomato' });
     const tomatoSplit = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 20, location: 'centraal', name: 'Tomato (split)' });
     tomatoSplit.parentId = tomatoParent.id;
@@ -92,15 +96,45 @@ describe('family-aware calcRequired', () => {
     S.batches = [tomatoParent, tomatoSplit, courgette];
     rebuildPlanner(S.batches);
 
-    // 130 guests / 2 menu options / 2 family-members at slot = 32.5 guests
-    // 32.5 × 280g = 9.1L per Tomato batch
-    expect(calcRequired(tomatoParent)).toBeCloseTo(9.1, 1);
-    expect(calcRequired(tomatoSplit)).toBeCloseTo(9.1, 1);
-    // Tomato family TOTAL = 18.2L (= half of full slot demand: 130 × 280g / 2)
-    expect(calcRequired(tomatoParent) + calcRequired(tomatoSplit)).toBeCloseTo(18.2, 1);
-    // Courgette gets the OTHER half — alone in its family, so full half:
-    // 130 / 2 / 1 × 280g = 18.2L
+    // Greedy: split (same-loc) absorbs full 18.2L, parent unused.
+    expect(calcRequired(tomatoSplit)).toBeCloseTo(18.2, 1);
+    expect(calcRequired(tomatoParent)).toBeCloseTo(0, 1);
+    // Family total still equals slot's family share.
+    expect(calcRequired(tomatoSplit) + calcRequired(tomatoParent)).toBeCloseTo(18.2, 1);
+    // Courgette gets the other half.
     expect(calcRequired(courgette)).toBeCloseTo(18.2, 1);
+  });
+
+  test('Multiple Centraal slots — split fills first slot fully, parent picks up the rest chronologically', () => {
+    // Daan's exact scenario. Tomato split (20L) at C, parent (50L) at W.
+    // 3 Centraal slots Mon/Tue/Wed dinner, 130 guests each = 18.2L family
+    // share each. Total family demand: 54.6L. Total stock: 70L. Should fit.
+    // GREEDY chronological:
+    //   Mon dinner C (slot 1): split tries to absorb 18.2L → has 20L → take
+    //     all 18.2L. Split remaining: 1.8L. Parent: 0L charged.
+    //   Tue dinner C (slot 2): split has 1.8L, takes 1.8L. Parent absorbs
+    //     16.4L. Split remaining: 0L. Parent remaining: 33.6L.
+    //   Wed dinner C (slot 3): split exhausted (0L), parent absorbs full 18.2L.
+    //     Parent remaining: 15.4L.
+    // Final: split = 20L (drained), parent = 34.6L of 50L used.
+    const parent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, location: 'west', name: 'Tomato' });
+    const split = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 20, location: 'centraal', name: 'Tomato (split)' });
+    split.parentId = parent.id;
+    const courgette = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, location: 'centraal', name: 'Courgette' });
+
+    const slot1: Service = { loc: 'centraal', date: '2026-05-04', meal: 'dinner' };
+    const slot2: Service = { loc: 'centraal', date: '2026-05-05', meal: 'dinner' };
+    const slot3: Service = { loc: 'centraal', date: '2026-05-06', meal: 'dinner' };
+    [parent, split, courgette].forEach(b => b.services.push(slot1, slot2, slot3));
+
+    S.batches = [parent, split, courgette];
+    rebuildPlanner(S.batches);
+
+    // Split is drained fully (20L), parent picks up 34.6L. Neither overshoots.
+    expect(calcRequired(split)).toBeCloseTo(20.0, 1);
+    expect(calcRequired(parent)).toBeCloseTo(34.6, 1);
+    // Family total = 54.6L (3 slots × 18.2L).
+    expect(calcRequired(split) + calcRequired(parent)).toBeCloseTo(54.6, 1);
   });
 
   test('Single batch (no family) behaves identically to old logic', () => {
@@ -134,9 +168,11 @@ describe('family-aware calcRequired', () => {
     expect(calcRequired(c)).toBeCloseTo(12.13, 1);
   });
 
-  test('Family-only at slot: demand splits across family members only', () => {
-    // Slot has only Tomato family — 2 physical batches, 1 menu option.
-    // 130 guests / 1 family / 2 members = 65 guests per batch = 18.2L each.
+  test('Family-only at slot — greedy drains same-loc first then off-loc', () => {
+    // Slot at Centraal, Tomato family is the only menu option (130 guests).
+    // Family share = 130 × 280g = 36.4L (full slot, alone on menu).
+    // Both batches have 50L. Same-loc (split) drains first up to 36.4L,
+    // parent gets 0L.
     const parent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, location: 'west', name: 'Tomato' });
     const split = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, location: 'centraal', name: 'Tomato (split)' });
     split.parentId = parent.id;
@@ -146,10 +182,28 @@ describe('family-aware calcRequired', () => {
     S.batches = [parent, split];
     rebuildPlanner(S.batches);
 
-    // Each carries half the slot's demand
-    expect(calcRequired(parent)).toBeCloseTo(18.2, 1);
-    expect(calcRequired(split)).toBeCloseTo(18.2, 1);
-    // Family total = full slot demand (alone on the menu = 100% of guests)
+    // Greedy: split (same-loc) takes the full 36.4L, parent gets 0.
+    expect(calcRequired(split)).toBeCloseTo(36.4, 1);
+    expect(calcRequired(parent)).toBeCloseTo(0, 1);
+    // Family total = full slot demand
     expect(calcRequired(parent) + calcRequired(split)).toBeCloseTo(36.4, 1);
+  });
+
+  test('All-zero family (uncooked placeholders only) falls back to even split', () => {
+    // Edge case: a placeholder family with no cooked siblings. Stock-prop
+    // would give each 0% (totalStock=0 division). Fall back to even so the
+    // placeholder still surfaces "to be cooked" volume.
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 0, name: 'Sun soup 1' });
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 0, name: 'Sun soup 2' });
+    b.parentId = a.id;  // pretend they're a family
+    const slot: Service = { loc: 'centraal', date: '2026-05-04', meal: 'dinner' };
+    [a, b].forEach(x => x.services.push(slot));
+
+    S.batches = [a, b];
+    rebuildPlanner(S.batches);
+
+    // Family share = 130 × 280g = 36.4L. Split 50/50 across 2 members.
+    expect(calcRequired(a)).toBeCloseTo(18.2, 1);
+    expect(calcRequired(b)).toBeCloseTo(18.2, 1);
   });
 });
