@@ -1169,6 +1169,55 @@ describe('Recipe v2 CRUD', () => {
     expect(res.status).toBe(404);
   });
 
+  // ── S8: photo upload mimetype hardening ──
+  // 1x1 transparent PNG (smallest valid PNG, 67 bytes)
+  const PNG_BYTES = Buffer.from(
+    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da6300010000000500010d0a2db40000000049454e44ae426082',
+    'hex',
+  );
+  // SVG with an inline script — the kind of payload S8 is meant to block.
+  const SVG_XSS = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+
+  it('POST /api/recipes/:id/photo — accepts whitelisted mimetype (png)', async () => {
+    const res = await request(app)
+      .post(`/api/recipes/${recipeId}/photo`)
+      .attach('photo', PNG_BYTES, { filename: 'a.png', contentType: 'image/png' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it('GET /api/recipes/:id/photo — sets nosniff and inline disposition with controlled filename', async () => {
+    const res = await request(app).get(`/api/recipes/${recipeId}/photo`);
+    expect(res.status).toBe(200);
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['content-disposition']).toBe(`inline; filename="recipe-${recipeId}.png"`);
+    // Express appends `; charset=utf-8` automatically; the major/minor type
+     // is what matters (and what nosniff anchors to).
+    expect(res.headers['content-type']).toMatch(/^image\/png/);
+  });
+
+  it('POST /api/recipes/:id/photo — rejects image/svg+xml (XSS payload)', async () => {
+    const res = await request(app)
+      .post(`/api/recipes/${recipeId}/photo`)
+      .attach('photo', SVG_XSS, { filename: 'bad.svg', contentType: 'image/svg+xml' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/jpg|png|webp|gif/i);
+  });
+
+  it('POST /api/recipes/:id/photo — rejects non-image mimetypes', async () => {
+    const res = await request(app)
+      .post(`/api/recipes/${recipeId}/photo`)
+      .attach('photo', Buffer.from('plain text'), { filename: 'a.txt', contentType: 'text/plain' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/:id/photo — case-insensitive mimetype match', async () => {
+    const res = await request(app)
+      .post(`/api/recipes/${recipeId}/photo`)
+      .attach('photo', PNG_BYTES, { filename: 'a.PNG', contentType: 'IMAGE/PNG' });
+    expect(res.status).toBe(200);
+  });
+
   it('DELETE /api/recipes/:id — deletes recipe', async () => {
     const res = await request(app).delete(`/api/recipes/${recipeId}`);
     expect(res.status).toBe(200);
