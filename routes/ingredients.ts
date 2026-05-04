@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import fs from 'fs';
 import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
 import { Prisma } from '@prisma/client';
-import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, recalcAllRecipeCosts, withWriteLock, checkId } from '../lib/db';
+import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, recalcAllRecipeCosts, withWriteLock, checkId, validateIngredients } from '../lib/db';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
@@ -148,14 +148,14 @@ function ingredientUpsertValues(ing: Ingredient): unknown[] {
 // SET NULL fires only for those, which is correct (they're truly gone).
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const ingredients = req.body;
+  // Audit T20: per-row validation (length caps, types[] bounds, JSON
+  // shapes) — was previously only "is it an array?" plus a checkId loop
+  // for S2. validateIngredients also handles the array+duplicate-id
+  // checks, so the early-out here is just to give a clean 400 instead of
+  // a 500 from validateIngredients dereferencing a non-array.
   if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'Expected array' });
-  // Audit S2: id flows into onclick handlers via esc() today, but a future
-  // un-escaped renderer would re-open the XSS vector. Reject malformed ids
-  // at the boundary (matches the per-entity validators in lib/db.ts).
-  for (let i = 0; i < ingredients.length; i++) {
-    const err = checkId(ingredients[i].id, `ingredients[${i}].id`);
-    if (err) return res.status(400).json({ error: err });
-  }
+  const validationErr = validateIngredients(ingredients);
+  if (validationErr) return res.status(400).json({ error: validationErr });
   await withWriteLock(async () => {
     await prisma.$transaction(async (tx) => {
       const incomingIds = new Set(ingredients.map((i: Ingredient) => i.id));
