@@ -13,7 +13,10 @@ Format: `[STATUS] <ID> — <one-line summary>`
 - [PR #26](https://github.com/baasvis/Sering-food-planner/pull/26) **T4** — fire-and-forget stock save.
 - [PR #27](https://github.com/baasvis/Sering-food-planner/pull/27) **S6** — timing-safe Bearer compare.
 - [PR #28](https://github.com/baasvis/Sering-food-planner/pull/28) **S8** — photo upload mimetype whitelist + nosniff + Content-Disposition.
-- [PR #29](https://github.com/baasvis/Sering-food-planner/pull/29) **S7** — helmet middleware (HSTS, frame-options, nosniff, referrer-policy). CSP deferred until S2's onclick refactor.
+- [PR #29](https://github.com/baasvis/Sering-food-planner/pull/29) **S7** — helmet middleware. CSP deferred.
+- [PR #30](https://github.com/baasvis/Sering-food-planner/pull/30) **T19** — bulk supplier-XLSX import triggers recipe cost recalc.
+- [PR #31](https://github.com/baasvis/Sering-food-planner/pull/31) **D2** — xlsx 0.18.5 → 0.20.3 (closes 2 High CVEs).
+- [PR #33](https://github.com/baasvis/Sering-food-planner/pull/33) **T19a** — bulk POST FK-wipe (data corruption). Replaces `deleteMany+createMany` with raw `INSERT … ON CONFLICT DO UPDATE`. Verified against staging — recipe FKs preserved across full 1162-row bulk POST.
 
 ## In progress
 - (picking next finding)
