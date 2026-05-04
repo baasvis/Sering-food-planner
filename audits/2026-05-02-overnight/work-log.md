@@ -12,7 +12,7 @@ Format: `[STATUS] <ID> — <one-line summary>`
 - [PR #25](https://github.com/baasvis/Sering-food-planner/pull/25) **U1+U3+U4** — ARIA quick wins.
 - [PR #26](https://github.com/baasvis/Sering-food-planner/pull/26) **T4** — fire-and-forget stock save.
 - [PR #27](https://github.com/baasvis/Sering-food-planner/pull/27) **S6** — timing-safe Bearer compare.
-- [PR pending] **S8** — photo upload mimetype whitelist + nosniff + Content-Disposition. 5 new tests, verified against staging.
+- [PR #28](https://github.com/baasvis/Sering-food-planner/pull/28) **S8** — photo upload mimetype whitelist + nosniff + Content-Disposition. 5 new tests, verified against staging.
 
 ## In progress
 - (picking next finding)
