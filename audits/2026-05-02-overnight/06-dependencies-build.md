@@ -29,6 +29,7 @@
 - **Confidence**: High — verified with `npm install --package-lock-only` that a lockfile generates cleanly; the file is just not tracked.
 
 ### D2 — `xlsx` 0.18.5 has known high-severity CVEs with no fix path
+**RESOLVED on 2026-05-04 (branch `claude/d2-xlsx-cdn-acfca7`)**: swapped `^0.18.5` for the CDN-hosted `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`. 0.20.3 is past the fix windows for both advisories (Prototype Pollution fixed in 0.19.3, ReDoS fixed in 0.20.2). API surface used by the project (`XLSX.read(buffer, {type: 'buffer'})` and `XLSX.utils.sheet_to_json(ws, {header: 1})`) is unchanged. New `test/xlsx-api-smoke.test.ts` round-trips a write+read to fail loud if the API ever drifts.
 - **Severity**: **High**
 - **Location**: [package.json:38](package.json) — `"xlsx": "^0.18.5"`.
 - **What**: `npm audit` reports two High advisories on this version:
