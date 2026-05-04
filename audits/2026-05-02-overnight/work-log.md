@@ -13,7 +13,7 @@ Format: `[STATUS] <ID> — <one-line summary>`
 - [PR #26](https://github.com/baasvis/Sering-food-planner/pull/26) **T4** — fire-and-forget stock save.
 - [PR #27](https://github.com/baasvis/Sering-food-planner/pull/27) **S6** — timing-safe Bearer compare.
 - [PR #28](https://github.com/baasvis/Sering-food-planner/pull/28) **S8** — photo upload mimetype whitelist + nosniff + Content-Disposition.
-- [PR pending] **S7** — helmet middleware (HSTS, frame-options, nosniff, referrer-policy). CSP deferred until S2's onclick refactor.
+- [PR #29](https://github.com/baasvis/Sering-food-planner/pull/29) **S7** — helmet middleware (HSTS, frame-options, nosniff, referrer-policy). CSP deferred until S2's onclick refactor.
 
 ## In progress
 - (picking next finding)
