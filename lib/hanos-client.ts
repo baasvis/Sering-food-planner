@@ -154,41 +154,50 @@ export class HanosClient {
     return this.cartId;
   }
 
-  async addToCart(productCode: string, quantity = 1, unitCode = 'ST') {
+  async addToCart(productCode: string, quantity = 1, unitCode = 'ST'): Promise<Record<string, unknown>> {
     if (!this.cartId) await this.getOrCreateCart();
 
-    const url = `${OCC_BASE}/hanosUsers/current/carts/${this.cartId}/entries?lang=en&curr=EUR&defaultUnit=15975108`;
-    const payload = {
-      product: { code: productCode },
-      note: '',
-      aumQuantities: [{
-        formattedQuantity: quantity,
-        conversionFactor: 1,
-        unitCode,
-        unitName: unitCode === 'COL' ? 'carton' : 'Bin',
-      }],
-    };
-
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: this._headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (resp.status === 401 && this.refreshToken) {
-      await this._refreshAccessToken();
-      const retry = await fetch(url, {
+    const send = () => {
+      const url = `${OCC_BASE}/hanosUsers/current/carts/${this.cartId}/entries?lang=en&curr=EUR&defaultUnit=15975108`;
+      const payload = {
+        product: { code: productCode },
+        note: '',
+        aumQuantities: [{
+          formattedQuantity: quantity,
+          conversionFactor: 1,
+          unitCode,
+          unitName: unitCode === 'COL' ? 'carton' : 'Bin',
+        }],
+      };
+      return fetch(url, {
         method: 'POST',
         headers: this._headers({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(15000),
       });
-      if (!retry.ok) {
-        const errBody = await retry.text().catch(() => '');
-        throw new Error(`Add to cart failed after refresh: HTTP ${retry.status} — ${errBody}`);
+    };
+
+    let resp = await send();
+
+    if (resp.status === 401 && this.refreshToken) {
+      await this._refreshAccessToken();
+      resp = await send();
+    }
+
+    // Stale-cart recovery: Hanos returns 400 CartError/notFound when the cached
+    // cartId no longer exists (cart was emptied, expired, or finalized into an
+    // order). Drop the stale cartId, mint a new one, and retry once. Later
+    // items in the same bulk call reuse the new cartId.
+    if (resp.status === 400) {
+      const errBody = await resp.text().catch(() => '');
+      if (/"subjectType"\s*:\s*"cart"/.test(errBody) && /"reason"\s*:\s*"notFound"/.test(errBody)) {
+        console.log(`[Hanos] Cart ${this.cartId} not found — recreating and retrying`);
+        this.cartId = null;
+        await this.getOrCreateCart();
+        resp = await send();
+      } else {
+        throw new Error(`Add to cart HTTP 400 — ${errBody}`);
       }
-      return await retry.json();
     }
 
     if (!resp.ok) {
