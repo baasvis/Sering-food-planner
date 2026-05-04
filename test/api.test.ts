@@ -262,6 +262,111 @@ describe('Ingredients API', () => {
   });
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+// T19a — bulk POST /api/ingredients must NOT wipe recipe→ingredient FKs.
+// Previously the route did `deleteMany + createMany` which fired the SET
+// NULL trigger on `recipe_ingredients.ingredient_id` for every row. Fix
+// uses INSERT … ON CONFLICT DO UPDATE so existing rows are touched in-
+// place — UPDATE doesn't fire the trigger.
+// ──────────────────────────────────────────────────────────────────────────
+describe('T19a — bulk ingredient save preserves recipe FK pointers', () => {
+  const t19aIngId = T + 't19a-ing';
+  const t19aRecipeId = T + 't19a-recipe';
+  const t19aRowId = T + 't19a-ri';
+
+  beforeAll(async () => {
+    // Seed a real ingredient + a recipe linking to it (FK non-NULL).
+    await prisma.ingredient.create({
+      data: {
+        id: t19aIngId,
+        name: 'T19a Test Ingredient',
+        category: 'Vegetables & Fruit',
+        unit: 'Grams',
+        active: true,
+      },
+    });
+    await prisma.recipe.create({
+      data: {
+        id: t19aRecipeId,
+        name: 'T19a Recipe',
+        type: 'Soup',
+        servingSize: 280,
+        recipeVolume: 1.0,
+        autoAllergens: [],
+        extraAllergens: [],
+        prepSteps: [],
+        coolingMethod: '',
+        storageMethod: '',
+        isComplete: true,
+        versions: [],
+        createdBy: 'test',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ingredients: {
+          create: [{
+            id: t19aRowId,
+            ingredientId: t19aIngId,
+            sortOrder: 0,
+            rawAmount: 100,
+            unit: 'Grams',
+            isFlexible: false,
+            suggestedNames: [],
+          }],
+        },
+      },
+    });
+    // Sanity check: FK is non-NULL before we start.
+    const before = await prisma.recipeIngredientRow.findUnique({ where: { id: t19aRowId } });
+    expect(before?.ingredientId).toBe(t19aIngId);
+  });
+
+  afterAll(async () => {
+    await prisma.recipeIngredientRow.deleteMany({ where: { recipeId: t19aRecipeId } });
+    await prisma.recipe.deleteMany({ where: { id: t19aRecipeId } });
+    await prisma.ingredient.deleteMany({ where: { id: t19aIngId } });
+  });
+
+  // Bulk endpoint touches the entire ingredient table (~1.1k rows on
+  // staging) — way over Jest's 5s default.
+  it('POST /api/ingredients — recipe FKs survive a full bulk save', async () => {
+    // Send the complete current ingredient set, unchanged. Same shape
+    // applySupplierUpdate sends from the frontend.
+    const all = await prisma.ingredient.findMany();
+    const payload = all.map(i => ({
+      ...i,
+      stock: i.stock || {},
+    }));
+
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // The critical assertion: the FK pointer on the recipe-ingredient row
+    // is STILL pointing at our test ingredient. If the deleteMany shape
+    // ever creeps back, the SET NULL trigger would null this and the
+    // assertion fails immediately.
+    const after = await prisma.recipeIngredientRow.findUnique({ where: { id: t19aRowId } });
+    expect(after?.ingredientId).toBe(t19aIngId);
+  }, 60_000);
+
+  it('POST /api/ingredients — broader: zero new NULLs across the whole table', async () => {
+    // Stronger check: count NULL FKs before and after — the count should
+    // be unchanged. Catches the wipe even if the test ingredient survives
+    // for some other reason. Note: on staging where every recipe-
+    // ingredient row was already wiped (T19a's pre-fix damage, 618/618
+    // NULL), this assertion is trivial — the first test is the load-
+    // bearing one. On a clean test DB or on prod (where 604/625 rows are
+    // still linked at the time of this fix), it actually exercises the
+    // full surface.
+    const nullsBefore = await prisma.recipeIngredientRow.count({ where: { ingredientId: null } });
+    const all = await prisma.ingredient.findMany();
+    const payload = all.map(i => ({ ...i, stock: i.stock || {} }));
+    await request(app).post('/api/ingredients').send(payload);
+    const nullsAfter = await prisma.recipeIngredientRow.count({ where: { ingredientId: null } });
+    expect(nullsAfter).toBe(nullsBefore);
+  }, 60_000);
+});
+
 // ── Ingredient Stock ──
 
 describe('POST /api/ingredients/stock', () => {

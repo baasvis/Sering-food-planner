@@ -54,7 +54,6 @@ scripts/
   fix-raw-amounts.ts          — One-off recipe ingredient backfill
   import-standard-inventory.js — CSV → DB importer
   import-storage-locations.js  — CSV → DB importer
-  migrate-ingredients.js      — Legacy Sheets → DB ingredient migration
   seed-staging.js             — Copy prod → staging DB
   tebi-scraper.js             — Playwright scraper (called by tebi-sync-worker)
   tebi-sync-worker.js         — Node child process spawned by lib/tebi-sync.ts
@@ -215,7 +214,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Recipe v2: `GET /api/recipes`, `GET /api/recipes/:id`, `POST /api/recipes`, `PATCH /api/recipes/:id`, `DELETE /api/recipes/:id`. Photo: `POST/DELETE /api/recipes/:id/photo`. Versioning: `POST /api/recipes/:id/version`. Print: `GET /api/recipes/:id/print`. Cost recalc: `POST /api/recipes/recalculate-costs`.
 - Recipe ingredient suggestion: `GET /api/ingredients/suggest?category=X&loc=west` — lives in `routes/recipes.ts`, mounted under `/api`. Don't look for it in `routes/ingredients.ts`.
 - Ingredient endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`, `/api/ingredients/stock`, `/api/ingredients/stock/bulk`, `/api/ingredients/target-stock`
-- Ingredient migration: `POST /api/ingredients/migrate` (accepts oldCsv + hanosCsv, supports `?dryRun=true`). Supplier upload: `POST /api/ingredients/upload-supplier` (XLSX).
+- Supplier upload: `POST /api/ingredients/upload-supplier` (XLSX).
 - Ingredient DB stores JSON fields: `types`, `storageLocations`, `stock`, `nutrition`, `priceHistory`, `targetStock` (Prisma Json type)
 - Ingredient constants in state.ts: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `PRICE_LEVELS`
 - Storage config: `GET/POST /api/storage-config` — per-location areas with colors, order, and spots (persisted as JSON)
