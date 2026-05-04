@@ -272,3 +272,13 @@
 - **Why it matters**: Today: fine. Future-defensive note.
 - **Suggested fix**: When you migrate to split-container rendering (P20/U21), use event delegation on a stable parent (`#screen-orders`) instead of per-input attachment.
 - **Confidence**: High.
+
+### T24 — Production-mode login flow has zero e2e coverage (added 2026-05-04 after a real outage)
+- **Severity**: Medium
+- **Location**: All e2e specs in [e2e/](e2e/) use the dev-mode login path via [e2e/helpers.ts](e2e/helpers.ts).
+- **What**: The Playwright suite boots `npm run preview` with `GOOGLE_CLIENT_ID` unset, so every spec exercises the dev-mode-login button. The production Google Sign-In flow (popup, postMessage handshake, token verification) is never touched by CI. On 2026-05-04 the helmet-S7 fix landed with `Cross-Origin-Opener-Policy: same-origin` (helmet's default). That header severs `window.opener` for cross-origin popups, so Google's popup couldn't post the credential back. Production was broken. The bug was invisible to all 236 unit tests and to the e2e suite.
+- **Why it matters**: Auth is the single most important user-facing flow — every other test passes against a logged-in app. We just shipped a header-only change that broke auth and didn't notice until a user reported it. The pattern (helmet bumps, security middleware tweaks, response-header changes) will recur.
+- **Suggested fix**: Two layers, smallest first:
+  1. **Header regression test** (already landed in PR for T24). `test/api.test.ts` now asserts the response headers don't accidentally re-enable COOP `same-origin` or COEP. This catches the *root cause* of the 2026-05-04 outage at the unit-test layer.
+  2. **Production-mode login screen e2e** (deferred). Add a Playwright project that boots `npm run preview` with `GOOGLE_CLIENT_ID=test-fake-id` and asserts the Google Sign-In button renders + the GSI bundle loads without console errors. Won't click through (real Google would reject the fake client id, no creds available), but does exercise the script-load path that production uses. Not landing in the T24 PR — needs a separate playwright config / project to avoid colliding with the dev-login suite.
+- **Confidence**: High that layer 1 catches the specific class of bug. Medium that layer 2 is worth the wiring complexity vs. just trusting layer 1 for header issues.

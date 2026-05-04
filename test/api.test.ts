@@ -106,6 +106,37 @@ describe('S7 — security headers (helmet)', () => {
     // CSP by default — that would silently break the planner.
     expect(res.headers['content-security-policy']).toBeUndefined();
   });
+
+  // Regression: 2026-05-04. The original S7 fix (PR #29) accepted helmet's
+  // default Cross-Origin-Opener-Policy: same-origin. Google Sign-In opens
+  // accounts.google.com in a popup and posts the credential back via
+  // window.opener.postMessage(); strict COOP severs that handle so the popup
+  // renders blank and the user can't log in. Production was broken until the
+  // policy was loosened to `same-origin-allow-popups` (which keeps clickjack
+  // protection for the main frame but lets the popup talk back).
+  //
+  // The bug was invisible to the e2e suite (which uses dev-mode login, no
+  // popup) and to the unit tests above. Pinning the value here so a future
+  // helmet upgrade or config tweak that re-tightens COOP fails CI instead of
+  // silently breaking prod auth.
+  it('Cross-Origin-Opener-Policy is compatible with the Google Sign-In popup', async () => {
+    const res = await request(app).get('/api/health');
+    const coop = res.headers['cross-origin-opener-policy'];
+    // Acceptable: unset, same-origin-allow-popups, or unsafe-none. Forbidden:
+    // bare `same-origin` (helmet default) — that's what broke prod.
+    expect(coop).not.toBe('same-origin');
+    if (coop !== undefined) {
+      expect(['same-origin-allow-popups', 'unsafe-none']).toContain(coop);
+    }
+  });
+
+  it('does NOT set Cross-Origin-Embedder-Policy (would block the GSI script)', async () => {
+    const res = await request(app).get('/api/health');
+    // Same shape as the CSP assertion above: lock the deliberate-off setting
+    // so a future helmet bump that re-enables COEP can't silently break login
+    // (the GSI bundle from accounts.google.com isn't COEP-compatible).
+    expect(res.headers['cross-origin-embedder-policy']).toBeUndefined();
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────────
