@@ -72,15 +72,17 @@ beforeEach(() => {
 });
 
 describe('family-aware calcRequired', () => {
-  test('Tomato family at slot counts as ONE menu option (not as N physical batches)', () => {
-    // Slot: Mon dinner Centraal, 130 guests
-    // 3 physical Soup batches at the slot:
+  test('Tomato family at slot — STOCK-PROPORTIONAL split, smaller batch carries less load', () => {
+    // Slot: Mon dinner Centraal, 130 guests, 280g per serving.
     //   - Tomato West (parent, 50L)
-    //   - Tomato Centraal (split, 20L) — same family as parent
+    //   - Tomato Centraal (split, 20L) — same family
     //   - Courgette Centraal (50L) — different family
-    // From guests' view: 2 menu options (Tomato + Courgette).
-    // Each menu option gets 130/2 = 65 guests.
-    // Within Tomato family (2 batches), 65/2 = 32.5 guests each → 9.1L each.
+    // 2 menu options. Tomato family share = 130/2 × 280g = 18.2L.
+    // Stock-proportional: split (20L) gets 20/(20+50) = 28.6% = 5.2L,
+    // parent (50L) gets 50/70 = 71.4% = 13L. Sum still 18.2L.
+    // Daan's complaint: with EVEN split (9.1L each) and 3 such slots, the
+    // 20L split goes negative (3 × 9.1 = 27.3L). Stock-proportional avoids
+    // that — 3 slots × 5.2L = 15.6L for the split, well within 20L.
     const tomatoParent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, location: 'west', name: 'Tomato' });
     const tomatoSplit = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 20, location: 'centraal', name: 'Tomato (split)' });
     tomatoSplit.parentId = tomatoParent.id;
@@ -92,14 +94,12 @@ describe('family-aware calcRequired', () => {
     S.batches = [tomatoParent, tomatoSplit, courgette];
     rebuildPlanner(S.batches);
 
-    // 130 guests / 2 menu options / 2 family-members at slot = 32.5 guests
-    // 32.5 × 280g = 9.1L per Tomato batch
-    expect(calcRequired(tomatoParent)).toBeCloseTo(9.1, 1);
-    expect(calcRequired(tomatoSplit)).toBeCloseTo(9.1, 1);
-    // Tomato family TOTAL = 18.2L (= half of full slot demand: 130 × 280g / 2)
+    // Stock-proportional within Tomato family (20L : 50L)
+    expect(calcRequired(tomatoSplit)).toBeCloseTo(5.2, 1);   // 18.2 × 20/70
+    expect(calcRequired(tomatoParent)).toBeCloseTo(13.0, 1); // 18.2 × 50/70
+    // Tomato family total = 18.2L (half the slot)
     expect(calcRequired(tomatoParent) + calcRequired(tomatoSplit)).toBeCloseTo(18.2, 1);
-    // Courgette gets the OTHER half — alone in its family, so full half:
-    // 130 / 2 / 1 × 280g = 18.2L
+    // Courgette gets the OTHER half (alone in its family)
     expect(calcRequired(courgette)).toBeCloseTo(18.2, 1);
   });
 
@@ -134,9 +134,10 @@ describe('family-aware calcRequired', () => {
     expect(calcRequired(c)).toBeCloseTo(12.13, 1);
   });
 
-  test('Family-only at slot: demand splits across family members only', () => {
-    // Slot has only Tomato family — 2 physical batches, 1 menu option.
-    // 130 guests / 1 family / 2 members = 65 guests per batch = 18.2L each.
+  test('Family-only at slot: demand splits stock-proportionally across members', () => {
+    // Slot has only Tomato family — 2 physical batches with EQUAL stock,
+    // 1 menu option. Family share = 130 × 280g = 36.4L.
+    // Stock 50:50 → 18.2L each.
     const parent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, location: 'west', name: 'Tomato' });
     const split = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 50, location: 'centraal', name: 'Tomato (split)' });
     split.parentId = parent.id;
@@ -146,10 +147,28 @@ describe('family-aware calcRequired', () => {
     S.batches = [parent, split];
     rebuildPlanner(S.batches);
 
-    // Each carries half the slot's demand
+    // Equal stock → equal share
     expect(calcRequired(parent)).toBeCloseTo(18.2, 1);
     expect(calcRequired(split)).toBeCloseTo(18.2, 1);
     // Family total = full slot demand (alone on the menu = 100% of guests)
     expect(calcRequired(parent) + calcRequired(split)).toBeCloseTo(36.4, 1);
+  });
+
+  test('All-zero family (uncooked placeholders only) falls back to even split', () => {
+    // Edge case: a placeholder family with no cooked siblings. Stock-prop
+    // would give each 0% (totalStock=0 division). Fall back to even so the
+    // placeholder still surfaces "to be cooked" volume.
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 0, name: 'Sun soup 1' });
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 0, name: 'Sun soup 2' });
+    b.parentId = a.id;  // pretend they're a family
+    const slot: Service = { loc: 'centraal', date: '2026-05-04', meal: 'dinner' };
+    [a, b].forEach(x => x.services.push(slot));
+
+    S.batches = [a, b];
+    rebuildPlanner(S.batches);
+
+    // Family share = 130 × 280g = 36.4L. Split 50/50 across 2 members.
+    expect(calcRequired(a)).toBeCloseTo(18.2, 1);
+    expect(calcRequired(b)).toBeCloseTo(18.2, 1);
   });
 });

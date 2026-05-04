@@ -351,33 +351,48 @@ export function getGuests(loc: string, dateStr: string, meal: Meal | string): nu
 /**
  * Family-aware demand share at a slot.
  *
- * Old behaviour: demand at slot = guests / num_physical_batches_of_same_type.
- * This silently double-counts when a single recipe is physically present as
- * multiple batches (e.g. Tomato West parent + Tomato Centraal split both at
- * Mon dinner C). Guests see ONE Tomato Soup option on the menu — not two —
- * so the algorithm should split the slot's demand by FAMILIES, not by raw
- * batches. Within a family, the family's portion splits evenly across the
- * physical batches that have that slot in their services list.
+ * Slot demand splits across menu OPTIONS (= families), not raw batches —
+ * guests see one Tomato Soup, not two, regardless of how many physical pots
+ * the family owns. Within a family at the slot, the family's share splits
+ * STOCK-PROPORTIONALLY across its physical members:
+ *
+ *   member's share = family_share × (myStock / totalFamilyStockAtSlot)
+ *
+ * Daan's intuition: "if I have 20L at Centraal and 50L at West and the slot
+ * needs 30L, the small batch shouldn't go negative while the big one has
+ * surplus." With even split (old behaviour), a Centraal split (20L) and a
+ * West parent (50L) would each be charged 9L per slot, so 3 slots = 27L for
+ * the split → over-stocked. Stock-proportional gives the split 5.7L per
+ * slot (3 slots = 17L, well under 20L), parent picks up the rest.
+ *
+ * Edge case: if every family member at the slot has 0 stock (all uncooked
+ * placeholders, an unusual but possible config) we fall back to even split
+ * so the placeholder still surfaces a "to be cooked" volume.
  *
  * Returns { perBatch, families }: `perBatch` is what THIS dish should be
- * charged at this slot (= guests / families / family-members-at-slot ×
- * serving), `families` is the menu-option count (useful for breakdown text).
+ * charged at this slot, `families` is the menu-option count (used for
+ * breakdown text).
  */
 function familyAwareSlotDemand(dish: Batch, svc: Service): { perBatch: number; families: number } {
   const g = getGuests(svc.loc, svc.date, svc.meal);
   if (g <= 0) return { perBatch: 0, families: 0 };
   const k = `${svc.loc}-${svc.date}-${svc.meal}`;
   const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
-  // Count unique family roots at the slot — that's the menu-option count.
   const familyRoots = new Set<string>();
   for (const p of peers) familyRoots.add(getRootId(p, S.batches));
   const families = Math.max(familyRoots.size, 1);
-  // Within MY family, count how many batches share this slot — the family's
-  // demand portion gets split evenly across them.
   const myRoot = getRootId(dish, S.batches);
-  const myFamilyAtSlot = peers.filter(p => getRootId(p, S.batches) === myRoot).length || 1;
-  const perBatch = (g / families / myFamilyAtSlot) * ((dish.serving || 280) / 1000);
-  return { perBatch, families };
+  const familyMembersAtSlot = peers.filter(p => getRootId(p, S.batches) === myRoot);
+  const familyShare = (g / families) * ((dish.serving || 280) / 1000);
+  const totalStock = familyMembersAtSlot.reduce((s, m) => s + (m.stock || 0), 0);
+  if (totalStock <= 0) {
+    // All-zero family (e.g. uncooked placeholders only) — fall back to even
+    // split so each surfaces a "to be cooked" demand.
+    const count = Math.max(familyMembersAtSlot.length, 1);
+    return { perBatch: familyShare / count, families };
+  }
+  const myShare = familyShare * ((dish.stock || 0) / totalStock);
+  return { perBatch: myShare, families };
 }
 
 export function calcRequired(dish: Batch): number {
@@ -436,13 +451,21 @@ export function calcTotalGuests(dish: Batch): number {
     const total = getGuests(svc.loc, svc.date, svc.meal);
     const k = `${svc.loc}-${svc.date}-${svc.meal}`;
     const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
-    // Same family-aware split as calcRequired (see familyAwareSlotDemand).
+    // Same family-aware split as calcRequired (see familyAwareSlotDemand) —
+    // STOCK-PROPORTIONAL within the family, falls back to even split when
+    // the family is all-zero stock (uncooked placeholders).
     const familyRoots = new Set<string>();
     for (const p of peers) familyRoots.add(getRootId(p, S.batches));
     const families = Math.max(familyRoots.size, 1);
     const myRoot = getRootId(dish, S.batches);
-    const myFamilyAtSlot = peers.filter(p => getRootId(p, S.batches) === myRoot).length || 1;
-    g += total / families / myFamilyAtSlot;
+    const familyAtSlot = peers.filter(p => getRootId(p, S.batches) === myRoot);
+    const totalFamilyStock = familyAtSlot.reduce((s, m) => s + (m.stock || 0), 0);
+    if (totalFamilyStock <= 0) {
+      const count = Math.max(familyAtSlot.length, 1);
+      g += total / families / count;
+    } else {
+      g += (total / families) * ((dish.stock || 0) / totalFamilyStock);
+    }
   });
   // Add catering guests (split by same-type peers)
   (S.caterings || []).forEach((c: Catering) => {
