@@ -8,7 +8,7 @@ import type { Ingredient, LocationStock } from '../shared/types';
 
 const router = express.Router();
 
-// Mount import sub-router (upload-supplier, migrate)
+// Mount import sub-router (upload-supplier)
 router.use('/', ingredientsImportRouter);
 
 // Helper: load ingredients from Postgres or fall back to seed file
