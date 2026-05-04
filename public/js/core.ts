@@ -275,6 +275,164 @@ export function rebuildPlanner(): void {
       if (!S.planner[k].find((x: Batch) => x.id === d.id)) S.planner[k].push(d);
     });
   });
+  // Recompute the greedy family allocation cache. calcRequired and friends
+  // read from this rather than computing per-call, so the math is stable
+  // and consistent across all UI/algorithm consumers within the same
+  // planner snapshot.
+  recomputeFamilyAllocations();
+}
+
+// ── Family demand allocator (greedy, chronological) ────────────────────────
+//
+// For each family, walk its services in chronological order. At each slot:
+//   1. Compute family share = guests / families_at_slot × serving / 1000
+//   2. Allocate to the family's same-location members first (drain their
+//      remaining stock smallest-first so tiny portions get exhausted before
+//      bigger ones).
+//   3. Spill the remainder to off-location members.
+//   4. If the family is still short on stock, the LAST member in the order
+//      absorbs the overflow (surfaces as a cooked-stockout warning).
+//
+// Daan's intuition: "use what's already at the slot's location first, then
+// bring more from elsewhere." With this allocator, a 20L Centraal split at
+// 3 Centraal slots gets fully drained on the first slot (taking 18.2L),
+// the next slots get 1.8L from the split + the rest from the West parent.
+// No more spreading thin or going negative on the small batch from share
+// math alone.
+//
+// The cache lives on S so it survives across calls within one planner
+// snapshot. rebuildPlanner refreshes it.
+
+interface FamilyAllocation {
+  /** batchId → slotKey → demand in liters allocated to this batch at this slot */
+  byBatch: Map<string, Map<string, number>>;
+  /** slotKey → families count (cached for convenience by callers that need it) */
+  familiesAtSlot: Map<string, number>;
+}
+
+let _familyAllocations: FamilyAllocation = { byBatch: new Map(), familiesAtSlot: new Map() };
+
+function slotKey(svc: Service): string {
+  return `${svc.loc}-${svc.date}-${svc.meal}`;
+}
+
+function compareSlots(a: { date: string; meal: string }, b: { date: string; meal: string }): number {
+  if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+  // lunch < dinner
+  if (a.meal === b.meal) return 0;
+  return a.meal === 'lunch' ? -1 : 1;
+}
+
+export function recomputeFamilyAllocations(): void {
+  const byBatch = new Map<string, Map<string, number>>();
+  const familiesAtSlot = new Map<string, number>();
+
+  // Bucket batches by family root
+  const families = new Map<string, Batch[]>();
+  for (const b of S.batches) {
+    const root = getRootId(b, S.batches);
+    if (!families.has(root)) families.set(root, []);
+    families.get(root)!.push(b);
+  }
+
+  for (const members of families.values()) {
+    // Build the ordered list of (slot, members-here) tuples this family touches.
+    const slotMap = new Map<string, { svc: Service; members: Batch[] }>();
+    for (const m of members) {
+      for (const svc of m.services || []) {
+        if (isServicePast(svc)) continue;
+        const k = slotKey(svc);
+        if (!slotMap.has(k)) slotMap.set(k, { svc, members: [] });
+        slotMap.get(k)!.members.push(m);
+      }
+    }
+    const slotEntries = Array.from(slotMap.entries()).sort(([, a], [, b]) =>
+      compareSlots(a.svc, b.svc),
+    );
+
+    // Running stock per member — drained as we allocate slot by slot.
+    const remaining = new Map<string, number>();
+    for (const m of members) remaining.set(m.id, m.stock || 0);
+    const totalFamilyStock = members.reduce((s, m) => s + (m.stock || 0), 0);
+
+    for (const [k, { svc, members: atSlot }] of slotEntries) {
+      // How many menu options at the slot? Count unique family roots among
+      // the slot's batches of THIS dish's type.
+      const peers = (S.planner[k] || []).filter(p => p.type === atSlot[0].type);
+      const roots = new Set<string>();
+      for (const p of peers) roots.add(getRootId(p, S.batches));
+      const familiesHere = Math.max(roots.size, 1);
+      familiesAtSlot.set(k, familiesHere);
+
+      const g = getGuests(svc.loc, svc.date, svc.meal);
+      const serving = (atSlot[0].serving || 280) / 1000;
+      const familyShare = g <= 0 ? 0 : (g / familiesHere) * serving;
+
+      // Greedy allocation order: same-location first (drain what's there),
+      // then off-location. Within each group, smallest remaining first so
+      // tiny portions get exhausted before bigger ones (matches Daan's
+      // intuition).
+      const sameLoc = atSlot.filter(m => m.location === svc.loc);
+      const offLoc = atSlot.filter(m => m.location !== svc.loc);
+      const sortByRemAsc = (arr: Batch[]) =>
+        [...arr].sort((a, b) => (remaining.get(a.id) || 0) - (remaining.get(b.id) || 0) || a.id.localeCompare(b.id));
+      const order = [...sortByRemAsc(sameLoc), ...sortByRemAsc(offLoc)];
+
+      // Edge case: family-share = 0 (no guests) → allocate 0 to all members.
+      if (familyShare <= 0) {
+        for (const m of order) recordAllocation(byBatch, m.id, k, 0);
+        continue;
+      }
+
+      // Edge case: all family stock is 0 (uncooked placeholders only). Fall
+      // back to even split so each placeholder still surfaces a "to be
+      // cooked" volume.
+      if (totalFamilyStock <= 0) {
+        const per = familyShare / order.length;
+        for (const m of order) recordAllocation(byBatch, m.id, k, per);
+        continue;
+      }
+
+      let need = familyShare;
+      for (let i = 0; i < order.length; i++) {
+        const m = order[i];
+        const rem = remaining.get(m.id) || 0;
+        const isLast = i === order.length - 1;
+        const take = isLast
+          ? need  // last member absorbs whatever's left, even if it overshoots
+          : Math.max(0, Math.min(need, rem));
+        recordAllocation(byBatch, m.id, k, take);
+        remaining.set(m.id, rem - take);
+        need -= take;
+        if (need <= 0.001) {
+          // Allocate 0 to remaining members in the order so they have an
+          // explicit entry (avoids "missing key" lookups).
+          for (let j = i + 1; j < order.length; j++) {
+            recordAllocation(byBatch, order[j].id, k, 0);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  _familyAllocations = { byBatch, familiesAtSlot };
+}
+
+function recordAllocation(byBatch: Map<string, Map<string, number>>, batchId: string, key: string, amount: number): void {
+  let inner = byBatch.get(batchId);
+  if (!inner) { inner = new Map(); byBatch.set(batchId, inner); }
+  inner.set(key, Math.round(amount * 10) / 10);
+}
+
+/** Read this batch's allocated demand at a slot (set by recomputeFamilyAllocations).
+ *  Returns undefined if no cache entry exists (callers should fall back).
+ *  An EXPLICIT 0 in the cache is meaningful — means "greedy decided this
+ *  batch contributes nothing here" — and must not be confused with "no entry". */
+function lookupAllocation(batch: Batch, svc: Service): number | undefined {
+  const inner = _familyAllocations.byBatch.get(batch.id);
+  if (!inner) return undefined;
+  return inner.get(slotKey(svc));
 }
 
 export function renderDishListSplit(dishes: Batch[]): string {
@@ -352,13 +510,14 @@ export function calcRequired(dish: Batch): number {
   let total = 0;
   (dish.services || []).forEach((svc: Service) => {
     if (isServicePast(svc)) return; // Skip served services — no longer pulling stock
-    const g = getGuests(svc.loc, svc.date, svc.meal);
-    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
-    const count = Math.max(peers.length, 1);
-    total += (g / count) * ((dish.serving || 280) / 1000);
+    // Per-slot demand comes from the family allocation cache (greedy, set by
+    // rebuildPlanner → recomputeFamilyAllocations). Falls back to a stateless
+    // family-share / per-member compute if the cache hasn't been built yet
+    // (e.g. tests that call calcRequired without rebuildPlanner first).
+    total += lookupAllocation(dish, svc) ?? _stalelessFamilyShare(dish, svc);
   });
-  // Add catering requirements (split by same-type peers)
+  // Add catering requirements (split by same-type peers — catering still
+  // routes to the specific dishId, no family-wide reallocation).
   (S.caterings || []).forEach((c: Catering) => {
     const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
     if (cd) {
@@ -367,6 +526,23 @@ export function calcRequired(dish: Batch): number {
     }
   });
   return Math.round(total * 10) / 10;
+}
+
+/** Fallback stateless compute used when the family allocation cache is
+ *  empty (callers that don't go through rebuildPlanner). Even-splits the
+ *  family share — same shape as the cache's all-zero edge case. */
+function _stalelessFamilyShare(dish: Batch, svc: Service): number {
+  const g = getGuests(svc.loc, svc.date, svc.meal);
+  if (g <= 0) return 0;
+  const k = `${svc.loc}-${svc.date}-${svc.meal}`;
+  const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
+  const familyRoots = new Set<string>();
+  for (const p of peers) familyRoots.add(getRootId(p, S.batches));
+  const families = Math.max(familyRoots.size, 1);
+  const myRoot = getRootId(dish, S.batches);
+  const familyAtSlot = peers.filter(p => getRootId(p, S.batches) === myRoot);
+  const count = Math.max(familyAtSlot.length, 1);
+  return (g / families / count) * ((dish.serving || 280) / 1000);
 }
 
 export interface BreakdownLine {
@@ -384,11 +560,8 @@ export function calcRequiredBreakdown(dish: Batch): string[] {
       lines.push(`\u2713 ${dayName} ${meal} ${loc} (served)`);
       return;
     }
-    const g = getGuests(svc.loc, svc.date, svc.meal);
-    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
-    const count = Math.max(peers.length, 1);
-    const liters = Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
+    const allocated = lookupAllocation(dish, svc) ?? _stalelessFamilyShare(dish, svc);
+    const liters = Math.round(allocated * 10) / 10;
     if (liters > 0) {
       lines.push(`${liters}L \u2014 ${dayName} ${meal} ${loc}`);
     }
@@ -408,10 +581,11 @@ export function calcTotalGuests(dish: Batch): number {
   let g = 0;
   (dish.services || []).forEach((svc: Service) => {
     if (isServicePast(svc)) return; // Skip served services
-    const total = getGuests(svc.loc, svc.date, svc.meal);
-    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
-    g += total / Math.max(peers.length, 1);
+    // Convert the cached allocation (liters) back to guests by dividing by
+    // serving size. Same source of truth as calcRequired.
+    const litersHere = lookupAllocation(dish, svc) ?? _stalelessFamilyShare(dish, svc);
+    const servingL = (dish.serving || 280) / 1000;
+    if (servingL > 0) g += litersHere / servingL;
   });
   // Add catering guests (split by same-type peers)
   (S.caterings || []).forEach((c: Catering) => {
@@ -520,6 +694,15 @@ export function cycleLocation(id: string): void {
   if (d.location === 'west') d.location = 'centraal';
   else d.location = 'west';
   d.inTransit = false;
+  // The batch effectively "arrived" at a new location — fold it into any
+  // existing same-family same-loc record so cooks don't end up with
+  // duplicates of the same recipe at one place.
+  const consolidation = consolidateFamilies(S.batches);
+  if (consolidation.removed.length > 0) {
+    S.batches = consolidation.kept;
+    if (!S.deletedBatches) S.deletedBatches = [];
+    for (const id of consolidation.removed) S.deletedBatches.push(id);
+  }
   rebuildPlanner();
   scheduleSave();
   rerenderCurrentView();

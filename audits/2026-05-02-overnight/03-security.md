@@ -113,7 +113,6 @@
 - **Confidence**: High.
 
 ### S8 — Photo upload trusts client-supplied `mimetype`
-**RESOLVED on 2026-05-04 (branch `claude/s8-photo-mimetype-acfca7`)**: `routes/recipes.ts` now whitelists `image/jpeg|png|webp|gif` (case-insensitive, normalized before storing). `image/svg+xml` and everything else returns 400. Serve path adds `X-Content-Type-Options: nosniff` and `Content-Disposition: inline; filename="recipe-${id}.${ext}"` (controlled filename — never user input). Verified against staging via preview_eval: SVG payload → 400, PNG → 200, GET response carries the new headers. Re-encoding via `sharp` was deferred (deps add) — the whitelist + nosniff combination already blocks the audit-cited XSS vector. Confirmed both staging (0 photos) and prod (0 photos) had no existing rows that would conflict with the whitelist.
 - **Severity**: Low
 - **Location**: [routes/recipes.ts:567-597](routes/recipes.ts).
 - **What**: The check is `if (!file.mimetype.startsWith('image/'))`. Multer takes the MIME type from the client's `Content-Type` header. A file with content `<script>alert(1)</script>` and `Content-Type: image/svg+xml` passes the check. SVG can include `<script>` tags executed when the SVG is rendered as an image. The serve handler ([routes/recipes.ts:600-607](routes/recipes.ts:600-607)) sets `Content-Type: ${photo.mimeType}` (i.e. `image/svg+xml` for SVG) and serves the file.

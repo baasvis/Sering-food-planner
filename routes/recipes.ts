@@ -346,10 +346,12 @@ router.patch('/recipes/:id', asyncHandler(async (req: Request, res: Response) =>
   const existing = await prisma.recipe.findUnique({ where: { id } });
   if (!existing) return res.status(404).json({ error: 'Recipe not found' });
 
-  if (body.name !== undefined) {
-    const err = validateRecipe({ name: body.name, type: body.type, servingSize: body.servingSize });
-    if (err) return res.status(400).json({ error: err });
-  }
+  // Validate every provided field — including ingredients[].ingredientId
+  // and the body's id (defence against the S2 stored-XSS vector). Use the
+  // existing name as a stand-in when the patch doesn't touch it, so the
+  // required-name check inside validateRecipe doesn't reject partial updates.
+  const err = validateRecipe({ ...body, name: body.name ?? existing.name });
+  if (err) return res.status(400).json({ error: err });
 
   const recipe = await withWriteLock(async () => {
     // Wrap ingredient replacement + recipe update in a transaction so a
