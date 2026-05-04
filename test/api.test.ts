@@ -83,6 +83,24 @@ describe('GET /api/data', () => {
     expect(res.body).toHaveProperty('transportItems');
     expect(Array.isArray(res.body.batches)).toBe(true);
   });
+
+  // Audit A10/T7: dbReadAll used to swallow any DB error and return empty
+  // arrays (200 + no data). The frontend rendered an "empty kitchen" that
+  // looked identical to a fresh install. Now the error is thrown and the
+  // global error handler returns 500 — the frontend's apiGet shows the
+  // persistent error banner instead of silently lying.
+  it('returns 500 (not 200 with empties) when the DB throws', async () => {
+    const original = prisma.batch.findMany;
+    prisma.batch.findMany = () => { throw new Error('simulated DB failure'); };
+    try {
+      const res = await request(app).get('/api/data');
+      expect(res.status).toBe(500);
+      // The 200-with-empty-arrays regression is the bug we're guarding against.
+      expect(res.body.batches).toBeUndefined();
+    } finally {
+      prisma.batch.findMany = original;
+    }
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -411,10 +429,6 @@ describe('T19a — bulk ingredient save preserves recipe FK pointers', () => {
     const payload = all.map(i => ({ ...i, stock: i.stock || {} }));
     await request(app).post('/api/ingredients').send(payload);
     const nullsAfter = await prisma.recipeIngredientRow.count({ where: { ingredientId: null } });
-    // Allow nullsAfter <= nullsBefore (other test runs in parallel can
-     // create + delete recipe-ingredient rows, briefly changing the count).
-     // The bug we're guarding against is the bulk POST INCREASING the NULL
-     // count, so any decrease or equal is fine.
     expect(nullsAfter).toBeLessThanOrEqual(nullsBefore);
   }, 60_000);
 });
