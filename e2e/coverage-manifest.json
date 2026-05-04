@@ -11,5 +11,6 @@
   "feedback-submit.spec.ts": ["feedback_submit"],
   "stocktake-start.spec.ts": ["stocktake_start"],
   "predictions-apply.spec.ts": ["predictions_apply"],
-  "recipes.spec.ts": ["recipe_save"]
+  "recipes.spec.ts": ["recipe_save"],
+  "order-copy.spec.ts": ["order_copy"]
 }
