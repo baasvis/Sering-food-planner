@@ -479,13 +479,28 @@ export function assignServicesPass1(
         if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal, allBatches)) continue;
         if (countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) continue;
 
-        // Tentatively assign, then check capacity. If overcommitted, undo.
+        // Tentatively assign, then check capacity. If overcommitted, undo
+        // and keep walking — a later slot may individually fit even if this
+        // one didn't (e.g. a Centraal split that doesn't fit Mon C lunch
+        // PLUS Mon C dinner together can still cover Mon C dinner alone).
+        // Without this, the split would stop after one slot and leave its
+        // remaining stock for Pass 2 to assign — which then prefers the
+        // newest peer and ends up routing the load to the West parent
+        // instead of draining the Centraal batch first.
+        //
+        // Also check FAMILY-level capacity for multi-member families: the
+        // per-batch check misses sibling-overflow caused by greedy
+        // reallocation. A 10L parent at a slot with no other family member
+        // gets all the family-share charged to it; the family check catches
+        // this even when per-batch overshoot looks OK to optimism.
         batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-        const overshot = calcReq(batch) > ceiling;
+        const family = allBatches.filter(m => getRootId(m, allBatches) === getRootId(batch, allBatches));
+        const familyOvershot = family.length > 1
+          && family.reduce((s, m) => s + (m.stock || 0), 0) < family.reduce((s, m) => s + calcReq(m), 0);
+        const overshot = calcReq(batch) > ceiling || familyOvershot;
         if (overshot) {
           batch.services.pop();
-          // No more room in this batch — move to the next batch.
-          break walk;
+          continue;
         }
 
         added++;
@@ -588,14 +603,23 @@ function tryFillOnePosition(
   });
 
   while (candidates.length > 0) {
-    // Sort: newest cookDate first (variety); tiebreak: cooked > uncooked.
+    // Sort: newest cookDate first (variety); tiebreak: cooked > uncooked,
+    // then SAME-LOC > off-loc. Same-loc preference matters most when a
+    // family has both a parent (West) and a split (Centraal) at the same
+    // cookDate — for a Centraal slot, the split should drain first because
+    // there's no big freezer at Centraal to absorb leftovers. Without this
+    // tiebreaker, Pass 2's most-loaded-first picks the bigger West parent
+    // and the Centraal split sits with 30+L unused.
     candidates.sort((a, b) => {
       const aIso = cookDateToIso(a.cookDate)!;
       const bIso = cookDateToIso(b.cookDate)!;
       if (aIso !== bIso) return aIso > bIso ? -1 : 1;
       const aCooked = a.stock > 0 ? 1 : 0;
       const bCooked = b.stock > 0 ? 1 : 0;
-      return bCooked - aCooked;
+      if (aCooked !== bCooked) return bCooked - aCooked;
+      const aSameLoc = a.location === loc ? 1 : 0;
+      const bSameLoc = b.location === loc ? 1 : 0;
+      return bSameLoc - aSameLoc;
     });
 
     const top = candidates[0];
@@ -613,23 +637,36 @@ function tryFillOnePosition(
     //     plan (one giant cook + zero-volume "ghost" entries).
     const sameBucket = candidates
       .filter(c => cookDateToIso(c.cookDate) === topIso && (c.stock > 0 ? 'cooked' : 'uncooked') === topCooked);
+    // Same-loc preference applies inside every bucket sort below — picking
+    // the Centraal-located family member for a Centraal slot before
+    // falling back to load/services tiebreakers.
+    const sameLocFirst = (a: Batch, b: Batch) => {
+      const as = a.location === loc ? 1 : 0;
+      const bs = b.location === loc ? 1 : 0;
+      return bs - as;
+    };
     let chosen: Batch;
     if (topCooked === 'cooked' && biggestPotLiters != null) {
       const underBig = sameBucket.filter(c => calcReq(c) < biggestPotLiters);
       if (underBig.length > 0) {
         underBig.sort((a, b) => {
+          const sl = sameLocFirst(a, b); if (sl !== 0) return sl;
           if (a.services.length !== b.services.length) return b.services.length - a.services.length;
           return a.id.localeCompare(b.id);
         });
         chosen = underBig[0];
       } else {
         // All at/over big-pot — spread overflow
-        sameBucket.sort((a, b) => a.services.length - b.services.length);
+        sameBucket.sort((a, b) => {
+          const sl = sameLocFirst(a, b); if (sl !== 0) return sl;
+          return a.services.length - b.services.length;
+        });
         chosen = sameBucket[0];
       }
     } else {
       // Uncooked bucket OR no equipment hint — even spread (least-loaded).
       sameBucket.sort((a, b) => {
+        const sl = sameLocFirst(a, b); if (sl !== 0) return sl;
         if (a.services.length !== b.services.length) return a.services.length - b.services.length;
         return a.id.localeCompare(b.id);
       });
@@ -649,9 +686,28 @@ function tryFillOnePosition(
     //      demand and overshoots. If the expected peer never arrives, the
     //      cooked-stockout warning surfaces the under-supply.
     chosen.services.push({ loc, date: isoDate, meal });
-    const fits = chosen.stock <= 0
-      || calcReq(chosen) <= chosen.stock
-      || calcReqOptimistic(chosen, allBatches) <= chosen.stock;
+    // Per-batch fit check: real-peer demand or optimistic (assumes peer joins
+    // the slot). For MULTI-MEMBER families (parent + split siblings), also
+    // check that real family demand stays within the family stock pool — the
+    // physical limit is shared, and greedy can deflect a push's demand onto
+    // a sibling, hiding per-batch fit while the family overshoots.
+    // Single-batch families are exempt because the optimistic per-batch check
+    // already handles their "needs a peer" case (paired placement).
+    let fits: boolean;
+    if (chosen.stock <= 0) {
+      fits = true;  // placeholder — no stock to overshoot
+    } else {
+      const perBatchFits = calcReq(chosen) <= chosen.stock
+        || calcReqOptimistic(chosen, allBatches) <= chosen.stock;
+      const family = allBatches.filter(m => getRootId(m, allBatches) === getRootId(chosen, allBatches));
+      if (family.length <= 1) {
+        fits = perBatchFits;
+      } else {
+        const familyStock = family.reduce((s, m) => s + (m.stock || 0), 0);
+        const familyDemand = family.reduce((s, m) => s + calcReq(m), 0);
+        fits = perBatchFits && familyDemand <= familyStock;
+      }
+    }
     if (!fits) {
       chosen.services.pop();
       // Cooked batch hit its stock limit — drop it and try the next candidate.
@@ -668,24 +724,39 @@ function tryFillOnePosition(
 /**
  * Optimistic capacity check used by Pass 2 and Pass 3. Sums the batch's
  * demand across its services, but splits each slot's guest load by
- * max(realPeers, SLOTS_PER_TYPE) instead of just realPeers. This lets a
+ * max(realFamilies, SLOTS_PER_TYPE) instead of just realFamilies. This lets a
  * tight-stock batch fit a slot that ONLY works as a paired placement —
  * the algorithm trusts that another candidate will join as the peer.
+ *
+ * FAMILY-AWARE: peers are counted as unique family roots (not raw batches)
+ * because a parent + split children at one slot represent ONE menu option,
+ * not multiple. Within the family this batch then takes its even share of
+ * the family's allocation (matches the all-zero edge case in the greedy
+ * allocator, since this is an OPTIMISTIC capacity hold, not a final
+ * allocation — Pass 2/3 just need to know "could this fit if peers join?").
  *
  * Catering hold uses the actual catering-side peer split (no optimism
  * there — a catering's dish list is what it is).
  */
 function calcReqOptimistic(b: Batch, allBatches: Batch[]): number {
   let total = 0;
+  const myRoot = getRootId(b, allBatches);
   for (const svc of b.services || []) {
     if (isServicePast(svc)) continue;
-    const realPeers = allBatches.filter(other =>
-      other.type === b.type
-      && (other.services || []).some(s => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal),
-    ).length;
-    const peers = Math.max(realPeers, SLOTS_PER_TYPE);
+    // Count unique family roots at the slot (matches countTypeInSlot).
+    const familyRoots = new Set<string>();
+    let myFamilyMembersHere = 0;
+    for (const other of allBatches) {
+      if (other.type !== b.type) continue;
+      if (!(other.services || []).some(s => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal)) continue;
+      const root = getRootId(other, allBatches);
+      familyRoots.add(root);
+      if (root === myRoot) myFamilyMembersHere++;
+    }
+    const families = Math.max(familyRoots.size, SLOTS_PER_TYPE);
+    const myShare = Math.max(myFamilyMembersHere, 1);
     const g = getGuests(svc.loc, svc.date, svc.meal);
-    total += (g / peers) * ((b.serving || 280) / 1000);
+    total += (g / families / myShare) * ((b.serving || 280) / 1000);
   }
   for (const c of (S.caterings || [])) {
     const cd = (c.dishes || []).find(cd => cd.dishId === b.id);
@@ -758,8 +829,18 @@ export function assignServicesPass3(
               // exception would permanently grow b.services on every retry.
               let fits: boolean;
               try {
-                fits = calcReq(b) <= b.stock
+                const perBatchFits = calcReq(b) <= b.stock
                   || calcReqOptimistic(b, allBatches) <= b.stock;
+                // Family-level capacity check — strict for multi-member
+                // families, exempt for singletons (see Pass 2 comment).
+                const family = allBatches.filter(m => getRootId(m, allBatches) === getRootId(b, allBatches));
+                if (family.length <= 1) {
+                  fits = perBatchFits;
+                } else {
+                  const familyStock = family.reduce((s, m) => s + (m.stock || 0), 0);
+                  const familyDemand = family.reduce((s, m) => s + calcReq(m), 0);
+                  fits = perBatchFits && familyDemand <= familyStock;
+                }
               } finally {
                 b.services.pop();
               }
@@ -781,6 +862,12 @@ export function assignServicesPass3(
             const aIso = cookDateToIso(a.cookDate)!;
             const bIso = cookDateToIso(b.cookDate)!;
             if (aIso !== bIso) return aIso > bIso ? -1 : 1;
+            // Same-loc preference within the same cookDate — drains
+            // Centraal-located splits before spilling load to the West
+            // parent (Centraal has no big freezer for leftovers).
+            const aSameLoc = a.location === slot.loc ? 1 : 0;
+            const bSameLoc = b.location === slot.loc ? 1 : 0;
+            if (aSameLoc !== bSameLoc) return bSameLoc - aSameLoc;
             const aConcentrate = a.stock > 0 && calcReq(a) < bigPot2;
             const bConcentrate = b.stock > 0 && calcReq(b) < bigPot2;
             if (aConcentrate !== bConcentrate) return aConcentrate ? -1 : 1;
@@ -821,18 +908,23 @@ export function assignServicesPass3(
  *   - in-slot duplicates
  *   - 3-deep cap (don't stack 4+ different options on one service)
  */
-const FINISH_OFF_CAP = SLOTS_PER_TYPE + 1;  // 3 = 2 main options + 1 extra
+/** Pass 4 (Tier A — fill under-filled slots) uses 0% family-level overshoot
+ *  tolerance. When there's clearly surplus elsewhere (e.g. 74L of unused
+ *  Tomato), pushing a tight family into a stockout is unnecessary — the
+ *  slot can stay under-filled and surface as a warning instead. The
+ *  previous Tier B "3rd peer pile-on" path was removed at Daan's request
+ *  because it created the "20L vs 2L" service problem (small batch runs
+ *  out fast, guests lose menu choice for the rest of service). */
+const FINISH_OFF_OVERSHOOT_TOLERANCE = 0;
 
-/** Pass 4 only fires for "last little bit" surpluses — anything bigger means
- *  the cook should reduce next week's volume, not pile it onto extra slots
- *  (which makes every meal 3-deep). 80 servings × the batch's serving size
- *  is the cutoff: ≈22.4L for a 280g soup, ≈6.4L for a 80g pasta dish. */
-const FINISH_OFF_MAX_SERVINGS = 80;
-
-/** Pass 4 tolerates a small stock overshoot — better to over-commit a little
- *  than to leave finish-off leftovers in the walk-in. 25% slack, surfaced
- *  to the cook via the existing cooked-stockout warning. */
-const FINISH_OFF_OVERSHOOT_TOLERANCE = 0.25;
+/** Pass 4's stale cutoff. Pass 1/2/3 use STALE_THRESHOLD_DAYS = 3 to keep
+ *  the FRESH menu young (no soup older than two-days-after-cook on the
+ *  primary positions). Pass 4 is finish-off — leftovers we'd otherwise
+ *  freeze or trash — so it's allowed one extra day of reach. With this set
+ *  to 5: a Sun-cooked batch that's been on the menu Mon/Tue (fresh) can
+ *  ride along Wed/Thu (3-4 days post-cook) as a finish-off rider, but is
+ *  cut off Fri+ (5d post-cook) before food safety becomes a concern. */
+const FINISH_OFF_STALE_LIMIT_DAYS = 5;
 
 export function assignServicesPass4(
   allBatches: Batch[],
@@ -845,12 +937,21 @@ export function assignServicesPass4(
     .filter(b => b.stock > 0)
     .filter(b => b.cookDate)
     .filter(b => b.storage !== 'Frozen')
-    // Oldest cookDate first — finish off the older food before the newer.
-    .sort((a, b) => cookDateSortKey(a).localeCompare(cookDateSortKey(b)));
+    .sort((a, b) => {
+      // Primary: oldest cookDate first — finish off older food before newer.
+      const ck = cookDateSortKey(a).localeCompare(cookDateSortKey(b));
+      if (ck !== 0) return ck;
+      // Secondary: Centraal-located batches first — same-loc preference at
+      // the batch-iteration level. Without this, a West parent gets processed
+      // before its Centraal split sibling and grabs Centraal slots first
+      // (via family-aware alreadyInSlot the split is then locked out).
+      if (a.location !== b.location) return a.location === 'centraal' ? -1 : 1;
+      // Tertiary: id for determinism.
+      return a.id.localeCompare(b.id);
+    });
 
   let added = 0;
   const touched = new Set<string>();
-  const overshootCeiling = (b: Batch) => b.stock * (1 + FINISH_OFF_OVERSHOOT_TOLERANCE);
 
   // Two-tier walk per batch:
   //   Tier A — fill UNDER-FILLED slots (filled < SLOTS_PER_TYPE). No surplus
@@ -860,16 +961,27 @@ export function assignServicesPass4(
   //     batches were skipped because their START surplus was over the
   //     "last little bit" threshold.
   //   Tier B — pile onto 2/2 slots as 3rd peer. Only "last little bit"
-  //     surpluses qualify (< FINISH_OFF_MAX_SERVINGS), to avoid making every
-  //     meal 3-deep when batches are massively over-cooked.
+  //     surpluses qualify (< FINISH_OFF_MAX_SERVINGS), AND the batch's
+  //     family must not already be over-committed (otherwise piling more
+  //     load just makes the family stockout worse). The threshold and
+  //     overshoot check are FAMILY-level so a parent batch with calcReq=0
+  //     because a sibling absorbed everything doesn't get mistaken for a
+  //     legitimate tail.
   for (const batch of cookedSorted) {
-    let surplus = batch.stock - calcReq(batch);
-    if (surplus <= 0) continue;
+    const family = allBatches.filter(m => getRootId(m, allBatches) === getRootId(batch, allBatches));
+    const familyStock = family.reduce((s, m) => s + (m.stock || 0), 0);
+    const familyDemand = () => family.reduce((s, m) => s + calcReq(m), 0);
+    const familySurplus = familyStock - familyDemand();
+    if (familySurplus <= 0) continue;  // family already over-committed; nothing to drain
     const servingL = (batch.serving || 280) / 1000;
-    const startSurplusServings = surplus / servingL;
+    const startFamilySurplusServings = familySurplus / servingL;
 
     walk: for (const day of window) {
-      if (isStaleAtSlot(batch.cookDate, day.isoDate)) break walk;
+      // Pass 4 uses a longer stale window than the fresh-menu passes — see
+      // FINISH_OFF_STALE_LIMIT_DAYS. A batch that's gone stale to Pass 1/2/3
+      // can still ride along here as a finish-off rider, draining leftover
+      // stock that would otherwise be frozen or trashed.
+      if (isStaleAtSlot(batch.cookDate, day.isoDate, FINISH_OFF_STALE_LIMIT_DAYS)) break walk;
 
       for (const slot of day.slots) {
         if (slot.isPast) continue;
@@ -877,14 +989,23 @@ export function assignServicesPass4(
         if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, batch.location)) continue;
         if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal, allBatches)) continue;
         const filled = countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal);
-        if (filled >= FINISH_OFF_CAP) continue;
-
-        // Tier B gate: 2/2 slot + over-threshold batch → skip (don't 3-deep
-        // every meal just because the cook over-produced this week).
-        if (filled >= SLOTS_PER_TYPE && startSurplusServings >= FINISH_OFF_MAX_SERVINGS) continue;
+        // Pass 4 only fills UNDER-FILLED slots (Tier A). The Tier B "3rd peer
+        // pile-on" path was removed at Daan's request: piling Miso (10L) onto
+        // a 2/2 slot already covered by Tomato + Zucchini turned a clean menu
+        // into one with phantom overshoots and a small batch that ran out
+        // five minutes into service. The "drain leftover stock" rationale is
+        // still served by Tier A (legit empty positions). Surplus that can't
+        // find a Tier-A home stays at West (which has freezer space) or
+        // surfaces as a leftover-stock signal to the cook for next week.
+        if (filled >= SLOTS_PER_TYPE) continue;
 
         batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-        const overshot = calcReq(batch) > overshootCeiling(batch);
+
+        // Family-level capacity check — strict 0% tolerance. If the push
+        // would put the family demand past its stock pool, reject; the slot
+        // can stay under-filled (cook sees the warning) rather than create
+        // an unnecessary stockout when surplus exists elsewhere.
+        const overshot = familyDemand() > familyStock * (1 + FINISH_OFF_OVERSHOOT_TOLERANCE);
         if (overshot) {
           batch.services.pop();
           continue;
@@ -892,8 +1013,9 @@ export function assignServicesPass4(
 
         added++;
         touched.add(batch.id);
-        surplus = batch.stock - calcReq(batch);
-        if (surplus <= 0) break walk;
+        // Stop walking when the family is fully drained — no more leftover
+        // to finish off, regardless of remaining eligible slots.
+        if (familyDemand() >= familyStock) break walk;
       }
     }
   }

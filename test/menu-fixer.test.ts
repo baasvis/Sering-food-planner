@@ -826,6 +826,72 @@ describe('allocatePotCaps (demand-based)', () => {
   });
 });
 
+// ── Same-loc preference ────────────────────────────────────────────────────
+
+describe('Same-loc preference (Centraal drains before West)', () => {
+  test('Pass 1 keeps walking after an overshoot pop — split lands on a later slot that fits', () => {
+    // Old behaviour ("break walk" on overshoot): split fits Mon C lunch
+    // alone, then tries Mon C dinner, overshoots together, gives up → only
+    // 1 service. Pass 2 then routes the rest to the West parent.
+    // New behaviour ("continue"): split pops Mon C dinner, keeps walking,
+    // and lands Tue C lunch which fits as a 2-peer slot (peer reduces
+    // share). Drains more of the Centraal-located stock.
+    const split = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 30, location: 'centraal', name: 'Split' });
+    // Pre-existing peer at Tue C lunch ONLY — so demand at Tue C lunch
+    // splits 2 ways and fits, while Mon slots are solo and overshoot.
+    const peer = makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 100, location: 'centraal', name: 'Peer' });
+    peer.services.push({ loc: 'centraal', date: '2026-05-05', meal: 'lunch' });
+
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // 130 guests, 280g serving. Solo slot = 36.4L; 2-peer slot = 18.2L.
+    const calc = peerAwareCalcRequired([split, peer], 130, 280);
+    assignServicesPass1([split, peer], window, calc, () => 130);
+
+    // Mon C lunch: split alone → 36.4L > 30L stock → pop. With break-walk
+    // the test would end here. With continue, split keeps trying.
+    // Tue C lunch (with peer): split + peer = 2 peers → 18.2L per ≤ 30 →
+    // fits. So split should land on Tue C lunch.
+    const splitAtTueCLunch = split.services.some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'lunch'
+    );
+    expect(splitAtTueCLunch).toBe(true);
+  });
+
+  test('Pass 2 picks Centraal-located batch over West for a Centraal slot at same cookDate', () => {
+    // The Miso situation: parent (W) and split (C) both cooked Sun. Pass 2
+    // hits Mon C dinner empty. Without the same-loc tiebreaker, the sort
+    // could pick parent (most-loaded under-bigPot) and leave split unused.
+    // With the tiebreaker, split (Centraal) wins for the Centraal slot.
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+    ]);
+    const parent = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 60, location: 'west', name: 'Parent' });
+    const split = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 40, location: 'centraal', name: 'Split' });
+    split.parentId = parent.id;
+
+    // Pass 2 normally fills Mon C dinner. We pre-empty everything; just two
+    // candidates — parent and split. peerAware stub so capacity check is
+    // realistic. Soup needs 18.2L per peer at 130 guests, 2 peers: well
+    // under either batch's stock.
+    const calc = peerAwareCalcRequired([parent, split], 130, 280);
+    assignServicesPass2([parent, split], window, calc, () => 130, 140);
+
+    const splitAtMonCDinner = split.services.some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-04' && s.meal === 'dinner'
+    );
+    const parentAtMonCDinner = parent.services.some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-04' && s.meal === 'dinner'
+    );
+    // Split (same-loc) lands on Mon C dinner; parent does NOT (would be a
+    // family duplicate).
+    expect(splitAtMonCDinner).toBe(true);
+    expect(parentAtMonCDinner).toBe(false);
+  });
+});
+
 // ── Pass 3 (fill-remaining, ignores pot caps) ──────────────────────────────
 
 describe('assignServicesPass3', () => {
@@ -881,31 +947,28 @@ describe('assignServicesPass3', () => {
 // ── Pass 4 (finish-off, allows up to 3 peers) ──────────────────────────────
 
 describe('assignServicesPass4', () => {
-  test('Pass 4 adds a 3rd peer to a 2/2 slot when a small-surplus cooked batch needs to drain', () => {
-    // Setup: a slot is already at 2/2 with two cooked batches. A third
-    // cooked batch has a SMALL leftover (under FINISH_OFF_MAX_SERVINGS = 80
-    // servings worth) and needs to drain. Pass 4 piles it onto the slot
-    // as a 3rd option to use up the last little bit.
+  test('Pass 4 does NOT add a 3rd peer to a 2/2 slot (Tier B disabled)', () => {
+    // Daan's "remove peers, don't add" feedback: a 2/2 slot already has two
+    // soup options for menu choice. Piling a 3rd small batch on top creates
+    // the "20L vs 2L" service problem — the small batch runs out fast and
+    // guests are left with fewer choices for the rest of service. Cleaner
+    // to leave the small batch un-assigned (its leftover stock signals a
+    // next-week-cook adjustment).
     const window = makeWindow([
       { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
     ]);
     const a = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'A' });
     const b = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 100, name: 'B' });
-    // Small-surplus batch: 10L stock at 280g serving = ~36 servings,
-    // well under the 80-serving threshold.
     const c = makeBatch({ type: 'Soup', cookDate: '06/05/2026', stock: 10, name: 'C' });
-    // Pre-fill Wed dinner West with A+B (Pass 1/2/3 result).
     a.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
     b.services = [{ loc: 'west', date: '2026-05-06', meal: 'dinner' }];
 
-    const result = assignServicesPass4([a, b, c], window, fixedCalcRequired(1));
+    assignServicesPass4([a, b, c], window, fixedCalcRequired(1));
 
-    // C should land at the same slot as the 3rd peer.
     const cAtSlot = (c.services || []).some(s =>
       s.loc === 'west' && s.date === '2026-05-06' && s.meal === 'dinner'
     );
-    expect(cAtSlot).toBe(true);
-    expect(result.servicesAdded).toBeGreaterThan(0);
+    expect(cAtSlot).toBe(false);
   });
 
   test('Pass 4 SKIPS batches with big surplus (over-cook situation, not finish-off)', () => {
