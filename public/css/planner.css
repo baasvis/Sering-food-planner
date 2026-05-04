@@ -163,13 +163,16 @@
   .batch-tile.in-transit{border-left:3px solid #97C459;}
   .batch-tile.loc-west.in-transit{border-left-color:#EF9F27;}
 
-  /* Compact row */
-  .batch-tile-compact{display:flex;align-items:center;gap:6px;padding:6px 10px;cursor:pointer;min-height:36px;overflow:hidden;}
+  /* Compact row — flex-wrap lets badges flow to a second line in narrow tiles
+     (e.g. 2-col grid in transport view) instead of squeezing the name to 0. */
+  .batch-tile-compact{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 10px;cursor:pointer;min-height:36px;}
   .batch-type-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
   .batch-type-dot.batch-type-soup{background:var(--green);}
   .batch-type-dot.batch-type-main-course{background:var(--blue);}
   .batch-type-dot.batch-type-dessert{background:var(--purple);}
-  .batch-tile-name{font-weight:500;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  /* min-width keeps the name readable even when other badges are present;
+     flex-basis pushes overflowing badges to a second row. */
+  .batch-tile-name{font-weight:500;font-size:13px;flex:1 1 120px;min-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .batch-status{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 6px;border-radius:3px;flex-shrink:0;white-space:nowrap;}
   .status-cooked{background:var(--green-light,#e8f5e9);color:var(--green,#388e3c);}
   .status-tocook{background:var(--amber-bg,#fff3e0);color:var(--amber,#e65100);}
