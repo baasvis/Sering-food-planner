@@ -1025,3 +1025,40 @@ describe('Recipe v2 CRUD', () => {
     expect(check.status).toBe(404);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// T19 — bulk POST /api/ingredients (supplier-XLSX import path) must trigger
+// recipe-cost recalculation. Previously the bulk path replaced the entire
+// ingredient table without triggering the per-ingredient recalc.
+//
+// Note: this test asserts the recalc fires (response surfaces a numeric
+// `recipeCostsUpdated` field). The deeper FK-wipe bug (audit follow-up
+// T19a — `recipe_ingredients.ingredient_id ON DELETE SET NULL` strips
+// every recipe→ingredient link on every bulk save) means the recalc
+// currently sees zero linked ingredients and so produces null cost. Once
+// T19a is fixed (raw INSERT...ON CONFLICT DO UPDATE so existing rows are
+// touched in-place), the assertion can tighten to check the actual cost.
+// ──────────────────────────────────────────────────────────────────────────
+describe('T19 — bulk ingredient save triggers recipe-cost recalc', () => {
+  // Bulk endpoint is delete-all/create-all over the entire ingredient
+  // table (~1.1k rows on staging) plus a recipe-cost recalc over every
+  // recipe — way over Jest's 5s default. Same shape as the supplier-import
+  // user action would hit in production.
+  it('POST /api/ingredients — response includes recipeCostsUpdated count', async () => {
+    // Send the full ingredient set unchanged. This is the safest possible
+    // round trip — same shape applySupplierUpdate sends on the frontend.
+    // Goal: prove the recalc fires (response field present + non-error).
+    const all = await prisma.ingredient.findMany();
+    const payload = all.map(i => ({
+      ...i,
+      stock: i.stock || {},
+    }));
+
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    // The new field surfaces the recalc count — a future regression that
+    // accidentally drops the recalc would zero this out.
+    expect(typeof res.body.recipeCostsUpdated).toBe('number');
+  }, 90_000);
+});

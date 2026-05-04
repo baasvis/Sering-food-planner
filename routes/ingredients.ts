@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import fs from 'fs';
 import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
 import { Prisma } from '@prisma/client';
-import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, withWriteLock } from '../lib/db';
+import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, recalcAllRecipeCosts, withWriteLock } from '../lib/db';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
@@ -68,6 +68,16 @@ router.get('/full', asyncHandler(async (_req: Request, res: Response) => {
 // Bulk save all ingredients (delete-all/create-all — frontend always sends
 // the complete set). withWriteLock serialises against any concurrent ingredient
 // edit so a single-row save during a bulk replace can't be silently dropped.
+//
+// KNOWN BUG (out of scope for this PR — see audit follow-up T19a in
+// 99-followups.md): the delete-all + recreate shape interacts badly with
+// Postgres FK `recipe_ingredients.ingredient_id ON DELETE SET NULL`. Every
+// supplier-XLSX import wipes recipe→ingredient links. Confirmed on staging
+// (100% NULL FKs after repeated supplier imports). The recalc trigger
+// added below is necessary but not sufficient — it can only produce real
+// numbers once the FK-wipe is fixed (likely via raw INSERT...ON CONFLICT
+// DO UPDATE so existing rows are touched in-place). Filed as a follow-up
+// because the safe rewrite needs more design than a one-line tweak.
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const ingredients = req.body;
   if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'Expected array' });
@@ -107,9 +117,22 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     }),
   ]);
   });
+  // Audit T19: bulk supplier-XLSX imports change pricePer100 across many
+  // ingredients at once but the per-ingredient PATCH recalc loop below
+  // doesn't fire on this path. Without this, recipe costs go stale until
+  // a future single-ingredient edit happens to share an ingredientId with
+  // them. Awaited (rather than fire-and-forget) so the response only
+  // returns after costs are consistent — this endpoint is a heavy one-shot
+  // user action; the extra latency is acceptable for the data correctness.
+  let recalcUpdated = 0;
+  try {
+    recalcUpdated = await recalcAllRecipeCosts();
+  } catch (e: unknown) {
+    console.error('recalcAllRecipeCosts after bulk ingredient save failed:', e instanceof Error ? e.message : e);
+  }
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
-  dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients`);
-  res.json({ ok: true, count: ingredients.length });
+  dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients (recalculated ${recalcUpdated} recipe costs)`);
+  res.json({ ok: true, count: ingredients.length, recipeCostsUpdated: recalcUpdated });
 }));
 
 // Update target stock for a single ingredient at one location.

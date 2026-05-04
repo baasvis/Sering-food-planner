@@ -126,3 +126,18 @@ For the elevated A17 (S.recipeIndex empty in three surfaces):
 - [ ] Open dishes overview → click "+ New batch" → search field. Confirm "No recipes in index yet."
 - [ ] Decide between "patch with S.recipes" (quick) and "sunset Recipe v1" (preferred).
 
+---
+
+## Discovered while implementing fixes
+
+### T19a — `POST /api/ingredients` bulk save wipes recipe → ingredient FKs (data-corruption)
+- **Severity**: **High** (silent data corruption on a regular user action)
+- **Location**: [routes/ingredients.ts:71-113](routes/ingredients.ts), [prisma/migrations/20260409180000_add_recipe_v2_models/migration.sql:85](prisma/migrations/20260409180000_add_recipe_v2_models/migration.sql).
+- **What**: The bulk endpoint runs `prisma.ingredient.deleteMany() + prisma.ingredient.createMany(...)` inside a transaction. The `recipe_ingredients.ingredient_id` FK is `ON DELETE SET NULL`. Postgres trigger fires on the `deleteMany` and NULLs every recipe-ingredient link; the immediate `createMany` recreates the ingredients with the same ids but does NOT restore the FKs.
+- **Confirmed live**: staging — 618 of 618 (100%) recipe_ingredients rows have `ingredient_id IS NULL` after repeated supplier imports. Production — 21 of 625 (3.4%) NULL, suggesting bulk POST has run on prod a few times.
+- **Why it matters**: After every supplier-XLSX import, every recipe loses its ingredient linkage. The frontend probably still shows ingredient *names* (denormalized into `RecipeFull` at read time), but: cost recalculations have no prices to use, allergen aggregation has no allergens, nutrition computations have no per-ingredient data. This is the root cause of the symptom T19 was describing — costs aren't "stale", they're getting silently nulled.
+- **Why this PR doesn't fix it**: the safe rewrite needs more design than a one-line tweak. The realistic fix is a raw `INSERT … ON CONFLICT DO UPDATE` so existing rows are touched in-place (preserving FKs). Per-row Prisma upsert in a transaction works correctly but is too slow (1162 rows × ~1 round trip each, exceeded a 60s test timeout). Diff-based update is also viable but brittle around JSON-column equality.
+- **Recovery**: existing NULL rows on prod (21) and staging (all 618) need to be re-linked manually or via a one-off script that matches recipe_ingredients rows back to ingredients by name (frequent collisions; not automatic).
+- **Suggested next PR**: rewrite bulk POST to use `INSERT … ON CONFLICT (id) DO UPDATE SET …` raw SQL. Single statement, FK-safe, fast. JSON columns need careful quoting but are tractable. Add a regression test that asserts FK count is unchanged across a bulk POST.
+- **Confidence**: High — verified the staging FK state directly and traced the cause through the migration + Prisma transaction semantics.
+
