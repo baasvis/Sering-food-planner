@@ -7,7 +7,7 @@
 import type { Batch, DishType, Location, Meal, KitchenEquipment } from '@shared/types';
 import { S } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './utils';
-import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired, getGuests, getRootId } from './core';
+import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired, getGuests, getRootId, consolidateFamilies } from './core';
 import { rerenderCurrentView } from './navigate';
 import { showModal, closeModal, esc } from './modal';
 
@@ -916,6 +916,19 @@ export function fixMyMenu(): void {
   );
   if (!ok) return;
 
+  // Step −2: consolidate same-loc same-family duplicates. Real prod data had
+  // Miso & ginger soup at Centraal as 3 separate splits (12.1L + 12.6L +
+  // 18L) — visually messy AND it broke peer math (calcRequired counted 3
+  // peers when there's really 1 menu option). After consolidation the rest
+  // of the algorithm operates on a clean dataset where each (recipe,
+  // location, storage, transit-state) is exactly one record.
+  const consolidation = consolidateFamilies(S.batches);
+  if (consolidation.removed.length > 0) {
+    S.batches = consolidation.kept;
+    if (!S.deletedBatches) S.deletedBatches = [];
+    for (const id of consolidation.removed) S.deletedBatches.push(id);
+  }
+
   // Step −1: strip every future service entry. Past services (already served)
   // stay; everything else gets re-decided by the assignment passes below.
   // This makes the algorithm REDISTRIBUTIVE rather than purely additive —
@@ -1016,6 +1029,7 @@ export function fixMyMenu(): void {
     cleaned: orphans.length,
     created: newPlaceholders.length,
     assigned: pass1.servicesAdded + pass2.servicesAdded + pass3.servicesAdded + pass4.servicesAdded,
+    consolidated: consolidation.removed.length,
     placeholderNames: newPlaceholders.map(p => p.name),
     warnings,
   });
@@ -1245,6 +1259,7 @@ interface ResultsReport {
   cleaned: number;
   created: number;
   assigned: number;
+  consolidated: number;
   placeholderNames: string[];
   warnings: Warning[];
 }
@@ -1304,8 +1319,9 @@ function categoryHeader(c: WarningCategory): { title: string; hint: string } {
 
 function showResultsModal(report: ResultsReport): void {
   _lastReport = report;
-  const { cleaned, created, assigned, placeholderNames, warnings } = report;
+  const { cleaned, created, assigned, consolidated, placeholderNames, warnings } = report;
   const summary: string[] = [];
+  if (consolidated > 0) summary.push(`<div>⛓ Merged ${consolidated} duplicate batch${consolidated === 1 ? '' : 'es'} of the same recipe at the same location</div>`);
   if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
   if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
   if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);

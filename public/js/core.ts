@@ -60,6 +60,157 @@ export function getFamilyStock(b: Batch, allBatches: Batch[]): number {
   return getFamilyMembers(b, allBatches).reduce((sum, x) => sum + (x.stock || 0), 0);
 }
 
+// ── Family consolidation ───────────────────────────────────────────────────
+//
+// When a cook ships portions of a recipe between locations multiple times
+// (or marks transit batches arrived one-by-one), the DB ends up with N
+// physical records of the SAME recipe at the SAME location. Example real
+// case from prod: Miso & ginger soup at Centraal as 3 separate splits of
+// 12.1L + 12.6L + 18L. From a kitchen perspective that's one 42.7L pot.
+//
+// Beyond the visual mess, leaving them as 3 records breaks demand math:
+//   - calcRequired counts peers per slot. With 3 Miso splits + Tomato at one
+//     slot, peers=4 → demand divided by 4 instead of by 2 (Miso family +
+//     Tomato family = 2 distinct menu options).
+//   - Pass 4 over-fills slots because the per-batch capacity check uses
+//     the inflated peer count.
+//
+// `consolidateFamilies` merges any group of batches that share:
+//   - same family root (parentId chain)
+//   - same physical location
+//   - same storage type (Frozen vs Gastro must NOT merge)
+//   - same inTransit flag (in-transit vs arrived must stay separate so a
+//     pending arrival doesn't get folded into stock that's actually here)
+// Stocks sum, services union (de-duped by slot key), oldest cookDate wins,
+// the parent (or smallest id) becomes the survivor. Removed batches go into
+// the deletedBatches list so the patch endpoint cleans them server-side.
+
+export interface ConsolidationResult {
+  /** The deduplicated batch list — caller should replace S.batches with this. */
+  kept: Batch[];
+  /** IDs that should be appended to S.deletedBatches and saved. */
+  removed: string[];
+  /** Diagnostic count of merges performed. */
+  mergedGroups: number;
+}
+
+export function consolidateFamilies(batches: Batch[]): ConsolidationResult {
+  const removed: string[] = [];
+  let mergedGroups = 0;
+
+  // Bucket by (familyRoot, location, storage, inTransit). Anything in the
+  // same bucket is a merge candidate.
+  const buckets = new Map<string, Batch[]>();
+  for (const b of batches) {
+    const root = getRootId(b, batches);
+    const key = `${root}|${b.location}|${b.storage}|${b.inTransit ? 't' : 'f'}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(b);
+  }
+
+  // Track survivors so we can rebuild the list at the end.
+  const survivorIds = new Set<string>();
+  const updatedById = new Map<string, Batch>();
+
+  for (const [, group] of buckets) {
+    if (group.length === 1) {
+      survivorIds.add(group[0].id);
+      continue;
+    }
+    mergedGroups++;
+    const primary = pickPrimary(group);
+    const others = group.filter(b => b.id !== primary.id);
+
+    // Sum stocks
+    primary.stock = round1(group.reduce((s, b) => s + (b.stock || 0), 0));
+
+    // Union services (de-duped by slot key); also pull in any "extras" the
+    // primary missed.
+    const seen = new Set<string>(
+      (primary.services || []).map(s => `${s.loc}|${s.date}|${s.meal}`),
+    );
+    for (const o of others) {
+      for (const svc of o.services || []) {
+        const k = `${svc.loc}|${svc.date}|${svc.meal}`;
+        if (!seen.has(k)) {
+          primary.services.push(svc);
+          seen.add(k);
+        }
+      }
+    }
+
+    // Use the OLDEST cookDate (use up older food first — same heuristic the
+    // assigner uses).
+    const cookDates = group.map(b => b.cookDate).filter((d): d is string => !!d);
+    if (cookDates.length > 0) {
+      primary.cookDate = cookDates.sort((a, b) => {
+        // dd/mm/yyyy → yyyy-mm-dd for lexicographic compare
+        const aIso = a.split('/').reverse().join('-');
+        const bIso = b.split('/').reverse().join('-');
+        return aIso.localeCompare(bIso);
+      })[0];
+    }
+
+    // Merge notes (concat unique non-empty)
+    const notes = group.map(b => b.note?.trim()).filter((n): n is string => !!n);
+    if (notes.length > 0) primary.note = Array.from(new Set(notes)).join(' / ');
+
+    // Allergens — union of any extras from siblings
+    const allerg = new Set<string>(primary.allergens || []);
+    const xtra = new Set<string>(primary.extraAllergens || []);
+    for (const o of others) {
+      for (const a of o.allergens || []) allerg.add(a);
+      for (const a of o.extraAllergens || []) xtra.add(a);
+    }
+    primary.allergens = Array.from(allerg);
+    primary.extraAllergens = Array.from(xtra);
+
+    survivorIds.add(primary.id);
+    updatedById.set(primary.id, primary);
+    for (const o of others) removed.push(o.id);
+  }
+
+  // Re-fixup parentId references: if a batch's parentId pointed to one of
+  // the removed records, redirect it to that group's primary so the family
+  // chain stays intact.
+  const redirectMap = new Map<string, string>();
+  for (const [, group] of buckets) {
+    if (group.length < 2) continue;
+    const primary = pickPrimary(group);
+    for (const o of group) {
+      if (o.id !== primary.id) redirectMap.set(o.id, primary.id);
+    }
+  }
+  const kept = batches.filter(b => survivorIds.has(b.id));
+  for (const b of kept) {
+    if (b.parentId && redirectMap.has(b.parentId)) {
+      b.parentId = redirectMap.get(b.parentId)!;
+    }
+    // If parent points to self after redirect (i.e. survivor is now its own
+    // root), null the parentId.
+    if (b.parentId === b.id) b.parentId = null;
+  }
+
+  return { kept, removed, mergedGroups };
+}
+
+function pickPrimary(group: Batch[]): Batch {
+  // Parent (no parentId) takes priority — most stable identity.
+  const parent = group.find(b => !b.parentId);
+  if (parent) return parent;
+  // Otherwise: oldest cookDate, tiebreak smallest id.
+  return [...group].sort((a, b) => {
+    const ad = a.cookDate ? a.cookDate.split('/').reverse().join('-') : '';
+    const bd = b.cookDate ? b.cookDate.split('/').reverse().join('-') : '';
+    if (ad !== bd) return ad < bd ? -1 : 1;
+    return a.id.localeCompare(b.id);
+  })[0];
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
 export function locationBadge(d: Batch): string {
   if (d.location === 'centraal') {
     return `<span class="badge b-centraal">Sering Centraal</span>`;
