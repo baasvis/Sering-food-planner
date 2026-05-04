@@ -7,7 +7,7 @@
 import type { Batch, DishType, Location, Meal, KitchenEquipment } from '@shared/types';
 import { S } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './utils';
-import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired, getGuests } from './core';
+import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired, getGuests, getRootId, consolidateFamilies } from './core';
 import { rerenderCurrentView } from './navigate';
 import { showModal, closeModal, esc } from './modal';
 
@@ -326,10 +326,17 @@ function diffDaysIso(aIso: string, bIso: string): number {
  * A batch with cookDate = X is servable starting at dinner of X (lunch of X is
  * too early — cooking happens during the day). Any later day is fine.
  *
- * Centraal exception: food is delivered to Centraal every morning, so a
- * West-cooked batch reaches Centraal only the next day — Centraal services
- * for West-cooked food need slotDate > cookDate (no same-day Centraal).
- * Centraal-cooked batches (rare) follow the standard same-day-dinner rule.
+ * Location rules (`batchLocation` = where the food physically IS, not where it
+ * was cooked):
+ *   - West-located batch + Centraal slot → next-morning delivery only
+ *     (West cooks, food rides the morning van to Centraal). Same-day Centraal
+ *     dinner is too early.
+ *   - Centraal-located batch + West slot → NEVER. There's no reverse delivery,
+ *     so once food is at Centraal it stays there. Without this rule the
+ *     algorithm cheerfully assigns Centraal stock (often a "(split)" batch
+ *     deliberately sent to Centraal) to West services, which is a logistics
+ *     impossibility AND starves Centraal of its own dedicated stock.
+ *   - Same-location: standard same-day-dinner rule.
  */
 export function isServableBy(
   cookDateDdmmyyyy: string | null,
@@ -341,11 +348,13 @@ export function isServableBy(
   const cookIso = cookDateToIso(cookDateDdmmyyyy);
   if (!cookIso) return false;
   if (slotIsoDate < cookIso) return false;
-  // West-cooked food at Centraal: must wait for next-morning delivery
+  // Centraal-located food cannot flow back to West — no reverse delivery.
+  if (slotLoc === 'west' && batchLocation === 'centraal') return false;
+  // West-cooked food at Centraal: must wait for next-morning delivery.
   if (slotLoc === 'centraal' && batchLocation === 'west') {
     return slotIsoDate > cookIso;
   }
-  // Otherwise: standard rule (same-day dinner OK, any later day OK)
+  // Same-location: standard rule (same-day dinner OK, any later day OK).
   if (slotIsoDate > cookIso) return true;
   return slotMeal === 'dinner';
 }
@@ -362,25 +371,46 @@ export function isStaleAtSlot(cookDateDdmmyyyy: string | null, slotIsoDate: stri
 }
 
 /**
- * How many batches of `type` currently have a service entry matching the
- * given (loc, isoDate, meal) slot. Counts the LIVE state of `batches.services`
- * so it picks up assignments added earlier in the same pass.
+ * How many DISTINCT batch families of `type` currently have a service entry
+ * at the given slot. A "family" = a parent batch + its split children (linked
+ * via parentId). From a guest's menu point of view they're a single option,
+ * even though they exist as separate batches for logistics.
+ *
+ * Counts the LIVE state of `batches.services` so it picks up assignments
+ * added earlier in the same pass.
  */
 export function countTypeInSlot(batches: Batch[], type: DishType, loc: Location, isoDate: string, meal: Meal): number {
-  let n = 0;
+  const familyRoots = new Set<string>();
   for (const b of batches) {
     if (b.type !== type) continue;
     if (!b.services || b.services.length === 0) continue;
-    for (const s of b.services) {
-      if (s.loc === loc && s.date === isoDate && s.meal === meal) { n++; break; }
-    }
+    if (!b.services.some(s => s.loc === loc && s.date === isoDate && s.meal === meal)) continue;
+    familyRoots.add(getRootId(b, batches));
   }
-  return n;
+  return familyRoots.size;
 }
 
-/** True if the batch already has a service entry exactly matching this slot. */
-export function alreadyInSlot(batch: Batch, loc: Location, isoDate: string, meal: Meal): boolean {
-  return (batch.services || []).some(s => s.loc === loc && s.date === isoDate && s.meal === meal);
+/**
+ * True if `batch` (or any member of its family — parent or split sibling) is
+ * already at the given slot. Family-aware so the algorithm doesn't put both
+ * Tomato Soup West and Tomato Soup (split) Centraal at the same slot — from
+ * a guest's perspective that's the same option twice.
+ *
+ * `allBatches` is optional to keep backward-compat with isolated unit tests
+ * (single-batch check). When passed, the family-aware check kicks in.
+ */
+export function alreadyInSlot(batch: Batch, loc: Location, isoDate: string, meal: Meal, allBatches?: Batch[]): boolean {
+  const matchSlot = (b: Batch) => (b.services || []).some(s => s.loc === loc && s.date === isoDate && s.meal === meal);
+  if (matchSlot(batch)) return true;
+  if (!allBatches) return false;
+  // Check siblings/parent in the family
+  const rootId = getRootId(batch, allBatches);
+  for (const other of allBatches) {
+    if (other.id === batch.id) continue;
+    if (getRootId(other, allBatches) !== rootId) continue;
+    if (matchSlot(other)) return true;
+  }
+  return false;
 }
 
 /** Lexically-comparable cookDate value for sorting (oldest first when ascending). */
@@ -414,7 +444,17 @@ export function assignServicesPass1(
     .filter(b => b.stock > 0)
     .filter(b => b.cookDate)
     .filter(b => b.storage !== 'Frozen')
-    .sort((a, b) => cookDateSortKey(a).localeCompare(cookDateSortKey(b)));
+    .sort((a, b) => {
+      // Primary: oldest cookDate first (use up older food before newer)
+      const ck = cookDateSortKey(a).localeCompare(cookDateSortKey(b));
+      if (ck !== 0) return ck;
+      // Secondary: Centraal-located batches before West. They have a smaller
+      // pool of eligible slots (Centraal-only — see isServableBy), so they
+      // need first pick before West batches consume Centraal slots.
+      if (a.location !== b.location) return a.location === 'centraal' ? -1 : 1;
+      // Tertiary: id for determinism so reruns produce the same plan.
+      return a.id.localeCompare(b.id);
+    });
 
   let added = 0;
   const touched = new Set<string>();
@@ -436,7 +476,7 @@ export function assignServicesPass1(
         // Skip slots with no expected guests — no point assigning food where nobody eats.
         if (getGuestsFn && getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
         if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, batch.location)) continue;
-        if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal)) continue;
+        if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal, allBatches)) continue;
         if (countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) continue;
 
         // Tentatively assign, then check capacity. If overcommitted, undo.
@@ -541,7 +581,7 @@ function tryFillOnePosition(
     if (b.type !== type) return false;
     if (!b.cookDate) return false;
     if (b.storage === 'Frozen') return false;
-    if (alreadyInSlot(b, loc, isoDate, meal)) return false;
+    if (alreadyInSlot(b, loc, isoDate, meal, allBatches)) return false;
     if (!isServableBy(b.cookDate, isoDate, meal, loc, b.location)) return false;
     if (b.stock > 0 && isStaleAtSlot(b.cookDate, isoDate)) return false;
     return true;
@@ -562,17 +602,19 @@ function tryFillOnePosition(
     const topIso = cookDateToIso(top.cookDate)!;
     const topCooked = top.stock > 0 ? 'cooked' : 'uncooked';
 
-    // Within same (cookDate, cooked-status) bucket, pick the MOST-LOADED
-    // batch under the big-pot ceiling (concentrate to fill one batch fully
-    // before adding to siblings). If all bucket members are over the ceiling,
-    // fall back to least-loaded to spread overflow.
-    // This naturally produces "min batch size" behavior — services pile onto
-    // the leading batch first, smaller siblings stay tiny (and trigger the
-    // too-small-batch warning to prompt cook to skip those cooks).
+    // Within same (cookDate, cooked-status) bucket, choose between two sort
+    // strategies:
+    //   - COOKED bucket: most-loaded first, up to the big-pot cap (concentrate
+    //     real stock onto one batch before requiring another cook).
+    //   - UNCOOKED bucket: least-loaded first (even spread). All placeholders
+    //     for the same day-and-type are physically interchangeable — the cook
+    //     chooses batch sizes after the fact. Concentrating one placeholder
+    //     to 140L while leaving its siblings empty produces the wrong cook
+    //     plan (one giant cook + zero-volume "ghost" entries).
     const sameBucket = candidates
       .filter(c => cookDateToIso(c.cookDate) === topIso && (c.stock > 0 ? 'cooked' : 'uncooked') === topCooked);
     let chosen: Batch;
-    if (biggestPotLiters != null) {
+    if (topCooked === 'cooked' && biggestPotLiters != null) {
       const underBig = sameBucket.filter(c => calcReq(c) < biggestPotLiters);
       if (underBig.length > 0) {
         underBig.sort((a, b) => {
@@ -586,15 +628,31 @@ function tryFillOnePosition(
         chosen = sameBucket[0];
       }
     } else {
-      // No equipment hint — even spread
-      sameBucket.sort((a, b) => a.services.length - b.services.length);
+      // Uncooked bucket OR no equipment hint — even spread (least-loaded).
+      sameBucket.sort((a, b) => {
+        if (a.services.length !== b.services.length) return a.services.length - b.services.length;
+        return a.id.localeCompare(b.id);
+      });
       chosen = sameBucket[0];
     }
 
     // Tentatively assign and check capacity. Only stock matters here — pot
     // sizing is decided post-assignment based on actual demand.
+    //
+    // Two-tier capacity check:
+    //   1. If real-peer demand fits → accept.
+    //   2. Else, retry assuming the slot will eventually reach SLOTS_PER_TYPE
+    //      peers (optimistic peer-split). Without (2), a slot that needs 2
+    //      batches together to be feasible (Tomato W + Miso W at Tue dinner
+    //      C, 240 guests — neither fits solo, both fit at 33.6L each) stays
+    //      empty forever, because position 1's tentative add sees solo
+    //      demand and overshoots. If the expected peer never arrives, the
+    //      cooked-stockout warning surfaces the under-supply.
     chosen.services.push({ loc, date: isoDate, meal });
-    if (chosen.stock > 0 && calcReq(chosen) > chosen.stock) {
+    const fits = chosen.stock <= 0
+      || calcReq(chosen) <= chosen.stock
+      || calcReqOptimistic(chosen, allBatches) <= chosen.stock;
+    if (!fits) {
       chosen.services.pop();
       // Cooked batch hit its stock limit — drop it and try the next candidate.
       candidates = candidates.filter(c => c !== chosen);
@@ -605,6 +663,38 @@ function tryFillOnePosition(
   }
 
   return false;
+}
+
+/**
+ * Optimistic capacity check used by Pass 2 and Pass 3. Sums the batch's
+ * demand across its services, but splits each slot's guest load by
+ * max(realPeers, SLOTS_PER_TYPE) instead of just realPeers. This lets a
+ * tight-stock batch fit a slot that ONLY works as a paired placement —
+ * the algorithm trusts that another candidate will join as the peer.
+ *
+ * Catering hold uses the actual catering-side peer split (no optimism
+ * there — a catering's dish list is what it is).
+ */
+function calcReqOptimistic(b: Batch, allBatches: Batch[]): number {
+  let total = 0;
+  for (const svc of b.services || []) {
+    if (isServicePast(svc)) continue;
+    const realPeers = allBatches.filter(other =>
+      other.type === b.type
+      && (other.services || []).some(s => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal),
+    ).length;
+    const peers = Math.max(realPeers, SLOTS_PER_TYPE);
+    const g = getGuests(svc.loc, svc.date, svc.meal);
+    total += (g / peers) * ((b.serving || 280) / 1000);
+  }
+  for (const c of (S.caterings || [])) {
+    const cd = (c.dishes || []).find(cd => cd.dishId === b.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter(d => d.type === b.type).length;
+      total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((b.serving || 280) / 1000);
+    }
+  }
+  return Math.round(total * 10) / 10;
 }
 
 // ── Step 4 — Pass 3: fill remaining empty positions, IGNORE pot caps ──────
@@ -653,30 +743,48 @@ export function assignServicesPass3(
             if (b.type !== type) return false;
             if (!b.cookDate) return false;
             if (b.storage === 'Frozen') return false;
-            if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal)) return false;
+            if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal, allBatches)) return false;
             if (!isServableBy(b.cookDate, day.isoDate, slot.meal, slot.loc, b.location)) return false;
             if (b.stock > 0 && isStaleAtSlot(b.cookDate, day.isoDate)) return false;
             // Cooked: tentative-add and undo to verify we don't exceed STOCK
             // (real food limit; pot cap is intentionally ignored here).
+            // Two-tier capacity check (matches Pass 2): real-peer demand,
+            // OR optimistic-peer demand assuming the slot reaches
+            // SLOTS_PER_TYPE peers. See the calcReqOptimistic comment.
             if (b.stock > 0) {
               b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-              const overshot = calcReq(b) > b.stock;
-              b.services.pop();
-              if (overshot) return false;
+              // try/finally so a throwing calcReq can't leave the speculative
+              // service stuck on the batch — without it a NaN/missing-slot
+              // exception would permanently grow b.services on every retry.
+              let fits: boolean;
+              try {
+                fits = calcReq(b) <= b.stock
+                  || calcReqOptimistic(b, allBatches) <= b.stock;
+              } finally {
+                b.services.pop();
+              }
+              if (!fits) return false;
             }
             return true;
           });
           if (candidates.length === 0) break;
 
-          // Pass 3 sort: newest cookDate first, then most-loaded under
-          // bigPot (concentrate within bucket), least-loaded over bigPot.
+          // Pass 3 sort: newest cookDate first. Within same cookDate:
+          //   - cooked batch with headroom under bigPot → most-loaded
+          //     (concentrate real stock onto one batch).
+          //   - everything else (uncooked placeholders, or cooked batches over
+          //     bigPot) → least-loaded (even spread). Same reasoning as Pass 2:
+          //     identical placeholders should distribute evenly so the cook
+          //     ends up with same-sized batches, not one giant + one empty.
           const bigPot2 = biggestPotLiters ?? Infinity;
           candidates.sort((a, b) => {
             const aIso = cookDateToIso(a.cookDate)!;
             const bIso = cookDateToIso(b.cookDate)!;
             if (aIso !== bIso) return aIso > bIso ? -1 : 1;
-            const aHeadroom = calcReq(a) < bigPot2;
-            return aHeadroom ? (b.services.length - a.services.length) : (a.services.length - b.services.length);
+            const aConcentrate = a.stock > 0 && calcReq(a) < bigPot2;
+            const bConcentrate = b.stock > 0 && calcReq(b) < bigPot2;
+            if (aConcentrate !== bConcentrate) return aConcentrate ? -1 : 1;
+            return aConcentrate ? (b.services.length - a.services.length) : (a.services.length - b.services.length);
           });
           const chosen: Batch = candidates[0];
           chosen.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
@@ -687,6 +795,110 @@ export function assignServicesPass3(
   }
 
   return { servicesAdded: added };
+}
+
+// ── Step 4 — Pass 4: finish-off pass (allow up to 3 peers per slot) ────────
+
+/**
+ * After Pass 1/2/3 have done their best within the SLOTS_PER_TYPE = 2 cap
+ * AND the no-overshoot stock check, cooked batches that still have a
+ * little leftover stock get a "finish-off" pass. This pass:
+ *   - Allows piling onto slots up to FINISH_OFF_CAP (= 3) peers, so a
+ *     leftover batch can ride along as a 3rd option on a 2/2 slot.
+ *   - Also fills under-filled slots (1/2 with a placeholder) with a real
+ *     cooked batch, replacing the cook of the placeholder if leftover
+ *     stock can cover the slot.
+ *   - Tolerates a slight stock overshoot (FINISH_OFF_OVERSHOOT_TOLERANCE)
+ *     because the user prefers a small over-commitment to leaving
+ *     leftovers in the walk-in to spoil.
+ *
+ * Limited to "last little bit" surpluses (FINISH_OFF_MAX_SERVINGS) so the
+ * algorithm doesn't pile every over-cooked batch onto every service.
+ *
+ * Still respects:
+ *   - frozen / stale exclusions
+ *   - servability and 0-guest skip
+ *   - in-slot duplicates
+ *   - 3-deep cap (don't stack 4+ different options on one service)
+ */
+const FINISH_OFF_CAP = SLOTS_PER_TYPE + 1;  // 3 = 2 main options + 1 extra
+
+/** Pass 4 only fires for "last little bit" surpluses — anything bigger means
+ *  the cook should reduce next week's volume, not pile it onto extra slots
+ *  (which makes every meal 3-deep). 80 servings × the batch's serving size
+ *  is the cutoff: ≈22.4L for a 280g soup, ≈6.4L for a 80g pasta dish. */
+const FINISH_OFF_MAX_SERVINGS = 80;
+
+/** Pass 4 tolerates a small stock overshoot — better to over-commit a little
+ *  than to leave finish-off leftovers in the walk-in. 25% slack, surfaced
+ *  to the cook via the existing cooked-stockout warning. */
+const FINISH_OFF_OVERSHOOT_TOLERANCE = 0.25;
+
+export function assignServicesPass4(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+  getGuestsFn?: (loc: Location, isoDate: string, meal: Meal) => number,
+): { servicesAdded: number; batchesTouched: number } {
+  const cookedSorted = allBatches
+    .filter(b => TYPES_TO_PLAN.includes(b.type))
+    .filter(b => b.stock > 0)
+    .filter(b => b.cookDate)
+    .filter(b => b.storage !== 'Frozen')
+    // Oldest cookDate first — finish off the older food before the newer.
+    .sort((a, b) => cookDateSortKey(a).localeCompare(cookDateSortKey(b)));
+
+  let added = 0;
+  const touched = new Set<string>();
+  const overshootCeiling = (b: Batch) => b.stock * (1 + FINISH_OFF_OVERSHOOT_TOLERANCE);
+
+  // Two-tier walk per batch:
+  //   Tier A — fill UNDER-FILLED slots (filled < SLOTS_PER_TYPE). No surplus
+  //     threshold: any batch with stock can help cover an empty slot. Daan
+  //     reported Tue dinner West sitting at 1/2 with placeholder while
+  //     Tomato/Zucchini soup leftover was untouched — without Tier A, the
+  //     batches were skipped because their START surplus was over the
+  //     "last little bit" threshold.
+  //   Tier B — pile onto 2/2 slots as 3rd peer. Only "last little bit"
+  //     surpluses qualify (< FINISH_OFF_MAX_SERVINGS), to avoid making every
+  //     meal 3-deep when batches are massively over-cooked.
+  for (const batch of cookedSorted) {
+    let surplus = batch.stock - calcReq(batch);
+    if (surplus <= 0) continue;
+    const servingL = (batch.serving || 280) / 1000;
+    const startSurplusServings = surplus / servingL;
+
+    walk: for (const day of window) {
+      if (isStaleAtSlot(batch.cookDate, day.isoDate)) break walk;
+
+      for (const slot of day.slots) {
+        if (slot.isPast) continue;
+        if (getGuestsFn && getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
+        if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, batch.location)) continue;
+        if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal, allBatches)) continue;
+        const filled = countTypeInSlot(allBatches, batch.type, slot.loc, day.isoDate, slot.meal);
+        if (filled >= FINISH_OFF_CAP) continue;
+
+        // Tier B gate: 2/2 slot + over-threshold batch → skip (don't 3-deep
+        // every meal just because the cook over-produced this week).
+        if (filled >= SLOTS_PER_TYPE && startSurplusServings >= FINISH_OFF_MAX_SERVINGS) continue;
+
+        batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+        const overshot = calcReq(batch) > overshootCeiling(batch);
+        if (overshot) {
+          batch.services.pop();
+          continue;
+        }
+
+        added++;
+        touched.add(batch.id);
+        surplus = batch.stock - calcReq(batch);
+        if (surplus <= 0) break walk;
+      }
+    }
+  }
+
+  return { servicesAdded: added, batchesTouched: touched.size };
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────
@@ -703,6 +915,19 @@ export function fixMyMenu(): void {
     "Continue?"
   );
   if (!ok) return;
+
+  // Step −2: consolidate same-loc same-family duplicates. Real prod data had
+  // Miso & ginger soup at Centraal as 3 separate splits (12.1L + 12.6L +
+  // 18L) — visually messy AND it broke peer math (calcRequired counted 3
+  // peers when there's really 1 menu option). After consolidation the rest
+  // of the algorithm operates on a clean dataset where each (recipe,
+  // location, storage, transit-state) is exactly one record.
+  const consolidation = consolidateFamilies(S.batches);
+  if (consolidation.removed.length > 0) {
+    S.batches = consolidation.kept;
+    if (!S.deletedBatches) S.deletedBatches = [];
+    for (const id of consolidation.removed) S.deletedBatches.push(id);
+  }
 
   // Step −1: strip every future service entry. Past services (already served)
   // stay; everything else gets re-decided by the assignment passes below.
@@ -737,11 +962,25 @@ export function fixMyMenu(): void {
   // S.planner to count peer batches per slot.
   rebuildPlanner();
 
+  // The pass functions tentatively-add a service then immediately call calcReq
+  // to check capacity. Without this wrapper, calcReq reads a stale S.planner
+  // that doesn't include the just-pushed service, so the "peer count" for the
+  // new slot is missing one entry. With two batches at a slot, peers come back
+  // as 1 instead of 2 — demand is computed at solo rates, the add overshoots
+  // stock, and the slot ends up empty even though it would fit fine when peers
+  // actually split the demand. Rebuilding before every calcReq is cheap (~150
+  // ops × ~300 calls per fixMyMenu run) and keeps the contract of calcReq
+  // unchanged elsewhere.
+  const calcReqLive = (b: Batch): number => {
+    rebuildPlanner();
+    return calcRequired(b);
+  };
+
   // Step 4 — Pass 1: extend cooked batches forward through the window.
   // All passes skip 0-guest slots — no point planning food where nobody eats.
   // Pot capacity is NOT enforced during assignment — pots get allocated by
   // demand AFTER all passes complete (see allocatePotCaps below).
-  const pass1 = assignServicesPass1(S.batches, planWindow, calcRequired, getGuests);
+  const pass1 = assignServicesPass1(S.batches, planWindow, calcReqLive, getGuests);
   rebuildPlanner();
 
   // Step 4 — Pass 2: fill remaining empty positions with the 2-newest rule.
@@ -751,12 +990,18 @@ export function fixMyMenu(): void {
   const biggestPot = S.kitchenEquipment && S.kitchenEquipment.pots.length > 0
     ? Math.max(...S.kitchenEquipment.pots)
     : undefined;
-  const pass2 = assignServicesPass2(S.batches, planWindow, calcRequired, getGuests, biggestPot);
+  const pass2 = assignServicesPass2(S.batches, planWindow, calcReqLive, getGuests, biggestPot);
   rebuildPlanner();
 
   // Step 4 — Pass 3: fill anything still empty. Uses the same Sun-bias and
   // most-loaded-under-bigPot logic as Pass 2 so it doesn't undo concentration.
-  const pass3 = assignServicesPass3(S.batches, planWindow, calcRequired, getGuests, biggestPot);
+  const pass3 = assignServicesPass3(S.batches, planWindow, calcReqLive, getGuests, biggestPot);
+  rebuildPlanner();
+
+  // Step 4.4 — Pass 4 (finish-off): cooked batches with leftover stock get
+  // added as a 3rd peer to slots that are already 2/2. Drains the surplus
+  // that would otherwise sit in the walk-in until it freezes or spoils.
+  const pass4 = assignServicesPass4(S.batches, planWindow, calcReqLive, getGuests);
   rebuildPlanner();
 
   // Step 4.5 — Allocate kitchen pots to batches by ACTUAL demand.
@@ -783,7 +1028,8 @@ export function fixMyMenu(): void {
   showResultsModal({
     cleaned: orphans.length,
     created: newPlaceholders.length,
-    assigned: pass1.servicesAdded + pass2.servicesAdded + pass3.servicesAdded,
+    assigned: pass1.servicesAdded + pass2.servicesAdded + pass3.servicesAdded + pass4.servicesAdded,
+    consolidated: consolidation.removed.length,
     placeholderNames: newPlaceholders.map(p => p.name),
     warnings,
   });
@@ -798,7 +1044,8 @@ export type WarningCategory =
   | 'over-pot-cap'
   | 'burner-overload'
   | 'catering-no-dishes'
-  | 'undeliverable-centraal';
+  | 'undeliverable-centraal'
+  | 'centraal-batch-at-west';
 
 export interface Warning {
   category: WarningCategory;
@@ -967,6 +1214,23 @@ export function collectWarnings(
     }
   }
 
+  // 6b. Centraal-located batch with a West service. Symmetric to (6) — there's
+  // no van going Centraal→West, so a Centraal batch can't physically reach a
+  // West slot. Catches manual assignments that violate the no-reverse-flow
+  // rule. (Pass 1/2/3 honour the rule via isServableBy and never create these.)
+  for (const b of allBatches) {
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (b.location !== 'centraal') continue;
+    const violating = (b.services || []).filter(s => s.loc === 'west');
+    if (violating.length > 0) {
+      warnings.push({
+        category: 'centraal-batch-at-west',
+        message: `${b.name} is at Centraal but is set to serve at West (${violating.length} service${violating.length === 1 ? '' : 's'}). There's no transport from Centraal back to West — either move the batch, or move the service.`,
+        anchor: { kind: 'batch', batchId: b.id },
+      });
+    }
+  }
+
   // 7. Caterings in window with no dishes assigned.
   const todayIso = dateToIso(getToday());
   const horizonEnd = dateToIso(new Date(getToday().getTime() + (PLANNING_HORIZON_DAYS - 1) * 86400000));
@@ -995,6 +1259,7 @@ interface ResultsReport {
   cleaned: number;
   created: number;
   assigned: number;
+  consolidated: number;
   placeholderNames: string[];
   warnings: Warning[];
 }
@@ -1030,6 +1295,7 @@ function renderWarningRow(w: Warning, idx: number): string {
 // a one-line explanation a line cook can act on.
 const CATEGORY_ORDER: WarningCategory[] = [
   'undeliverable-centraal',  // wrong assignment, needs immediate fix
+  'centraal-batch-at-west',  // wrong assignment (no reverse delivery)
   'cooked-stockout',         // real food shortage, will run out
   'under-filled-slot',       // need to plan more food
   'over-pot-cap',            // pot doesn't fit, must split
@@ -1041,6 +1307,7 @@ const CATEGORY_ORDER: WarningCategory[] = [
 function categoryHeader(c: WarningCategory): { title: string; hint: string } {
   switch (c) {
     case 'undeliverable-centraal': return { title: '🚚 Won\'t arrive in time', hint: 'Centraal gets food delivered the morning after it\'s cooked.' };
+    case 'centraal-batch-at-west': return { title: '↩️ No transport back to West', hint: 'Once food is at Centraal, it stays there — there\'s no return van.' };
     case 'cooked-stockout':        return { title: '🥣 Will run out of food', hint: 'Already cooked but not enough for the planned services.' };
     case 'under-filled-slot':      return { title: '📋 Slots need more food', hint: 'Each service usually has 2 soups + 2 mains.' };
     case 'over-pot-cap':           return { title: '🍲 Won\'t fit in one pot', hint: 'Cook it in two pots so it fits.' };
@@ -1052,8 +1319,9 @@ function categoryHeader(c: WarningCategory): { title: string; hint: string } {
 
 function showResultsModal(report: ResultsReport): void {
   _lastReport = report;
-  const { cleaned, created, assigned, placeholderNames, warnings } = report;
+  const { cleaned, created, assigned, consolidated, placeholderNames, warnings } = report;
   const summary: string[] = [];
+  if (consolidated > 0) summary.push(`<div>⛓ Merged ${consolidated} duplicate batch${consolidated === 1 ? '' : 'es'} of the same recipe at the same location</div>`);
   if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
   if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
   if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);
@@ -1185,7 +1453,7 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
         for (const slot of day.slots) {
           if (slot.isPast) continue;
           if (countTypeInSlot(S.batches, b.type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) continue;
-          if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal)) continue;
+          if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal, S.batches)) continue;
           b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
           placed = true;
           toast(`Assigned ${b.name} to ${day.dayName} ${slot.meal} ${slot.loc}`);
@@ -1214,7 +1482,7 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
         b.type === a.type
         && b.cookDate === todayStr
         && b.cookNotes === 'Emergency morning cook'
-        && !alreadyInSlot(b, a.loc, a.date, a.meal)
+        && !alreadyInSlot(b, a.loc, a.date, a.meal, S.batches)
       );
       if (existing) {
         existing.services.push({ loc: a.loc, date: a.date, meal: a.meal });

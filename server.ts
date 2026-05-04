@@ -36,6 +36,39 @@ async function seedIfNeeded() {
   }
 }
 
+// ── Production-config guard (audit S3, S4) ──
+//
+// Refuse to boot if AUTH_MODE=production is set but the auth gate is missing.
+// Without this, the dev-mode bypass at routes/auth.ts:127 makes the entire
+// API public when GOOGLE_CLIENT_ID is empty (so a Railway env rotation slip
+// would silently hand prod to the internet), and the email allowlist at
+// routes/auth.ts:95 fails open when ALLOWED_EMAILS is empty (so any Google
+// account holder gets in). Both are intentional in dev/staging; in production
+// they're exit-1 configuration errors. AUTH_MODE is decoupled from NODE_ENV
+// so the preview workflow (NODE_ENV=production for serving dist/client +
+// dev-login for auth) keeps working.
+if (CONFIG.AUTH_MODE === 'production') {
+  if (!CONFIG.GOOGLE_CLIENT_ID) {
+    console.error('FATAL: AUTH_MODE=production but GOOGLE_CLIENT_ID is empty.');
+    console.error('Refusing to start: the dev-mode auth bypass would expose the entire API publicly.');
+    console.error('Set GOOGLE_CLIENT_ID in the Railway env, or unset AUTH_MODE to opt into dev mode.');
+    process.exit(1);
+  }
+  if (CONFIG.ALLOWED_EMAILS.length === 0) {
+    console.error('FATAL: AUTH_MODE=production but ALLOWED_EMAILS is empty.');
+    console.error('Refusing to start: any Google account would be allowed in.');
+    console.error('Set ALLOWED_EMAILS to the comma-separated list of staff emails.');
+    process.exit(1);
+  }
+} else if (process.env.NODE_ENV === 'production') {
+  // The boot guard above is opt-in. Until AUTH_MODE=production is set on
+  // Railway, the dev-mode auth bypass remains active in production. Print a
+  // loud warning so the omission shows up in Railway deploy logs and Daan
+  // can flip the env var when ready.
+  console.warn('WARNING: NODE_ENV=production but AUTH_MODE is not set to "production".');
+  console.warn('The dev-mode auth bypass is still active. Set AUTH_MODE=production in the Railway env to enable the boot guard (audit S3/S4).');
+}
+
 // ── Start ──
 
 const PORT = process.env.PORT || 3000;
