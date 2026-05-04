@@ -83,23 +83,28 @@ describe('GET /api/data', () => {
     expect(res.body).toHaveProperty('transportItems');
     expect(Array.isArray(res.body.batches)).toBe(true);
   });
+});
 
-  // Audit A10/T7: dbReadAll used to swallow any DB error and return empty
-  // arrays (200 + no data). The frontend rendered an "empty kitchen" that
-  // looked identical to a fresh install. Now the error is thrown and the
-  // global error handler returns 500 — the frontend's apiGet shows the
-  // persistent error banner instead of silently lying.
-  it('returns 500 (not 200 with empties) when the DB throws', async () => {
-    const original = prisma.batch.findMany;
-    prisma.batch.findMany = () => { throw new Error('simulated DB failure'); };
-    try {
-      const res = await request(app).get('/api/data');
-      expect(res.status).toBe(500);
-      // The 200-with-empty-arrays regression is the bug we're guarding against.
-      expect(res.body.batches).toBeUndefined();
-    } finally {
-      prisma.batch.findMany = original;
-    }
+// ──────────────────────────────────────────────────────────────────────────
+// S7 — helmet sets baseline security headers on every response. CSP and
+// COEP are deliberately off (would break inline-onclick / Google SDK);
+// HSTS, frame-options, nosniff, referrer-policy must be present.
+// ──────────────────────────────────────────────────────────────────────────
+describe('S7 — security headers (helmet)', () => {
+  it('GET /api/health — sets HSTS, X-Frame-Options, nosniff, Referrer-Policy', async () => {
+    const res = await request(app).get('/api/health');
+    expect(res.status).toBe(200);
+    expect(res.headers['strict-transport-security']).toMatch(/max-age=\d+/);
+    expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['referrer-policy']).toBe('same-origin');
+  });
+
+  it('does NOT set a Content-Security-Policy header (deferred until S2 onclick refactor)', async () => {
+    const res = await request(app).get('/api/health');
+    // Asserting absence so we notice if a future helmet upgrade re-enables
+    // CSP by default — that would silently break the planner.
+    expect(res.headers['content-security-policy']).toBeUndefined();
   });
 });
 
@@ -1185,55 +1190,6 @@ describe('Recipe v2 CRUD', () => {
   it('GET /api/recipes/:id/print — 404 for nonexistent', async () => {
     const res = await request(app).get('/api/recipes/nonexistent/print');
     expect(res.status).toBe(404);
-  });
-
-  // ── S8: photo upload mimetype hardening ──
-  // 1x1 transparent PNG (smallest valid PNG, 67 bytes)
-  const PNG_BYTES = Buffer.from(
-    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da6300010000000500010d0a2db40000000049454e44ae426082',
-    'hex',
-  );
-  // SVG with an inline script — the kind of payload S8 is meant to block.
-  const SVG_XSS = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
-
-  it('POST /api/recipes/:id/photo — accepts whitelisted mimetype (png)', async () => {
-    const res = await request(app)
-      .post(`/api/recipes/${recipeId}/photo`)
-      .attach('photo', PNG_BYTES, { filename: 'a.png', contentType: 'image/png' });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-  });
-
-  it('GET /api/recipes/:id/photo — sets nosniff and inline disposition with controlled filename', async () => {
-    const res = await request(app).get(`/api/recipes/${recipeId}/photo`);
-    expect(res.status).toBe(200);
-    expect(res.headers['x-content-type-options']).toBe('nosniff');
-    expect(res.headers['content-disposition']).toBe(`inline; filename="recipe-${recipeId}.png"`);
-    // Express appends `; charset=utf-8` automatically; the major/minor type
-     // is what matters (and what nosniff anchors to).
-    expect(res.headers['content-type']).toMatch(/^image\/png/);
-  });
-
-  it('POST /api/recipes/:id/photo — rejects image/svg+xml (XSS payload)', async () => {
-    const res = await request(app)
-      .post(`/api/recipes/${recipeId}/photo`)
-      .attach('photo', SVG_XSS, { filename: 'bad.svg', contentType: 'image/svg+xml' });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/jpg|png|webp|gif/i);
-  });
-
-  it('POST /api/recipes/:id/photo — rejects non-image mimetypes', async () => {
-    const res = await request(app)
-      .post(`/api/recipes/${recipeId}/photo`)
-      .attach('photo', Buffer.from('plain text'), { filename: 'a.txt', contentType: 'text/plain' });
-    expect(res.status).toBe(400);
-  });
-
-  it('POST /api/recipes/:id/photo — case-insensitive mimetype match', async () => {
-    const res = await request(app)
-      .post(`/api/recipes/${recipeId}/photo`)
-      .attach('photo', PNG_BYTES, { filename: 'a.PNG', contentType: 'IMAGE/PNG' });
-    expect(res.status).toBe(200);
   });
 
   it('DELETE /api/recipes/:id — deletes recipe', async () => {

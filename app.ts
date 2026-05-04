@@ -5,9 +5,33 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import compression from 'compression';
+import helmet from 'helmet';
 
 const app = express();
 app.set('trust proxy', 1);
+
+// Audit S7: baseline security headers via helmet. Two defaults are turned
+// off because they would break the current app:
+//   - contentSecurityPolicy: the app uses inline `onclick=""` everywhere
+//     (S2 follow-up — switch to delegated handlers, then enable a strict
+//     CSP). With the default CSP enabled, the planner won't render.
+//   - crossOriginEmbedderPolicy: the login screen loads the Google Sign-In
+//     SDK from accounts.google.com which is not COEP-compatible.
+// Everything else stays on:
+//   - HSTS (1y, includeSubDomains)
+//   - X-Frame-Options: SAMEORIGIN — blocks clickjacking on destructive actions
+//   - X-Content-Type-Options: nosniff — defense-in-depth for the photo path (S8)
+//   - Referrer-Policy: same-origin (per the audit, less restrictive than the
+//     default `no-referrer` so internal links keep working as expected)
+//   - Cross-Origin-Resource-Policy: cross-origin so the photo endpoint can
+//     be embedded if a future feature ever needs it; same-origin would also
+//     be fine but cross-origin is the safer non-breaking default
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  referrerPolicy: { policy: 'same-origin' },
+}));
 
 // gzip compression for JSON + static assets. Skip SSE (text/event-stream
 // must stream un-buffered, otherwise clients never see events until the
