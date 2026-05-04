@@ -198,7 +198,7 @@ Skipped (or only spot-read): the bigger frontend modules (`orders.ts` 1971 LOC, 
 - **Suggested fix**: Add a per-ingredient PATCH path: instead of POSTing the whole array, send only the touched ingredients (those whose `orderCode` appeared in the supplier file) one-by-one or via a new `/api/ingredients/bulk-update` endpoint that does per-row upserts inside a single transaction.
 - **Confidence**: High.
 
-### A19 — Module-level singleton timeouts shared across all rows lose updates on fast successive edits
+### A19 — Module-level singleton timeouts shared across all rows lose updates on fast successive edits — RESOLVED
 - **Severity**: Low
 - **Location**: [public/js/ingredient-db.ts:149-173](public/js/ingredient-db.ts) (`_inlineStockTimeout`), [public/js/orders.ts:295-311](public/js/orders.ts) (`siTargetTimeout`), [public/js/orders.ts:314-330](public/js/orders.ts) (`siStockTimeout`), [public/js/orders.ts:1523-1545](public/js/orders.ts) (`_stockSaveTimeout`).
 - **What**: Each module declares ONE timeout id, shared across all ingredient rows. Pattern:
@@ -212,8 +212,9 @@ Skipped (or only spot-read): the bigger frontend modules (`orders.ts` 1971 LOC, 
 - **Why it matters**: The optimistic UI shows the edit "stuck" until next reload, when it reverts. Same silent-failure shape as T4/U6 in original audit. Likely rare in practice (users edit one stock at a time), but the pattern is wrong: the debounce key should include the ingredient id.
 - **Suggested fix**: Switch to a `Map<ingredientId, timeout>` with per-row timeouts. Or use a queue-based debouncer that flushes a batch every N ms.
 - **Confidence**: High.
+- **Resolution (2026-05-03)**: Took the audit's first option. All four singletons swapped for `Map<string, ReturnType<typeof setTimeout>>` keyed by `${ingredientId}|${location}` so concurrent edits to different (ingredient × location) cells no longer cancel each other. The Map entry is `delete()`d inside the setTimeout callback so the Map doesn't grow. Code comments cite A19 to discourage future regression.
 
-### A20 — Dead duplicate code in `saveInlineStock` and `openStoragePopover`
+### A20 — Dead duplicate code in `saveInlineStock` and `openStoragePopover` — RESOLVED
 - **Severity**: Nit
 - **Location**: [public/js/ingredient-db.ts:154-163](public/js/ingredient-db.ts), [public/js/ingredient-db.ts:1127](public/js/ingredient-db.ts).
 - **What**:
@@ -222,6 +223,7 @@ Skipped (or only spot-read): the bigger frontend modules (`orders.ts` 1971 LOC, 
 - **Why it matters**: Cosmetic. Worth a one-line cleanup.
 - **Suggested fix**: Remove the duplicates.
 - **Confidence**: High.
+- **Resolution (2026-05-03)**: Removed both — `saveInlineStock` now does a single lookup and `openStoragePopover`'s `||` fallback is dropped. Bundled with A19 since both touch the same function and module.
 
 ### A21 — `tebi-scraper.js` mutates `process.env` for credential isolation between accounts
 - **Severity**: Low (today), Medium (if anything else reads those vars)
