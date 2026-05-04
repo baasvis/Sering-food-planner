@@ -1,7 +1,7 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet } from './utils';
 import { pushUndo } from './undo';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getFamilyMembers, getFamilyStock, getRootId, consolidateFamilies } from './core';
+import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, cycleStorage, logisticsBadge, logisticsBadgeClass, logisticsShort, cycleLocation, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getFamilyMembers, getFamilyStock, getRootId, consolidateFamilies } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
@@ -473,11 +473,11 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
       const dayLabel = fullDayNames[short] || short;
       let liters = '';
       if (!past) {
-        const g = getGuests(svc.loc, svc.date, svc.meal);
-        const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-        const peers = (S.planner[k] || []).filter((p: Batch) => p.type === d.type);
-        const count = Math.max(peers.length, 1);
-        const l = Math.round((g / count) * ((d.serving || 280) / 1000) * 10) / 10;
+        // Read from the family-aware allocator cache so this line agrees
+        // with calcRequired's total and the diff badge. Doing the per-peer
+        // math inline used to undercount split-batch demand (peers were
+        // counted as raw batches, not unique families).
+        const l = Math.round(calcRequiredAtService(d, svc) * 10) / 10;
         liters = `${l}L`;
       }
       const line = { day: dayLabel, meal, liters, served: past };
@@ -991,14 +991,13 @@ export function setFilter(group: keyof typeof S.filters, val: string) { S.filter
 export function toggleSelect(id: string) { if (S.draggingBatchId) return; if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id); rerenderCurrentView(); }
 
 export function calcRequiredForLoc(dish: Batch, loc: string) {
+  // Sum the family-allocated demand for this batch at services located at
+  // `loc`. Single source of truth via calcRequiredAtService so this number
+  // matches calcRequired's location-agnostic total when summed across both.
   let total = 0;
   (dish.services || []).forEach(svc => {
     if (svc.loc !== loc) return;
-    const g = getGuests(svc.loc, svc.date, svc.meal);
-    const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-    const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
-    const count = Math.max(peers.length, 1);
-    total += (g / count) * ((dish.serving || 280) / 1000);
+    total += calcRequiredAtService(dish, svc);
   });
   return Math.round(total * 10) / 10;
 }

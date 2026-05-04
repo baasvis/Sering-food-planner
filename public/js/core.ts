@@ -366,6 +366,15 @@ export function recomputeFamilyAllocations(): void {
 
       const g = getGuests(svc.loc, svc.date, svc.meal);
       const serving = (atSlot[0].serving || 280) / 1000;
+      // Equal split: each family at slot gets the same share of demand.
+      // Guests pick options uniformly, so this matches the actual service
+      // experience. Lopsided (capacity-weighted) shares were tried and
+      // rejected — they create scenarios where one batch has 20L of
+      // demand and a sibling has 2L, the small batch runs out in 5
+      // minutes, and guests are left with no choice for the rest of
+      // service. Family-level overshoot from equal-split is handled
+      // upstream by the per-pass family capacity check (Pass 1/2/3) plus
+      // the cooked-stockout warning the cook sees.
       const familyShare = g <= 0 ? 0 : (g / familiesHere) * serving;
 
       // Greedy allocation order: same-location first (drain what's there),
@@ -506,15 +515,29 @@ export function getGuests(loc: string, dateStr: string, meal: Meal | string): nu
   return ((S.guests[lk] || {})[dn] || {} as any)[meal] || 0;
 }
 
+/** Per-service allocation in liters, read from the family allocator cache.
+ *  Single source of truth for "how many liters does this batch contribute
+ *  to this slot" — used by calcRequired, calcRequiredBreakdown, the dish
+ *  tile per-service line, and calcRequiredForLoc so all consumers agree.
+ *
+ *  Returns 0 for past services (no longer pulling stock) and 0 when the
+ *  cache has no entry (caller hasn't rebuilt the planner yet — same
+ *  contract as the calcRequired total). */
+export function calcRequiredAtService(dish: Batch, svc: Service): number {
+  if (isServicePast(svc)) return 0;
+  return lookupAllocation(dish, svc) ?? 0;
+}
+
 export function calcRequired(dish: Batch): number {
   let total = 0;
   (dish.services || []).forEach((svc: Service) => {
     if (isServicePast(svc)) return; // Skip served services — no longer pulling stock
     // Per-slot demand comes from the family allocation cache (greedy, set by
-    // rebuildPlanner → recomputeFamilyAllocations). Falls back to a stateless
-    // family-share / per-member compute if the cache hasn't been built yet
-    // (e.g. tests that call calcRequired without rebuildPlanner first).
-    total += lookupAllocation(dish, svc) ?? _stalelessFamilyShare(dish, svc);
+    // rebuildPlanner → recomputeFamilyAllocations). Callers must rebuild the
+    // planner before reading; missing entries default to 0 so a not-yet-
+    // assigned service contributes nothing instead of silently invoking a
+    // stale even-split fallback.
+    total += lookupAllocation(dish, svc) ?? 0;
   });
   // Add catering requirements (split by same-type peers — catering still
   // routes to the specific dishId, no family-wide reallocation).
@@ -526,23 +549,6 @@ export function calcRequired(dish: Batch): number {
     }
   });
   return Math.round(total * 10) / 10;
-}
-
-/** Fallback stateless compute used when the family allocation cache is
- *  empty (callers that don't go through rebuildPlanner). Even-splits the
- *  family share — same shape as the cache's all-zero edge case. */
-function _stalelessFamilyShare(dish: Batch, svc: Service): number {
-  const g = getGuests(svc.loc, svc.date, svc.meal);
-  if (g <= 0) return 0;
-  const k = `${svc.loc}-${svc.date}-${svc.meal}`;
-  const peers = (S.planner[k] || []).filter((d: Batch) => d.type === dish.type);
-  const familyRoots = new Set<string>();
-  for (const p of peers) familyRoots.add(getRootId(p, S.batches));
-  const families = Math.max(familyRoots.size, 1);
-  const myRoot = getRootId(dish, S.batches);
-  const familyAtSlot = peers.filter(p => getRootId(p, S.batches) === myRoot);
-  const count = Math.max(familyAtSlot.length, 1);
-  return (g / families / count) * ((dish.serving || 280) / 1000);
 }
 
 export interface BreakdownLine {
@@ -560,7 +566,7 @@ export function calcRequiredBreakdown(dish: Batch): string[] {
       lines.push(`\u2713 ${dayName} ${meal} ${loc} (served)`);
       return;
     }
-    const allocated = lookupAllocation(dish, svc) ?? _stalelessFamilyShare(dish, svc);
+    const allocated = lookupAllocation(dish, svc) ?? 0;
     const liters = Math.round(allocated * 10) / 10;
     if (liters > 0) {
       lines.push(`${liters}L \u2014 ${dayName} ${meal} ${loc}`);
@@ -583,7 +589,7 @@ export function calcTotalGuests(dish: Batch): number {
     if (isServicePast(svc)) return; // Skip served services
     // Convert the cached allocation (liters) back to guests by dividing by
     // serving size. Same source of truth as calcRequired.
-    const litersHere = lookupAllocation(dish, svc) ?? _stalelessFamilyShare(dish, svc);
+    const litersHere = lookupAllocation(dish, svc) ?? 0;
     const servingL = (dish.serving || 280) / 1000;
     if (servingL > 0) g += litersHere / servingL;
   });
