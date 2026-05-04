@@ -90,8 +90,8 @@ export function validateCatering(c: Catering, prefix = ''): string | null {
   if (!c.id || typeof c.id !== 'string') return `${p}missing or invalid id`;
   if (!VALID_ID_PATTERN.test(c.id)) return `${p}invalid id charset`;
   if (typeof c.name !== 'string' || c.name.length > 200) return `${p}invalid name`;
-  if (c.date !== null && c.date !== undefined && (typeof c.date !== 'string' || (c.date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(c.date)))) {
-    return `${p}invalid date (expected YYYY-MM-DD)`;
+  if (c.date !== null && c.date !== undefined && (typeof c.date !== 'string' || (c.date !== '' && !/^\d{2}\/\d{2}\/\d{4}$/.test(c.date)))) {
+    return `${p}invalid date (expected DD/MM/YYYY)`;
   }
   if (typeof c.guestCount !== 'number' || c.guestCount < 0 || c.guestCount > 9999) return `${p}invalid guestCount`;
   if (typeof c.deliveryMode !== 'string' || c.deliveryMode.length > 50) return `${p}invalid deliveryMode`;
