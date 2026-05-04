@@ -438,6 +438,103 @@ describe('T19a — bulk ingredient save preserves recipe FK pointers', () => {
   }, 60_000);
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+// T19 — bulk POST /api/ingredients must trigger recipe-cost recalculation.
+// Originally the per-ingredient PATCH recalc loop only fired on single-row
+// updates, so a supplier-XLSX import (bulk POST) would leave costPerServing
+// stale across every recipe whose ingredients changed price.
+//
+// Becomes meaningful only with T19a in place — pre-T19a the bulk POST
+// wiped recipe→ingredient FKs, so the recalc found zero linked rows for
+// every recipe and produced null. With T19a's INSERT-on-conflict shape
+// the FKs survive and the recalc produces real numbers.
+// ──────────────────────────────────────────────────────────────────────────
+describe('T19 — bulk ingredient save recomputes recipe costs', () => {
+  const t19IngId = T + 't19-ing';
+  const t19RecipeId = T + 't19-recipe';
+
+  beforeAll(async () => {
+    // Seed an ingredient with a known price (€1/100g — orderPrice 10 / 1kg).
+    await prisma.ingredient.create({
+      data: {
+        id: t19IngId,
+        name: 'T19 Test Ingredient',
+        category: 'Vegetables & Fruit',
+        unit: 'Grams',
+        orderPrice: 10,
+        orderUnitSize: 1000,
+        pricePer100: 1.0,
+        active: true,
+      },
+    });
+    // Seed a recipe linking to it. recipeVolume=1L so cost-per-serving math fires.
+    await prisma.recipe.create({
+      data: {
+        id: t19RecipeId,
+        name: 'T19 Recipe',
+        type: 'Soup',
+        servingSize: 280,
+        recipeVolume: 1.0,
+        autoAllergens: [],
+        extraAllergens: [],
+        prepSteps: [],
+        coolingMethod: '',
+        storageMethod: '',
+        isComplete: true,
+        versions: [],
+        createdBy: 'test',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ingredients: {
+          create: [{
+            id: T + 't19-ri',
+            ingredientId: t19IngId,
+            sortOrder: 0,
+            rawAmount: 100,
+            unit: 'Grams',
+            isFlexible: false,
+            suggestedNames: [],
+          }],
+        },
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.recipeIngredientRow.deleteMany({ where: { recipeId: t19RecipeId } });
+    await prisma.recipe.deleteMany({ where: { id: t19RecipeId } });
+    await prisma.ingredient.deleteMany({ where: { id: t19IngId } });
+  });
+
+  // The test sends the full ingredient set (~1.1k rows on staging) — well
+  // over Jest's 5s default. Same shape applySupplierUpdate sends from the
+  // frontend.
+  it('POST /api/ingredients — bulk save triggers recipe-cost recalc with real numbers', async () => {
+    // Read all current ingredients, swap our t19 ingredient's price 10 → 30
+    // (€3/100g instead of €1), then bulk-save the whole list.
+    const all = await prisma.ingredient.findMany();
+    const payload = all.map(i => ({
+      ...i,
+      orderPrice: i.id === t19IngId ? 30 : i.orderPrice,
+      stock: i.stock || {},
+    }));
+
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(typeof res.body.recipeCostsUpdated).toBe('number');
+
+    // Recipe cost must reflect the new pricePer100. Old: 100g × €1/100g = €1
+    // / 3.57 servings ≈ €0.28. New: 100g × €3/100g = €3 / 3.57 ≈ €0.84.
+    // Pre-T19a (FK wipe) this would be null because no linked ingredients
+    // would survive the bulk POST.
+    const after = await prisma.recipe.findUnique({ where: { id: t19RecipeId } });
+    expect(after?.costPerServing).not.toBeNull();
+    expect(after!.costPerServing!).toBeGreaterThan(0.5);
+    expect(after!.costPerServing!).toBeLessThan(1.5);
+  }, 90_000);
+});
+
 // ── Ingredient Stock ──
 
 describe('POST /api/ingredients/stock', () => {

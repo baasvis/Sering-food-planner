@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import fs from 'fs';
 import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
 import { Prisma } from '@prisma/client';
-import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, withWriteLock, checkId } from '../lib/db';
+import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, recalcAllRecipeCosts, withWriteLock, checkId } from '../lib/db';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
@@ -201,9 +201,26 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       await tx.$executeRawUnsafe(sql, ...allValues);
     });
   });
+  // Audit T19: bulk supplier-XLSX imports change pricePer100 across many
+  // ingredients at once. The per-ingredient recalc loop below (POST /:id)
+  // doesn't fire on this path, so without this every recipe's cached
+  // costPerServing went stale until the next single-ingredient edit. Now
+  // that T19a preserves recipe→ingredient FKs across the bulk POST, this
+  // recalc actually produces real numbers (pre-T19a it would have seen
+  // zero linked rows for every recipe). Awaited so the response only
+  // returns once costs are consistent — bulk POST is already a heavy
+  // one-shot user action; the extra latency is acceptable. Surfacing
+  // recipeCostsUpdated in the response means a future regression that
+  // accidentally drops the trigger fails-loud.
+  let recalcUpdated = 0;
+  try {
+    recalcUpdated = await recalcAllRecipeCosts();
+  } catch (e: unknown) {
+    console.error('recalcAllRecipeCosts after bulk ingredient save failed:', e instanceof Error ? e.message : e);
+  }
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
-  dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients`);
-  res.json({ ok: true, count: ingredients.length });
+  dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients (recalculated ${recalcUpdated} recipe costs)`);
+  res.json({ ok: true, count: ingredients.length, recipeCostsUpdated: recalcUpdated });
 }));
 
 // Update target stock for a single ingredient at one location.
