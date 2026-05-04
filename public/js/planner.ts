@@ -1,7 +1,8 @@
 import type { Batch, RecipeFull, DishType, Location, Meal, Service } from '@shared/types';
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError } from './utils';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate, consolidateFamilies, getRootId } from './core';
+import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate, consolidateFamilies, getRootId, getFamilyMembers } from './core';
+import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderBatchTile, renderFamilyGrouped, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, renderSplitBar, cleanCateringRefs } from './dishes';
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
@@ -360,15 +361,50 @@ export function slotDrop(e: DragEvent, loc: string, date: string, meal: string) 
   if (!batchId) return;
   const batch = S.batches.find(d => d.id === batchId);
   if (!batch) return;
-  const already = (batch.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal);
-  if (already) { toast('Already assigned to this slot'); return; }
-  if (!batch.services) batch.services = [];
-  batch.services.push({ loc, date, meal });
   S.draggingBatchId = null;
+  const added = assignFamilyToSlot(batch, loc, date, meal);
+  if (added.length === 0) {
+    toast('Already assigned to this slot');
+    return;
+  }
   rebuildPlanner();
   scheduleSave();
   rerenderCurrentView();
-  toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
+  // Toast: family-aware language. If only the dragged batch got the
+  // service, behave like the old toast. If siblings also got pulled in,
+  // call out the family.
+  if (added.length === 1) {
+    toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
+  } else {
+    const familyName = batch.name.replace(/\s*\(split\)\s*$/i, '').trim();
+    toast(`${familyName} family assigned to ${dateToDayName(date)} ${meal} (${added.length} batches)`);
+  }
+}
+
+/**
+ * Family-aware service assignment. When the cook assigns ANY batch to a slot,
+ * also assign every OTHER family member that can physically reach that slot
+ * (per isServableBy). Otherwise the lone-assigned batch absorbs the entire
+ * family's share of the slot's demand and goes negative on stock — forcing
+ * the cook to manually assign each family member separately.
+ *
+ * Returns the list of batches that received a NEW service entry. Members
+ * that already had it, or can't reach the slot, are skipped.
+ *
+ * Frozen batches are excluded (they don't auto-rotate).
+ */
+export function assignFamilyToSlot(seed: Batch, loc: string, date: string, meal: string): Batch[] {
+  const family = getFamilyMembers(seed, S.batches);
+  const added: Batch[] = [];
+  for (const m of family) {
+    if (m.storage === 'Frozen') continue;
+    if ((m.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal)) continue;
+    if (!isServableBy(m.cookDate, date, meal as 'lunch'|'dinner', loc as 'west'|'centraal', m.location)) continue;
+    if (!m.services) m.services = [];
+    m.services.push({ loc, date, meal } as Service);
+    added.push(m);
+  }
+  return added;
 }
 
 // ── ASSIGN MODE ─────────────────────────────────────────
@@ -387,19 +423,21 @@ export function assignBatchToSlot(loc: string, date: string, meal: string) {
   if (!batchId) return;
   const batch = S.batches.find(d => d.id === batchId);
   if (!batch) { S.assigningBatchId = null; return; }
-  // Check if already assigned to this slot
-  const already = (batch.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal);
-  if (already) {
+  S.assigningBatchId = null;
+  const added = assignFamilyToSlot(batch, loc, date, meal);
+  if (added.length === 0) {
     toast('Already assigned to this slot');
     return;
   }
-  if (!batch.services) batch.services = [];
-  batch.services.push({ loc, date, meal });
-  S.assigningBatchId = null;
   rebuildPlanner();
   scheduleSave();
   rerenderCurrentView();
-  toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
+  if (added.length === 1) {
+    toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
+  } else {
+    const familyName = batch.name.replace(/\s*\(split\)\s*$/i, '').trim();
+    toast(`${familyName} family assigned to ${dateToDayName(date)} ${meal} (${added.length} batches)`);
+  }
 }
 
 // ── TRANSPORT VIEW ───────────────────────────────────────
