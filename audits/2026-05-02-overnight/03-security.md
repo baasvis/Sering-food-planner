@@ -258,13 +258,14 @@
 - **Suggested fix**: Write to `/tmp/tebi-error-${Date.now()}.png`. Add `tebi-error*.png` to `.gitignore` as defense in depth.
 - **Confidence**: High.
 
-### S21 — `prisma/archive/import-xlsx.js` is a destructive landmine if the schema ever re-introduces Dish/Service models
+### S21 — `prisma/archive/import-xlsx.js` is a destructive landmine if the schema ever re-introduces Dish/Service models — RESOLVED
 - **Severity**: Low (today), High (latent)
 - **Location**: [prisma/archive/import-xlsx.js:43-55](prisma/archive/import-xlsx.js). Same finding as A22 — included in security audit because the failure mode is "wipes most production tables." The CLAUDE.md warning depends on humans reading it.
 - **What**: See A22.
 - **Why it matters**: See A22.
 - **Suggested fix**: See A22 — preferred is to delete the archive scripts entirely.
 - **Confidence**: High.
+- **Resolution (2026-05-03)**: See A22.
 
 ### S22 — `tebi-scraper.js` mutates `process.env.TEBI_EMAIL/PASSWORD` mid-run for cross-account credential isolation
 - **Severity**: Low
