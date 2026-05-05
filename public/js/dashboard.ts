@@ -3,7 +3,7 @@ import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS } from './state';
 
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
 type DashBatch = Batch & { starch?: string | null };
-import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId } from './utils';
+import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId, formatRelativeTime } from './utils';
 import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
@@ -833,9 +833,63 @@ export async function dashStocktakeSave(goToNext: boolean) {
   }
 }
 
+// ── Cooked-food inventory freshness ──────────────────────────
+// Shows for both locations how long ago the most recent inventory was
+// completed. The Stock card otherwise only reflects the *current* location,
+// so this strip is what tells the user whether the data they're looking at
+// (and the data at the other site) is up to date. Falls back to "no
+// inventory yet" until at least one window has been finished today.
+
+const STALE_HOURS = 6;
+
+function _latestCompletion(loc: Location): string | null {
+  const c = S.inventoryCompletions[loc];
+  if (!c) return null;
+  const a = c.lunch ? Date.parse(c.lunch) : -Infinity;
+  const b = c.dinner ? Date.parse(c.dinner) : -Infinity;
+  if (a === -Infinity && b === -Infinity) return null;
+  return a >= b ? c.lunch : c.dinner;
+}
+
+export function renderInventoryFreshness(): string {
+  const items = (['west', 'centraal'] as Location[]).map(loc => {
+    const ts = _latestCompletion(loc);
+    const rel = formatRelativeTime(ts);
+    let stale = false;
+    if (ts) {
+      const ageHr = (Date.now() - Date.parse(ts)) / 36e5;
+      stale = ageHr >= STALE_HOURS;
+    }
+    const cls = !ts ? 'never' : stale ? 'stale' : 'fresh';
+    const label = !ts ? 'no inventory yet' : `${rel}`;
+    return `<button class="dash-inv-fresh-chip ${cls}" onclick="openInventory('${loc}')" title="Click to open ${esc(locName(loc))} inventory">
+      <span class="dash-inv-fresh-loc">${esc(locName(loc))}</span>
+      <span class="dash-inv-fresh-age">${esc(label)}</span>
+    </button>`;
+  }).join('');
+  return `<div class="dash-inv-fresh-row" title="Time since the last 'Finish inventory' was pressed for each location">${items}</div>`;
+}
+
+// Re-render the dashboard once a minute so the "X min ago" counters keep
+// counting up without the user touching anything. Cheap — `renderDashboardContent`
+// rebuilds the planner and re-paints the dashboard, but only when that screen
+// is actually visible.
+let _freshTickStarted = false;
+function _startFreshnessTick() {
+  if (_freshTickStarted) return;
+  _freshTickStarted = true;
+  setInterval(() => {
+    const screen = document.getElementById('screen-dashboard');
+    if (screen && screen.style.display !== 'none' && screen.offsetParent !== null) {
+      renderDashboardContent();
+    }
+  }, 60_000);
+}
+
 // ── MAIN CONTENT RENDER ──────────────────────────────────────
 
 export function renderDashboardContent() {
+  _startFreshnessTick();
   const el = document.getElementById('dash-content');
   if (!el) return;
 
@@ -932,6 +986,7 @@ export function renderDashboardContent() {
             <button class="btn btn-sm dash-inv-btn" onclick="openInventory('${loc}')">🍽️ Cooked Food Inventory</button>
             <button class="btn btn-sm dash-st-btn" onclick="openStocktakeModal()">📋 Ingredient Stocktake</button>
           </div>
+          ${renderInventoryFreshness()}
           ${stockBatches.length === 0
             ? `<div class="dash-empty">No food in stock</div>`
             : (() => {

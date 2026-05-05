@@ -91,6 +91,15 @@ export interface InventoryDone {
   dinner: string | null;
 }
 
+/** Server-persisted ISO timestamps of the most recent "Finish inventory" press
+ *  per location + meal window. Powers the dashboard freshness counter so any
+ *  device sees the same "last inventory was X ago" value. Distinct from
+ *  `inventoryDone` which is a per-device button-state hint keyed by date. */
+export interface InventoryCompletions {
+  lunch: string | null;
+  dinner: string | null;
+}
+
 export interface CustomTodo {
   id: string;
   text: string;
@@ -108,6 +117,7 @@ export interface AppState {
   transportItems: TransportItem[];
   collapsedTypes: Record<string, boolean>;
   inventoryDone: Record<Location, InventoryDone>;
+  inventoryCompletions: Record<Location, InventoryCompletions>;
   guests: GuestsData;
   batches: Batch[];
   expandedBatches: Set<string>;
@@ -163,6 +173,7 @@ export let S: AppState = {
   transportItems:[],
   collapsedTypes:{},
   inventoryDone:{west:{lunch:null,dinner:null},centraal:{lunch:null,dinner:null}},
+  inventoryCompletions:{west:{lunch:null,dinner:null},centraal:{lunch:null,dinner:null}},
   guests:{
     west:{Mon:{lunch:100,dinner:110},Tue:{lunch:100,dinner:110},Wed:{lunch:100,dinner:110},Thu:{lunch:100,dinner:110},Fri:{lunch:80,dinner:90},Sat:{lunch:0,dinner:0},Sun:{lunch:0,dinner:0}},
     centraal:{Mon:{lunch:80,dinner:85},Tue:{lunch:80,dinner:85},Wed:{lunch:80,dinner:85},Thu:{lunch:80,dinner:85},Fri:{lunch:60,dinner:70},Sat:{lunch:0,dinner:0},Sun:{lunch:0,dinner:0}}

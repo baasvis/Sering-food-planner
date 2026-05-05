@@ -34,6 +34,17 @@
 .dash-inv-btn:hover{background:var(--red, #dc2626);color:#fff;}
 .dash-st-btn{font-size:10px;padding:3px 8px;border-radius:6px;font-weight:700;background:var(--green-bg);color:var(--green);border-color:rgba(22,163,74,.25);}
 .dash-st-btn:hover{background:var(--green);color:#fff;}
+.dash-inv-fresh-row{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px;}
+.dash-inv-fresh-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;border:1px solid var(--border);background:var(--bg2);color:var(--text2);cursor:pointer;}
+.dash-inv-fresh-chip:hover{background:var(--bg);}
+.dash-inv-fresh-chip .dash-inv-fresh-loc{text-transform:uppercase;letter-spacing:.04em;font-weight:700;color:var(--text);}
+.dash-inv-fresh-chip .dash-inv-fresh-age{color:var(--text2);}
+.dash-inv-fresh-chip.fresh{border-color:rgba(22,163,74,.25);background:var(--green-bg);}
+.dash-inv-fresh-chip.fresh .dash-inv-fresh-age{color:var(--green);}
+.dash-inv-fresh-chip.stale{border-color:rgba(220,38,38,.25);background:var(--red-bg, rgba(220,38,38,.1));}
+.dash-inv-fresh-chip.stale .dash-inv-fresh-age{color:var(--red, #dc2626);font-weight:700;}
+.dash-inv-fresh-chip.never{border-style:dashed;}
+.dash-inv-fresh-chip.never .dash-inv-fresh-age{font-style:italic;}
 
 /* ── Dish Chip Component ── */
 .dash-chip{border-radius:var(--radius);margin-bottom:4px;background:var(--bg2);border:1px solid var(--border);transition:all .12s;}

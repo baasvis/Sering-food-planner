@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
-import { prisma, withWriteLock } from '../lib/db';
-import { asyncHandler } from '../lib/config';
+import { prisma, dbAppendLog, withWriteLock } from '../lib/db';
+import { asyncHandler, AppError } from '../lib/config';
 
 const router = express.Router();
 
@@ -122,6 +122,43 @@ router.post('/prep-checklist', asyncHandler(async (req: Request, res: Response) 
     });
   });
   res.json({ ok: true });
+}));
+
+// ── Cooked Food Inventory completions ──
+// Persists "the lunch/dinner inventory was completed at this time" so every
+// device can show a freshness counter. We piggyback on the Log table — no
+// schema change — and key by `loc|window` in details. Server reads the most
+// recent entry per key.
+
+const INV_LOCS = new Set(['west', 'centraal']);
+const INV_WINDOWS = new Set(['lunch', 'dinner']);
+
+router.post('/inventory-completions', asyncHandler(async (req: Request, res: Response) => {
+  const { loc, window } = req.body || {};
+  if (!INV_LOCS.has(loc)) throw new AppError(400, 'loc must be "west" or "centraal"');
+  if (!INV_WINDOWS.has(window)) throw new AppError(400, 'window must be "lunch" or "dinner"');
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  const completedAt = new Date().toISOString();
+  await dbAppendLog(user.email, user.name, 'inventory-complete', `${loc}|${window}`);
+  res.json({ ok: true, loc, window, completedAt });
+}));
+
+router.get('/inventory-completions/latest', asyncHandler(async (_req: Request, res: Response) => {
+  const rows = await prisma.log.findMany({
+    where: { action: 'inventory-complete' },
+    orderBy: { id: 'desc' },
+    take: 200,
+  });
+  const result: Record<string, Record<string, string | null>> = {
+    west: { lunch: null, dinner: null },
+    centraal: { lunch: null, dinner: null },
+  };
+  for (const r of rows) {
+    const [loc, window] = (r.details || '').split('|');
+    if (!INV_LOCS.has(loc) || !INV_WINDOWS.has(window)) continue;
+    if (result[loc][window] === null) result[loc][window] = r.timestamp;
+  }
+  res.json(result);
 }));
 
 // ── Activity Log ──

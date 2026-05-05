@@ -231,6 +231,7 @@ export async function loadData(): Promise<void> {
     // Load guest history + next weeks in background (for Guests tab)
     loadGuestHistory();
     loadGuestsNextWeeks();
+    loadInventoryCompletions();
     hideDataError();
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Unknown error';
@@ -602,6 +603,42 @@ function updateSnapshotForRemote(msg: RemotePatchMessage): void {
 // loadPrepChecklist below calls `todayIso()`.
 import { todayIso } from '@shared/dates';
 export { todayIso };
+
+export async function loadInventoryCompletions(): Promise<void> {
+  try {
+    const data = await apiGet('/api/inventory-completions/latest');
+    if (data && typeof data === 'object') {
+      for (const loc of ['west', 'centraal'] as const) {
+        const slot = data[loc] || {};
+        S.inventoryCompletions[loc] = {
+          lunch: typeof slot.lunch === 'string' ? slot.lunch : null,
+          dinner: typeof slot.dinner === 'string' ? slot.dinner : null,
+        };
+      }
+    }
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Unknown error';
+    console.warn('Could not load inventory completions:', message);
+  }
+}
+
+/** Render an ISO timestamp as a short "X ago" relative string. Returns
+ *  '—' when the timestamp is null/invalid. Intended for soft freshness
+ *  hints; the dashboard re-renders this on a 60s tick so the value stays
+ *  current without polling the server. */
+export function formatRelativeTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '—';
+  const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (sec < 60) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  return `${day}d ago`;
+}
 
 export async function loadPrepChecklist(loc: string): Promise<void> {
   try {
