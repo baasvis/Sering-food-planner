@@ -3,6 +3,7 @@ import fs from 'fs';
 import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
 import { Prisma } from '@prisma/client';
 import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, recalcAllRecipeCosts, withWriteLock, checkId, validateIngredients } from '../lib/db';
+import { addBackendEvent } from './telemetry';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
@@ -326,9 +327,17 @@ router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
   });
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'ingredient', `saved "${ingredient.name}"`);
-  // Recalculate costs for any recipes using this ingredient (fire-and-forget)
-  recalcRecipeCostsForIngredient(req.params.id as string).catch(e => {
-    console.error(`Failed to recalculate recipe costs for ingredient ${req.params.id}:`, e);
+  // Recalculate costs for any recipes using this ingredient (fire-and-forget).
+  // Audit T5: failures previously only hit stderr (same shape as the 31-day
+  // silent finance-sync incident). Surface via addBackendEvent so the AI
+  // insights cron / telemetry summary picks up sustained failure.
+  recalcRecipeCostsForIngredient(req.params.id as string).catch((e: unknown) => {
+    const message = e instanceof Error ? e.message : 'Unknown error';
+    console.error(`Failed to recalculate recipe costs for ingredient ${req.params.id}:`, message);
+    addBackendEvent('error', 'recipe_cost_recalc_failed', {
+      ingredientId: req.params.id,
+      message,
+    });
   });
   res.json({ ok: true });
 }));
