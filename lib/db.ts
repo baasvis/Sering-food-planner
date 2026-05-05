@@ -899,3 +899,62 @@ export async function recalcRecipeCostsForIngredient(ingredientId: string): Prom
   }
   return updated;
 }
+
+/**
+ * Recalculate cost for EVERY recipe in one pass. Used after a bulk ingredient
+ * write (supplier-XLSX import / POST /api/ingredients) where pricePer100 may
+ * have changed for many rows at once. Audit T19 — calling
+ * recalcRecipeCostsForIngredient per row would be ~2N queries; this helper
+ * is two reads plus N writes (one per recipe whose cost actually changed).
+ *
+ * Becomes meaningful only with T19a's FK-preserving bulk POST in place.
+ * Pre-T19a the bulk POST wiped recipe→ingredient links so the recalc found
+ * zero linked rows for every recipe and produced null. Post-T19a (PR #33)
+ * the FKs survive and the recalc produces real numbers.
+ */
+export async function recalcAllRecipeCosts(): Promise<number> {
+  const recipes = await prisma.recipe.findMany({
+    include: { ingredients: true },
+  });
+  if (recipes.length === 0) return 0;
+
+  // Pull every linked ingredient's pricePer100 in one query, then reproduce
+  // calcRecipeCost's math in memory — sharing the price map across recipes
+  // avoids the N findManys that calling calcRecipeCost per recipe would do.
+  const allIngredientIds = [...new Set(
+    recipes.flatMap(r => r.ingredients.filter(i => i.ingredientId && !i.isFlexible).map(i => i.ingredientId as string)),
+  )];
+  const dbIngredients = allIngredientIds.length > 0
+    ? await prisma.ingredient.findMany({ where: { id: { in: allIngredientIds } }, select: { id: true, pricePer100: true } })
+    : [];
+  const priceMap = new Map(dbIngredients.map(i => [i.id, i.pricePer100 || 0]));
+  const FLEX_PRICE_PER_100G = 0.15;
+
+  let updated = 0;
+  for (const r of recipes) {
+    const linkedRows = r.ingredients.filter(i => i.ingredientId && !i.isFlexible);
+    let newCost: number | null = null;
+    if (linkedRows.length > 0 && r.recipeVolume) {
+      const baseServings = (r.recipeVolume * 1000) / r.servingSize;
+      if (baseServings > 0) {
+        let totalCost = 0;
+        for (const ing of r.ingredients) {
+          const amountGrams = toGrams(ing.rawAmount, ing.unit);
+          if (ing.isFlexible) {
+            totalCost += (amountGrams / 100) * FLEX_PRICE_PER_100G;
+            continue;
+          }
+          if (!ing.ingredientId) continue;
+          const pricePer100 = priceMap.get(ing.ingredientId) || 0;
+          totalCost += (amountGrams / 100) * pricePer100;
+        }
+        newCost = Math.round((totalCost / baseServings) * 100) / 100;
+      }
+    }
+    if (newCost !== r.costPerServing) {
+      await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: newCost } });
+      updated++;
+    }
+  }
+  return updated;
+}
