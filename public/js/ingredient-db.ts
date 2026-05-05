@@ -146,32 +146,33 @@ export function renderInlineStock(ing: Ingredient) {
   </div>`;
 }
 
-export let _inlineStockTimeout: ReturnType<typeof setTimeout> | null = null;
+// Per-row debouncers keyed by `${ingredientId}|${location}`. A single shared
+// timeout (the previous design — audit A19) cancelled the pending POST for
+// ingredient A whenever the user moved on to ingredient B, so A's edit was
+// stuck in S.ingredientDb but never reached the server.
+export const _inlineStockTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 export function saveInlineStock(ingId: string, location: string, val: string) {
   const amount = parseFloat(val) || 0;
 
-  // Update local state
   const ing = S.ingredientDb.find(i => i.id === ingId);
   if (ing) {
     if (!ing.stock) ing.stock = {};
     ing.stock[location] = { amount, date: new Date().toISOString().slice(0, 10) };
-  }
-  const dbIng = S.ingredientDb.find(i => i.id === ingId);
-  if (dbIng) {
-    if (!dbIng.stock) dbIng.stock = {};
-    dbIng.stock[location] = { amount, date: new Date().toISOString().slice(0, 10) };
   }
 
   // Debounced save to backend. apiPost throws on non-2xx (instead of the
   // bare-fetch silent fail the audit flagged as T4) — pipe to toastError so
   // a kitchen-network blip is visible instead of a UI value that "looks
   // saved" but never persisted.
-  clearTimeout(_inlineStockTimeout);
-  _inlineStockTimeout = setTimeout(() => {
+  const key = `${ingId}|${location}`;
+  const existing = _inlineStockTimeouts.get(key);
+  if (existing) clearTimeout(existing);
+  _inlineStockTimeouts.set(key, setTimeout(() => {
+    _inlineStockTimeouts.delete(key);
     apiPost('/api/ingredients/stock', { ingredientId: ingId, location, amount }).catch((e: unknown) => {
       toastError('Stock save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
     });
-  }, 600);
+  }, 600));
 }
 
 export function renderStockBadges(stock: Ingredient['stock'] | undefined) {
@@ -1124,7 +1125,7 @@ export function openStoragePopover(ingredientId: string, anchorEl: HTMLElement) 
   const existing = document.getElementById('storage-popover');
   if (existing) existing.remove();
 
-  const ing = S.ingredientDb.find(i => i.id === ingredientId) || S.ingredientDb.find(i => i.id === ingredientId);
+  const ing = S.ingredientDb.find(i => i.id === ingredientId);
   if (!ing) return;
 
   const storLocs = ing.storageLocations || {};

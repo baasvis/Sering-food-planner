@@ -292,7 +292,11 @@ export async function removeSiItem(ingredientId: string) {
   renderOrders();
 }
 
-export let siTargetTimeout: ReturnType<typeof setTimeout> | null = null;
+// Per-row debouncers keyed by `${ingredientId}|${location}`. A single shared
+// timeout (the previous design — audit A19) cancelled the pending POST for
+// ingredient A whenever the user moved on to ingredient B, so A's edit was
+// stuck in the local Ingredient row but never reached the server.
+export const siTargetTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 export function updateSiTarget(ingredientId: string, val: string) {
   const loc = S.currentLoc;
   const ing = ingredientDb().find(i => i.id === ingredientId);
@@ -303,15 +307,18 @@ export function updateSiTarget(ingredientId: string, val: string) {
   const baseAmount = ing.orderUnitSize > 0 ? orderUnits * ing.orderUnitSize : orderUnits;
   ing.targetStock[loc] = baseAmount;
   _updateSiToOrder(ingredientId, ing);
-  clearTimeout(siTargetTimeout);
-  siTargetTimeout = setTimeout(async () => {
+  const key = `${ingredientId}|${loc}`;
+  const existing = siTargetTimeouts.get(key);
+  if (existing) clearTimeout(existing);
+  siTargetTimeouts.set(key, setTimeout(async () => {
+    siTargetTimeouts.delete(key);
     try {
       await apiPost('/api/ingredients/target-stock', { ingredientId, location: loc, amount: baseAmount });
     } catch (e: unknown) { toastError('Failed to save target: ' + (e instanceof Error ? e.message : 'Unknown error')); }
-  }, 800);
+  }, 800));
 }
 
-export let siStockTimeout: ReturnType<typeof setTimeout> | null = null;
+export const siStockTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 export function updateSiStock(ingredientId: string, val: string) {
   const loc = S.currentLoc;
   const ing = ingredientDb().find(i => i.id === ingredientId);
@@ -322,12 +329,15 @@ export function updateSiStock(ingredientId: string, val: string) {
   const baseAmount = ing.orderUnitSize > 0 ? orderUnits * ing.orderUnitSize : orderUnits;
   ing.stock[loc] = { amount: baseAmount, date: new Date().toISOString().slice(0, 10) };
   _updateSiToOrder(ingredientId, ing);
-  clearTimeout(siStockTimeout);
-  siStockTimeout = setTimeout(async () => {
+  const key = `${ingredientId}|${loc}`;
+  const existing = siStockTimeouts.get(key);
+  if (existing) clearTimeout(existing);
+  siStockTimeouts.set(key, setTimeout(async () => {
+    siStockTimeouts.delete(key);
     try {
       await apiPost('/api/ingredients/stock', { ingredientId, location: loc, amount: baseAmount });
     } catch (e: unknown) { toastError('Failed to save stock: ' + (e instanceof Error ? e.message : 'Unknown error')); }
-  }, 800);
+  }, 800));
 }
 
 /** Inline update the to-order cell for a standard inventory row */
@@ -1518,13 +1528,17 @@ export async function saveGramsPerPiece(ingredientId: string, combinedKey: strin
 
 export function toggleOrderSection(key: 'batches' | 'standard') { S.orderToggles[key] = !S.orderToggles[key]; renderOrders(); }
 
-// Persist stock to the ingredient DB so it survives reloads and syncs across tabs
-export let _stockSaveTimeout: ReturnType<typeof setTimeout> | null = null;
+// Persist stock to the ingredient DB so it survives reloads and syncs across tabs.
+// Per-row debouncers keyed by `${ingredientId}|${location}` (audit A19) — a single
+// shared timeout used to drop the pending POST whenever a different ingredient's
+// row was edited, so the first edit was stuck in the UI but never persisted.
+export const _stockSaveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 export function persistIngredientStock(ingredientName: string, amount: number) {
   const db = lookupIngredient(ingredientName);
   if (!db || !db.id) return;
   const loc = S.currentLoc || 'west';
   const amountNum = amount || 0;
+  const ingId = db.id;
 
   // Update in S.ingredientDb immediately. (Previously this also kept a
   // separate ingredientDbFull array in sync — now collapsed into S.ingredientDb
@@ -1536,12 +1550,15 @@ export function persistIngredientStock(ingredientName: string, amount: number) {
   // bare-fetch silent fail the audit flagged as T4) — pipe to toastError so
   // a kitchen-network blip is visible instead of a UI value that "looks
   // saved" but never persisted.
-  clearTimeout(_stockSaveTimeout);
-  _stockSaveTimeout = setTimeout(() => {
-    apiPost('/api/ingredients/stock', { ingredientId: db.id, location: loc, amount: amountNum }).catch((e: unknown) => {
+  const key = `${ingId}|${loc}`;
+  const existing = _stockSaveTimeouts.get(key);
+  if (existing) clearTimeout(existing);
+  _stockSaveTimeouts.set(key, setTimeout(() => {
+    _stockSaveTimeouts.delete(key);
+    apiPost('/api/ingredients/stock', { ingredientId: ingId, location: loc, amount: amountNum }).catch((e: unknown) => {
       toastError('Stock save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
     });
-  }, 600);
+  }, 600));
 }
 
 // Shared inline stock update — input is in order units, convert to base for storage
