@@ -54,7 +54,7 @@
 - **Suggested fix**: Pipe the error through `toastError()` and update the save indicator (`setSaveState('error', 'Stock save failed')`). Better: route through `apiPost` so retries and 401-handling are uniform.
 - **Confidence**: High.
 
-### T5 — Recipe-cost recalculation runs fire-and-forget; failures only `console.error`
+### T5 — Recipe-cost recalculation runs fire-and-forget; failures only `console.error` — RESOLVED
 - **Severity**: Low
 - **Location**: [routes/ingredients.ts:217-219](routes/ingredients.ts).
 - **What**: After a single ingredient save:
@@ -67,6 +67,7 @@
 - **Why it matters**: Cited finance-sync incident took 31 days to detect because the failure had the same shape — silent stderr. The same architectural lesson applies.
 - **Suggested fix**: Wrap in `addBackendEvent('error', 'recipe_cost_recalc_failed', { ingredientId, message })`. Same pattern as the well-instrumented Tebi sync.
 - **Confidence**: High.
+- **Resolution (2026-05-05, [PR #39](https://github.com/baasvis/Sering-food-planner/pull/39))**: Catch block now does both `console.error` and `addBackendEvent('error', 'recipe_cost_recalc_failed', { ingredientId, message })`. Sustained recalc failures will now surface in the AI-insights cron + telemetry summary endpoint. Note for follow-up: the bulk path (`recalcAllRecipeCosts` introduced by [PR #37](https://github.com/baasvis/Sering-food-planner/pull/37)) is still stderr-only — a thin follow-up could mirror this pattern with a `recipe_cost_bulk_recalc_failed` event.
 
 ### T6 — `dbAppendLog` swallows errors
 - **Severity**: Low
@@ -233,21 +234,23 @@
   Plus: change `console.warn('Failed to deduct stock:', e)` → `toastError('Stock deduction failed: ' + ...)`. Silent failures are the recurring reliability bug class (T4, T5, T6). Same pattern.
 - **Confidence**: High — verified the shape mismatch by reading both sides.
 
-### T19 — `recalcRecipeCostsForIngredient` finds 0 dirty recipes silently when ingredient pricing changes
+### T19 — `recalcRecipeCostsForIngredient` finds 0 dirty recipes silently when ingredient pricing changes — RESOLVED
 - **Severity**: Medium
 - **Location**: [routes/ingredients.ts:217](routes/ingredients.ts), `recalcRecipeCostsForIngredient` in [lib/db.ts:858-881](lib/db.ts).
 - **What**: After a single ingredient PATCH, the recalc runs fire-and-forget. It only looks for recipes via `prisma.recipeIngredientRow.findMany({ where: { ingredientId } })`. But ingredient prices are also captured in `priceHistory` JSON arrays on the Ingredient itself, and recipe cost depends on `pricePer100` which is derived from `orderPrice / orderUnitSize`. If `applySupplierUpdate` (P19) updates `orderPrice` for 50 ingredients via the bulk POST `/api/ingredients`, that bulk path doesn't trigger any per-ingredient recalc. Result: recipe costs go stale across the board after every supplier-XLSX import.
 - **Why it matters**: Cost-per-serving is a planning input the team uses to think about menu pricing. Stale by hours-to-days after a supplier import.
 - **Suggested fix**: After the bulk `POST /api/ingredients`, call `recalcRecipeCostsForIngredient` for every changed ingredient — or better, add a `recalcAllRecipeCosts()` that runs once after a bulk write.
 - **Confidence**: Medium — need to verify whether the `applySupplierUpdate` POST path actually hits the per-ingredient recalc or skips it. Reading the backend code, the bulk endpoint does NOT call recalc. So recipe costs definitely go stale after supplier updates.
+- **Resolution (2026-05-05, [PR #37](https://github.com/baasvis/Sering-food-planner/pull/37))**: New `recalcAllRecipeCosts()` in `lib/db.ts` — one read of every recipe + one read of every linked ingredient's `pricePer100`, in-memory cost compute, minimal `UPDATE`s (skip recipes whose cost didn't change). Bulk POST `/api/ingredients` awaits the recalc and surfaces a numeric `recipeCostsUpdated` field in the response so a future regression that drops the trigger fails-loud. Required [PR #33 (T19a)](https://github.com/baasvis/Sering-food-planner/pull/33) FK-preservation to be in place — pre-T19a the recalc would have produced `null` for every recipe.
 
-### T20 — Stock-deduct on supplier-XLSX upload bypasses ingredient validators
+### T20 — Stock-deduct on supplier-XLSX upload bypasses ingredient validators — RESOLVED
 - **Severity**: Low
 - **Location**: [routes/ingredients.ts:71-113](routes/ingredients.ts) (the bulk POST endpoint).
 - **What**: The bulk `POST /api/ingredients` accepts `req.body` as `Ingredient[]`, validates only that it's an array, then casts each row to `Ingredient` and writes via `createMany`. There's no per-row validation (no length cap on name, no charset constraint on id, no allergens-string format check). Same issue as A12.
 - **Why it matters**: A subverted supplier file or a hand-crafted POST could plant XSS-shaped ids (cf S2) at scale. The XSS S2 vector applies; with the bulk endpoint, an attacker can plant 2100 poisoned ids in one POST.
 - **Suggested fix**: Add a `validateIngredients(ingredients)` helper analogous to `validateBatches` and call it before the createMany.
 - **Confidence**: High.
+- **Resolution (2026-05-05, [PR #38](https://github.com/baasvis/Sering-food-planner/pull/38))**: Added `validateIngredient` + `validateIngredients` in `lib/db.ts` mirroring the `validateBatch` / `validateCatering` pattern: id charset (subsumes S2's check), length caps on every string field, `types[]` array bounds, numeric ranges on `orderPrice`/`orderUnitSize`/`pricePer100`, `priceLevel` enum, JSON-shape checks, `priceHistory` array bounds, duplicate-id rejection. Bulk POST replaces its inline `checkId` loop with one `validateIngredients()` call. Validated all 1165 staging + 1165 prod ingredient rows pass the new validator. 9 new negative-path test cases. Coverage gap noted in PR comment: missing happy-path round-trip + a few cap tests (`notes` 5000, `priceHistory` 240, `storageLocations` array, id length 201+) — worth a thin follow-up but not blocking T20.
 
 ### T21 — Tebi worker exits 0 when one account succeeds and another silently writes 0 rows
 - **Severity**: Low
@@ -279,6 +282,7 @@
 - **What**: The Playwright suite boots `npm run preview` with `GOOGLE_CLIENT_ID` unset, so every spec exercises the dev-mode-login button. The production Google Sign-In flow (popup, postMessage handshake, token verification) is never touched by CI. On 2026-05-04 the helmet-S7 fix landed with `Cross-Origin-Opener-Policy: same-origin` (helmet's default). That header severs `window.opener` for cross-origin popups, so Google's popup couldn't post the credential back. Production was broken. The bug was invisible to all 236 unit tests and to the e2e suite.
 - **Why it matters**: Auth is the single most important user-facing flow — every other test passes against a logged-in app. We just shipped a header-only change that broke auth and didn't notice until a user reported it. The pattern (helmet bumps, security middleware tweaks, response-header changes) will recur.
 - **Suggested fix**: Two layers, smallest first:
-  1. **Header regression test** (already landed in PR for T24). `test/api.test.ts` now asserts the response headers don't accidentally re-enable COOP `same-origin` or COEP. This catches the *root cause* of the 2026-05-04 outage at the unit-test layer.
+  1. **Header regression test** ([PR #43](https://github.com/baasvis/Sering-food-planner/pull/43), merged 2026-05-05). `test/api.test.ts` now asserts the response headers don't accidentally re-enable COOP `same-origin` or COEP. Mutation-tested locally: commenting out the COOP fix in `app.ts` makes the new test fail. Catches the *root cause* of the 2026-05-04 outage at the unit-test layer.
   2. **Production-mode login screen e2e** (deferred). Add a Playwright project that boots `npm run preview` with `GOOGLE_CLIENT_ID=test-fake-id` and asserts the Google Sign-In button renders + the GSI bundle loads without console errors. Won't click through (real Google would reject the fake client id, no creds available), but does exercise the script-load path that production uses. Not landing in the T24 PR — needs a separate playwright config / project to avoid colliding with the dev-login suite.
 - **Confidence**: High that layer 1 catches the specific class of bug. Medium that layer 2 is worth the wiring complexity vs. just trusting layer 1 for header issues.
+- **Status (2026-05-05)**: Layer 1 resolved via PR #43; layer 2 remains open as a follow-up.

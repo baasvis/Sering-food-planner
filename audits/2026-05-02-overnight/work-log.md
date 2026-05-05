@@ -23,7 +23,11 @@ Format: `[STATUS] <ID> — <one-line summary>`
 - [PR #37](https://github.com/baasvis/Sering-food-planner/pull/37) **T19** — recalc trigger re-applied on top of merged #33.
 - [PR #38](https://github.com/baasvis/Sering-food-planner/pull/38) **T20** — bulk POST `/api/ingredients` per-row validation.
 - [PR #39](https://github.com/baasvis/Sering-food-planner/pull/39) **T5** — surface recalc failures via `addBackendEvent`.
-- [PR pending] **D3** — `@anthropic-ai/sdk` 0.88 → 0.92 (closes GHSA-p7fg-763f-g4gf).
+- [PR #40](https://github.com/baasvis/Sering-food-planner/pull/40) **D3** — `@anthropic-ai/sdk` 0.88 → 0.92 (closes GHSA-p7fg-763f-g4gf).
+- [PR #41](https://github.com/baasvis/Sering-food-planner/pull/41) **A22+D16+S21** — delete `prisma/archive/` landmine scripts.
+- [PR #42](https://github.com/baasvis/Sering-food-planner/pull/42) **A19+A20** — per-row stock-save timeouts (`Map<key,timeout>`); drop duplicate `S.ingredientDb.find()` blocks.
+- [PR #43](https://github.com/baasvis/Sering-food-planner/pull/43) **S7 follow-up + T24** — pin `Cross-Origin-Opener-Policy` compatible with Google Sign-In; flag prod-login e2e gap.
+- [PR #45](https://github.com/baasvis/Sering-food-planner/pull/45) — pin system time in `family-aware-demand` + `menu-fixer` tests so hardcoded dates stay future-relative.
 
 ## In progress
 - (picking next finding)
