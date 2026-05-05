@@ -42,13 +42,14 @@
   3. Long-term, consider whether server-side XLSX parsing is needed at all — could the frontend parse with `SheetJS-Lite` and POST normalised JSON?
 - **Confidence**: High.
 
-### D3 — `@anthropic-ai/sdk` 0.88.0 is on the GHSA-p7fg-763f-g4gf advisory
+### D3 — `@anthropic-ai/sdk` 0.88.0 is on the GHSA-p7fg-763f-g4gf advisory — RESOLVED
 - **Severity**: Medium
 - **Location**: [package.json:26](package.json) — `~0.88.0`.
 - **What**: GHSA-p7fg-763f-g4gf — "Insecure Default File Permissions in Local Filesystem Memory Tool" (CWE-732). Affects `@anthropic-ai/sdk >=0.79.0 <0.91.1`. Fix in 0.92.0. The advisory is Memory-Tool-specific; this codebase uses the SDK only for `client.messages.create({...})` ([lib/ai-analyzer.ts:301](lib/ai-analyzer.ts)) — no Memory Tool usage. Real exposure: zero.
 - **Why it matters**: Even though the affected feature isn't used, it's a marker on every npm audit run. Developers learn to ignore audits when there's persistent noise.
 - **Suggested fix**: Bump to `^0.92.0` (semver-major). One-line change. The release notes should be reviewed for `messages.create` API changes, but this kind of bump is routine.
 - **Confidence**: High.
+- **Resolution (2026-05-03)**: Bumped to `^0.92.0`. Reviewed CHANGELOG 0.88→0.92 — no breaking changes to `messages.create` (the only call site at [lib/ai-analyzer.ts:301](lib/ai-analyzer.ts:301)). 0.89-0.92 added managed-agents/CMA Memory APIs, bedrock fixes, and internal codegen, none of which touch the surface this app uses. `npm audit` no longer lists GHSA-p7fg-763f-g4gf. All 236 tests pass.
 
 ### D4 — `googleapis` 128.0.0 is 43 majors behind (latest 171.x)
 - **Severity**: Medium

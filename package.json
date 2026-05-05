@@ -23,7 +23,7 @@
     "seed": "node prisma/seed.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "~0.88.0",
+    "@anthropic-ai/sdk": "^0.92.0",
     "@prisma/client": "~6.19.2",
     "@types/compression": "^1.8.1",
     "compression": "^1.8.1",
