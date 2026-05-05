@@ -1,6 +1,6 @@
 import type { Batch, RecipeFull, DishType, Location, Meal, Service } from '@shared/types';
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
-import { newId, scheduleSave, toast, toastError } from './utils';
+import { newId, scheduleSave, toast, toastError, apiPost } from './utils';
 import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate, consolidateFamilies, getRootId, getFamilyMembers } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
@@ -1231,13 +1231,29 @@ export function finishInventory(loc: string) {
   const now = getAmsterdamNow();
   const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
   const st = getInventoryState(loc);
-  if (!S.inventoryDone[loc]) S.inventoryDone[loc] = {};
+  if (!S.inventoryDone[loc]) S.inventoryDone[loc] = { lunch: null, dinner: null };
   S.inventoryDone[loc][st.window] = todayStr;
+  // Update local freshness counter immediately so the dashboard chip updates
+  // without waiting for the server round-trip.
+  if (st.window === 'lunch' || st.window === 'dinner') {
+    if (!S.inventoryCompletions[loc as Location]) {
+      S.inventoryCompletions[loc as Location] = { lunch: null, dinner: null };
+    }
+    S.inventoryCompletions[loc as Location][st.window] = new Date().toISOString();
+  }
   S._inventoryLoc = null;
   closeModal();
   rebuildPlanner();
   rerenderCurrentView();
   scheduleSave();
+  // Persist freshness server-side so other devices see "last inventory N min
+  // ago" too. Fire-and-forget; the local stamp above keeps the UI snappy.
+  if (st.window === 'lunch' || st.window === 'dinner') {
+    apiPost('/api/inventory-completions', { loc, window: st.window }).catch((e: unknown) => {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      console.warn('Could not persist inventory completion:', msg);
+    });
+  }
   toast('Inventory complete!');
 }
 
