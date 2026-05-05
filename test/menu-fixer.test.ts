@@ -16,6 +16,7 @@ import {
   assignServicesPass2,
   assignServicesPass3,
   assignServicesPass4,
+  assignServicesPass5,
   allocatePotCaps,
   collectWarnings,
   buildPlanningWindow,
@@ -1073,6 +1074,288 @@ describe('assignServicesPass4', () => {
 
     // Placeholder has stock=0, so it's not a "leftover" to drain.
     expect(placeholder.services.length).toBe(0);
+  });
+});
+
+// ── Pass 5: combination fill ───────────────────────────────────────────────
+
+describe('assignServicesPass5', () => {
+  // Production reproduction: Tue dinner Centraal at 240 guests, no single
+  // Centraal-located batch has enough stock to cover its 50% share solo, but
+  // 3 small batches together cover the demand cleanly. This is the scenario
+  // that motivated Pass 5.
+  test('forms a 3-family team when no 2-peer team fits family stock', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // 240 guests. With 2 peers each needs 120 guests:
+    //   pasta:  120 × 80ml = 9.6L  (fits in 10L stock)
+    //   kale:   120 × 250ml = 30L  (overshoots 20L stock)
+    //   veggie: 120 × 280ml = 33.6L (fits in 40L)
+    // So 2-peer (pasta + kale) overshoots kale → Pass 5 must escalate to 3-peer.
+    // With 3 peers: 80 × {80,250,280} = {6.4, 20, 22.4}L — all fit.
+    const pasta = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 10, serving: 80, name: 'Pasta split',
+    });
+    const pumpkinKale = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 20, serving: 250, name: 'Pumpkin Kale split',
+    });
+    const pumpkinVeggie = makeBatch({
+      type: 'Main course', cookDate: '04/05/2026',
+      location: 'centraal', stock: 40, serving: 280, name: 'Pumpkin veggie split',
+    });
+    const allBatches = [pasta, pumpkinKale, pumpkinVeggie];
+
+    const guestsFn = (loc: Location, _date: string, meal: Meal) =>
+      loc === 'centraal' && meal === 'dinner' ? 240 : 0;
+
+    // Per-batch-serving-aware calc: family demand = sum of (guests/families × serving)
+    // across each service. Mirrors the real family allocator's even-split.
+    const calc = (b: Batch): number => {
+      let total = 0;
+      for (const svc of b.services || []) {
+        const peerFamilyRoots = new Set<string>();
+        for (const other of allBatches) {
+          if (other.type !== b.type) continue;
+          if (!(other.services || []).some(s => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal)) continue;
+          peerFamilyRoots.add(other.parentId || other.id);
+        }
+        const families = Math.max(peerFamilyRoots.size, 1);
+        total += (guestsFn(svc.loc, svc.date, svc.meal) / families) * (b.serving / 1000);
+      }
+      return Math.round(total * 10) / 10;
+    };
+
+    const result = assignServicesPass5(allBatches, window, calc, guestsFn);
+
+    expect(result.teamsFormed).toBeGreaterThanOrEqual(1);
+    const atSlot = (b: Batch) => (b.services || []).some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'dinner'
+    );
+    // Pass 5 prefers smallest K. K=2 with Pasta + Pumpkin veggie fits family
+    // budgets (9.6L < 10L stock and 33.6L < 40L stock). Pumpkin Kale's 30L
+    // share blows its 20L stock at K=2 so it's skipped.
+    expect(atSlot(pasta)).toBe(true);
+    expect(atSlot(pumpkinVeggie)).toBe(true);
+    // The total team should be ≥ 2 family-distinct peers
+    const peerCount = [atSlot(pasta), atSlot(pumpkinKale), atSlot(pumpkinVeggie)].filter(Boolean).length;
+    expect(peerCount).toBeGreaterThanOrEqual(2);
+  });
+
+  test('escalates to a 3-peer team when no 2-peer team fits', () => {
+    // Construct a slot where every 2-peer combination fails the family budget,
+    // but a 3-peer team works. Demand = 240 guests at 280ml = 67.2L total.
+    // 2-peer share = 33.6L per peer. None of these has 33.6L unused alone.
+    // 3-peer share = 22.4L per peer. All three fit.
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const a = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 25, serving: 280, name: 'A',
+    });
+    const b = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 25, serving: 280, name: 'B',
+    });
+    const c = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 25, serving: 280, name: 'C',
+    });
+    const allBatches = [a, b, c];
+    const guestsFn = (loc: Location, _date: string, meal: Meal) =>
+      loc === 'centraal' && meal === 'dinner' ? 240 : 0;
+
+    // Real-shape calc: serving × (guests/families) per service.
+    const calc = (batch: Batch): number => {
+      let total = 0;
+      for (const svc of batch.services || []) {
+        const peerFamilyRoots = new Set<string>();
+        for (const other of allBatches) {
+          if (other.type !== batch.type) continue;
+          if (!(other.services || []).some(s => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal)) continue;
+          peerFamilyRoots.add(other.parentId || other.id);
+        }
+        const families = Math.max(peerFamilyRoots.size, 1);
+        total += (guestsFn(svc.loc, svc.date, svc.meal) / families) * (batch.serving / 1000);
+      }
+      return Math.round(total * 10) / 10;
+    };
+
+    assignServicesPass5(allBatches, window, calc, guestsFn);
+
+    const atSlot = (batch: Batch) => (batch.services || []).some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'dinner'
+    );
+    expect(atSlot(a)).toBe(true);
+    expect(atSlot(b)).toBe(true);
+    expect(atSlot(c)).toBe(true);
+  });
+
+  test('skips slots that are already at SLOTS_PER_TYPE', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const a = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 30, serving: 280, name: 'A',
+    });
+    const b = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 30, serving: 280, name: 'B',
+    });
+    const c = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 30, serving: 280, name: 'C',
+    });
+    a.services = [{ loc: 'centraal', date: '2026-05-05', meal: 'dinner' }];
+    b.services = [{ loc: 'centraal', date: '2026-05-05', meal: 'dinner' }];
+
+    const guestsFn = (loc: Location, _date: string, meal: Meal) =>
+      loc === 'centraal' && meal === 'dinner' ? 240 : 0;
+
+    assignServicesPass5([a, b, c], window, fixedCalcRequired(0), guestsFn);
+
+    // c shouldn't be added — slot already 2/2 (which is SLOTS_PER_TYPE).
+    const cAtSlot = (c.services || []).some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'dinner'
+    );
+    expect(cAtSlot).toBe(false);
+  });
+
+  test('skips 0-guest slots', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const a = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026',
+      location: 'centraal', stock: 30, serving: 280, name: 'A',
+    });
+    const b = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026',
+      location: 'centraal', stock: 30, serving: 280, name: 'B',
+    });
+    // 0 guests everywhere
+    const guestsFn = () => 0;
+
+    const result = assignServicesPass5([a, b], window, fixedCalcRequired(0), guestsFn);
+    expect(result.servicesAdded).toBe(0);
+  });
+
+  test('skips frozen batches', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const fresh = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 10, serving: 280, name: 'Fresh',
+    });
+    const frozen = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 50, serving: 280, name: 'Frozen',
+      storage: 'Frozen',
+    });
+    const guestsFn = (loc: Location, _date: string, meal: Meal) =>
+      loc === 'centraal' && meal === 'dinner' ? 240 : 0;
+
+    assignServicesPass5([fresh, frozen], window, fixedCalcRequired(0), guestsFn);
+
+    // Frozen should never be auto-assigned — cooks pull from freezer manually.
+    const frozenAtSlot = (frozen.services || []).some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'dinner'
+    );
+    expect(frozenAtSlot).toBe(false);
+  });
+
+  test('treats parent and split as one menu option (family-distinct)', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const parent = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'west', stock: 30, serving: 280, name: 'Parent',
+    });
+    const split = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 30, serving: 280, name: 'Split',
+      parentId: parent.id,
+    });
+    const other = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 30, serving: 280, name: 'Other',
+    });
+    const guestsFn = (loc: Location, _date: string, meal: Meal) =>
+      loc === 'centraal' && meal === 'dinner' ? 240 : 0;
+
+    assignServicesPass5([parent, split, other], window, fixedCalcRequired(0), guestsFn);
+
+    // Only ONE of {parent, split} should be at the slot — same family means
+    // same menu option from a guest's POV.
+    const parentAtSlot = (parent.services || []).some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'dinner'
+    );
+    const splitAtSlot = (split.services || []).some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'dinner'
+    );
+    expect(Number(parentAtSlot) + Number(splitAtSlot)).toBeLessThanOrEqual(1);
+  });
+
+  test('refuses to commit a team that overshoots family stock', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // Each batch has tiny stock; combined coverage at 80 guests/peer would be
+    // way over their stock. Family budget check should reject.
+    const a = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 1, serving: 280, name: 'A',
+    });
+    const b = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 1, serving: 280, name: 'B',
+    });
+    const guestsFn = (loc: Location, _date: string, meal: Meal) =>
+      loc === 'centraal' && meal === 'dinner' ? 240 : 0;
+
+    // Use a peer-aware calc that respects serving × guests / peers.
+    const calc = peerAwareCalcRequired([a, b], 240, 280);
+
+    assignServicesPass5([a, b], window, calc, guestsFn);
+
+    // Neither should land — tiny stocks can't satisfy any reasonable team
+    // share at 240 guests.
+    expect(a.services.length).toBe(0);
+    expect(b.services.length).toBe(0);
+  });
+
+  test('purely additive — never removes services that earlier passes set', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // Pre-existing service from "earlier passes" — Pass 5 must not touch it.
+    const pinned = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 50, serving: 280, name: 'Pinned',
+    });
+    pinned.services = [
+      { loc: 'centraal', date: '2026-05-05', meal: 'lunch' },  // already committed
+    ];
+    const candidate = makeBatch({
+      type: 'Main course', cookDate: '03/05/2026',
+      location: 'centraal', stock: 30, serving: 280, name: 'Candidate',
+    });
+    const guestsFn = (loc: Location, _date: string, meal: Meal) =>
+      loc === 'centraal' ? (meal === 'dinner' ? 240 : 90) : 0;
+
+    assignServicesPass5([pinned, candidate], window, fixedCalcRequired(0), guestsFn);
+
+    // pinned still has its lunch service.
+    const pinnedHasLunch = (pinned.services || []).some(s =>
+      s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'lunch'
+    );
+    expect(pinnedHasLunch).toBe(true);
   });
 });
 

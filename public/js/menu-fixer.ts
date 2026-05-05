@@ -1023,6 +1023,197 @@ export function assignServicesPass4(
   return { servicesAdded: added, batchesTouched: touched.size };
 }
 
+// ── Step 4 — Pass 5: combination fill for under-served slots ────────────────
+
+/**
+ * Maximum 60% of a slot's guests can come from one batch — prevents the
+ * "20L vs 2L" pathology where one dominant batch is paired with a tiny
+ * straggler that runs dry mid-service. With 60% cap, the dominant carries
+ * up to 60%, the rest must come from other peer families.
+ */
+const PASS5_MAX_GUEST_FRACTION_PER_BATCH = 0.6;
+
+/**
+ * Pass 5 won't bother committing to a slot unless the team can serve at
+ * least this fraction of the slot's guests. Below this floor, leave the
+ * slot under-filled and let the under-filled-slot warning surface it.
+ * (Without a floor, Pass 5 happily places a 30L team for 67L demand and
+ * "pretends" the slot is filled — worse UX than an honest empty + warning.)
+ */
+const PASS5_MIN_COVERAGE_FRACTION = 0.8;
+
+/**
+ * Cap on how many family peers can co-occupy a slot. SLOTS_PER_TYPE = 2 is
+ * the normal target; Pass 5 expands up to 4 so a high-demand slot (e.g.
+ * 240-guest dinner) can be covered by smaller batches teaming up.
+ */
+const PASS5_MAX_PEERS_PER_SLOT = 4;
+
+/**
+ * Pass 5 — combination fill. Runs after Pass 4. For any slot still below
+ * SLOTS_PER_TYPE peer families, find a multi-batch team where each batch
+ * carries a "fair share" of the slot's guests within its family stock pool.
+ *
+ * Why this exists: Pass 1-4's per-batch fit checks ask each batch alone to
+ * cover its (guests / SLOTS_PER_TYPE) share. At a 240-guest slot that's
+ * ~120 guests per peer — too much for any small batch (10-20L). The slot
+ * stays empty even though combining 3-4 small batches would cover it.
+ *
+ * Pass 5's contract:
+ *   - Purely additive — never removes a service that earlier passes set.
+ *   - Tries team sizes K from (SLOTS_PER_TYPE - existing) up to
+ *     (PASS5_MAX_PEERS_PER_SLOT - existing). Smallest workable K wins.
+ *   - Each team member carries no more than 60% of the slot's guests.
+ *   - Total team coverage must be ≥ 80% of the slot's guests; below that,
+ *     the slot stays under-filled and surfaces as a warning.
+ *   - Family stock check: tentative-add, ensure family demand across all
+ *     slots ≤ family stock. Same shape as Pass 1's check.
+ *   - Same-loc preference: Centraal slots prefer Centraal-located stock so
+ *     they don't burn next-morning-delivery slots from West unnecessarily.
+ */
+export function assignServicesPass5(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+  getGuestsFn?: (loc: Location, isoDate: string, meal: Meal) => number,
+): { servicesAdded: number; teamsFormed: number } {
+  let added = 0;
+  let teamsFormed = 0;
+
+  for (const day of window) {
+    for (const slot of day.slots) {
+      if (slot.isPast) continue;
+      const guests = getGuestsFn ? getGuestsFn(slot.loc, day.isoDate, slot.meal) : 0;
+      if (guests <= 0) continue;
+
+      for (const type of TYPES_TO_PLAN) {
+        const existingFamilies = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+        if (existingFamilies >= SLOTS_PER_TYPE) continue;
+
+        const team = findCombinationTeam(
+          allBatches, type, slot.loc, day.isoDate, slot.meal, guests,
+          existingFamilies, calcReq,
+        );
+        if (team.length === 0) continue;
+
+        for (const batch of team) {
+          batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+          added++;
+        }
+        teamsFormed++;
+      }
+    }
+  }
+
+  return { servicesAdded: added, teamsFormed };
+}
+
+/**
+ * Try to assemble a family-distinct team that fills the slot under the
+ * 60%/80% rules. Returns the list of batches to commit (in addition to
+ * existing peers) or [] if no workable team was found.
+ *
+ * Strategy: try team sizes K from minimum up to maximum; for each K, run
+ * a greedy walk over family-distinct candidates and accept the first K
+ * that satisfy the rules.
+ */
+function findCombinationTeam(
+  allBatches: Batch[],
+  type: DishType,
+  loc: Location,
+  isoDate: string,
+  meal: Meal,
+  guests: number,
+  existingFamilies: number,
+  calcReq: (b: Batch) => number,
+): Batch[] {
+  // Same eligibility filter as Pass 2/3.
+  const eligible = allBatches.filter(b => {
+    if (b.type !== type) return false;
+    if (!b.cookDate) return false;
+    if (b.storage === 'Frozen') return false;
+    if (alreadyInSlot(b, loc, isoDate, meal, allBatches)) return false;
+    if (!isServableBy(b.cookDate, isoDate, meal, loc, b.location)) return false;
+    if (b.stock > 0 && isStaleAtSlot(b.cookDate, isoDate)) return false;
+    return true;
+  });
+  if (eligible.length === 0) return [];
+
+  // One representative per family — prefer same-loc, then biggest stock.
+  // Splits at Centraal should drain before West parents are pulled in for
+  // a Centraal slot (matches the no-reverse-flow + same-loc-first rules).
+  const byFamily = new Map<string, Batch>();
+  for (const c of eligible) {
+    const root = getRootId(c, allBatches);
+    const cur = byFamily.get(root);
+    if (!cur) { byFamily.set(root, c); continue; }
+    const cIsSame = c.location === loc ? 1 : 0;
+    const curIsSame = cur.location === loc ? 1 : 0;
+    if (cIsSame > curIsSame) byFamily.set(root, c);
+    else if (cIsSame === curIsSame && c.stock > cur.stock) byFamily.set(root, c);
+  }
+  const familyReps = Array.from(byFamily.values());
+
+  // Sort by value: same-loc first, then oldest cookDate (use up older food),
+  // then biggest stock (more capacity), then id for determinism.
+  familyReps.sort((a, b) => {
+    const aSame = a.location === loc ? 1 : 0;
+    const bSame = b.location === loc ? 1 : 0;
+    if (aSame !== bSame) return bSame - aSame;
+    const aIso = cookDateToIso(a.cookDate)!;
+    const bIso = cookDateToIso(b.cookDate)!;
+    if (aIso !== bIso) return aIso < bIso ? -1 : 1;
+    if (a.stock !== b.stock) return b.stock - a.stock;
+    return a.id.localeCompare(b.id);
+  });
+
+  const minK = Math.max(1, SLOTS_PER_TYPE - existingFamilies);
+  const maxK = Math.max(minK, PASS5_MAX_PEERS_PER_SLOT - existingFamilies);
+
+  for (let k = minK; k <= maxK; k++) {
+    const totalPeers = existingFamilies + k;
+    const guestsPerPeer = guests / totalPeers;
+    const maxGuestsPerBatch = guests * PASS5_MAX_GUEST_FRACTION_PER_BATCH;
+    if (guestsPerPeer > maxGuestsPerBatch) continue;  // 60% cap can't be honored at this K
+
+    // For each candidate, compute "would my family fit if K peers joined this
+    // slot?" using OPTIMISTIC per-peer share. This avoids the Pass 1 problem
+    // where solo-evaluation makes every small-stock batch look infeasible.
+    const team: Batch[] = [];
+    let coverageGuests = existingFamilies * guestsPerPeer;
+
+    for (const cand of familyReps) {
+      if (team.length >= k) break;
+
+      // Optimistic per-batch demand IF K peers join: my family carries
+      // guestsPerPeer guests at this slot, served at this batch's serving.
+      const shareLitersAtThisSlot = guestsPerPeer * (cand.serving || 280) / 1000;
+
+      // Family demand = current commitments (calcReq across all batches in
+      // family, no this-slot service yet) + this slot's optimistic share.
+      const family = allBatches.filter(m => getRootId(m, allBatches) === getRootId(cand, allBatches));
+      const familyStock = family.reduce((s, m) => s + (m.stock || 0), 0);
+      const existingFamilyDemand = family.reduce((s, m) => s + calcReq(m), 0);
+      const projectedFamilyDemand = existingFamilyDemand + shareLitersAtThisSlot;
+
+      // Only enforce stock check for cooked families (placeholders have stock=0
+      // and will be cooked to whatever volume the cook decides — not an
+      // overshoot risk).
+      if (familyStock > 0 && projectedFamilyDemand > familyStock) continue;
+
+      team.push(cand);
+      coverageGuests += guestsPerPeer;
+    }
+
+    if (team.length < k) continue;  // not enough fitting candidates at this K
+    const coverageFraction = coverageGuests / guests;
+    if (coverageFraction < PASS5_MIN_COVERAGE_FRACTION) continue;
+    return team;
+  }
+
+  return [];
+}
+
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 /**
@@ -1126,6 +1317,14 @@ export function fixMyMenu(): void {
   const pass4 = assignServicesPass4(S.batches, planWindow, calcReqLive, getGuests);
   rebuildPlanner();
 
+  // Step 4.45 — Pass 5 (combination fill): for slots still under-filled, try
+  // multi-batch teams that share guest demand. Solves the high-demand-slot
+  // problem where Pass 1-4's per-batch fit checks reject every individual
+  // candidate because solo share exceeds stock — but 3-4 batches together
+  // cover it cleanly. 60% cap per batch + 80% coverage floor.
+  const pass5 = assignServicesPass5(S.batches, planWindow, calcReqLive, getGuests);
+  rebuildPlanner();
+
   // Step 4.5 — Allocate kitchen pots to batches by ACTUAL demand.
   // Biggest pot goes to the batch that needs the most food. This way the
   // 140L pot is never wasted on a low-demand batch just because it sorts
@@ -1150,9 +1349,10 @@ export function fixMyMenu(): void {
   showResultsModal({
     cleaned: orphans.length,
     created: newPlaceholders.length,
-    assigned: pass1.servicesAdded + pass2.servicesAdded + pass3.servicesAdded + pass4.servicesAdded,
+    assigned: pass1.servicesAdded + pass2.servicesAdded + pass3.servicesAdded + pass4.servicesAdded + pass5.servicesAdded,
     consolidated: consolidation.removed.length,
     placeholderNames: newPlaceholders.map(p => p.name),
+    teamsFormed: pass5.teamsFormed,
     warnings,
   });
 }
@@ -1383,6 +1583,8 @@ interface ResultsReport {
   assigned: number;
   consolidated: number;
   placeholderNames: string[];
+  /** Number of multi-batch teams Pass 5 assembled to fill high-demand slots. */
+  teamsFormed?: number;
   warnings: Warning[];
 }
 
@@ -1441,12 +1643,13 @@ function categoryHeader(c: WarningCategory): { title: string; hint: string } {
 
 function showResultsModal(report: ResultsReport): void {
   _lastReport = report;
-  const { cleaned, created, assigned, consolidated, placeholderNames, warnings } = report;
+  const { cleaned, created, assigned, consolidated, placeholderNames, teamsFormed, warnings } = report;
   const summary: string[] = [];
   if (consolidated > 0) summary.push(`<div>⛓ Merged ${consolidated} duplicate batch${consolidated === 1 ? '' : 'es'} of the same recipe at the same location</div>`);
   if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
   if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
   if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);
+  if (teamsFormed && teamsFormed > 0) summary.push(`<div>🤝 Combined ${teamsFormed} multi-batch team${teamsFormed === 1 ? '' : 's'} for high-demand slots</div>`);
   if (summary.length === 0) summary.push(`<div>Menu already covers the cook rhythm — nothing to do.</div>`);
 
   // Sort warnings by category order, preserving original index for action handlers.
