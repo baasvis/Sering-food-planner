@@ -34,6 +34,19 @@ import {
 } from '../public/js/menu-fixer';
 import type { KitchenEquipment } from '../shared/types';
 
+// Pin the system clock to a stable date in late April 2026 so the
+// hardcoded service dates (2026-05-04..10) stay in the future relative to
+// "now". `assignServicesPass3` calls `calcReqOptimistic` which uses
+// `isServicePast` internally — without this, a slot that fell into the
+// past would silently pass the stock check and Pass 3 would over-assign.
+beforeAll(() => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2026-05-01T08:00:00Z'));
+});
+afterAll(() => {
+  jest.useRealTimers();
+});
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 let _idCounter = 0;

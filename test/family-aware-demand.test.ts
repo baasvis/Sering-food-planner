@@ -60,6 +60,20 @@ function rebuildPlanner(batches: Batch[]) {
   recomputeFamilyAllocations();
 }
 
+// Pin the system clock to a stable Friday in late April 2026 so the
+// hardcoded service dates (2026-05-04..06) stay in the future relative to
+// "now" and `isServicePast` returns false for them. Without this, running
+// the suite after 2026-05-03 makes `calcReqOptimistic` skip past slots and
+// `calcRequired` returns 0, breaking every assertion that depends on a
+// non-zero family share.
+beforeAll(() => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2026-05-01T08:00:00Z'));
+});
+afterAll(() => {
+  jest.useRealTimers();
+});
+
 beforeEach(() => {
   _id = 0;
   // Seed S.guests for every weekday so the multi-slot test can rely on
