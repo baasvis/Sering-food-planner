@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { PrismaClient, Prisma } from '@prisma/client';
-import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient } from '../shared/types';
+import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient, Ingredient } from '../shared/types';
 import { toGrams } from '../shared/units';
 
 export const prisma = new PrismaClient();
@@ -137,6 +137,81 @@ export function validateTransportItems(items: TransportItem[]): string | null {
     if (ids.has(t.id)) return `TransportItem ${i}: duplicate id "${t.id}"`;
     ids.add(t.id);
     const err = validateTransportItem(t, `TransportItem ${i}`);
+    if (err) return err;
+  }
+  return null;
+}
+
+// Audit T20: bulk POST /api/ingredients used to validate only that the
+// payload was an array (no per-row checks). A subverted supplier file or
+// hand-crafted POST could plant XSS-shaped ids (S2) or oversized
+// strings at scale. validateIngredient mirrors validateBatch's shape:
+// per-field type/length/range checks. PRICE_LEVELS is the domain set the
+// frontend sends; '' is also accepted because it's the default for
+// hand-entered ingredients with no level set.
+const VALID_PRICE_LEVELS = ['', 'cheap', 'medium', 'expensive'];
+const VALID_MEASURE_MODES = ['weight', 'volume', 'amount'];
+
+export function validateIngredient(ing: Ingredient, prefix = ''): string | null {
+  const p = prefix ? `${prefix}: ` : '';
+  if (!ing.id || typeof ing.id !== 'string') return `${p}missing or invalid id`;
+  if (!VALID_ID_PATTERN.test(ing.id)) return `${p}invalid id charset`;
+  if (typeof ing.name !== 'string' || ing.name.length === 0 || ing.name.length > 200) return `${p}invalid name`;
+  if (typeof ing.supplierName !== 'string' || ing.supplierName.length > 500) return `${p}invalid supplierName`;
+  if (!Array.isArray(ing.types)) return `${p}types must be an array`;
+  if (ing.types.length > 20) return `${p}too many types (max 20)`;
+  for (const t of ing.types) {
+    if (typeof t !== 'string' || t.length > 50) return `${p}invalid types entry`;
+  }
+  if (typeof ing.category !== 'string' || ing.category.length > 100) return `${p}invalid category`;
+  if (ing.measureMode !== undefined && (typeof ing.measureMode !== 'string' || (ing.measureMode !== '' && !VALID_MEASURE_MODES.includes(ing.measureMode)))) return `${p}invalid measureMode`;
+  if (typeof ing.unit !== 'string' || ing.unit.length > 50) return `${p}invalid unit`;
+  if (typeof ing.supplier !== 'string' || ing.supplier.length > 100) return `${p}invalid supplier`;
+  if (typeof ing.orderCode !== 'string' || ing.orderCode.length > 100) return `${p}invalid orderCode`;
+  if (typeof ing.orderUnit !== 'string' || ing.orderUnit.length > 100) return `${p}invalid orderUnit`;
+  if (ing.orderPrice !== null && ing.orderPrice !== undefined) {
+    const n = typeof ing.orderPrice === 'number' ? ing.orderPrice : parseFloat(String(ing.orderPrice));
+    if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return `${p}invalid orderPrice`;
+  }
+  if (ing.orderUnitSize !== undefined) {
+    const n = typeof ing.orderUnitSize === 'number' ? ing.orderUnitSize : parseFloat(String(ing.orderUnitSize));
+    if (!Number.isFinite(n) || n < 0 || n > 10_000_000) return `${p}invalid orderUnitSize`;
+  }
+  if (ing.priceLevel !== undefined && !VALID_PRICE_LEVELS.includes(ing.priceLevel)) return `${p}invalid priceLevel`;
+  if (ing.pricePer100 !== undefined) {
+    const n = typeof ing.pricePer100 === 'number' ? ing.pricePer100 : parseFloat(String(ing.pricePer100));
+    if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return `${p}invalid pricePer100`;
+  }
+  if (ing.priceAlert !== undefined && typeof ing.priceAlert !== 'boolean') return `${p}invalid priceAlert`;
+  if (typeof ing.allergens !== 'string' || ing.allergens.length > 500) return `${p}invalid allergens`;
+  if (typeof ing.notes !== 'string' || ing.notes.length > 5000) return `${p}invalid notes`;
+  if (ing.active !== undefined && typeof ing.active !== 'boolean') return `${p}invalid active`;
+  // Loose JSON shape checks: must be an object, not an array (Prisma JSON
+  // would accept either but the runtime code expects the documented shapes).
+  if (ing.storageLocations !== undefined && (typeof ing.storageLocations !== 'object' || ing.storageLocations === null || Array.isArray(ing.storageLocations))) return `${p}invalid storageLocations`;
+  if (ing.stock !== undefined && (typeof ing.stock !== 'object' || ing.stock === null || Array.isArray(ing.stock))) return `${p}invalid stock`;
+  if (ing.targetStock !== undefined && (typeof ing.targetStock !== 'object' || ing.targetStock === null || Array.isArray(ing.targetStock))) return `${p}invalid targetStock`;
+  if (ing.nutrition !== undefined && ing.nutrition !== null && (typeof ing.nutrition !== 'object' || Array.isArray(ing.nutrition))) return `${p}invalid nutrition`;
+  if (ing.priceHistory !== undefined && ing.priceHistory !== null) {
+    if (!Array.isArray(ing.priceHistory)) return `${p}invalid priceHistory`;
+    if (ing.priceHistory.length > 240) return `${p}too many priceHistory entries (max 240)`;
+    for (const h of ing.priceHistory) {
+      if (!h || typeof h !== 'object' || typeof h.month !== 'string' || h.month.length > 20) return `${p}invalid priceHistory entry`;
+      if (typeof h.price !== 'number' || !Number.isFinite(h.price) || h.price < 0) return `${p}invalid priceHistory entry`;
+    }
+  }
+  return null;
+}
+
+export function validateIngredients(ingredients: Ingredient[]): string | null {
+  if (!Array.isArray(ingredients)) return 'ingredients must be an array';
+  if (ingredients.length > 5000) return 'Too many ingredients (max 5000)';
+  const ids = new Set<string>();
+  for (let i = 0; i < ingredients.length; i++) {
+    const ing = ingredients[i];
+    if (ing && ids.has(ing.id)) return `Ingredient ${i}: duplicate id "${ing.id}"`;
+    if (ing && ing.id) ids.add(ing.id);
+    const err = validateIngredient(ing, `Ingredient ${i}`);
     if (err) return err;
   }
   return null;

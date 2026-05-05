@@ -566,6 +566,80 @@ describe('T19 — bulk ingredient save recomputes recipe costs', () => {
   }, 90_000);
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+// T20 — bulk POST /api/ingredients per-row validation. Previously the
+// route only checked Array.isArray + a per-id charset loop (S2 fix);
+// every other field was unchecked. validateIngredients now enforces
+// length caps, types[] bounds, JSON shapes — same shape as
+// validateBatches/validateCaterings.
+// ──────────────────────────────────────────────────────────────────────────
+describe('T20 — bulk POST /api/ingredients per-row validation', () => {
+  // The valid base — minimum fields the validator accepts.
+  const baseIng = (id: string) => ({
+    id, name: 'T20 Test', supplierName: '', types: [], category: '',
+    unit: 'Grams', supplier: '', orderCode: '', orderUnit: '',
+    orderPrice: null, orderUnitSize: 0, priceLevel: '', pricePer100: 0,
+    priceAlert: false, storageLocations: {}, stock: {}, targetStock: {},
+    allergens: '', notes: '', active: true,
+  });
+
+  it('rejects oversized name', async () => {
+    const payload = [{ ...baseIng(T + 't20-name'), name: 'x'.repeat(201) }];
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/name/i);
+  });
+
+  it('rejects empty name', async () => {
+    const payload = [{ ...baseIng(T + 't20-empty-name'), name: '' }];
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects non-array types', async () => {
+    const payload = [{ ...baseIng(T + 't20-types'), types: 'Food' as unknown as string[] }];
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects oversized allergens string', async () => {
+    const payload = [{ ...baseIng(T + 't20-allergens'), allergens: 'a'.repeat(501) }];
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects negative orderPrice', async () => {
+    const payload = [{ ...baseIng(T + 't20-neg-price'), orderPrice: -5 }];
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects invalid priceLevel', async () => {
+    const payload = [{ ...baseIng(T + 't20-pl'), priceLevel: 'super-cheap' }];
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects duplicate ids in the payload', async () => {
+    const payload = [baseIng(T + 't20-dup'), baseIng(T + 't20-dup')];
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/duplicate/i);
+  });
+
+  it('rejects array types[] entry that is not a string', async () => {
+    const payload = [{ ...baseIng(T + 't20-types-bad'), types: [123 as unknown as string] }];
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(400);
+  });
+
+  it('still rejects XSS-shaped id (charset check survives)', async () => {
+    const payload = [{ ...baseIng("');alert(1);('"), name: 'Bad Id' }];
+    const res = await request(app).post('/api/ingredients').send(payload);
+    expect(res.status).toBe(400);
+  });
+});
+
 // ── Ingredient Stock ──
 
 describe('POST /api/ingredients/stock', () => {
