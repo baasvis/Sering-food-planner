@@ -10,6 +10,26 @@ import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './
 import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired, getGuests, getRootId, consolidateFamilies } from './core';
 import { rerenderCurrentView } from './navigate';
 import { showModal, closeModal, esc } from './modal';
+import { refineWithGa, type GaResult } from './menu-fixer-ga';
+
+// ── Feature flag ────────────────────────────────────────────────────────────
+//
+// 'v2' — 5-pass greedy + GA refinement (default since 2026-05-07; bench:
+//        +7.5% mean score, eliminates missed-matches, see
+//        bench/menu-fixer/strategies/COMPARISON.md). Adds ~1-3s latency.
+// 'v1' — old 5-pass greedy + Pass 5 only. Kept as escape hatch in case v2
+//        misbehaves on a specific week.
+//
+// Force v1 in DevTools: `localStorage.setItem('menu_fixer_version', 'v1')`
+// Back to default:       `localStorage.removeItem('menu_fixer_version')`
+function getMenuFixerVersion(): 'v1' | 'v2' {
+  try {
+    const v = localStorage.getItem('menu_fixer_version');
+    return v === 'v1' ? 'v1' : 'v2';
+  } catch {
+    return 'v2';
+  }
+}
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -1325,6 +1345,19 @@ export function fixMyMenu(): void {
   const pass5 = assignServicesPass5(S.batches, planWindow, calcReqLive, getGuests);
   rebuildPlanner();
 
+  // Step 4.6 — GA refinement (opt-in via MENU_FIXER_VERSION flag).
+  // The 5-pass greedy commits to per-position choices it can't take back.
+  // On weeks where the prior Sunday over-cooked, this leaves slots empty
+  // even when food's available ("missed match"). The GA explores wider
+  // and recovers these. Bench: +7.5% mean score across 10 fixtures, all
+  // missed-matches eliminated. Latency: +1-3s on top of the 5-pass.
+  // Default OFF — enable in DevTools: localStorage.setItem('menu_fixer_version', 'v2')
+  let gaResult: GaResult | null = null;
+  if (getMenuFixerVersion() === 'v2') {
+    gaResult = refineWithGa(getToday());
+    rebuildPlanner();
+  }
+
   // Step 4.5 — Allocate kitchen pots to batches by ACTUAL demand.
   // Biggest pot goes to the batch that needs the most food. This way the
   // 140L pot is never wasted on a low-demand batch just because it sorts
@@ -1354,6 +1387,7 @@ export function fixMyMenu(): void {
     placeholderNames: newPlaceholders.map(p => p.name),
     teamsFormed: pass5.teamsFormed,
     warnings,
+    gaResult,
   });
 }
 
@@ -1586,6 +1620,8 @@ interface ResultsReport {
   /** Number of multi-batch teams Pass 5 assembled to fill high-demand slots. */
   teamsFormed?: number;
   warnings: Warning[];
+  /** Set when MENU_FIXER_VERSION === 'v2' and the GA refinement ran. */
+  gaResult?: GaResult | null;
 }
 
 let _lastReport: ResultsReport | null = null;
@@ -1643,13 +1679,21 @@ function categoryHeader(c: WarningCategory): { title: string; hint: string } {
 
 function showResultsModal(report: ResultsReport): void {
   _lastReport = report;
-  const { cleaned, created, assigned, consolidated, placeholderNames, teamsFormed, warnings } = report;
+  const { cleaned, created, assigned, consolidated, placeholderNames, teamsFormed, warnings, gaResult } = report;
   const summary: string[] = [];
   if (consolidated > 0) summary.push(`<div>⛓ Merged ${consolidated} duplicate batch${consolidated === 1 ? '' : 'es'} of the same recipe at the same location</div>`);
   if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
   if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
   if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);
   if (teamsFormed && teamsFormed > 0) summary.push(`<div>🤝 Combined ${teamsFormed} multi-batch team${teamsFormed === 1 ? '' : 's'} for high-demand slots</div>`);
+  if (gaResult) {
+    const lift = gaResult.bestScore - gaResult.baseScore;
+    if (lift > 0) {
+      summary.push(`<div>🧬 GA refinement (v2): improved score by ${lift.toLocaleString()} pts in ${gaResult.generations} generations (${(gaResult.durationMs / 1000).toFixed(1)}s)</div>`);
+    } else {
+      summary.push(`<div>🧬 GA refinement (v2): no improvement found — ${gaResult.generations} generations in ${(gaResult.durationMs / 1000).toFixed(1)}s</div>`);
+    }
+  }
   if (summary.length === 0) summary.push(`<div>Menu already covers the cook rhythm — nothing to do.</div>`);
 
   // Sort warnings by category order, preserving original index for action handlers.
