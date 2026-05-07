@@ -11,7 +11,10 @@
     "declaration": false,
     "sourceMap": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": []
+    "types": [],
+    "paths": {
+      "@shared/*": ["./shared/*"]
+    }
   },
   "include": ["public/js/**/*.ts", "shared/**/*.ts", "types/**/*.d.ts"]
 }
