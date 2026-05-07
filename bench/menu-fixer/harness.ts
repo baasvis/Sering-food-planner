@@ -178,13 +178,13 @@ export async function runStrategy(
 
 export function formatRunsTable(runs: BenchRun[]): string {
   const lines: string[] = [];
-  lines.push('| Strategy | Fixture | Score | Filled | Missed | Surplus L | Over-cap | Stale L | HardFails | Time ms |');
-  lines.push('|---|---|---:|---:|---:|---:|---:|---:|---:|---:|');
+  lines.push('| Strategy | Fixture | Score | Filled | Missed | Surplus L | Deficit L | Over-cap | Stale L | HardFails | Time ms |');
+  lines.push('|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|');
   for (const r of runs) {
     const b = r.score.breakdown;
     const hf = r.score.hardFails.length;
     const fillPct = b.slotsTotal > 0 ? `${b.slotsFilled}/${b.slotsTotal}` : '-';
-    lines.push(`| ${r.strategy} | ${r.fixture} | ${r.score.total} | ${fillPct} | ${b.missedMatches} | ${b.leftoverSurplusLiters.toFixed(1)} | ${b.overCapSlots} | ${b.staleNotAssignedLiters.toFixed(1)} | ${hf} | ${r.durationMs} |`);
+    lines.push(`| ${r.strategy} | ${r.fixture} | ${r.score.total} | ${fillPct} | ${b.missedMatches} | ${b.leftoverSurplusLiters.toFixed(1)} | ${b.overcommitDeficitLiters.toFixed(1)} | ${b.overCapSlots} | ${b.staleNotAssignedLiters.toFixed(1)} | ${hf} | ${r.durationMs} |`);
   }
   return lines.join('\n');
 }
@@ -198,8 +198,8 @@ export function formatStrategyAverages(runs: BenchRun[]): string {
     byStrat.set(r.strategy, arr);
   }
   const lines: string[] = [];
-  lines.push('| Strategy | Mean Score | Mean Filled% | Mean Missed | Mean Surplus L | HardFails | Mean ms |');
-  lines.push('|---|---:|---:|---:|---:|---:|---:|');
+  lines.push('| Strategy | Mean Score | Mean Filled% | Mean Missed | Mean Surplus L | Mean Deficit L | HardFails | Mean ms |');
+  lines.push('|---|---:|---:|---:|---:|---:|---:|---:|');
   for (const [strat, list] of byStrat) {
     const meanScore = list.reduce((s, r) => s + r.score.total, 0) / list.length;
     const totalSlots = list.reduce((s, r) => s + r.score.breakdown.slotsTotal, 0);
@@ -207,9 +207,10 @@ export function formatStrategyAverages(runs: BenchRun[]): string {
     const fillPct = totalSlots > 0 ? (totalFilled / totalSlots * 100) : 0;
     const meanMissed = list.reduce((s, r) => s + r.score.breakdown.missedMatches, 0) / list.length;
     const meanSurplus = list.reduce((s, r) => s + r.score.breakdown.leftoverSurplusLiters, 0) / list.length;
+    const meanDeficit = list.reduce((s, r) => s + r.score.breakdown.overcommitDeficitLiters, 0) / list.length;
     const totalHardFails = list.reduce((s, r) => s + r.score.hardFails.length, 0);
     const meanMs = list.reduce((s, r) => s + r.durationMs, 0) / list.length;
-    lines.push(`| ${strat} | ${meanScore.toFixed(0)} | ${fillPct.toFixed(0)}% | ${meanMissed.toFixed(1)} | ${meanSurplus.toFixed(1)} | ${totalHardFails} | ${meanMs.toFixed(0)} |`);
+    lines.push(`| ${strat} | ${meanScore.toFixed(0)} | ${fillPct.toFixed(0)}% | ${meanMissed.toFixed(1)} | ${meanSurplus.toFixed(1)} | ${meanDeficit.toFixed(1)} | ${totalHardFails} | ${meanMs.toFixed(0)} |`);
   }
   return lines.join('\n');
 }

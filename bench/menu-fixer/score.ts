@@ -24,6 +24,12 @@ const W_STALE_LITER = -50;
 const W_FAMILY_BUDGET = -20;
 const W_OLDEST_FIRST = 10;
 const W_VARIETY = 2;
+// Over-commit (calcRequired > stock) — must keep solvers from filling slots
+// by pushing batches into a deficit. At -200/L, 4L overcommit costs 800
+// (slot-fill bonus +1000 still wins) while 10L+ flips to "leave empty wins".
+// User feedback 2026-05-07: -40L over-commit was happening in prod and is
+// unacceptable; the slot should be empty + warning instead.
+const W_OVERCOMMIT_LITER = -200;
 
 // Cap on the largest single batch's share of slot demand (Pass 5 constant).
 const MAX_GUEST_FRACTION_PER_BATCH = 0.6;
@@ -136,6 +142,7 @@ export function scoreSolution(fixture: Fixture, batchesAfter: Batch[]): ScoreRep
     slotsFilledPoints: 0,
     missedMatchPenalty: 0,
     leftoverSurplusPenalty: 0,
+    overcommitPenalty: 0,
     overCapPenalty: 0,
     staleNotAssignedPenalty: 0,
     familyBudgetPenalty: 0,
@@ -145,6 +152,7 @@ export function scoreSolution(fixture: Fixture, batchesAfter: Batch[]): ScoreRep
     slotsTotal: 0,
     missedMatches: 0,
     leftoverSurplusLiters: 0,
+    overcommitDeficitLiters: 0,
     overCapSlots: 0,
     staleNotAssignedLiters: 0,
     familyBudgetViolations: 0,
@@ -285,6 +293,18 @@ export function scoreSolution(fixture: Fixture, batchesAfter: Batch[]): ScoreRep
         liters: surplus,
         batchId: b.id,
       });
+    } else if (surplus < -1) {
+      // Over-commit: required exceeds stock — the batch is being asked to
+      // serve more food than it has. Past about 5L deficit this is unacceptable
+      // (feedback 2026-05-07: -40L was happening; should be empty + warning).
+      const deficit = -surplus;
+      breakdown.overcommitDeficitLiters += deficit;
+      softViolations.push({
+        category: 'over-commit',
+        detail: `Batch ${b.name} (${b.stock.toFixed(1)}L stock) is allocated ${required.toFixed(1)}L of demand — ${deficit.toFixed(1)}L deficit`,
+        liters: deficit,
+        batchId: b.id,
+      });
     }
   }
 
@@ -409,6 +429,7 @@ export function scoreSolution(fixture: Fixture, batchesAfter: Batch[]): ScoreRep
   breakdown.slotsFilledPoints = breakdown.slotsFilled * W_SLOT_FILLED;
   breakdown.missedMatchPenalty = breakdown.missedMatches * W_MISSED_MATCH;
   breakdown.leftoverSurplusPenalty = breakdown.leftoverSurplusLiters * W_LEFTOVER_LITER;
+  breakdown.overcommitPenalty = breakdown.overcommitDeficitLiters * W_OVERCOMMIT_LITER;
   breakdown.overCapPenalty = breakdown.overCapSlots * W_OVER_CAP;
   breakdown.staleNotAssignedPenalty = breakdown.staleNotAssignedLiters * W_STALE_LITER;
   breakdown.familyBudgetPenalty = breakdown.familyBudgetViolations * W_FAMILY_BUDGET;
@@ -418,6 +439,7 @@ export function scoreSolution(fixture: Fixture, batchesAfter: Batch[]): ScoreRep
   const total = breakdown.slotsFilledPoints
     + breakdown.missedMatchPenalty
     + breakdown.leftoverSurplusPenalty
+    + breakdown.overcommitPenalty
     + breakdown.overCapPenalty
     + breakdown.staleNotAssignedPenalty
     + breakdown.familyBudgetPenalty

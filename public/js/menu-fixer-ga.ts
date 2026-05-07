@@ -63,6 +63,16 @@ const W_OLD = 10;
 const W_VAR = 2;
 const MAX_GUEST_FRACTION_PER_BATCH = 0.6;
 
+// Over-commit penalty: per liter of (calcRequired − stock) on cooked batches.
+// User feedback 2026-05-07: small deficits (≤ ~5L) are tolerable; bigger
+// deficits mean an entire dish goes hungry and the slot should stay empty
+// + emit a stockout warning instead. At -200/L the breakeven against the
+// +1000 slot-fill bonus is around 5L deficit:
+//   4L  deficit → +1000 − 800   = +200  (still fills, OK)
+//   10L deficit → +1000 − 2000  = −1000 (leaving empty wins)
+//   40L deficit → +1000 − 8000  = −7000 (empty crushes)
+const W_OVERCOMMIT = -200;
+
 // ── Tiny LCG seeded by hash ────────────────────────────────────────────────
 
 function hashString(s: string): number {
@@ -358,6 +368,7 @@ function fitnessScore(ctx: PlannerCtx): number {
   }
 
   let slotsFilled = 0, missed = 0, leftover = 0, overCap = 0, staleL = 0, famV = 0, oldF = 0, variety = 0;
+  let overcommitDeficitL = 0;
 
   for (const date of ctx.window) {
     if (date < ctx.todayIso) continue;
@@ -412,6 +423,10 @@ function fitnessScore(ctx: PlannerCtx): number {
     const required = calcReq(b, ctx);
     const surplus = b.stock - required;
     if (surplus > 1) leftover += surplus;
+    // Over-commit: required exceeds stock — the batch is being asked to
+    // serve more food than it has. Flag the deficit so the GA stops
+    // filling slots by pushing batches into the red.
+    else if (surplus < -1) overcommitDeficitL += -surplus;
   }
 
   // Over-cap (60%)
@@ -497,6 +512,7 @@ function fitnessScore(ctx: PlannerCtx): number {
   return Math.round(
     slotsFilled * W_SLOT + missed * W_MISS + leftover * W_LEFT + overCap * W_OVER
     + staleL * W_STALE + famV * W_FAM + oldF * W_OLD + variety * W_VAR
+    + overcommitDeficitL * W_OVERCOMMIT
   );
 }
 

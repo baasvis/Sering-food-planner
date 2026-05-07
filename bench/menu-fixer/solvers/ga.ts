@@ -441,8 +441,14 @@ function calcReq(b: Batch, ctx: ScoreCtx): number {
 
 function fitnessScore(ctx: ScoreCtx): number {
   const W_SLOT = 1000, W_MISS = -500, W_LEFT = -300, W_OVER = -100, W_STALE = -50, W_FAM = -20, W_OLD = 10, W_VAR = 2;
+  // Over-commit penalty (matches bench/menu-fixer/score.ts and
+  // public/js/menu-fixer-ga.ts). Stops the GA from filling slots by
+  // pushing batches into a deficit (prod feedback 2026-05-07: -40L
+  // overcommits were happening; threshold is "leave empty + warning").
+  const W_OVERCOMMIT = -200;
   let total = 0;
   let slotsFilled = 0, missed = 0, leftover = 0, overCap = 0, staleL = 0, famV = 0, oldF = 0, variety = 0;
+  let overcommitDeficitL = 0;
 
   // Hard fails first
   // 1. In-slot family duplicate (only future)
@@ -525,6 +531,7 @@ function fitnessScore(ctx: ScoreCtx): number {
     const required = calcReq(b, ctx);
     const surplus = b.stock - required;
     if (surplus > 1) leftover += surplus;
+    else if (surplus < -1) overcommitDeficitL += -surplus;
   }
 
   // Over-cap (60% of slot)
@@ -612,7 +619,8 @@ function fitnessScore(ctx: ScoreCtx): number {
   }
 
   total = slotsFilled * W_SLOT + missed * W_MISS + leftover * W_LEFT + overCap * W_OVER
-    + staleL * W_STALE + famV * W_FAM + oldF * W_OLD + variety * W_VAR;
+    + staleL * W_STALE + famV * W_FAM + oldF * W_OLD + variety * W_VAR
+    + overcommitDeficitL * W_OVERCOMMIT;
   return Math.round(total);
 }
 

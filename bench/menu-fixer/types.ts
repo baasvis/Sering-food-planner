@@ -95,6 +95,7 @@ export interface ScoreBreakdown {
   slotsFilledPoints: number;
   missedMatchPenalty: number;
   leftoverSurplusPenalty: number;
+  overcommitPenalty: number;
   overCapPenalty: number;
   staleNotAssignedPenalty: number;
   familyBudgetPenalty: number;
@@ -105,6 +106,7 @@ export interface ScoreBreakdown {
   slotsTotal: number;
   missedMatches: number;
   leftoverSurplusLiters: number;
+  overcommitDeficitLiters: number;
   overCapSlots: number;
   staleNotAssignedLiters: number;
   familyBudgetViolations: number;
