@@ -14,18 +14,20 @@ import { refineWithGa, type GaResult } from './menu-fixer-ga';
 
 // ── Feature flag ────────────────────────────────────────────────────────────
 //
-// 'v1' — current 5-pass greedy + Pass 5 (default, what's been in prod since 2026-05-04)
-// 'v2' — 5-pass greedy + GA refinement (bench: +7.5% mean score, see
+// 'v2' — 5-pass greedy + GA refinement (default since 2026-05-07; bench:
+//        +7.5% mean score, eliminates missed-matches, see
 //        bench/menu-fixer/strategies/COMPARISON.md). Adds ~1-3s latency.
+// 'v1' — old 5-pass greedy + Pass 5 only. Kept as escape hatch in case v2
+//        misbehaves on a specific week.
 //
-// Toggle in DevTools: `localStorage.setItem('menu_fixer_version', 'v2')`
-// Reset:               `localStorage.removeItem('menu_fixer_version')`
+// Force v1 in DevTools: `localStorage.setItem('menu_fixer_version', 'v1')`
+// Back to default:       `localStorage.removeItem('menu_fixer_version')`
 function getMenuFixerVersion(): 'v1' | 'v2' {
   try {
     const v = localStorage.getItem('menu_fixer_version');
-    return v === 'v2' ? 'v2' : 'v1';
+    return v === 'v1' ? 'v1' : 'v2';
   } catch {
-    return 'v1';
+    return 'v2';
   }
 }
 
