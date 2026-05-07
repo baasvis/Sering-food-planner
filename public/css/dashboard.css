@@ -132,3 +132,37 @@
 .dash-flow-toggles{display:none;}
 .dash-cook-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--radius);background:var(--bg2);border:1px solid var(--border);margin-bottom:4px;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent;transition:opacity .15s;}
 .dash-cook-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+
+/* ── Transport Card (Pack for Centraal — tomorrow) ── */
+.tcard{margin-bottom:10px;}
+/* "Lit" = inventory + cook + Fix My Menu all done today AND there are rows to
+   pack. Visual cue only — never blocks action. */
+.tcard.tcard-lit{border-color:var(--green);background:linear-gradient(180deg,var(--green-bg) 0%,var(--bg) 60%);box-shadow:0 0 0 1px rgba(22,163,74,.18);}
+.tcard .dash-card-title{margin-bottom:8px;}
+
+.tcard-mode-toggle{margin-left:auto;display:inline-flex;border:1px solid var(--border2);border-radius:6px;overflow:hidden;}
+.tcard-mode-btn{font-size:10px;font-weight:700;padding:3px 10px;background:var(--bg);color:var(--text2);border:none;cursor:pointer;text-transform:uppercase;letter-spacing:.04em;-webkit-tap-highlight-color:transparent;}
+.tcard-mode-btn:hover{color:var(--text);}
+.tcard-mode-btn.active{background:var(--text);color:var(--bg);}
+
+.tcard-banner{font-size:11px;padding:6px 8px;border-radius:6px;margin-bottom:8px;line-height:1.35;}
+.tcard-banner-ready{background:var(--green-bg);color:var(--green);border:1px solid rgba(22,163,74,.2);}
+.tcard-banner-pending{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(186,117,23,.2);}
+
+.tcard-empty{font-size:12px;color:var(--text3);font-style:italic;padding:10px 4px;text-align:center;}
+
+.tcard-rows{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+.tcard-row{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);}
+.tcard-row-main{flex:1 1 0;min-width:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.tcard-row-name{font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto;min-width:0;}
+.tcard-row-future{font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;background:var(--blue-bg);color:var(--blue);text-transform:uppercase;letter-spacing:.04em;flex-shrink:0;}
+.tcard-row-svc{font-size:10px;color:var(--text2);font-weight:500;white-space:nowrap;flex-shrink:0;}
+.tcard-row-qty{display:flex;align-items:baseline;gap:6px;flex-shrink:0;}
+.tcard-row-send{font-size:13px;font-weight:800;color:var(--text);background:var(--bg3);padding:2px 8px;border-radius:5px;}
+.tcard-row-sub{font-size:10px;color:var(--text3);font-weight:500;}
+
+.tcard-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:6px;border-top:1px solid var(--border);}
+.tcard-total{display:flex;align-items:baseline;gap:6px;}
+.tcard-total-label{font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
+.tcard-total-qty{font-size:14px;font-weight:800;color:var(--text);}
+.tcard-confirm{font-size:12px;padding:6px 14px;}

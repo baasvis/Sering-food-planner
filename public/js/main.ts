@@ -25,6 +25,7 @@ import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, 
 import { initTelemetry, trackScreenView, trackEvent, trackError } from './telemetry';
 import { executeUndo, flushUndo } from './undo';
 import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave, fixMenuGoto, fixMenuAction } from './menu-fixer';
+import { setTransportMode, confirmTransportPlan } from './transport-card';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -100,6 +101,9 @@ Object.assign(window, {
   // menu-fixer
   fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave,
   fixMenuGoto, fixMenuAction,
+
+  // transport-card
+  setTransportMode, confirmTransportPlan,
 });
 
 // ═══════════════════════════════════════════════════════════════════

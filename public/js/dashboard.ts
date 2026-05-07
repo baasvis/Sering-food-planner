@@ -17,6 +17,7 @@ import { trackScreenView } from './telemetry';
 import { showModal, closeModal } from './modal';
 import { getStorageConfigForLoc } from './state';
 import { locName } from '@shared/location';
+import { renderTransportCard } from './transport-card';
 
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
@@ -973,6 +974,8 @@ export function renderDashboardContent() {
         </div>
       </div>
     </div>
+
+    ${renderTransportCard()}
 
     <!-- ═══ TWO-COLUMN LAYOUT ═══ -->
     <div class="dash-columns">

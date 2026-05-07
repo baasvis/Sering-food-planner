@@ -10,6 +10,7 @@ import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './
 import { rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, isServicePast, calcRequired, getGuests, getRootId, consolidateFamilies } from './core';
 import { rerenderCurrentView } from './navigate';
 import { showModal, closeModal, esc } from './modal';
+import { markFixMyMenuRun } from './transport-card';
 import { refineWithGa, type GaResult } from './menu-fixer-ga';
 
 // ── Feature flag ────────────────────────────────────────────────────────────
@@ -1375,6 +1376,11 @@ export function fixMyMenu(): void {
     S.kitchenEquipment,
     getGuests,
   );
+
+  // Mark Fix My Menu as run today — read by the dashboard transport card's
+  // readiness banner (localStorage-backed; persists across reloads, resets on
+  // local-day boundary).
+  markFixMyMenuRun();
 
   rerenderCurrentView();
   scheduleSave();

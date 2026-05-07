@@ -1037,16 +1037,24 @@ export function renderSplitBar() {
     <label>Storage</label><select id="sp-storage">${STORAGE.map(s => `<option>${s}</option>`).join('')}</select>
     <label>Location</label><select id="sp-location">${LOCATIONS.map(l => `<option value="${l}">${locName(l)}</option>`).join('')}</select>
     <button class="btn btn-primary" onclick="doSplit(false)">Split off</button>
-    ${hasWest ? `<button class="btn btn-purple" onclick="doTransportSplit('centraal',${smartCentraalAmt})">Split ${smartCentraalAmt}L &rarr; Centraal</button>` : ''}
-    ${hasCentraal ? `<button class="btn btn-purple" onclick="doTransportSplit('west',${smartWestAmt})">Split ${smartWestAmt}L &rarr; West</button>` : ''}
+    ${hasWest ? `<button class="btn btn-purple" onclick="doTransportSplit('centraal',${smartCentraalAmt})" title="Ad-hoc move outside the daily Pack-and-send flow">Send ${smartCentraalAmt}L to Centraal now</button>` : ''}
+    ${hasCentraal ? `<button class="btn btn-purple" onclick="doTransportSplit('west',${smartWestAmt})" title="Ad-hoc move outside the daily Pack-and-send flow">Send ${smartWestAmt}L to West now</button>` : ''}
     <button class="btn" onclick="S.selected.clear();rerenderCurrentView()">Cancel</button>
   </div>`;
 }
 
 export function doSplit(isTransport: boolean, targetLoc?: string, smartAmounts?: boolean) {
-  const manualAmt = parseFloat((document.getElementById('sp-amt') as HTMLInputElement).value);
-  const defaultStorage = (document.getElementById('sp-storage') as HTMLSelectElement).value;
-  const splitLocation = isTransport ? targetLoc! : (document.getElementById('sp-location') as HTMLSelectElement).value;
+  // The split bar's inputs only exist on screens that mount renderSplitBar
+  // (the planner). Callers like the dashboard transport card invoke doSplit
+  // directly with isTransport+smartAmounts and never read manualAmt /
+  // defaultStorage / dropdown location, so guard the DOM reads instead of
+  // throwing on `(null).value`.
+  const amtEl = document.getElementById('sp-amt') as HTMLInputElement | null;
+  const storageEl = document.getElementById('sp-storage') as HTMLSelectElement | null;
+  const locationEl = document.getElementById('sp-location') as HTMLSelectElement | null;
+  const manualAmt = amtEl ? parseFloat(amtEl.value) : NaN;
+  const defaultStorage = storageEl ? storageEl.value : 'Gastro';
+  const splitLocation = isTransport ? targetLoc! : (locationEl ? locationEl.value : 'centraal');
   const splitInTransit = isTransport ? true : false;
   let errors = [];
   [...S.selected].forEach(id => {
