@@ -28,8 +28,12 @@ or workflow.
 - **Flavor through technique.** Roasting, toasting whole spices, building
   depth with umami (miso, soy, tomato paste, mushrooms), brightening with
   acid (vinegar, citrus), and finishing with herbs.
-- **Aromatics base.** Almost every savoury recipe starts with onion + garlic
-  + ginger fried in oil.
+- **Aromatics base.** Almost every savoury recipe starts by frying aromatics
+  in oil. Onion + garlic + ginger is the default, but pick what fits the
+  cuisine: shallots + lemongrass + chili for Thai, mirepoix (onion + carrot
+  + celery) for Italian, sofrito for Spanish, mustard seeds + curry leaves
+  + onion for South Indian. The principle is "build flavor from a fried
+  base" — the specific ingredients vary.
 
 ## Cost targets (food cost per portion)
 | Type        | Target            | Notes |
@@ -88,6 +92,13 @@ Steps should be:
 - **Numbered**, in the order a cook executes them.
 - **Written for large-scale production** by volunteers.
 - **Workflow-efficient** — see the liquid-first principle below.
+- **No time measurements.** Never write "cook for 5 minutes" or "simmer
+  for 30 seconds" — those don't scale at kitchen volumes (5 minutes in a
+  small pot ≠ 5 minutes in a 100 L kettle). Use **state cues** instead:
+  *until translucent and fragrant*, *until reduced by half*, *until
+  thickened*, *until tender*, *until the oil splits*, *until darkened*.
+  A volunteer cook uses the cue as the target and lets scale dictate the
+  clock.
 
 Steps should cover, where applicable: roasting, simmering, blending,
 seasoning adjustments, and texture guidance.
@@ -104,8 +115,8 @@ Concretely, a soup recipe might look like:
 
 1. Heat oil in a large pot. Add onion + garlic + ginger; cook until
    translucent and fragrant.
-2. Add the spice blend; toast 30 seconds.
-3. Add tomato paste; cook 1 minute.
+2. Add the spice blend; toast until fragrant.
+3. Add tomato paste; cook until darkened and the oil splits.
 4. **Add stock, coconut milk, and lentils. Bring to a simmer.** ← liquid
    stage reached
 5. Meanwhile (someone else): roast / chop / prep the vegetables.
@@ -134,6 +145,48 @@ Use this structure as the default for soups and most main courses.
 - **Garlic / ginger**: prefer the pre-mashed catalog entries.
 - **Stock awareness.** If the user asks "what can I cook now", prefer
   ingredients with positive stock at the relevant location.
+
+## Cooked amounts (always fill these in)
+
+For every ingredient, set both `rawAmount` (what the cook starts with —
+unpeeled, unwashed, raw weight) **and** `cookedAmount` (what's left after
+cleaning, peeling, frying, evaporation — the weight that ends up in the
+finished dish, in the same unit as `rawAmount`). The dish's calculated
+final volume is the sum of all `cookedAmount` values, which drives the
+serving count and per-portion price.
+
+If you only set `rawAmount`, the editor falls back to using raw weight
+for volume — wildly wrong for soups with lots of vegetables that shrink.
+
+Rough shrinkage to estimate from (the cook adjusts on the day):
+
+| Ingredient class | rawAmount → cookedAmount |
+|---|---|
+| Onions, leeks (cleaned + fried down) | × 0.4–0.5 |
+| Carrots, parsnip, celeriac, pumpkin (peeled, cooked through) | × 0.7 |
+| Leafy greens, spinach, kale (wilted into the pot) | × 0.2–0.3 |
+| Mushrooms (sautéed, water cooked off) | × 0.4–0.5 |
+| Tomatoes, fresh (reduced into a sauce) | × 0.5–0.6 |
+| Lentils, beans, rice, bulgur (absorb water) | × 2.5 |
+| Pasta (cooked, but starches stay separate per house rule) | × 2.5 |
+| Whole spices, dried herbs, salt, oil | = rawAmount |
+| Stock, water, coconut milk (long simmer) | × 0.85–1.0 |
+| Stock, water, coconut milk (short simmer / no reduction) | = rawAmount |
+
+Worked example — a 60-portion dahl:
+
+- 2 kg onion → cookedAmount 0.9 kg (heavy fry-down)
+- 1.2 kg carrot → cookedAmount 0.85 kg
+- 4 L veggie stock → cookedAmount 4 L (lid on, no reduction)
+- 800 g red lentil → cookedAmount 2 kg (absorbs liquid)
+- 800 g coconut milk → cookedAmount 0.8 kg
+- 400 g tomato paste → cookedAmount 0.4 kg
+
+Sum ≈ 8.95 L → 60 servings of ~250 ml main course. ✓
+
+When in doubt, prefer estimating slightly **lower** for solids (the cook
+adds water if needed) and slightly **lower** for liquids that simmer with
+the lid off.
 
 ## Other fields
 - **Seasonality**: "Year round" / "Spring" / "Summer" / "Fall". (No "Winter"

@@ -122,6 +122,41 @@ describe('applyToolCall', () => {
       expect(after.ingredients[0].rawAmount).toBe(30);
       expect(after.ingredients[0].unit).toBe('Grams');
       expect(after.ingredients[0].isFlexible).toBe(false);
+      expect(after.ingredients[0].cookedAmount).toBeNull();
+    });
+
+    it('preserves cookedAmount when AI provides it', () => {
+      const after = applyToolCall(emptyState(), 'set_ingredients', {
+        ingredients: [
+          { ingredientId: 'ing-onion', ingredientName: 'onion', rawAmount: 800, cookedAmount: 400, unit: 'Grams' },
+          { ingredientId: 'ing-lentil', ingredientName: 'red lentil', rawAmount: 400, cookedAmount: 1000, unit: 'Grams' },
+        ],
+      }, catalog);
+      expect(after.ingredients[0].cookedAmount).toBe(400);
+      expect(after.ingredients[1].cookedAmount).toBe(1000);
+    });
+
+    it('leaves cookedAmount null when AI omits it', () => {
+      const after = applyToolCall(emptyState(), 'set_ingredients', {
+        ingredients: [
+          { ingredientId: 'ing-onion', ingredientName: 'onion', rawAmount: 500, unit: 'Grams' },
+        ],
+      }, catalog);
+      expect(after.ingredients[0].cookedAmount).toBeNull();
+    });
+
+    it('rejects non-finite cookedAmount values', () => {
+      const after = applyToolCall(emptyState(), 'set_ingredients', {
+        ingredients: [
+          { ingredientName: 'a', rawAmount: 100, cookedAmount: NaN as unknown as number, unit: 'Grams' },
+          { ingredientName: 'b', rawAmount: 100, cookedAmount: '50' as unknown as number, unit: 'Grams' },
+          { ingredientName: 'c', rawAmount: 100, cookedAmount: Infinity as unknown as number, unit: 'Grams' },
+        ],
+      }, catalog);
+      // NaN, string, and Infinity should all coerce to null — the AI must send a real number.
+      expect(after.ingredients[0].cookedAmount).toBeNull();
+      expect(after.ingredients[1].cookedAmount).toBeNull();
+      expect(after.ingredients[2].cookedAmount).toBeNull();
     });
   });
 

@@ -23,6 +23,7 @@ export interface AIRecipeStateClient {
     ingredientId: string | null;
     ingredientName: string;
     rawAmount: number;
+    cookedAmount: number | null;
     unit: string;
     isFlexible: boolean;
     flexCategory: string | null;

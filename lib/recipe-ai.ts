@@ -26,7 +26,14 @@ import type { Ingredient, RecipeFull } from '../shared/types';
 export interface AIIngredientRow {
   ingredientId: string | null;
   ingredientName: string;
+  /** What the cook starts with — unpeeled / unwashed / raw weight. */
   rawAmount: number;
+  /** What's left in the finished dish after cleaning, peeling, frying,
+   *  evaporation. Same unit as rawAmount. The editor uses the sum of
+   *  cookedAmount values (falling back to rawAmount when null) to compute
+   *  total recipe volume → portion count. Null means "not estimated" and
+   *  is a soft failure — the AI should fill it in for every ingredient. */
+  cookedAmount: number | null;
   unit: string;
   isFlexible: boolean;
   flexCategory: string | null;
@@ -240,7 +247,7 @@ export const RECIPE_TOOLS = [
   {
     name: 'set_ingredients',
     description:
-      'Replace the entire ingredients list. Provide all ingredients in the order a cook would use them. Link to catalog ingredients by ingredientId; use ingredientName + null id only when nothing in the catalog fits.',
+      'Replace the entire ingredients list. Provide all ingredients in the order a cook would use them. Link to catalog ingredients by ingredientId; use ingredientName + null id only when nothing in the catalog fits. Fill in cookedAmount for every ingredient — see the house style for shrinkage estimates.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -251,7 +258,8 @@ export const RECIPE_TOOLS = [
             properties: {
               ingredientId: { type: ['string', 'null'], description: 'Catalog ingredient id, or null for free-text' },
               ingredientName: { type: 'string', description: 'Display name (must match catalog if ingredientId is set)' },
-              rawAmount: { type: 'number' },
+              rawAmount: { type: 'number', description: 'Raw / starting weight — unpeeled, unwashed' },
+              cookedAmount: { type: ['number', 'null'], description: 'Weight remaining in the finished dish after cleaning, peeling, frying, evaporation (or after absorbing liquid for grains/beans). Same unit as rawAmount. See the house-style shrinkage table; only use null when truly unknown.' },
               unit: { type: 'string', enum: UNITS },
               isFlexible: { type: 'boolean', description: 'True for "any vegetable" style placeholder slots' },
               flexCategory: { type: ['string', 'null'], description: 'Category for flex slots, e.g. "Vegetables & Fruit"' },
@@ -369,10 +377,18 @@ export function applyToolCall(
       const ingredients: AIIngredientRow[] = list.map(row => {
         let ingredientId = row.ingredientId ?? null;
         if (ingredientId && !catalogIds.has(ingredientId)) ingredientId = null;
+        // cookedAmount: accept finite numbers (including 0) from the SDK,
+        // reject null/undefined/strings/NaN/Infinity. The schema declares
+        // ['number', 'null'] but the SDK can occasionally surface coerced
+        // values, so we re-check rather than trusting the cast.
+        const ca = row.cookedAmount;
+        const cookedAmount: number | null =
+          typeof ca === 'number' && Number.isFinite(ca) ? ca : null;
         return {
           ingredientId,
           ingredientName: String(row.ingredientName || ''),
           rawAmount: Number(row.rawAmount) || 0,
+          cookedAmount,
           unit: typeof row.unit === 'string' ? row.unit : 'Grams',
           isFlexible: !!row.isFlexible,
           flexCategory: row.flexCategory ?? null,
