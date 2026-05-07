@@ -134,7 +134,6 @@
 .dash-cook-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
 
 /* ── Transport Card (Pack for Centraal — tomorrow) ── */
-.tcard{margin-bottom:10px;}
 /* "Lit" = inventory + cook + Fix My Menu all done today AND there are rows to
    pack. Visual cue only — never blocks action. */
 .tcard.tcard-lit{border-color:var(--green);background:linear-gradient(180deg,var(--green-bg) 0%,var(--bg) 60%);box-shadow:0 0 0 1px rgba(22,163,74,.18);}

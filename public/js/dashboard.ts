@@ -975,12 +975,10 @@ export function renderDashboardContent() {
       </div>
     </div>
 
-    ${renderTransportCard()}
-
     <!-- ═══ TWO-COLUMN LAYOUT ═══ -->
     <div class="dash-columns">
 
-      <!-- LEFT: STOCK -->
+      <!-- LEFT: STOCK + TRANSPORT -->
       <div class="dash-col">
         <div class="dash-card">
           <div class="dash-card-title">
@@ -1010,6 +1008,7 @@ export function renderDashboardContent() {
               })()
           }
         </div>
+        ${renderTransportCard()}
       </div>
 
       <!-- RIGHT: CHEF TO-DOS -->
