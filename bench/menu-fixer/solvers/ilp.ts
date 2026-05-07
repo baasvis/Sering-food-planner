@@ -233,15 +233,12 @@ export const ilp: SolverFn = (input): SolverResult => {
           // Servable: cook day's dinner or later
           if (cookIso > day.iso) continue;
           if (cookIso === day.iso && slot.meal === 'lunch') continue;
-          // Past cooked: skip if too old to be relevant
+          // Stale rule applies uniformly to cooked AND uncooked. A Sat
+          // placeholder is "stale" for Tue lunch (3 days out) even though
+          // stock=0 right now — the cook plans one batch per cookDate that
+          // serves over ~3 days, and Tue is at-or-past that window.
           const ageDays = daysBetween(cookIso, day.iso);
-          // Cooked stale rule (scorer also ignores stale-cooked for missed-match)
-          if (batch.stock > 0 && ageDays >= STALE_THRESHOLD_DAYS) continue;
-          // For UNcooked placeholders, a sensible serving window is up to ~3 days
-          // post-cook (after that, food would be stale). For cooked stocks already
-          // gated by the rule above. Allow ageDays from 0 to STALE_THRESHOLD_DAYS - 1
-          // for uncooked and let the LP pick what fits.
-          if (batch.stock <= 0 && ageDays > STALE_THRESHOLD_DAYS) continue;
+          if (ageDays >= STALE_THRESHOLD_DAYS) continue;
           const share = guests * (batch.serving || 280) / 1000 / SLOTS_PER_TYPE;
           const cand: Candidate = {
             varName: `x_${batch.id}__${slotKeyStr.replace(/[|]/g, '_')}`,

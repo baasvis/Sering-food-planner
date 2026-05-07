@@ -146,11 +146,14 @@ function isEligibleAtSlot(b: Batch, slot: SlotKey, todayIso: string): boolean {
   if (b.storage === 'Frozen') return false;
   if (slot.date < todayIso) return false;
   if (!isServableBy(b.cookDate, slot.date, slot.meal, slot.loc, b.location || 'west')) return false;
-  if (b.stock > 0) {
-    const cookIso = cookDateToIso(b.cookDate);
-    if (!cookIso) return false;
-    if (daysBetween(cookIso, slot.date) >= STALE_THRESHOLD_DAYS) return false;
-  }
+  // Stale check applies to both cooked AND uncooked. For an uncooked
+  // placeholder, the cook plans to make one batch on cookDate and serve
+  // it over ~3 days; assigning Sat's placeholder to Tue lunch (3 days
+  // out) means the food would be eaten stale even though stock=0 right
+  // now. User feedback 2026-05-07.
+  const cookIso = cookDateToIso(b.cookDate);
+  if (!cookIso) return false;
+  if (daysBetween(cookIso, slot.date) >= STALE_THRESHOLD_DAYS) return false;
   return true;
 }
 
@@ -396,7 +399,8 @@ function fitnessScore(ctx: PlannerCtx): number {
             if (!cookIso) return false;
             if (cookIso > date) return false;
             if (cookIso === date && slot.meal === 'lunch') return false;
-            if (b.stock > 0 && daysBetween(cookIso, date) >= STALE_THRESHOLD_DAYS) return false;
+            // Stale applies to both cooked AND uncooked.
+            if (daysBetween(cookIso, date) >= STALE_THRESHOLD_DAYS) return false;
             const root = ctx.familyRoot.get(b.id) || b.id;
             if (filledFamilies.has(root)) return false;
             if (b.stock === 0) return true;

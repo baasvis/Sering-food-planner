@@ -378,7 +378,8 @@ function generateCandidates(
     if (b.storage === 'Frozen') continue;
     if (!b.cookDate) continue;
     if (!isServableBy(b.cookDate, pos.date, pos.meal, pos.loc, b.location)) continue;
-    if (b.stock > 0 && isStaleAtSlot(b.cookDate, pos.date)) continue;
+    // Stale applies to both cooked and uncooked.
+    if (isStaleAtSlot(b.cookDate, pos.date)) continue;
 
     const root = ctx.rootById.get(b.id)!;
     if (usedRoots.has(root)) continue;
