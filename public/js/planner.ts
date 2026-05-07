@@ -391,15 +391,21 @@ export function slotDrop(e: DragEvent, loc: string, date: string, meal: string) 
  * Returns the list of batches that received a NEW service entry. Members
  * that already had it, or can't reach the slot, are skipped.
  *
- * Frozen batches are excluded (they don't auto-rotate).
+ * The seed (the batch the user explicitly dragged/clicked) is always assigned
+ * unless it already has that service entry — the user's explicit instruction
+ * outranks logistics heuristics. Frozen + isServableBy filters apply only to
+ * auto-pulled-in siblings, so we don't e.g. drag a Centraal split into a West
+ * slot just because its parent was assigned.
  */
 export function assignFamilyToSlot(seed: Batch, loc: string, date: string, meal: string): Batch[] {
   const family = getFamilyMembers(seed, S.batches);
   const added: Batch[] = [];
   for (const m of family) {
-    if (m.storage === 'Frozen') continue;
     if ((m.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal)) continue;
-    if (!isServableBy(m.cookDate, date, meal as 'lunch'|'dinner', loc as 'west'|'centraal', m.location)) continue;
+    if (m.id !== seed.id) {
+      if (m.storage === 'Frozen') continue;
+      if (!isServableBy(m.cookDate, date, meal as 'lunch'|'dinner', loc as 'west'|'centraal', m.location)) continue;
+    }
     if (!m.services) m.services = [];
     m.services.push({ loc, date, meal } as Service);
     added.push(m);
