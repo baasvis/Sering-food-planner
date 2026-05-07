@@ -305,6 +305,29 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
+/** Count West batches that *would* be in the lean plan if they were cooked —
+ *  i.e. they have a Centraal service in the next-3-slot horizon, are not
+ *  in-transit, but `isBatchCooked` is currently false. Used to differentiate
+ *  the empty-state message: "nothing scheduled" vs "scheduled but not yet
+ *  cooked". */
+export function countPendingUncookedForCentraal(batches: Batch[]): number {
+  const horizonSlots = nextCentraalSlots(batches, 3);
+  if (horizonSlots.length === 0) return 0;
+  const horizonKeys = new Set(horizonSlots.map(s => s.key));
+  let count = 0;
+  for (const b of batches) {
+    if (b.location !== 'west') continue;
+    if (b.inTransit) continue;
+    if (isBatchCooked(b)) continue;
+    const hasInHorizon = (b.services || []).some(svc => {
+      if (svc.loc !== 'centraal') return false;
+      return horizonKeys.has(`${svc.loc}-${svc.date}-${svc.meal}`);
+    });
+    if (hasInHorizon) count++;
+  }
+  return count;
+}
+
 // ── Readiness banner ─────────────────────────────────────────────────────
 
 /** Compute the "ritual ready" state: today's inventory finished, today's cook
@@ -426,8 +449,12 @@ export function renderTransportCard(): string {
 
   trackEvent('transport_card_shown', _mode, { rowCount: rows.length, totalVolume: totalSendQty });
 
+  const pending = rows.length === 0 ? countPendingUncookedForCentraal(S.batches) : 0;
+  const emptyMsg = pending > 0
+    ? `${pending} dish${pending === 1 ? '' : 'es'} scheduled for Centraal — finish cooking first, then come back.`
+    : `Nothing scheduled to leave for Centraal in the next 3 services.`;
   const body = rows.length === 0
-    ? `<div class="tcard-empty">Nothing scheduled to leave for Centraal in the next 3 services.</div>`
+    ? `<div class="tcard-empty">${esc(emptyMsg)}</div>`
     : `<div class="tcard-rows">${rows.map(rowHtml).join('')}</div>
        <div class="tcard-footer">
          <div class="tcard-total"><span class="tcard-total-label">Total to pack</span> <span class="tcard-total-qty">${totalSendQty} L</span></div>

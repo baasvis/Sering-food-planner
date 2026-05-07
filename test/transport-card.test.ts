@@ -28,6 +28,7 @@ import {
   getReadiness,
   wasFixMyMenuRunToday,
   markFixMyMenuRun,
+  countPendingUncookedForCentraal,
 } from '../public/js/transport-card';
 import { recomputeFamilyAllocations } from '../public/js/core';
 import { S } from '../public/js/state';
@@ -508,5 +509,61 @@ describe('wasFixMyMenuRunToday / markFixMyMenuRun', () => {
   test('returns false on garbage stored value', () => {
     _store['sering-fix-my-menu-last-run'] = 'not a date';
     expect(wasFixMyMenuRunToday()).toBe(false);
+  });
+});
+
+// ── Pending-uncooked counter ─────────────────────────────────────────────
+
+describe('countPendingUncookedForCentraal', () => {
+  // Use future dates so isServicePast doesn't filter them out — the function
+  // mirrors computeTransportPlan's horizon detection.
+  const future = '2099-01-15';
+
+  test('returns 0 when no batches exist', () => {
+    expect(countPendingUncookedForCentraal([])).toBe(0);
+  });
+
+  test('returns 0 when only cooked batches are scheduled', () => {
+    const b = makeBatch({
+      type: 'Soup', stock: 5, cookDate: '01/05/2026',
+      services: [{ loc: 'centraal', date: future, meal: 'lunch', qty: 8 } as any],
+    });
+    expect(countPendingUncookedForCentraal([b])).toBe(0);
+  });
+
+  test('returns 1 for a West batch scheduled for Centraal that is uncooked (stock=0)', () => {
+    const b = makeBatch({
+      type: 'Soup', stock: 0, cookDate: null as any,
+      services: [{ loc: 'centraal', date: future, meal: 'lunch', qty: 8 } as any],
+    });
+    expect(countPendingUncookedForCentraal([b])).toBe(1);
+  });
+
+  test('excludes in-transit West batches', () => {
+    const b = makeBatch({
+      type: 'Soup', stock: 0, cookDate: null as any, inTransit: true,
+      services: [{ loc: 'centraal', date: future, meal: 'lunch', qty: 8 } as any],
+    });
+    expect(countPendingUncookedForCentraal([b])).toBe(0);
+  });
+
+  test('excludes Centraal-located batches', () => {
+    const b = makeBatch({
+      type: 'Soup', stock: 0, cookDate: null as any, location: 'centraal' as Location,
+      services: [{ loc: 'centraal', date: future, meal: 'lunch', qty: 8 } as any],
+    });
+    expect(countPendingUncookedForCentraal([b])).toBe(0);
+  });
+
+  test('counts multiple uncooked batches with Centraal services in the horizon', () => {
+    const a = makeBatch({
+      type: 'Soup', stock: 0, cookDate: null as any,
+      services: [{ loc: 'centraal', date: future, meal: 'lunch', qty: 8 } as any],
+    });
+    const b = makeBatch({
+      type: 'Main course', stock: 0, cookDate: null as any,
+      services: [{ loc: 'centraal', date: future, meal: 'dinner', qty: 6 } as any],
+    });
+    expect(countPendingUncookedForCentraal([a, b])).toBe(2);
   });
 });
