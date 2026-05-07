@@ -6,7 +6,7 @@ type DashBatch = Batch & { starch?: string | null };
 import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId, formatRelativeTime } from './utils';
 import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
-import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
+import { calcRequiredForLoc, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
 import { esc } from './modal';
 import { registerRenderer, setOnScreenChange } from './navigate';
 // Stocktake helpers used by the dashboard chip — kept distinct from the
@@ -165,6 +165,48 @@ export function calcLitersForService(dish: Batch, loc: Location, dateStr: string
   return Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
 }
 
+/** Liters of `dish` still needed for guests yet to arrive at today's `meal`
+ *  service at `loc`. Mirrors the existing guests-expected countdown:
+ *  `fractionRemaining = (guests in buckets ≥ now) / totalGuests`, then
+ *  multiplied by this dish's per-service demand.
+ *
+ *  Returns null outside the live service window — past/future dates, before
+ *  the meal opens, after it closes, or when there's no guest count for that
+ *  loc/meal. The dashboard render checks `typeof remaining === 'number'`
+ *  before drawing the pill, so null suppresses the indicator entirely.
+ *
+ *  Reuses `buildGuestFlowData` (historical POS distribution if available,
+ *  Gaussian fallback otherwise) so the dish-level countdown moves in lockstep
+ *  with the guest-flow canvas's "X left" label. */
+const CHIP_SERVICE_WINDOWS: Record<Meal, { start: number; end: number }> = {
+  lunch:  { start: 12 * 60, end: 14 * 60 },
+  dinner: { start: 18 * 60, end: 21 * 60 },
+};
+
+export function calcDishRemainingToServe(
+  dish: Batch, loc: Location, dateStr: string, meal: Meal, now: Date = getAmsterdamNow()
+): number | null {
+  if (dateStr !== dateToIso(getToday())) return null;
+  const win = CHIP_SERVICE_WINDOWS[meal];
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  if (nowMins < win.start || nowMins >= win.end) return null;
+
+  const totalGuests = getGuests(loc, dateStr, meal);
+  if (totalGuests <= 0) return null;
+  const data = buildGuestFlowData(totalGuests, meal, loc);
+  if (!data.length) return null;
+
+  const remainingGuests = data.reduce((sum, d) => {
+    const parts = d.time.split(':');
+    const slotMins = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+    return sum + (slotMins >= nowMins ? d.guests : 0);
+  }, 0);
+  const fraction = totalGuests > 0 ? remainingGuests / totalGuests : 0;
+
+  const perServiceDemand = calcLitersForService(dish, loc, dateStr, meal);
+  return Math.round(perServiceDemand * fraction * 10) / 10;
+}
+
 interface VegIngredient { name: string; amount: number; unit: string }
 
 export function getVegIngredients(dishes: Batch[]) {
@@ -234,6 +276,7 @@ interface ChipContext {
   meal?: Meal;
   dateStr?: string;
   liters?: number;
+  remaining?: number | null;
   note?: string;
   showAllergens?: boolean;
   showStarch?: boolean;
@@ -297,6 +340,10 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
     html += `<span class="dash-chip-liters">${ctx.liters} L</span>`;
   } else if (ctx.showStock && (dish.stock || 0) > 0) {
     html += `<span class="dash-chip-liters">${dish.stock} L</span>`;
+  }
+
+  if (typeof ctx.remaining === 'number') {
+    html += `<span class="dash-chip-remaining" title="Still needed for guests yet to arrive">~${ctx.remaining} L left</span>`;
   }
 
   html += `<span class="dash-chip-arrow">${expanded ? '▾' : '›'}</span>
@@ -630,14 +677,6 @@ export function toggleHeatItem(dishId: string) {
 }
 
 export function toggleCookItem(dishId: string) {
-  const d = S.batches.find(x => x.id === dishId);
-  if (d && !isBatchCooked(d)) {
-    confirmCooked(dishId);
-    S.cookChecked.add(dishId);
-    saveDayTodos();
-    renderDashboardContent();
-    return;
-  }
   S.cookChecked.has(dishId) ? S.cookChecked.delete(dishId) : S.cookChecked.add(dishId);
   saveDayTodos();
   renderDashboardContent();
@@ -956,6 +995,7 @@ export function renderDashboardContent() {
               meal,
               dateStr: todayStr,
               liters: calcLitersForService(d, loc, todayStr, meal),
+              remaining: calcDishRemainingToServe(d, loc, todayStr, meal),
               showAllergens: true,
               showStarch: true,
               showRecipe: true,
@@ -1021,7 +1061,7 @@ export function renderDashboardContent() {
             : cookDishes.map(d => renderDashChip(d, {
                 meal,
                 dateStr: todayStr,
-                liters: calcLitersForService(d, loc, todayStr, meal),
+                liters: calcRequired(d),
                 note: 'cook today',
                 checkable: true,
                 checked: S.cookChecked.has(d.id),

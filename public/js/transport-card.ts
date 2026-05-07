@@ -12,10 +12,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Batch, Service, Location, DishType } from '@shared/types';
 import { S } from './state';
-import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner } from './core';
+import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner, getAmsterdamNow } from './core';
 import { esc } from './modal';
 import { trackEvent } from './telemetry';
-import { rerenderCurrentView } from './navigate';
 import { doSplit } from './dishes';
 import { toast } from './utils';
 
@@ -373,10 +372,13 @@ export function setTransportMode(m: TransportMode): void {
   if (_mode === m) return;
   _mode = m;
   trackEvent('transport_card_mode_toggled', m);
-  // Re-render only this card if the dashboard is up.
-  const dashEl = document.getElementById('dash-content');
-  if (dashEl) {
-    rerenderCurrentView();
+  // renderTransportCard returns `<div id="transport-card-host" …>…</div>`,
+  // so use outerHTML to swap the host div itself (id stays stable). If the
+  // host isn't in the DOM (e.g. user is on a different screen), silently
+  // skip — the next dashboard render will pick up the new mode from `_mode`.
+  const host = document.getElementById('transport-card-host');
+  if (host) {
+    host.outerHTML = renderTransportCard();
   }
 }
 
@@ -453,15 +455,22 @@ export function renderTransportCard(): string {
   const emptyMsg = pending > 0
     ? `${pending} dish${pending === 1 ? '' : 'es'} scheduled for Centraal — finish cooking first, then come back.`
     : `Nothing scheduled to leave for Centraal in the next 3 services.`;
+  // Pack-and-send only becomes available after 19:00 Amsterdam time — packing
+  // earlier than that has historically caused problems (the pack is for the
+  // next day). The 60s freshness tick re-renders the dashboard, so the notice
+  // flips to a button automatically once the clock crosses 19:00.
+  const beforeNineteen = getAmsterdamNow().getHours() < 19;
   const body = rows.length === 0
     ? `<div class="tcard-empty">${esc(emptyMsg)}</div>`
     : `<div class="tcard-rows">${rows.map(rowHtml).join('')}</div>
        <div class="tcard-footer">
          <div class="tcard-total"><span class="tcard-total-label">Total to pack</span> <span class="tcard-total-qty">${totalSendQty} L</span></div>
-         <button class="btn btn-primary tcard-confirm" onclick="confirmTransportPlan()">Pack and send</button>
+         ${beforeNineteen
+           ? `<div class="tcard-after-1900">⏰ Available after 19:00</div>`
+           : `<button class="btn btn-primary tcard-confirm" onclick="confirmTransportPlan()">Pack and send</button>`}
        </div>`;
 
-  return `<div class="dash-card tcard ${lit}">
+  return `<div id="transport-card-host" class="dash-card tcard ${lit}">
     <div class="dash-card-title">
       <span class="dash-card-icon">🚚</span> Pack for Centraal — tomorrow
       ${modeToggle()}
