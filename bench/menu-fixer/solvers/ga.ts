@@ -202,12 +202,12 @@ function isEligibleAtSlot(b: Batch, slot: SlotKey, todayIso: string): boolean {
   if (b.storage === 'Frozen') return false;
   if (slot.date < todayIso) return false;
   if (!isServableBy(b.cookDate, slot.date, slot.meal, slot.loc, b.location || 'west')) return false;
-  // If cooked, must not be stale at slot
-  if (b.stock > 0) {
-    const cookIso = cookDateToIso(b.cookDate);
-    if (!cookIso) return false;
-    if (daysBetween(cookIso, slot.date) >= STALE_THRESHOLD_DAYS) return false;
-  }
+  // Stale applies to both cooked and uncooked. A Sat placeholder
+  // assigned to Tue lunch (3 days out) means food eaten stale even
+  // though stock=0 right now. Matches production menu-fixer-ga.ts.
+  const cookIso = cookDateToIso(b.cookDate);
+  if (!cookIso) return false;
+  if (daysBetween(cookIso, slot.date) >= STALE_THRESHOLD_DAYS) return false;
   return true;
 }
 
@@ -504,7 +504,8 @@ function fitnessScore(ctx: ScoreCtx): number {
             if (!cookIso) return false;
             if (cookIso > date) return false;
             if (cookIso === date && slot.meal === 'lunch') return false;
-            if (b.stock > 0 && daysBetween(cookIso, date) >= STALE_THRESHOLD_DAYS) return false;
+            // Stale applies to both cooked and uncooked.
+            if (daysBetween(cookIso, date) >= STALE_THRESHOLD_DAYS) return false;
             const root = ctx.familyRoot.get(b.id) || b.id;
             if (filledFamilies.has(root)) return false;
             if (b.stock === 0) return true;
