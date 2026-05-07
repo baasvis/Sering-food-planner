@@ -48,6 +48,8 @@ app.use(helmet({
 app.use(compression({
   filter: (req, res) => {
     if (req.path.startsWith('/api/events')) return false;
+    // Recipe AI chat is also SSE — must not buffer.
+    if (req.path.startsWith('/api/recipe-ai/chat')) return false;
     return compression.filter(req, res);
   },
 }));
@@ -139,6 +141,9 @@ app.use('/api/health',            healthRouter);
 
 import adminRouter from './routes/admin';
 app.use('/api/admin',             adminRouter);
+
+import recipeAiRouter from './routes/recipe-ai';
+app.use('/api/recipe-ai',         recipeAiRouter);
 
 // ── Global error handler ──
 

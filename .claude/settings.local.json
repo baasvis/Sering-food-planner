@@ -7,7 +7,8 @@
       "Bash(node -e \":*)",
       "Bash(mkdir -p prisma/migrations/20260322190000_init)",
       "Bash(mv prisma/migration.sql prisma/migrations/20260322190000_init/migration.sql)",
-      "Bash(node -e \"try { require\\(''''./server''''\\); console.log\\(''''OK: server module loaded''''\\); process.exit\\(0\\); } catch\\(e\\) { console.error\\(''''FAIL:'''', e.message\\); process.exit\\(1\\); }\")"
+      "Bash(node -e \"try { require\\(''''./server''''\\); console.log\\(''''OK: server module loaded''''\\); process.exit\\(0\\); } catch\\(e\\) { console.error\\(''''FAIL:'''', e.message\\); process.exit\\(1\\); }\")",
+      "Bash(npm run *)"
     ]
   }
 }

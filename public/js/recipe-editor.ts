@@ -10,6 +10,7 @@ import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
 import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType } from '@shared/types';
 import { toGrams } from '@shared/units';
+import { renderChatPanel, resetChat, type AIRecipeStateClient } from './recipe-ai-chat';
 
 // ── Editor state ──
 
@@ -47,6 +48,9 @@ interface EditorState {
 
 let ed: EditorState | null = null;
 let _suggestionTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// AI helper mode — director-only chat panel alongside the editor.
+let aiMode = false;
 
 const UNITS = ['Grams', 'Kilos', 'Liters', 'ML'];
 
@@ -154,7 +158,10 @@ function refreshPriceBar() {
 
 // ── Public entry points ──
 
-export function openRecipeEditor(recipeId?: string) {
+export function openRecipeEditor(recipeId?: string, opts?: { aiMode?: boolean }) {
+  // Director-only AI mode — silently downgrade for everyone else.
+  aiMode = !!opts?.aiMode && !!S.user?.isDirector;
+  resetChat();
   if (recipeId) {
     loadRecipeForEdit(recipeId);
   } else {
@@ -167,6 +174,103 @@ export function openRecipeEditor(recipeId?: string) {
     };
     renderEditor();
   }
+}
+
+export function reToggleAiMode() {
+  if (!S.user?.isDirector) return;
+  aiMode = !aiMode;
+  renderEditor();
+  trackEvent('ai_recipe_chat_toggle', { on: aiMode });
+}
+
+// ── State exchange with the AI chat panel ──
+
+/** Snapshot the current editor state in the slim shape the AI module
+ *  expects. Pure read of `ed` — does not mutate. */
+function editorStateForAI(): AIRecipeStateClient {
+  if (!ed) {
+    return {
+      name: '', type: 'Soup', structure: '', seasonality: '', servingTemp: '',
+      servingSize: 280, ingredients: [], prepSteps: [],
+      coolingMethod: '', storageMethod: '', extraAllergens: [],
+    };
+  }
+  return {
+    name: ed.name,
+    type: ed.type,
+    structure: ed.structure,
+    seasonality: ed.seasonality,
+    servingTemp: ed.servingTemp,
+    servingSize: ed.servingSize,
+    ingredients: ed.ingredients.map(i => ({
+      ingredientId: i.ingredientId,
+      ingredientName: i.ingredientName,
+      rawAmount: i.rawAmount,
+      unit: i.unit,
+      isFlexible: i.isFlexible,
+      flexCategory: i.flexCategory,
+      flexLabel: i.flexLabel,
+    })),
+    prepSteps: ed.prepSteps.map(p => ({ text: p.text, ...(p.note ? { note: p.note } : {}) })),
+    coolingMethod: ed.coolingMethod,
+    storageMethod: ed.storageMethod,
+    extraAllergens: [...ed.extraAllergens],
+  };
+}
+
+/** Apply an AI-produced state to the editor. Re-renders the form so the
+ *  cost bar, ingredient table and prep steps reflect the new state. */
+function applyAIStateToEditor(s: AIRecipeStateClient): void {
+  if (!ed) return;
+  ed.name = s.name ?? ed.name;
+  ed.type = s.type ?? ed.type;
+  ed.structure = s.structure ?? ed.structure;
+  ed.seasonality = s.seasonality ?? ed.seasonality;
+  ed.servingTemp = s.servingTemp ?? ed.servingTemp;
+  ed.servingSize = s.servingSize ?? ed.servingSize;
+  ed.ingredients = (s.ingredients || []).map((i, idx) => ({
+    id: tempId(),
+    ingredientId: i.ingredientId,
+    ingredientName: i.ingredientName,
+    sortOrder: idx,
+    rawAmount: i.rawAmount,
+    cookedAmount: null,
+    unit: i.unit,
+    isFlexible: i.isFlexible,
+    flexCategory: i.flexCategory,
+    flexLabel: i.flexLabel,
+    suggestedNames: [],
+  }));
+  ed.prepSteps = (s.prepSteps || []).map((p, idx) => ({
+    step: idx + 1, text: p.text, ...(p.note ? { note: p.note } : {}),
+  }));
+  ed.coolingMethod = s.coolingMethod ?? ed.coolingMethod;
+  ed.storageMethod = s.storageMethod ?? ed.storageMethod;
+  ed.extraAllergens = [...(s.extraAllergens || [])];
+  // Refresh just the form pane — the chat pane keeps its scroll/state.
+  renderEditorBody();
+  refreshPriceBar();
+  // Update modal-level state-derived UI (e.g. basics inputs)
+  syncBasicsInputs();
+}
+
+/** Push current ed.basics values back into the rendered <input> elements
+ *  without redrawing them. Lets the AI update name/type without nuking the
+ *  user's focus on whatever they were typing. */
+function syncBasicsInputs(): void {
+  if (!ed) return;
+  const nameEl = document.getElementById('re-name') as HTMLInputElement | null;
+  if (nameEl && document.activeElement !== nameEl) nameEl.value = ed.name;
+  const typeEl = document.getElementById('re-type') as HTMLSelectElement | null;
+  if (typeEl) typeEl.value = ed.type;
+  const servEl = document.getElementById('re-serving') as HTMLInputElement | null;
+  if (servEl && document.activeElement !== servEl) servEl.value = String(ed.servingSize);
+  const structEl = document.getElementById('re-structure') as HTMLSelectElement | null;
+  if (structEl) structEl.value = ed.structure;
+  const seasonEl = document.getElementById('re-season') as HTMLSelectElement | null;
+  if (seasonEl) seasonEl.value = ed.seasonality;
+  const tempEl = document.getElementById('re-temp') as HTMLSelectElement | null;
+  if (tempEl) tempEl.value = ed.servingTemp;
 }
 
 export async function openRecipeDetail(recipeId: string) {
@@ -219,18 +323,47 @@ async function loadRecipeForEdit(id: string) {
 function renderEditor() {
   if (!ed) return;
   const isNew = !ed.recipeId;
+  const directorMode = !!S.user?.isDirector;
+  const ai = aiMode && directorMode;
+  const aiToggleBtn = directorMode
+    ? `<button class="re-ai-toggle ${ai ? 'on' : ''}" onclick="reToggleAiMode()" title="${ai ? 'Hide AI helper' : 'Show AI helper'}">${ai ? '✨ AI: on' : '✨ AI'}</button>`
+    : '';
   showModal(`
-    <div class="re-editor">
-      <div class="re-header">
-        <h3>${isNew ? 'Create new recipe' : 'Edit recipe'}</h3>
+    <div class="re-editor ${ai ? 're-editor--ai-mode' : ''}">
+      <div class="re-form-pane">
+        <div class="re-header">
+          <h3>${isNew ? 'Create new recipe' : 'Edit recipe'}</h3>
+          ${aiToggleBtn}
+        </div>
+        ${renderPriceBar()}
+        <div id="re-body" class="re-body-scroll"></div>
       </div>
-      ${renderPriceBar()}
-      <div id="re-body" class="re-body-scroll"></div>
+      ${ai ? '<div class="ai-chat-panel" id="ai-chat-panel"></div>' : ''}
     </div>
   `);
   const modal = document.querySelector('.modal') as HTMLElement;
-  if (modal) { modal.style.width = '780px'; modal.style.maxWidth = '95vw'; }
+  if (modal) {
+    if (ai) {
+      // In AI mode let the modal grow with the viewport so the chat doesn't
+      // squeeze the form on wide displays. Cap so it doesn't get silly on
+      // ultrawides; 95vw keeps a comfortable margin around it.
+      modal.style.width = '95vw';
+      modal.style.maxWidth = '1600px';
+    } else {
+      modal.style.width = '780px';
+      modal.style.maxWidth = '95vw';
+    }
+  }
   renderEditorBody();
+  if (ai) {
+    const panel = document.getElementById('ai-chat-panel');
+    if (panel) {
+      renderChatPanel(panel, {
+        getState: editorStateForAI,
+        setState: applyAIStateToEditor,
+      });
+    }
+  }
 }
 
 function renderEditorBody() {

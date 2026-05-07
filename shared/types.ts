@@ -254,6 +254,10 @@ export interface AppUser {
   email: string;
   name: string;
   picture: string | null;
+  /** True when the user's email is in DIRECTOR_EMAILS. Drives visibility of
+   *  director-only features like the private AI recipe assistant. Computed
+   *  at session-issue / session-restore time and sent down with /auth/me. */
+  isDirector?: boolean;
 }
 
 // ── Ratings (for served dialog) ──

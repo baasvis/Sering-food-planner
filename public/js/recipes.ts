@@ -50,9 +50,11 @@ export function renderRecipeIndex() {
   const types = [...new Set((S.recipes || []).map(r => r.type).filter(Boolean))];
 
   const v2Count = S.recipes.length;
+  const isDirector = !!S.user?.isDirector;
   let html = `
   <div class="btn-row" style="margin-bottom:12px;">
     <button class="btn btn-primary" data-testid="recipe-create-btn" onclick="openRecipeEditor()">+ Create recipe</button>
+    ${isDirector ? '<button class="btn btn-primary" data-testid="recipe-ai-btn" onclick="openRecipeEditor(undefined, { aiMode: true })" title="Draft a recipe with AI" style="background:var(--purple,#7c3aed);border-color:var(--purple,#7c3aed);">✨ AI helper</button>' : ''}
     <button class="btn" onclick="recalcAllCosts()" title="Recalculate all recipe costs from current ingredient prices">Recalculate costs</button>
     <button class="btn" onclick="importCookedAmounts()" title="Re-import cooked amounts from Google Sheets for all recipes">Import cooked amounts</button>
     <span style="font-size:12px;color:var(--text2);margin-left:8px;">${v2Count} recipe${v2Count !== 1 ? 's' : ''}</span>

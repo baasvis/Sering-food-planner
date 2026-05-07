@@ -23,7 +23,8 @@
       "autoPort": true,
       "env": {
         "NODE_ENV": "production",
-        "DATABASE_URL": "postgresql://postgres:QXwFZbYaQhZeeWUqdFUjXCRVhQvEoLgv@shuttle.proxy.rlwy.net:52350/railway"
+        "DATABASE_URL": "postgresql://postgres:QXwFZbYaQhZeeWUqdFUjXCRVhQvEoLgv@shuttle.proxy.rlwy.net:52350/railway",
+        "DIRECTOR_EMAILS": "dev@local,daandorr36@gmail.com"
       }
     }
   ]
