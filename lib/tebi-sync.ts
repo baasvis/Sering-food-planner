@@ -41,6 +41,12 @@ interface SyncState {
     source: SyncSource;
     finishedAt: string;
   } | null;
+  // Tail of stdout from the most recent SUCCESSFUL run. Persisted alongside
+  // `finance_sync_complete` telemetry events so we can diagnose silent
+  // partial-failures (where the worker exits 0 but the per-call ✓/✗ logs
+  // would tell us something is wrong). Without this, the only place per-call
+  // detail lived was Railway container stdout, which evicts after a few days.
+  lastSuccessOutputTail: string | null;
 }
 
 const state: SyncState = {
@@ -54,6 +60,7 @@ const state: SyncState = {
   lastSyncAt: null,
   lastSyncError: null,
   lastSyncErrorDetails: null,
+  lastSuccessOutputTail: null,
 };
 
 // Cap the captured output. The scraper can produce hundreds of KB of debug
@@ -118,6 +125,9 @@ async function hydrateFromTelemetry(): Promise<void> {
         state.lastSyncAt = lastSuccess.timestamp.toISOString();
         state.lastSyncError = null;
         state.lastSyncErrorDetails = null;
+        const successData = (lastSuccess.data as Record<string, unknown> | null) || {};
+        state.lastSuccessOutputTail =
+          typeof successData.stdoutTail === 'string' ? successData.stdoutTail : null;
       } else if (lastFailure) {
         const d = (lastFailure.data as Record<string, unknown> | null) || {};
         const code = typeof d.code === 'number' ? d.code : null;
@@ -157,6 +167,7 @@ export async function getStatus(): Promise<{
   lastSyncAt: string | null;
   lastSyncError: string | null;
   lastSyncErrorDetails: SyncState['lastSyncErrorDetails'];
+  lastSuccessOutputTail: string | null;
   tebiConfigured: boolean;
 }> {
   await hydrateFromTelemetry();
@@ -165,6 +176,7 @@ export async function getStatus(): Promise<{
     lastSyncAt: state.lastSyncAt,
     lastSyncError: state.lastSyncError,
     lastSyncErrorDetails: state.lastSyncErrorDetails,
+    lastSuccessOutputTail: state.lastSuccessOutputTail,
     tebiConfigured: !!(process.env.TEBI_EMAIL && process.env.TEBI_PASSWORD),
   };
 }
@@ -270,11 +282,18 @@ export function runTebiSync(opts: RunOpts): RunResult {
       state.lastSyncAt = new Date().toISOString();
       state.lastSyncError = null;
       state.lastSyncErrorDetails = null;
+      state.lastSuccessOutputTail = stdoutTail;
+      // Carry the per-call ✓/✗ scraper logs into the telemetry event so a
+      // silent partial-failure (e.g. only ledger-aggregate rows reaching the
+      // DB while per-location and product fetches return empty) is visible
+      // post-hoc, even though the worker exited 0.
       addBackendEvent('feature_use', 'finance_sync_complete', {
         source: opts.source,
         durationMs,
         start: opts.start,
         end: opts.end,
+        stdoutTail,
+        stderrTail,
       });
     } else {
       // Don't overwrite a cancellation message that was set by cancelSync().

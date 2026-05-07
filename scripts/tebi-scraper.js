@@ -16,6 +16,13 @@
 //   TEBI_HEADLESS   — "false" to see the browser (default: true)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Load .env when run standalone (e.g. `npx tsx scripts/tebi-scraper.js ...`).
+// In production the worker (tebi-sync-worker.js) already calls dotenv.config()
+// before requiring this module, so this is a no-op there. Locally it lets the
+// scraper find TEBI_EMAIL / TEBI_PASSWORD without the user having to source
+// the .env file by hand.
+require('dotenv').config();
+
 const { chromium } = require('playwright');
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -24,9 +31,12 @@ const TEBI_BASE = 'https://live.tebi.co';
 const LEDGER_ID = process.env.TEBI_LEDGER_ID || '723192';
 const HEADLESS = process.env.TEBI_HEADLESS !== 'false';
 
-// Profit center UUIDs (discovered from Tebi backoffice network requests)
+// Profit center UUIDs (discovered from Tebi backoffice dashboard JSON).
+// As of 2026-05-07 there is no aggregate "all" profit center any more — the
+// 00000000-...-0 UUID that used to be the aggregate is now Sering West, and
+// the overall total is exposed via the unfiltered `revenue_overview_chart`
+// instead.
 const PROFIT_CENTERS = {
-  all:      '00000000-0000-0000-0000-000000000000',
   west:     null, // will be discovered during first run
   centraal: null,
   testtafel: null,
@@ -100,8 +110,19 @@ async function login(page) {
     // showing the email/password form. Treat its body markers as
     // already-logged-in; the caller navigates to the ledger URL next,
     // which bypasses the picker.
-    if (content.includes('Sign out') || content.includes('Dashboard') || content.includes('Select location')) {
-      log('Already logged in (Sign out / Dashboard / Select location detected)');
+    //
+    // 2026-05-07: Tebi reworked the post-login UI again — the "Select
+    // location" string no longer appears verbatim. Recognise the navbar
+    // items ("Refer a friend", "Help & Support") that ONLY render once
+    // logged in.
+    if (
+      content.includes('Sign out') ||
+      content.includes('Dashboard') ||
+      content.includes('Select location') ||
+      content.includes('Refer a friend') ||
+      content.includes('Help & Support')
+    ) {
+      log('Already logged in (post-login navbar marker detected)');
       return true;
     }
     throw new Error('Could not find login form. Page content: ' + content.substring(0, 200));
@@ -130,13 +151,19 @@ async function login(page) {
   // briefly even after a successful submit, and Tebi's new flow lands on
   // a "Select location" page after login (URL may still read /login).
   // Trust body markers as well as the URL.
+  //
+  // 2026-05-07: Tebi reworked the post-login UI — "Select location" no
+  // longer appears verbatim. Recognise navbar items ("Refer a friend",
+  // "Help & Support") that ONLY render once logged in.
   const currentUrl = page.url();
   const bodyText = (await page.textContent('body').catch(() => '')) || '';
   const passedLogin =
     !currentUrl.includes('/login')
     || bodyText.includes('Sign out')
     || bodyText.includes('Dashboard')
-    || bodyText.includes('Select location');
+    || bodyText.includes('Select location')
+    || bodyText.includes('Refer a friend')
+    || bodyText.includes('Help & Support');
   if (!passedLogin) {
     throw new Error('Login did not succeed. URL: ' + currentUrl + '. Body excerpt: ' + bodyText.slice(0, 200));
   }
@@ -216,20 +243,59 @@ async function discoverProfitCenters(page, ledgerId, profitCenters) {
     `/api/insights/ledgers/${ledgerId}/insights/dashboards/main`
   );
 
+  // Log dashboard top-level shape so a Tebi response-shape change is visible
+  // in the next cron's stdoutTail. Without this, a renamed `groups` key (or
+  // a renamed chartType prefix) silently produces 0 profit centers and we'd
+  // have no idea why per-location rows stopped reaching the DB.
+  //
+  // 2026-05-07: Tebi renamed the top-level `groups` field to `chartGroups`.
+  // Reading either key keeps the scraper working through any future
+  // partial revert and through old test fixtures.
+  const dashboardKeys = dashboardMain && typeof dashboardMain === 'object'
+    ? Object.keys(dashboardMain).join(',')
+    : '(non-object)';
+  const groups = dashboardMain && (Array.isArray(dashboardMain.chartGroups)
+    ? dashboardMain.chartGroups
+    : Array.isArray(dashboardMain.groups) ? dashboardMain.groups : null);
+  const groupsCount = Array.isArray(groups) ? groups.length : -1;
+  log(`  dashboard shape: keys=[${dashboardKeys}] chartGroups=${groupsCount}`);
+
+  // Recursive walk for charts. Tebi moved the chart IDENTIFIER from
+  // `chartType` to `id`, and `chartType` now means visualisation type
+  // (BAR / LINE / LAYERED_BAR) and lives on every metric, not just charts.
+  // Match by `id` starting with `revenue_profit_center_` instead.
+  // Walking generically (rather than assuming a fixed nested path) keeps
+  // discovery alive through any further shape drift inside chartGroups.
   const profitCenterCharts = [];
-  if (dashboardMain && Array.isArray(dashboardMain.groups)) {
-    for (const group of dashboardMain.groups) {
-      if (Array.isArray(group.charts)) {
-        for (const chart of group.charts) {
-          if (chart.chartType && chart.chartType.startsWith('revenue_profit_center_')) {
-            const uuid = chart.chartType.replace('revenue_profit_center_', '');
-            if (uuid !== profitCenters.all) {
-              profitCenterCharts.push({ uuid, label: chart.label || chart.title || 'unknown' });
-            }
-          }
-        }
+  const allChartIds = [];
+  function walkForCharts(node) {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { for (const el of node) walkForCharts(el); return; }
+    if (typeof node.id === 'string') {
+      allChartIds.push(node.id);
+      if (node.id.startsWith('revenue_profit_center_')) {
+        const uuid = node.id.replace('revenue_profit_center_', '');
+        profitCenterCharts.push({ uuid, label: node.name || node.label || node.title || 'unknown' });
       }
     }
+    for (const v of Object.values(node)) {
+      if (v && typeof v === 'object') walkForCharts(v);
+    }
+  }
+  walkForCharts(dashboardMain);
+
+  if (profitCenterCharts.length === 0) {
+    log(`  ⚠ no revenue_profit_center_* charts found. ${allChartIds.length} ids found at any depth: ${allChartIds.slice(0, 20).join(', ')}${allChartIds.length > 20 ? ' …' : ''}`);
+    // Dump (capped) JSON so we can see exactly what shape Tebi returns and
+    // wire the walk to it. Cap is generous — dashboardMain is typically
+    // under 30 KB, so the full structure usually fits.
+    try {
+      const dump = JSON.stringify(dashboardMain, null, 2);
+      const capped = dump.length > 20000 ? dump.slice(0, 20000) + '\n... [truncated, total length ' + dump.length + ' chars]' : dump;
+      log(`  --- dashboardMain JSON (for diagnostic) ---`);
+      log(capped);
+      log(`  --- end dashboardMain JSON ---`);
+    } catch (_e) { /* ignore */ }
   }
 
   for (const pc of profitCenterCharts) {
@@ -247,6 +313,11 @@ async function discoverProfitCenters(page, ledgerId, profitCenters) {
       log(`  Unknown profit center: "${pc.label}" = ${pc.uuid}`);
     }
   }
+
+  // Final summary so absence is loud. With the original code, "couldn't find
+  // Centraal" was inferred only by the absence of a `Sering Centraal = ...`
+  // line, which is easy to miss in a long log.
+  log(`  PC summary: west=${profitCenters.west ? 'yes' : 'NO'} centraal=${profitCenters.centraal ? 'yes' : 'NO'} testtafel=${profitCenters.testtafel ? 'yes' : 'NO'}`);
 
   return profitCenters;
 }
@@ -283,12 +354,39 @@ async function fetchDayData(page, ledgerId, profitCenters, startDate, endDate) {
     }
   }
 
+  // Per-PC product breakdown via the `product_top` chart with a JSON-encoded
+  // PROFIT_CENTER filter. This replaces the old invoice-line-items path,
+  // which broke around 2026-05-07 when Tebi stopped including line items in
+  // the invoice list response. `product_top` returns per-item gross revenue
+  // and total quantity for the date range, scoped to the filtered PC.
+  // (Tebi can't be asked to also group by TIME_DAY, so we still fetch
+  // per-day from the caller — this function fetches the whole range here.)
+  results.productTopByPc = {};
+  for (const [name, uuid] of Object.entries(profitCenters)) {
+    if (!uuid) continue;
+    try {
+      const filter = encodeURIComponent(JSON.stringify({ grouping: 'PROFIT_CENTER', value: uuid }));
+      const data = await fetchTebiAPI(page,
+        `/api/insights/ledgers/${ledgerId}/insights/data/charts/product_top?startDate=${startDate}&endDate=${endDate}&mock=false&limit=-1&filter=${filter}`
+      );
+      results.productTopByPc[name] = data;
+      const rowCount = Array.isArray(data && data.data) ? data.data.length : 0;
+      log(`  ✓ product_top.${name} (${rowCount} items)`);
+    } catch (e) {
+      err(`  ✗ product_top.${name}: ${e.message}`);
+    }
+  }
+
+  // Invoice list — still fetched for invoiceCount in DailyRevenue, but line
+  // items are no longer present so we don't try to derive products from it
+  // any more.
   try {
     const invoices = await fetchTebiAPI(page,
       `/api/invoicing/ledgers/${ledgerId}/sales/invoices?page=0&pageSize=500&startDate=${startDate}&endDate=${endDate}`
     );
     results.invoices = invoices;
-    log(`  ✓ invoices (${Array.isArray(invoices?.content) ? invoices.content.length : '?'} records)`);
+    const invArr = Array.isArray(invoices?.data) ? invoices.data : Array.isArray(invoices?.content) ? invoices.content : null;
+    log(`  ✓ invoices (${invArr ? invArr.length : '?'} records)`);
   } catch (e) {
     err(`  ✗ invoices: ${e.message}`);
   }
@@ -315,12 +413,131 @@ function classifyServicePeriod(timestamp) {
   return 'bar'; // 21:00–06:00
 }
 
-// ── Invoice Line-Item Parsing ────────────────────────────────────────────────
+// ── Meal-product allowlist ──────────────────────────────────────────────────
+//
+// Mirrors the CSV path in public/js/predictions.ts. These exact item names,
+// when sold at Sering, represent guests served and feed the auto-update of
+// `GuestHistory`. Items outside this list (drinks, snacks, "Lunch card"
+// bulk purchases) are still recorded in ProductRevenue but never count
+// toward guests.
+const MEAL_ITEM_TYPE = {
+  'Lunch':                  'lunch',
+  'Lunch card guest':       'lunch',
+  'Dinner donation':        'dinner',
+  'Stadspas Dinner':        'dinner',
+  'DSC Dinner':             'dinner',
+  'Staff & volunteer meals': 'staff',
+};
 
-// Extract product-level revenue from invoice data.
-// options.forceLocation: assign ALL invoices to this location (useful for accounts with one location)
+// Round helper (2 dp)
+function r2(n) { return Math.round((n || 0) * 100) / 100; }
+
+// Approximate net from gross. Dutch low VAT rate (9%) covers most food &
+// non-alcoholic. Drinks at Sering (alcohol) are 21% but we don't have item
+// category here — set to a single rate and let the finance UI show this is
+// an approximation. DailyRevenue.net comes from the overview chart's real
+// NET_REVENUE metric so that's accurate; only ProductRevenue.net is the
+// approximation.
+function netFromGross(gross) { return r2(gross / 1.09); }
+
+// ── Product-level revenue (built from product_top per-PC data) ──────────────
+
+// Build productRows from `productTopByPc`. Each PC's product_top response
+// already carries items aggregated for the date range; we collapse to one
+// row per (date, location, productName) with meal classified by item name.
+//
+// productTopByPc: { [locationName]: chartResponse }
+// date: YYYY-MM-DD (single day — the scraper's per-day loop already iterates)
+// Returns rows shaped for ProductRevenue table inserts.
+function formatProductRevenueFromTop(productTopByPc, date, options = {}) {
+  const { forceLocation } = options;
+  const rows = [];
+  for (const [locName, chartData] of Object.entries(productTopByPc || {})) {
+    if (!chartData || !Array.isArray(chartData.data)) continue;
+    const location = forceLocation || locName;
+    for (const entry of chartData.data) {
+      const itemEntry = (entry.key && Array.isArray(entry.key.groupedBy))
+        ? entry.key.groupedBy.find(g => g && g.name === 'ITEM')
+        : null;
+      if (!itemEntry) continue;
+      const productName = itemEntry.value || 'Unknown';
+      const qtyMetric = (entry.metrics || []).find(m => m && m.name === 'TOTAL_PRODUCTS_SOLD');
+      const grossMetric = (entry.metrics || []).find(m => m && m.name === 'GROSS_REVENUE');
+      const quantity = qtyMetric ? parseFloat(qtyMetric.value) || 0 : 0;
+      const grossRevenue = grossMetric && typeof grossMetric.value === 'object'
+        ? parseFloat(grossMetric.value.quantity) || 0
+        : 0;
+      if (quantity <= 0 && grossRevenue <= 0) continue;
+      const meal = MEAL_ITEM_TYPE[productName] || 'other';
+      rows.push({
+        date,
+        location,
+        meal,
+        productName,
+        productCategory: '', // product_top doesn't carry category; left blank
+        quantity: r2(quantity),
+        grossRevenue: r2(grossRevenue),
+        netRevenue: netFromGross(grossRevenue),
+      });
+    }
+  }
+  return rows;
+}
+
+// Derive per-meal guest counts from a productRows array. Counts mirror the
+// CSV path's logic: lunch + dinner totals INCLUDE the staff portion split
+// 30/70 lunch/dinner (a default heuristic; we don't have per-hour data for
+// staff meals from product_top).
+function deriveGuestCountsFromProductRows(productRows) {
+  const byLoc = {};
+  for (const row of productRows) {
+    const loc = row.location;
+    const meal = MEAL_ITEM_TYPE[row.productName];
+    if (!meal) continue;
+    if (!byLoc[loc]) byLoc[loc] = { lunch: 0, dinner: 0, staff: 0, staff_lunch: 0, staff_dinner: 0 };
+    if (meal === 'lunch') byLoc[loc].lunch += row.quantity;
+    else if (meal === 'dinner') byLoc[loc].dinner += row.quantity;
+    else if (meal === 'staff') byLoc[loc].staff += row.quantity;
+  }
+  for (const loc of Object.keys(byLoc)) {
+    const c = byLoc[loc];
+    c.staff_lunch = Math.round(c.staff * 0.3);
+    c.staff_dinner = Math.round(c.staff * 0.7);
+    c.lunch += c.staff_lunch;
+    c.dinner += c.staff_dinner;
+    // Round to ints (counts are people, not fractions)
+    c.lunch = Math.round(c.lunch);
+    c.dinner = Math.round(c.dinner);
+    c.staff = Math.round(c.staff);
+  }
+  return byLoc;
+}
+
+// ── Legacy invoice line-item parser ─────────────────────────────────────────
+// Kept around for fixture-based tests + as a documented dead path. Tebi
+// stopped returning line items in the invoice list response on 2026-05-07,
+// so production no longer relies on this. The new path is product_top
+// (above) which Tebi guarantees as part of the back-office dashboard.
 function formatProductRevenue(invoices, profitCenters, options = {}) {
-  if (!invoices || !Array.isArray(invoices.content)) return [];
+  // Surface response-shape changes loudly. ProductRevenue silently went to
+  // zero rows for ~7 weeks because Tebi's response shape changed and we had
+  // no log telling us "the array we expected isn't there".
+  //
+  // 2026-05-07: Tebi renamed the invoice array from `content` to `data`.
+  // Read either key (whichever is an array) so the scraper survives a
+  // partial revert and old fixtures continue to parse.
+  const invoiceArray = invoices && (Array.isArray(invoices.data)
+    ? invoices.data
+    : Array.isArray(invoices.content) ? invoices.content : null);
+  if (!Array.isArray(invoiceArray)) {
+    const keys = invoices && typeof invoices === 'object' ? Object.keys(invoices).join(',') : '(non-object)';
+    log(`  ⚠ invoices.data / invoices.content missing or not an array. response keys=[${keys}]`);
+    return [];
+  }
+  if (invoiceArray.length === 0) {
+    log(`  invoice array is empty (no invoices for this date range).`);
+    return [];
+  }
 
   const { forceLocation } = options;
 
@@ -333,7 +550,7 @@ function formatProductRevenue(invoices, profitCenters, options = {}) {
   // Aggregate: key = date|location|meal|productName|productCategory
   const agg = {};
 
-  for (const invoice of invoices.content) {
+  for (const invoice of invoiceArray) {
     const timestamp = invoice.createdAt || invoice.date || invoice.closedAt || '';
 
     // Determine location: forced > profit center lookup > 'unknown'
@@ -405,6 +622,25 @@ function formatProductRevenue(invoices, profitCenters, options = {}) {
     }
   }
 
+  // If we processed invoices but produced zero aggregated rows, the line-item
+  // and total field names have likely drifted on Tebi's side. Log a sample
+  // invoice's top-level keys (and the keys of the first nested array we see)
+  // so the next cron's stdoutTail tells us exactly what to fix in the parser.
+  if (Object.keys(agg).length === 0 && invoiceArray.length > 0) {
+    const sample = invoiceArray[0];
+    const sampleKeys = sample && typeof sample === 'object' ? Object.keys(sample).join(',') : '(non-object)';
+    let nestedHint = '';
+    if (sample && typeof sample === 'object') {
+      for (const [k, v] of Object.entries(sample)) {
+        if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
+          nestedHint = ` first-array-key="${k}" first-element-keys=[${Object.keys(v[0]).join(',')}]`;
+          break;
+        }
+      }
+    }
+    log(`  ⚠ formatProductRevenue: ${invoiceArray.length} invoices yielded 0 product rows. sample invoice keys=[${sampleKeys}]${nestedHint}`);
+  }
+
   // Round all amounts
   return Object.values(agg).map(row => ({
     ...row,
@@ -468,7 +704,12 @@ function formatResults(results, startDate, profitCenters) {
 // Run a full scrape for one account. Isolated: resets auth cache, uses local
 // profitCenters object so two accounts never share state.
 // config: { email, password, ledgerId, forceLocation? }
-// Returns { summary, productRows } or throws on hard failure.
+// Returns { summary, productRows, guestCounts } or throws on hard failure.
+//
+// `guestCounts` is { [locationName]: { lunch, dinner, staff, staff_lunch,
+// staff_dinner } } and is the source for the GuestHistory auto-update done
+// in tebi-sync-worker.js. `productRows` is built from product_top (no
+// invoice line items as of 2026-05-07).
 async function runForAccount(config, page, startDate, endDate) {
   const { email, password, ledgerId, forceLocation } = config;
 
@@ -476,8 +717,9 @@ async function runForAccount(config, page, startDate, endDate) {
   fetchTebiAPI._authHeader = null;
   fetchTebiAPI._cookie = null;
 
-  // Local profit centers — never leaks between account runs
-  const profitCenters = { all: '00000000-0000-0000-0000-000000000000', west: null, centraal: null, testtafel: null };
+  // Local profit centers — never leaks between account runs.
+  // No 'all' sentinel any more — see comment on PROFIT_CENTERS at top.
+  const profitCenters = { west: null, centraal: null, testtafel: null };
 
   // Override env vars for the login call (login() reads from process.env)
   const origEmail = process.env.TEBI_EMAIL;
@@ -497,9 +739,16 @@ async function runForAccount(config, page, startDate, endDate) {
 
     const rawData = await fetchDayData(page, ledgerId, profitCenters, startDate, endDate);
     const summary = formatResults(rawData, startDate, profitCenters);
-    const productRows = formatProductRevenue(rawData.invoices, profitCenters, { forceLocation });
+    // The day passed to formatProductRevenueFromTop is the row-key date —
+    // the worker iterates per-day already, so startDate is the singular day.
+    const productRows = formatProductRevenueFromTop(
+      rawData.productTopByPc,
+      startDate,
+      { forceLocation },
+    );
+    const guestCounts = deriveGuestCountsFromProductRows(productRows);
 
-    return { summary, productRows };
+    return { summary, productRows, guestCounts };
   } finally {
     process.env.TEBI_EMAIL    = origEmail;
     process.env.TEBI_PASSWORD = origPass;
@@ -556,14 +805,17 @@ async function main() {
     console.log('='.repeat(60));
 
     // Dump invoice structure for discovery
-    if (dumpInvoices && rawData.invoices && Array.isArray(rawData.invoices.content)) {
+    const dumpArr = rawData.invoices && (Array.isArray(rawData.invoices.data)
+      ? rawData.invoices.data
+      : Array.isArray(rawData.invoices.content) ? rawData.invoices.content : null);
+    if (dumpInvoices && dumpArr) {
       console.log('\n' + '='.repeat(60));
       console.log('INVOICE STRUCTURE (first 3 invoices)');
       console.log('='.repeat(60));
-      const sample = rawData.invoices.content.slice(0, 3);
+      const sample = dumpArr.slice(0, 3);
       console.log(JSON.stringify(sample, null, 2));
       console.log('='.repeat(60));
-      console.log(`Total invoices: ${rawData.invoices.content.length}`);
+      console.log(`Total invoices: ${dumpArr.length}`);
       if (sample[0]) {
         console.log('Invoice keys:', Object.keys(sample[0]).join(', '));
         const items = sample[0].items || sample[0].lines || sample[0].lineItems || [];
@@ -574,8 +826,26 @@ async function main() {
     }
 
     const forceLocation = process.env.TEBI_FORCE_LOCATION || null;
-    const productRevenue = formatProductRevenue(rawData.invoices, PROFIT_CENTERS, { forceLocation });
+    // The new path: build per-product rows from product_top responses
+    // (the previous invoice-line-items source went away when Tebi stripped
+    // line items from /api/invoicing/.../invoices on 2026-05-07).
+    const productRevenue = formatProductRevenueFromTop(
+      rawData.productTopByPc,
+      startDate,
+      { forceLocation },
+    );
     summary.productRevenue = productRevenue;
+    summary.guestCounts = deriveGuestCountsFromProductRows(productRevenue);
+
+    console.log('\n' + '='.repeat(60));
+    console.log('PRODUCT REVENUE (from product_top, ' + productRevenue.length + ' rows)');
+    console.log('='.repeat(60));
+    console.log(JSON.stringify(productRevenue.slice(0, 12), null, 2));
+    console.log('='.repeat(60));
+    console.log('GUEST COUNTS (derived from meal-product allowlist)');
+    console.log('='.repeat(60));
+    console.log(JSON.stringify(summary.guestCounts, null, 2));
+    console.log('='.repeat(60));
 
     // Also output raw data for debugging
     if (showRaw) {
@@ -605,4 +875,19 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, runForAccount, login, fetchTebiAPI, fetchDayData, formatResults, formatProductRevenue, classifyServicePeriod, sumMetric, PROFIT_CENTERS, CHART_TYPES };
+module.exports = {
+  main,
+  runForAccount,
+  login,
+  fetchTebiAPI,
+  fetchDayData,
+  formatResults,
+  formatProductRevenue,           // legacy invoice-line-items path (kept for fixtures)
+  formatProductRevenueFromTop,    // new product_top-based path
+  deriveGuestCountsFromProductRows,
+  classifyServicePeriod,
+  sumMetric,
+  MEAL_ITEM_TYPE,
+  PROFIT_CENTERS,
+  CHART_TYPES,
+};

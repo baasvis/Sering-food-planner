@@ -47,6 +47,10 @@
     "testMatch": [
       "**/test/**/*.test.ts"
     ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/.claude/"
+    ],
     "setupFiles": [
       "<rootDir>/test/setup-env.ts",
       "<rootDir>/test/setup-dom-stubs.ts"
