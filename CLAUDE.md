@@ -157,6 +157,8 @@ Optional: `COVERAGE_API_KEY` for the weekly e2e coverage agent — required for 
 Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Ledger 1 (Sering West, default ledger `723192`). For the second account/ledger (TestTafel + Centraal, `724466`), set `TEBI_LEDGER_ID_2=724466` and `TEBI_EMAIL_2` + `TEBI_PASSWORD_2`.
 Note on the `_2` env vars: only `scripts/tebi-sync-worker.js` reads them. The app-level `tebiConfigured` check (`lib/tebi-sync.ts`) and `runTebiSync` refusal logic look at the primary `TEBI_EMAIL`/`TEBI_PASSWORD` only. If `TEBI_LEDGER_ID_2` is set but the `_2` credentials are not, the worker silently falls back to primary creds — only valid if one Tebi account spans both ledgers (no longer the case as of 2026-04-26). Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` to bypass discovery if needed.
 
+**For anything Tebi-related — auth, endpoint catalogue, the post-2026-05-07 product_top + filter pipeline, GuestHistory auto-update, common failure modes, diagnostic scripts — see [`TEBI.md`](TEBI.md).** That doc is the single source of truth for the integration; update it when you fix or extend something.
+
 ## Preview (for Claude Code verification)
 Use `preview_start` with `name: "preview"` (not `"dev"`). The `dev` script runs two
 servers via `concurrently` which breaks the preview tool. The `preview` config builds
