@@ -20,20 +20,35 @@ interface SolverEntry {
   load: () => SolverFn;
 }
 
-const SOLVERS: SolverEntry[] = [
-  {
-    name: 'current',
-    description: 'Existing 5-pass greedy + Pass 5 combination fill (baseline)',
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    load: () => require('./solvers/current').current,
-  },
-  // Strategy slots filled by the parallel agents:
-  // { name: 'ilp', load: () => require('./solvers/ilp').ilp },
-  // { name: 'constraint', load: () => require('./solvers/constraint').constraint },
-  // { name: 'sa', load: () => require('./solvers/sa').sa },
-  // { name: 'beam', load: () => require('./solvers/beam').beam },
-  // { name: 'ga', load: () => require('./solvers/ga').ga },
-];
+/**
+ * Auto-discover all .ts files under solvers/. Each file MUST export a const
+ * with the same name as the filename (e.g. solvers/ilp.ts → export const ilp).
+ *
+ * This avoids merge conflicts when multiple agents add solvers in parallel.
+ */
+function discoverSolvers(): SolverEntry[] {
+  const dir = path.join(__dirname, 'solvers');
+  if (!fs.existsSync(dir)) return [];
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.ts') && !f.startsWith('_'));
+  const entries: SolverEntry[] = [];
+  for (const f of files) {
+    const name = f.replace(/\.ts$/, '');
+    entries.push({
+      name,
+      description: '',
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      load: () => {
+        const mod = require(`./solvers/${name}`);
+        const fn = mod[name];
+        if (!fn) throw new Error(`solvers/${name}.ts must export "${name}" as a SolverFn`);
+        return fn;
+      },
+    });
+  }
+  return entries;
+}
+
+const SOLVERS: SolverEntry[] = discoverSolvers();
 
 async function main() {
   const args = process.argv.slice(2);
@@ -44,7 +59,9 @@ async function main() {
   if (baselineOnly) solvers = solvers.filter(s => s.name === 'current');
   else if (filterNames.length > 0) solvers = solvers.filter(s => filterNames.includes(s.name));
 
-  // Try to load each requested solver
+  // Try to load each requested solver. If a parallel-agent solver file is
+  // half-written or has a syntax error, we skip it rather than fail the
+  // whole run — other strategies still get scored.
   const loaded: { name: string; fn: SolverFn; description: string }[] = [];
   for (const s of solvers) {
     try {
@@ -52,7 +69,7 @@ async function main() {
       loaded.push({ name: s.name, fn, description: s.description });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`  [skip] ${s.name}: ${msg}`);
+      console.warn(`  [skip] ${s.name}: ${msg.split('\n')[0]}`);
     }
   }
 
