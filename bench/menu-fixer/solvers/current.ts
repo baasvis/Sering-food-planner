@@ -106,6 +106,10 @@ export const current: SolverFn = (input): SolverResult => {
     const pass5 = menuFixer.assignServicesPass5(S.batches, planWindow, calcReqLive, getGuests);
     rebuildPlanner();
 
+    // Step 4.7 — over-commit trim. Same as production (added 2026-05-07).
+    const trim = menuFixer.trimOvercommits(S.batches, fixture.today, calcRequired, rebuildPlanner);
+    if (trim.servicesRemoved > 0) rebuildPlanner();
+
     return {
       batches: S.batches,
       durationMs: RealDate.now() - start,
@@ -119,6 +123,7 @@ export const current: SolverFn = (input): SolverResult => {
         pass4Added: pass4.servicesAdded,
         pass5Added: pass5.servicesAdded,
         pass5Teams: pass5.teamsFormed,
+        overcommitsTrimmed: trim.servicesRemoved,
       },
     };
   } finally {

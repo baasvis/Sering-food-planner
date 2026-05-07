@@ -50,6 +50,12 @@ export const COOK_RHYTHM: Record<string, { soup: number; main: number }> = {
 export const SLOTS_PER_TYPE = 2;
 export const PLANNING_HORIZON_DAYS = 10;
 export const STALE_THRESHOLD_DAYS = 3;
+// Per-batch over-commit slack: how much demand may exceed stock before the
+// trim pass evicts services. ≤5L is small slack the cook can absorb (slightly
+// fuller pot, slightly larger portions); past that we leave the slot empty
+// and emit an under-filled-slot warning instead. Per Daan 2026-05-07:
+// "-4L is fine, but -40L is an entire dish. Slot needs to be empty + warning."
+export const OVERCOMMIT_SLACK_L = 5;
 export const TYPES_TO_PLAN: DishType[] = ['Soup', 'Main course'];
 
 // All four service slots per day, in the canonical order Pass 2 will use later
@@ -1235,6 +1241,71 @@ function findCombinationTeam(
   return [];
 }
 
+// ── Step 4.7 — post-pass over-commit trim ──────────────────────────────────
+
+/**
+ * Walk every cooked batch and remove its latest future services until
+ * `calcRequired(batch) ≤ stock + OVERCOMMIT_SLACK_L`. Removed slots become
+ * under-filled-slot warnings — handled by the existing warning category.
+ *
+ * Why: Pass 1 has an explicit overshoot check, but Passes 2-5 only check
+ * per-batch fit at the moment of assignment. They miss family-level
+ * overshoots (where a parent + split sibling combined exceed the family
+ * stock pool) and chained reallocations across passes that push a batch
+ * above its capacity. Per Daan 2026-05-07: a -40L overcommit on a single
+ * batch is unacceptable; the slot should be empty + warning instead.
+ *
+ * Strategy: drop the LATEST chronological future service first. Earliest
+ * services get the freshest food (cooked-day-dinner is fresher than +5d).
+ * Dropping later preserves freshness and the natural day-spread.
+ *
+ * Idempotent and safe to run after Pass 5 + GA. Past services are
+ * never touched.
+ */
+export function trimOvercommits(
+  batches: Batch[],
+  todayIso: string,
+  calcReq: (b: Batch) => number,
+  rebuild: () => void,
+): { batchesTrimmed: number; servicesRemoved: number } {
+  let servicesRemoved = 0;
+  const touched = new Set<string>();
+  for (const b of batches) {
+    if (b.stock <= 0) continue;
+    if (b.storage === 'Frozen') continue;
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (!b.services || b.services.length === 0) continue;
+
+    rebuild();
+    let required = calcReq(b);
+    let safety = 0;
+    while (required > b.stock + OVERCOMMIT_SLACK_L && safety++ < 50) {
+      // Find the latest future service entry on this batch.
+      let lastFutureIdx = -1;
+      let lastFutureKey = '';
+      for (let i = 0; i < b.services.length; i++) {
+        const s = b.services[i];
+        if (s.date < todayIso) continue; // never touch past services
+        // Sort key: date | meal-rank (dinner > lunch) | location (west > centraal)
+        const mealRank = s.meal === 'dinner' ? '1' : '0';
+        const locRank = s.loc === 'west' ? '1' : '0';
+        const key = `${s.date}|${mealRank}|${locRank}`;
+        if (key > lastFutureKey) {
+          lastFutureKey = key;
+          lastFutureIdx = i;
+        }
+      }
+      if (lastFutureIdx < 0) break; // no future services left to drop
+      b.services.splice(lastFutureIdx, 1);
+      servicesRemoved++;
+      touched.add(b.id);
+      rebuild();
+      required = calcReq(b);
+    }
+  }
+  return { batchesTrimmed: touched.size, servicesRemoved };
+}
+
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 /**
@@ -1359,6 +1430,15 @@ export function fixMyMenu(): void {
     rebuildPlanner();
   }
 
+  // Step 4.7 — trim over-commits. Even with per-pass capacity checks +
+  // GA penalty, batches sometimes end up serving more food than they
+  // have (family-level overshoots, chained reallocations across passes).
+  // Drop services until each batch is within OVERCOMMIT_SLACK_L of stock.
+  // Removed slots become under-filled-slot warnings the cook can act on.
+  const todayIsoStr = dateToIso(getToday());
+  const trim = trimOvercommits(S.batches, todayIsoStr, calcRequired, rebuildPlanner);
+  if (trim.servicesRemoved > 0) rebuildPlanner();
+
   // Step 4.5 — Allocate kitchen pots to batches by ACTUAL demand.
   // Biggest pot goes to the batch that needs the most food. This way the
   // 140L pot is never wasted on a low-demand batch just because it sorts
@@ -1392,6 +1472,7 @@ export function fixMyMenu(): void {
     consolidated: consolidation.removed.length,
     placeholderNames: newPlaceholders.map(p => p.name),
     teamsFormed: pass5.teamsFormed,
+    overcommitsTrimmed: trim.servicesRemoved,
     warnings,
     gaResult,
   });
@@ -1625,6 +1706,8 @@ interface ResultsReport {
   placeholderNames: string[];
   /** Number of multi-batch teams Pass 5 assembled to fill high-demand slots. */
   teamsFormed?: number;
+  /** Number of services dropped by the trim pass to keep batches within stock. */
+  overcommitsTrimmed?: number;
   warnings: Warning[];
   /** Set when MENU_FIXER_VERSION === 'v2' and the GA refinement ran. */
   gaResult?: GaResult | null;
@@ -1685,13 +1768,14 @@ function categoryHeader(c: WarningCategory): { title: string; hint: string } {
 
 function showResultsModal(report: ResultsReport): void {
   _lastReport = report;
-  const { cleaned, created, assigned, consolidated, placeholderNames, teamsFormed, warnings, gaResult } = report;
+  const { cleaned, created, assigned, consolidated, placeholderNames, teamsFormed, overcommitsTrimmed, warnings, gaResult } = report;
   const summary: string[] = [];
   if (consolidated > 0) summary.push(`<div>⛓ Merged ${consolidated} duplicate batch${consolidated === 1 ? '' : 'es'} of the same recipe at the same location</div>`);
   if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
   if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
   if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);
   if (teamsFormed && teamsFormed > 0) summary.push(`<div>🤝 Combined ${teamsFormed} multi-batch team${teamsFormed === 1 ? '' : 's'} for high-demand slots</div>`);
+  if (overcommitsTrimmed && overcommitsTrimmed > 0) summary.push(`<div>✂️ Removed ${overcommitsTrimmed} service${overcommitsTrimmed === 1 ? '' : 's'} where a batch would have been over-committed (slot now empty + flagged below)</div>`);
   if (gaResult) {
     const lift = gaResult.bestScore - gaResult.baseScore;
     if (lift > 0) {

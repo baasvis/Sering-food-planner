@@ -678,6 +678,9 @@ function runBaseline(fixture: any, batches: Batch[]): Batch[] {
     rebuildPlanner();
     menuFixer.assignServicesPass5(S.batches, planWindow, calcReqLive, getGuestsCore);
     rebuildPlanner();
+    // Step 4.7 — over-commit trim (same as production fixMyMenu pipeline).
+    menuFixer.trimOvercommits(S.batches, fixture.today, calcRequired, rebuildPlanner);
+    rebuildPlanner();
     return S.batches;
   } finally {
     sandbox.uninstallFixture();
@@ -861,6 +864,18 @@ export const ga: SolverFn = (input): SolverResult => {
 
   // Step 5: write best chromosome to allBatches
   if (bestChr) decodeChromosomeToBatches(bestChr, ctx);
+
+  // Step 6: post-GA over-commit trim (same as production v2 pipeline)
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const menuFixer = require('../../../public/js/menu-fixer');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { rebuildPlanner: rp, calcRequired: calcReqProd } = require('../../../public/js/core');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { S: stateS } = require('../../../public/js/state');
+  stateS.batches = allBatches;
+  rp();
+  menuFixer.trimOvercommits(allBatches, todayIso, calcReqProd, rp);
+  rp();
 
   return {
     batches: allBatches,
