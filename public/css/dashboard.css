@@ -64,6 +64,7 @@
 .dash-chip-note.note-blue{background:var(--blue-bg);color:var(--blue);}
 .dash-chip-note.note-gray{background:var(--bg3);color:var(--text3);}
 .dash-chip-liters{font-size:11px;font-weight:700;color:var(--text);background:var(--bg3);padding:2px 6px;border-radius:5px;white-space:nowrap;flex-shrink:0;}
+.dash-chip-remaining{font-size:11px;font-weight:700;color:var(--amber);background:var(--amber-bg);padding:2px 6px;border-radius:5px;white-space:nowrap;flex-shrink:0;}
 .dash-chip-arrow{font-size:10px;color:var(--text3);flex-shrink:0;width:14px;text-align:center;}
 
 /* Chip foldout */
@@ -149,6 +150,7 @@
 .tcard-banner-pending{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(186,117,23,.2);}
 
 .tcard-empty{font-size:12px;color:var(--text3);font-style:italic;padding:10px 4px;text-align:center;}
+.tcard-after-1900{font-size:12px;color:var(--text3);font-style:italic;padding:8px 12px;text-align:center;}
 
 .tcard-rows{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
 .tcard-row{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);}

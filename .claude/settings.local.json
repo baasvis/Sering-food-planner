@@ -8,7 +8,26 @@
       "Bash(mkdir -p prisma/migrations/20260322190000_init)",
       "Bash(mv prisma/migration.sql prisma/migrations/20260322190000_init/migration.sql)",
       "Bash(node -e \"try { require\\(''''./server''''\\); console.log\\(''''OK: server module loaded''''\\); process.exit\\(0\\); } catch\\(e\\) { console.error\\(''''FAIL:'''', e.message\\); process.exit\\(1\\); }\")",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(git diff *)",
+      "Bash(git diff)",
+      "Bash(git status *)",
+      "Bash(git status)",
+      "Bash(git log *)",
+      "Bash(git log)",
+      "Read(//c/Users/Daan/.claude/**)",
+      "Read(//c/Users/Daan/Sering-food-planner/**)",
+      "Edit(//c/Users/Daan/Sering-food-planner/**)",
+      "Write(//c/Users/Daan/Sering-food-planner/**)",
+      "Bash(npm test *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Read(//tmp/**)",
+      "Bash(npx jest *)",
+      "Bash(git fetch *)",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
