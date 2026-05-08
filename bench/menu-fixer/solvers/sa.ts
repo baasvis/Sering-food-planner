@@ -329,8 +329,7 @@ function isEligibleForSlot(
   if (batch.storage === 'Frozen') return false;
   if (!batch.cookDate) return false;
   if (!isServableBy(batch.cookDate, date, meal, loc, batch.location)) return false;
-  // Stale applies to both cooked and uncooked.
-  if (isStaleAtSlot(batch.cookDate, date)) return false;
+  if (batch.stock > 0 && isStaleAtSlot(batch.cookDate, date)) return false;
   if (familyAlreadyAtSlot(batch, batches, loc, date, meal)) return false;
   if (countFamiliesAtSlot(batches, type, loc, date, meal) >= SLOTS_PER_TYPE) return false;
   if (date < fixture.today) return false;
@@ -538,7 +537,7 @@ function tryMove(batches: Batch[], rng: () => number, fixture: Fixture): MoveOp 
     // Tentatively check eligibility ignoring "alreadyAtSlot" (we'll verify after move)
     if (batch.storage === 'Frozen') return false;
     if (!isServableBy(batch.cookDate, slot.date, slot.meal, slot.loc, batch.location)) return false;
-    if (isStaleAtSlot(batch.cookDate, slot.date)) return false;
+    if (batch.stock > 0 && isStaleAtSlot(batch.cookDate, slot.date)) return false;
     return true;
   });
   if (eligibleEmpty.length === 0) return null;
@@ -597,9 +596,9 @@ function trySwap(batches: Batch[], rng: () => number, fixture: Fixture): MoveOp 
       batchB.services[r2!.serviceIdx] = svcA;
       // Validity: each batch must be servable at its new slot AND family/in-slot rules hold
       const aOk = isServableBy(batchA.cookDate, svcB.date, svcB.meal, svcB.loc, batchA.location)
-                   && !isStaleAtSlot(batchA.cookDate, svcB.date);
+                   && !(batchA.stock > 0 && isStaleAtSlot(batchA.cookDate, svcB.date));
       const bOk = isServableBy(batchB.cookDate, svcA.date, svcA.meal, svcA.loc, batchB.location)
-                   && !isStaleAtSlot(batchB.cookDate, svcA.date);
+                   && !(batchB.stock > 0 && isStaleAtSlot(batchB.cookDate, svcA.date));
       if (!aOk || !bOk
           || !familyStockOk(batchA, batches, fixture)
           || !familyStockOk(batchB, batches, fixture)

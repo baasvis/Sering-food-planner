@@ -257,9 +257,8 @@ export const constraint: SolverFn = (input): SolverResult => {
       const cookIso = cookDateToIso(b.cookDate);
       if (!cookIso) continue;
       if (!isServable(cookIso, v.key.date, v.key.meal, v.key.loc, b.location)) continue;
-      // Stale check applies to both cooked and uncooked — a Sat placeholder
-      // is "stale" for Tue lunch (3 days out) even though stock=0 right now.
-      if (daysBetween(cookIso, v.key.date) >= STALE_THRESHOLD_DAYS) continue;
+      // Stale check: cooked batches that would be stale on this slot's date are excluded
+      if (b.stock > 0 && daysBetween(cookIso, v.key.date) >= STALE_THRESHOLD_DAYS) continue;
       candidates.push(b.id);
     }
     candidates.push(NULL_BATCH);

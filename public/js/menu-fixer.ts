@@ -625,13 +625,7 @@ function tryFillOnePosition(
     if (b.storage === 'Frozen') return false;
     if (alreadyInSlot(b, loc, isoDate, meal, allBatches)) return false;
     if (!isServableBy(b.cookDate, isoDate, meal, loc, b.location)) return false;
-    // Stale check applies to BOTH cooked and uncooked. For an uncooked
-    // placeholder, the cook plans to make one batch on cookDate and serve
-    // it over the next ~3 days; assigning Sat's placeholder to Tue lunch
-    // (3 days out) means the food would be eaten stale even though stock=0
-    // right now. User feedback 2026-05-07: "Sat-cooked food shouldn't go
-    // to Tue/Wed — that should be a Sun/Mon/Tue cook".
-    if (isStaleAtSlot(b.cookDate, isoDate)) return false;
+    if (b.stock > 0 && isStaleAtSlot(b.cookDate, isoDate)) return false;
     return true;
   });
 
@@ -849,8 +843,7 @@ export function assignServicesPass3(
             if (b.storage === 'Frozen') return false;
             if (alreadyInSlot(b, slot.loc, day.isoDate, slot.meal, allBatches)) return false;
             if (!isServableBy(b.cookDate, day.isoDate, slot.meal, slot.loc, b.location)) return false;
-            // Stale applies to both cooked AND uncooked — see Pass 2 comment.
-            if (isStaleAtSlot(b.cookDate, day.isoDate)) return false;
+            if (b.stock > 0 && isStaleAtSlot(b.cookDate, day.isoDate)) return false;
             // Cooked: tentative-add and undo to verify we don't exceed STOCK
             // (real food limit; pot cap is intentionally ignored here).
             // Two-tier capacity check (matches Pass 2): real-peer demand,
@@ -1168,8 +1161,7 @@ function findCombinationTeam(
     if (b.storage === 'Frozen') return false;
     if (alreadyInSlot(b, loc, isoDate, meal, allBatches)) return false;
     if (!isServableBy(b.cookDate, isoDate, meal, loc, b.location)) return false;
-    // Stale applies to both cooked AND uncooked — see Pass 2 comment.
-    if (isStaleAtSlot(b.cookDate, isoDate)) return false;
+    if (b.stock > 0 && isStaleAtSlot(b.cookDate, isoDate)) return false;
     return true;
   });
   if (eligible.length === 0) return [];

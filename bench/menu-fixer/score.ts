@@ -244,10 +244,9 @@ export function scoreSolution(fixture: Fixture, batchesAfter: Batch[]): ScoreRep
             // Servable: cook day's dinner or later
             if (cookIso > date) return false;
             if (cookIso === date && slot.meal === 'lunch') return false;
-            // Not stale at this slot — applies to both cooked and uncooked
-            // (a Sat placeholder is "stale" for Tue lunch even though stock=0).
+            // Not stale at this slot
             const ageDays = daysBetween(cookIso, date);
-            if (ageDays >= STALE_THRESHOLD_DAYS) return false;
+            if (b.stock > 0 && ageDays >= STALE_THRESHOLD_DAYS) return false;
             // Already in slot? (family-aware — counted as filled above)
             const family = b.parentId || b.id;
             if (filledFamilies.has(family)) return false;
