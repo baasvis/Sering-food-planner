@@ -285,33 +285,78 @@ working even though we no longer have per-transaction service-period data.
 
 ```js
 {
-  'Lunch':                   'lunch',
-  'Lunch card guest':        'lunch',
-  'Dinner donation':         'dinner',
-  'Stadspas Dinner':         'dinner',
-  'DSC Dinner':              'dinner',
-  'Staff & volunteer meals': 'staff',
+  // Account #1 — West (info@testtafel.nl, ledger 723192)
+  'Lunch':                            'lunch',
+  'Lunch card guest':                 'lunch',
+  'Dinner donation':                  'dinner',
+  'Stadspas Dinner':                  'dinner',
+  'DSC Dinner':                       'dinner',
+  'Staff & volunteer meals':          'staff',
+  // Account #2 — TestTafel + Centraal (facturen@testtafel.nl, ledger 724466)
+  'DSC Lunch':                        'lunch',
+  'DSC Stadspas Dinner':              'dinner',
+  'DSC staff & volunteer meals':      'staff',
+  'Single TestTafel Menu (5 course)': 'dinner',
+  'Single TestTafel Menu (3 course)': 'dinner',
 }
 ```
 
 **Important distinction**: `"Lunch card"` (the bulk-buy CARD) is NOT in this
 list — those rows are donor purchases, not guests served. The actual guest
-event is `"Lunch card guest"`, which IS in the list. Mirrors
-`public/js/predictions.ts` exactly.
+event is `"Lunch card guest"`, which IS in the list.
+
+**Multi-course components NOT in the allowlist**: `Bread (bundle)`,
+`Amuse (Bundle)`, `Course 1..3`, `Dessert 1..2`. These appear at TestTafel
+PC with quantities matching `Single TestTafel Menu` × N because they're the
+sub-components of each multi-course meal. Counting them would double-count
+guests.
 
 If Sering's POS gets new product names (renames, new SKUs), update
-`MEAL_ITEM_TYPE` and the same constant in `predictions.ts`. The diagnostic
-scripts (`diagnose-tebi-coverage.ts`, `tebi-derive-guests.ts`) print
-"unmatched products" so you can spot what's escaping the allowlist.
+`MEAL_ITEM_TYPE` here. The CSV path in `public/js/predictions.ts` is being
+phased out — don't sync the constant there for new items unless someone
+is still uploading CSVs. The diagnostic scripts
+(`diagnose-tebi-coverage.ts`, `tebi-derive-guests.ts`) print "unmatched
+products" so you can spot what's escaping the allowlist.
+
+### Misattribution rule: TestTafel PC ↔ Centraal
+
+TestTafel and Centraal share one Tebi cash drawer at the same site, with
+two profit centers. **TestTafel only opens 18:00+ and only sells the
+"Single TestTafel Menu" multi-course dinner experience** — everything else
+under TestTafel's PC is misattributed Centraal sales (staff forgot to
+switch the POS register before ringing up community-kitchen items).
+
+`resolveLocationForItem` in `tebi-scraper.js` corrects this:
+
+| Item at TestTafel PC | Resolved location | Reason |
+|---|---|---|
+| `Single TestTafel Menu (5 course)` / `... (3 course)` | testtafel | legitimate evening service |
+| Any other meal item (`DSC Lunch`, `DSC Dinner`, `Lunch card guest`, …) | **centraal** | misattributed community kitchen |
+| Drinks / snacks (`DSC pilsner`, `2 Caps - Blonde`, `Lunch card`, …) | testtafel | left as PC sees them — could be either, no time data to disambiguate |
+
+The reassignment runs inside `formatProductRevenueFromTop`, which also
+aggregates by `(date, location, meal, productName)` — so when DSC Lunch
+appears at both TestTafel PC (reassigned to centraal) and Centraal PC, the
+two are summed into a single ProductRevenue row instead of one
+`upsert`-overwriting the other.
+
+**Known caveat**: `DailyRevenue` per-PC rows come from Tebi's per-PC
+revenue chart unchanged. After reassignment, `sum(ProductRevenue WHERE
+location=testtafel)` won't equal `DailyRevenue WHERE location=testtafel`
+on days with TestTafel-PC misattributions. Finance UI primarily reads
+the `'all'` aggregate row so this hasn't bitten anyone, but it's worth
+knowing if you trust per-location revenue totals. Fix would be to
+recompute `DailyRevenue` from `ProductRevenue` sums instead of from the
+per-PC chart.
 
 ### Staff lunch/dinner split
 
 `product_top` doesn't carry per-hour data and the `Staff & volunteer meals`
-item is one bucket. We split it 30/70 lunch/dinner as a default heuristic
-matching the typical Sering pattern (more staff stay through dinner). If
-you want exact numbers, you'd need to fetch a separate hourly chart and
-correlate by service period — not currently done. Refining this is a
-nice-to-have.
+(or `DSC staff & volunteer meals`) item is one bucket. We split it 30/70
+lunch/dinner as a default heuristic matching the typical Sering pattern
+(more staff stay through dinner). If you want exact numbers, you'd need to
+fetch a separate hourly chart and correlate by service period — not
+currently done. Refining this is a nice-to-have.
 
 ## Common failure modes + diagnosis
 
