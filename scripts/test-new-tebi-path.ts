@@ -44,17 +44,33 @@ if (!TOKEN) {
 
 const BASE = 'https://live.tebi.co';
 const LEDGER = process.env.TEBI_LEDGER_ID || '723192';
-const PROFIT_CENTERS = {
-  west: '00000000-0000-0000-0000-000000000000',
-  centraal: '27c33042-47c1-4650-8e76-37c7bfef86dd',
-  testtafel: 'a904a975-6bd2-413f-8e02-dc457b87a6e3',
-};
 
 const headers: Record<string, string> = {
   authorization: `Bearer ${TOKEN}`,
   accept: '*/*',
   'tebi-version-code': '1722000',
 };
+
+async function discoverProfitCenters(): Promise<Record<string, string>> {
+  const r = await fetch(`${BASE}/api/insights/ledgers/${LEDGER}/insights/dashboards/main`, { headers });
+  if (!r.ok) throw new Error(`dashboards/main: HTTP ${r.status}`);
+  const dash = (await r.json()) as { chartGroups?: Array<{ charts?: Array<{ id?: string; name?: string }> }> };
+  const out: Record<string, string> = {};
+  for (const g of dash.chartGroups ?? []) {
+    for (const c of g.charts ?? []) {
+      if (c.id && c.id.startsWith('revenue_profit_center_')) {
+        const uuid = c.id.replace('revenue_profit_center_', '');
+        const label = (c.name ?? '').trim().toLowerCase();
+        let key = label.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        if (label.includes('west')) key = 'west';
+        else if (label.includes('centraal')) key = 'centraal';
+        else if (label.includes('testtafel') || label.includes('test')) key = 'testtafel';
+        out[key] = uuid;
+      }
+    }
+  }
+  return out;
+}
 
 async function fetchProductTop(date: string, pcUuid: string): Promise<unknown> {
   const [y, m, d] = date.split('-').map(Number);
@@ -68,7 +84,25 @@ async function fetchProductTop(date: string, pcUuid: string): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
-  const dates = ['2026-04-30', '2026-05-01', '2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07'];
+  const PROFIT_CENTERS = await discoverProfitCenters();
+  console.log(`Ledger ${LEDGER}: ${Object.keys(PROFIT_CENTERS).length} profit centers — ${Object.keys(PROFIT_CENTERS).join(', ')}\n`);
+
+  const startStr = process.env.TEBI_PROBE_START;
+  const endStr = process.env.TEBI_PROBE_END;
+  let dates: string[];
+  if (startStr && endStr) {
+    dates = [];
+    const [sy, sm, sd] = startStr.split('-').map(Number);
+    const [ey, em, ed] = endStr.split('-').map(Number);
+    const cur = new Date(sy, sm - 1, sd);
+    const stop = new Date(ey, em - 1, ed);
+    while (cur <= stop) {
+      dates.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`);
+      cur.setDate(cur.getDate() + 1);
+    }
+  } else {
+    dates = ['2026-04-30', '2026-05-01', '2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07'];
+  }
   const allProductRows: ReturnType<typeof formatProductRevenueFromTop> = [];
   const allGuestCounts: Record<string, Record<string, { lunch: number; dinner: number; staff: number; staff_lunch: number; staff_dinner: number }>> = {};
 

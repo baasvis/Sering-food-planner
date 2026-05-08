@@ -464,6 +464,43 @@ function r2(n) { return Math.round((n || 0) * 100) / 100; }
 // approximation.
 function netFromGross(gross) { return r2(gross / 1.09); }
 
+// ── Misattribution rule: TestTafel-PC community-kitchen items ──────────────
+//
+// At Sering's site, TestTafel and Centraal share a venue. TestTafel is the
+// upscale evening dining experience (only opens 18:00+) selling exclusively
+// the "Single TestTafel Menu" multi-course experience. Centraal is the
+// community kitchen (DSC = "De Sering Community") serving lunch and
+// community dinners.
+//
+// However, both register under one Tebi cash drawer with two profit
+// centers, and staff sometimes forget to switch the POS to Centraal mode
+// before ringing community-kitchen items. The result: DSC* / Lunch card /
+// Stadspas items routinely show up under TestTafel's profit center, but
+// they're actually Centraal customers.
+//
+// `resolveLocationForItem` corrects this for ProductRevenue + GuestHistory:
+// any meal-y item rung up at TestTafel that isn't a Single TestTafel Menu
+// is reassigned to centraal. Drinks at TestTafel (DSC pilsner, wine, etc.)
+// stay at TestTafel — those are legitimate evening-service sales.
+//
+// Side effect: DailyRevenue per-PC totals (which come from Tebi's per-PC
+// revenue_profit_center_<uuid> chart) reflect the as-rung-up location and
+// will NOT match sum(ProductRevenue) for testtafel/centraal after this
+// reassignment. Acceptable today — Finance UI primarily uses the 'all' row
+// and per-product breakdown. If users start relying on per-PC revenue
+// totals, recompute DailyRevenue from ProductRevenue sums instead.
+function resolveLocationForItem(productName, pcLocation) {
+  if (pcLocation !== 'testtafel') return pcLocation;
+  // At TestTafel PC: Single TestTafel Menu items are genuine TestTafel sales.
+  if (productName.startsWith('Single TestTafel Menu')) return 'testtafel';
+  // Anything else that's a known meal item is a misattributed community
+  // kitchen sale — should be Centraal.
+  if (MEAL_ITEM_TYPE[productName]) return 'centraal';
+  // Drinks / snacks / unknown items at TestTafel PC stay at TestTafel
+  // (legitimate evening-service revenue).
+  return 'testtafel';
+}
+
 // ── Product-level revenue (built from product_top per-PC data) ──────────────
 
 // Build productRows from `productTopByPc`. Each PC's product_top response
@@ -473,12 +510,21 @@ function netFromGross(gross) { return r2(gross / 1.09); }
 // productTopByPc: { [locationName]: chartResponse }
 // date: YYYY-MM-DD (single day — the scraper's per-day loop already iterates)
 // Returns rows shaped for ProductRevenue table inserts.
+//
+// Location reassignment per `resolveLocationForItem` happens here, so
+// downstream consumers (ProductRevenue, deriveGuestCountsFromProductRows
+// → GuestHistory) all see the corrected location.
 function formatProductRevenueFromTop(productTopByPc, date, options = {}) {
   const { forceLocation } = options;
-  const rows = [];
+  // Aggregate by (date, location, meal, productName) to handle the case
+  // where the same item shows up at multiple PCs and gets reassigned to a
+  // shared location (e.g. DSC Lunch at both TestTafel and Centraal both
+  // → centraal). Without this, ProductRevenue.upsert with the unique key
+  // would overwrite one with the other instead of summing.
+  const agg = new Map();
   for (const [locName, chartData] of Object.entries(productTopByPc || {})) {
     if (!chartData || !Array.isArray(chartData.data)) continue;
-    const location = forceLocation || locName;
+    const pcLocation = forceLocation || locName;
     for (const entry of chartData.data) {
       const itemEntry = (entry.key && Array.isArray(entry.key.groupedBy))
         ? entry.key.groupedBy.find(g => g && g.name === 'ITEM')
@@ -493,19 +539,31 @@ function formatProductRevenueFromTop(productTopByPc, date, options = {}) {
         : 0;
       if (quantity <= 0 && grossRevenue <= 0) continue;
       const meal = MEAL_ITEM_TYPE[productName] || 'other';
-      rows.push({
-        date,
-        location,
-        meal,
-        productName,
-        productCategory: '', // product_top doesn't carry category; left blank
-        quantity: r2(quantity),
-        grossRevenue: r2(grossRevenue),
-        netRevenue: netFromGross(grossRevenue),
-      });
+      const location = resolveLocationForItem(productName, pcLocation);
+      const key = `${date}|${location}|${meal}|${productName}`;
+      const existing = agg.get(key);
+      if (existing) {
+        existing.quantity += quantity;
+        existing.grossRevenue += grossRevenue;
+      } else {
+        agg.set(key, {
+          date,
+          location,
+          meal,
+          productName,
+          productCategory: '', // product_top doesn't carry category; left blank
+          quantity,
+          grossRevenue,
+        });
+      }
     }
   }
-  return rows;
+  return [...agg.values()].map(row => ({
+    ...row,
+    quantity: r2(row.quantity),
+    grossRevenue: r2(row.grossRevenue),
+    netRevenue: netFromGross(row.grossRevenue),
+  }));
 }
 
 // Derive per-meal guest counts from a productRows array. Counts mirror the
