@@ -1,35 +1,40 @@
 /**
- * Cleanup + backfill for the new Tebi account (TestTafel + Centraal,
- * ledger 724466, facturen@testtafel.nl) covering the new-account era.
+ * Cleanup + backfill for any Tebi ledger. Discovers profit centers at
+ * runtime from the supplied Bearer token + ledger, so it works for both:
+ *   - Account 1 (info@testtafel.nl, ledger 723192) — West (always), and
+ *     Centraal historically (2026-03-06 → 2026-04-09).
+ *   - Account 2 (facturen@testtafel.nl, ledger 724466) — TestTafel +
+ *     Centraal in their new home (2026-04-10 onwards).
  *
  * What this does, per date in [START, END]:
- *  1. DELETE existing ProductRevenue rows for testtafel AND centraal
- *     (wipes both pre-reassignment stale rows and any partial sync rows
- *     so we don't leave orphans behind).
- *  2. DELETE existing GuestHistory rows for testtafel AND centraal.
- *  3. Fetch Account 2's product_top for each PC (TestTafel UUID
- *     00000000-...-0 and Centraal UUID 85194418-...) with the supplied
- *     Bearer token.
- *  4. Apply the production scraper's reassignment rule
- *     (`formatProductRevenueFromTop` from tebi-scraper.js) — community
- *     kitchen items rung up at TestTafel PC are reassigned to centraal.
- *  5. Aggregate by (date, location, meal, productName) and upsert into
- *     ProductRevenue.
- *  6. Derive per-meal guest counts and upsert into GuestHistory.
+ *  1. DELETE existing ProductRevenue rows for the locations the script is
+ *     touching (specified via DELETE_LOCATIONS, default centraal+testtafel
+ *     since West is already correct from cron and we don't want to
+ *     overwrite it).
+ *  2. DELETE existing GuestHistory rows for the same locations + dates.
+ *  3. Fetch product_top for each discovered PC with the supplied Bearer
+ *     token.
+ *  4. Apply formatProductRevenueFromTop — same reassignment rule as
+ *     production cron (community-kitchen items at TestTafel PC →
+ *     centraal). This is benign for Account 1 since its TestTafel PC has
+ *     basically always been empty.
+ *  5. Aggregate, upsert ProductRevenue.
+ *  6. Derive guest counts, upsert GuestHistory.
  *
- * West (account 1) is NOT touched — its data is already correct from cron.
- *
- * DailyRevenue is also NOT touched here — those values come from per-PC
- * revenue charts and are already populated by the cron / manual syncs.
- * Cleaning + recomputing them would double the API call count and isn't
- * what the user actually sees on the Guests page.
+ * DailyRevenue is NOT touched — those values come from per-PC revenue
+ * charts and are independently maintained by cron / manual sync.
  *
  * Usage:
- *   TEBI_BEARER_TOKEN_2='eyJ...' \
+ *   TEBI_BEARER_TOKEN='eyJ...' \
+ *   TEBI_LEDGER_ID=724466 \
  *   BACKFILL_START=2026-04-10 BACKFILL_END=2026-05-08 \
+ *   [DELETE_LOCATIONS=centraal,testtafel] \
  *   npx tsx scripts/backfill-tebi-account2.ts [--dry-run]
  *
- * Defaults: START = 2026-04-10 (new-account first activity), END = today.
+ * Defaults: TEBI_LEDGER_ID = 724466, DELETE_LOCATIONS = centraal,testtafel.
+ *
+ * The TEBI_BEARER_TOKEN_2 env var is also accepted (legacy from when this
+ * script was Account-2-specific) so existing recipes don't break.
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -62,19 +67,24 @@ const {
   }>;
 };
 
-const TOKEN = process.env.TEBI_BEARER_TOKEN_2;
+const TOKEN = process.env.TEBI_BEARER_TOKEN || process.env.TEBI_BEARER_TOKEN_2;
 if (!TOKEN) {
-  console.error('TEBI_BEARER_TOKEN_2 not set');
+  console.error('TEBI_BEARER_TOKEN (or TEBI_BEARER_TOKEN_2) not set');
   process.exit(1);
 }
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const BASE = 'https://live.tebi.co';
-const LEDGER = '724466';
-const PROFIT_CENTERS: Record<string, string> = {
-  testtafel: '00000000-0000-0000-0000-000000000000',
-  centraal: '85194418-ab36-49a0-8161-9ae3a64576ba',
-};
+const LEDGER = process.env.TEBI_LEDGER_ID || '724466';
+
+// Locations to wipe before backfilling. Defaults to centraal+testtafel —
+// West is excluded so this script never accidentally clobbers Account 1's
+// already-correct data when run against Account 1 to fill in the centraal
+// gap.
+const DELETE_LOCATIONS = (process.env.DELETE_LOCATIONS || 'centraal,testtafel')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 // Default: from new-account first activity to today.
 const today = new Date();
@@ -87,6 +97,27 @@ const headers: Record<string, string> = {
   accept: '*/*',
   'tebi-version-code': '1722000',
 };
+
+async function discoverProfitCenters(): Promise<Record<string, string>> {
+  const r = await fetch(`${BASE}/api/insights/ledgers/${LEDGER}/insights/dashboards/main`, { headers });
+  if (!r.ok) throw new Error(`dashboards/main: HTTP ${r.status}`);
+  const dash = (await r.json()) as { chartGroups?: Array<{ charts?: Array<{ id?: string; name?: string }> }> };
+  const out: Record<string, string> = {};
+  for (const g of dash.chartGroups ?? []) {
+    for (const c of g.charts ?? []) {
+      if (c.id && c.id.startsWith('revenue_profit_center_')) {
+        const uuid = c.id.replace('revenue_profit_center_', '');
+        const label = (c.name ?? '').trim().toLowerCase();
+        let key = label.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        if (label.includes('west')) key = 'west';
+        else if (label.includes('centraal')) key = 'centraal';
+        else if (label.includes('testtafel') || label.includes('test')) key = 'testtafel';
+        out[key] = uuid;
+      }
+    }
+  }
+  return out;
+}
 
 async function fetchProductTop(date: string, pcUuid: string): Promise<unknown> {
   // endDate is exclusive on Tebi's chart endpoints.
@@ -118,12 +149,14 @@ const MEAL_FIELDS = ['lunch', 'dinner', 'staff', 'staff_lunch', 'staff_dinner'] 
 async function main(): Promise<void> {
   const prisma = new PrismaClient();
   const dates = dateRange(START, END);
+  const PROFIT_CENTERS = await discoverProfitCenters();
 
   console.log(`Backfill plan:`);
-  console.log(`  Range:   ${START} → ${END} (${dates.length} days)`);
-  console.log(`  Ledger:  ${LEDGER}`);
-  console.log(`  PCs:     ${Object.keys(PROFIT_CENTERS).join(', ')}`);
-  console.log(`  Mode:    ${DRY_RUN ? 'DRY RUN (no DB writes)' : 'WRITE'}`);
+  console.log(`  Range:        ${START} → ${END} (${dates.length} days)`);
+  console.log(`  Ledger:       ${LEDGER}`);
+  console.log(`  Discovered PCs: ${Object.entries(PROFIT_CENTERS).map(([k, v]) => `${k}=${v.slice(0, 8)}…`).join(', ')}`);
+  console.log(`  Wipe before write: ${DELETE_LOCATIONS.join(', ')}`);
+  console.log(`  Mode:         ${DRY_RUN ? 'DRY RUN (no DB writes)' : 'WRITE'}`);
   console.log('');
 
   let totalProductRowsWritten = 0;
@@ -134,21 +167,26 @@ async function main(): Promise<void> {
 
   try {
     for (const date of dates) {
-      // ── Step 1+2: clean existing testtafel + centraal rows for this date ──
+      // ── Step 1+2: clean existing rows for this date in target locations ──
       if (!DRY_RUN) {
         const prDel = await prisma.productRevenue.deleteMany({
-          where: { date, location: { in: ['testtafel', 'centraal'] } },
+          where: { date, location: { in: DELETE_LOCATIONS } },
         });
         const ghDel = await prisma.guestHistory.deleteMany({
-          where: { date, location: { in: ['testtafel', 'centraal'] } },
+          where: { date, location: { in: DELETE_LOCATIONS } },
         });
         totalProductRowsDeleted += prDel.count;
         totalGuestRowsDeleted += ghDel.count;
       }
 
       // ── Step 3: fetch product_top per PC ──
+      // Only fetch PCs whose pre-reassignment location is one we're going
+      // to write. Skipping un-touched-locations means we never overwrite
+      // (e.g.) Account 1's West GuestHistory when the script's run scope
+      // is just the centraal gap.
       const productTopByPc: Record<string, unknown> = {};
       for (const [name, uuid] of Object.entries(PROFIT_CENTERS)) {
+        if (!DELETE_LOCATIONS.includes(name)) continue;
         try {
           productTopByPc[name] = await fetchProductTop(date, uuid);
         } catch (e) {
