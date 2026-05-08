@@ -71,7 +71,13 @@ const OUTPUT_TAIL_CHARS = 4000;
 // Manual-sync timeout. Cron runs aren't bounded — the comment in the previous
 // server.ts cron path explicitly says backfills can take several minutes, and
 // stale crons are simply replaced by the next nightly tick.
-const MANUAL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes; was 2 min — too tight for a 14-day backfill
+//
+// 2026-05-08: Bumped 5 → 15 min after the second Tebi account (TestTafel +
+// Centraal) was added. A 14-day backfill across two ledgers (full Playwright
+// login per ledger + ~13 chart fetches per day per PC + product_top per PC
+// per day + invoice list) consistently lands in the 8–12 minute range —
+// 5 min would cancel mid-second-ledger and lose its data.
+const MANUAL_TIMEOUT_MS = 15 * 60 * 1000;
 
 function appendOutput(chunk: string): void {
   state.output += chunk;

@@ -29,16 +29,14 @@
 
 import { PrismaClient } from '@prisma/client';
 
-// Exact-match allowlist used by the CSV path (predictions.ts categorizers).
-// Anything outside this list is invisible to the would-be guest-count step.
-const MEAL_PRODUCT_NAMES = [
-  'Lunch',
-  'Lunch card guest',
-  'Dinner donation',
-  'Stadspas Dinner',
-  'DSC Dinner',
-  'Staff & volunteer meals',
-];
+// Single source of truth lives in scripts/tebi-scraper.js. Importing here
+// keeps the diagnostic in sync with whatever the production scraper
+// actually counts as a meal — without this, the "ALLOW ROWS / ALLOW QTY"
+// columns under-report whenever the allowlist gets a new entry.
+const { MEAL_ITEM_TYPE } = require('./tebi-scraper.js') as {
+  MEAL_ITEM_TYPE: Record<string, 'lunch' | 'dinner' | 'staff'>;
+};
+const MEAL_PRODUCT_NAMES = Object.keys(MEAL_ITEM_TYPE);
 const MEAL_PRODUCT_NAMES_LC = MEAL_PRODUCT_NAMES.map((s) => s.toLowerCase());
 const EXPECTED_LOCATIONS = new Set(['west', 'centraal', 'all', 'unknown', 'testtafel']);
 
