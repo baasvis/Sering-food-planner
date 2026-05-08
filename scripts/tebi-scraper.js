@@ -415,18 +415,42 @@ function classifyServicePeriod(timestamp) {
 
 // ── Meal-product allowlist ──────────────────────────────────────────────────
 //
-// Mirrors the CSV path in public/js/predictions.ts. These exact item names,
-// when sold at Sering, represent guests served and feed the auto-update of
-// `GuestHistory`. Items outside this list (drinks, snacks, "Lunch card"
-// bulk purchases) are still recorded in ProductRevenue but never count
-// toward guests.
+// These exact item names represent guests served and feed the auto-update
+// of `GuestHistory`. Items outside this list (drinks, snacks, "Lunch card"
+// BULK PURCHASES — note "Lunch card" itself is a card-purchase event, not a
+// guest, while "Lunch card guest" IS a guest) are still recorded in
+// ProductRevenue but never count toward guests.
+//
+// Two product-name dialects exist as of 2026-05-08:
+//   - West (Account #1, info@testtafel.nl, ledger 723192)
+//     Item names without prefix: Lunch / Dinner donation / Stadspas Dinner /
+//     Staff & volunteer meals.
+//   - TestTafel + Centraal (Account #2, facturen@testtafel.nl, ledger 724466)
+//     Item names with `DSC ` prefix (= "De Sering Community"): DSC Lunch /
+//     DSC Dinner / DSC Stadspas Dinner / DSC staff & volunteer meals. Plus
+//     TestTafel-only paid menus: "Single TestTafel Menu (3 course / 5 course)".
+//
+// Note on TestTafel courses (Bread (bundle), Amuse (Bundle), Course 1..3,
+// Dessert 1..2): these are sub-components of the multi-course menu, NOT
+// separate guest events. Don't add them — they'd double-count.
+//
+// If a future product rename shows up, add it here. The diagnostic scripts
+// (diagnose-tebi-coverage, tebi-derive-guests) print "unmatched products"
+// so you can spot what's escaping the allowlist.
 const MEAL_ITEM_TYPE = {
-  'Lunch':                  'lunch',
-  'Lunch card guest':       'lunch',
-  'Dinner donation':        'dinner',
-  'Stadspas Dinner':        'dinner',
-  'DSC Dinner':             'dinner',
-  'Staff & volunteer meals': 'staff',
+  // Account #1 — West (info@testtafel.nl, ledger 723192)
+  'Lunch':                          'lunch',
+  'Lunch card guest':               'lunch',
+  'Dinner donation':                'dinner',
+  'Stadspas Dinner':                'dinner',
+  'DSC Dinner':                     'dinner',
+  'Staff & volunteer meals':        'staff',
+  // Account #2 — TestTafel + Centraal (facturen@testtafel.nl, ledger 724466)
+  'DSC Lunch':                      'lunch',
+  'DSC Stadspas Dinner':            'dinner',
+  'DSC staff & volunteer meals':    'staff',
+  'Single TestTafel Menu (5 course)': 'dinner',
+  'Single TestTafel Menu (3 course)': 'dinner',
 };
 
 // Round helper (2 dp)

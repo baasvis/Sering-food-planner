@@ -20,30 +20,15 @@ const LEDGER = process.env.TEBI_LEDGER_ID || '723192';
 const START = process.env.TEBI_PROBE_START || '2026-04-30';
 const END = process.env.TEBI_PROBE_END || '2026-05-07';
 
-// Profit centers known to live in Ledger 1 (723192). Eventually these will
-// be discovered at runtime, but for the prove-the-pipeline test they're
-// hardcoded (we already know the UUIDs from the dashboard JSON probe).
-const PROFIT_CENTERS: Record<string, string> = {
-  west: '00000000-0000-0000-0000-000000000000',
-  centraal: '27c33042-47c1-4650-8e76-37c7bfef86dd',
-  testtafel: 'a904a975-6bd2-413f-8e02-dc457b87a6e3',
-};
+// Profit centers are discovered at runtime from dashboardMain. This makes
+// the script work against any ledger (West / TestTafel+Centraal / future).
 
-// ── Meal product allowlist — mirrors the CSV-path categorizers in
-// public/js/predictions.ts so we get identical numbers either way. ──
-//
-// Important distinction:
-//   "Lunch card"        = card PURCHASE event (not a guest served — not counted)
-//   "Lunch card guest"  = card REDEMPTION event (one guest served — counted)
-//
-// If your kitchen reorganises product naming, add new entries here.
-const MEAL_ITEM_TYPE: Record<string, 'lunch' | 'dinner' | 'staff'> = {
-  Lunch: 'lunch',
-  'Lunch card guest': 'lunch',
-  'Dinner donation': 'dinner',
-  'Stadspas Dinner': 'dinner',
-  'DSC Dinner': 'dinner',
-  'Staff & volunteer meals': 'staff',
+// Single source of truth for the meal-product allowlist lives in
+// scripts/tebi-scraper.js — import it so this diagnostic stays in sync
+// with the production pipeline. (If this file ever diverges, diagnostic
+// numbers won't match what the cron actually writes.)
+const { MEAL_ITEM_TYPE } = require('./tebi-scraper.js') as {
+  MEAL_ITEM_TYPE: Record<string, 'lunch' | 'dinner' | 'staff'>;
 };
 
 interface ItemRow {
@@ -67,6 +52,30 @@ const headers: Record<string, string> = {
   'accept-language': 'en-US',
   'tebi-version-code': '1722000',
 };
+
+async function discoverProfitCenters(ledgerId: string): Promise<Record<string, string>> {
+  const r = await fetch(`${BASE}/api/insights/ledgers/${ledgerId}/insights/dashboards/main`, { headers });
+  if (!r.ok) throw new Error(`dashboards/main: HTTP ${r.status}`);
+  const dash = (await r.json()) as { chartGroups?: Array<{ charts?: Array<{ id?: string; name?: string }> }> };
+  const out: Record<string, string> = {};
+  for (const g of dash.chartGroups ?? []) {
+    for (const c of g.charts ?? []) {
+      if (c.id && c.id.startsWith('revenue_profit_center_')) {
+        const uuid = c.id.replace('revenue_profit_center_', '');
+        // Normalise label to lowercase + trim + first word for the key
+        const label = (c.name ?? '').trim().toLowerCase();
+        let key = label.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        // Friendly aliases for the locations we know about, so output is
+        // consistent across accounts.
+        if (label.includes('west')) key = 'west';
+        else if (label.includes('centraal')) key = 'centraal';
+        else if (label.includes('testtafel') || label.includes('test')) key = 'testtafel';
+        out[key] = uuid;
+      }
+    }
+  }
+  return out;
+}
 
 async function fetchProductTop(ledgerId: string, date: string, profitCenterUuid: string): Promise<ItemRow[]> {
   // endDate is exclusive, so for one day we pass next-day as endDate.
@@ -146,6 +155,9 @@ function dateRange(start: string, end: string): string[] {
 
 async function main(): Promise<void> {
   const dates = dateRange(START, END);
+  console.log(`Discovering profit centers for ledger ${LEDGER}…`);
+  const PROFIT_CENTERS = await discoverProfitCenters(LEDGER);
+  console.log(`Found ${Object.keys(PROFIT_CENTERS).length} profit centers: ${Object.entries(PROFIT_CENTERS).map(([k, v]) => `${k}=${v.slice(0, 8)}…`).join(', ')}`);
   console.log(`Fetching product_top for ${dates.length} days × ${Object.keys(PROFIT_CENTERS).length} profit centers from ledger ${LEDGER}`);
   console.log(`Range: ${START} → ${END}`);
   console.log('');
