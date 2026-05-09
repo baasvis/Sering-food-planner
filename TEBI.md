@@ -5,7 +5,7 @@
 > everything learned across the 2026-03 → 2026-05 series of breakages and
 > migrations so the next person doesn't have to retrace it.
 >
-> **Last fully verified:** 2026-05-08.
+> **Last fully verified:** 2026-05-09.
 > **Last big change:** 2026-04-10 — Centraal + TestTafel migrated to a
 > second Tebi account (see **Ledger history** below).
 
@@ -22,6 +22,7 @@
 | Backfill guest counts for a date range | `TEBI_BEARER_TOKEN=… TEBI_LEDGER_ID=… BACKFILL_START=… BACKFILL_END=… DELETE_LOCATIONS=west,centraal npx tsx scripts/backfill-tebi.ts`. |
 | Backfill flow-chart distribution | Two-token form: `TEBI_BEARER_TOKEN_1=… TEBI_BEARER_TOKEN_2=… npx tsx scripts/backfill-tebi-flow.ts`. |
 | Probe a specific account's history | `TEBI_BEARER_TOKEN_1=… npx tsx scripts/probe-tebi-account1-history.ts` (or `_2` for Account 2). |
+| Detect PC migrations (alert if a previously-active PC went silent) | `TEBI_BEARER_TOKEN_1=… TEBI_BEARER_TOKEN_2=… npx tsx scripts/detect-pc-migrations.ts [--weeks 8]`. |
 | Get a fresh Bearer token | Chrome → live.tebi.co (logged in) → F12 → Network → filter `api` → right-click row → Copy as cURL. Paste into the script. ~24h validity. |
 
 If `npx tsx` fails on Windows, run from the Sering-food-planner directory in a fresh PowerShell — the agentic harness can't always spawn `tsx` reliably.
@@ -544,6 +545,40 @@ TEBI_BEARER_TOKEN_1='eyJ...' npx tsx scripts/probe-tebi-account1-history.ts
 TEBI_BEARER_TOKEN_2='eyJ...' npx tsx scripts/probe-tebi-history.ts
 ```
 
+### "I want to detect PC migrations / silent breakage."
+
+```bash
+# Auto-classify each (ledger, PC) over the last 8 weeks:
+TEBI_BEARER_TOKEN_1='eyJ...' \
+TEBI_BEARER_TOKEN_2='eyJ...' \
+  npx tsx scripts/detect-pc-migrations.ts [--weeks 8]
+```
+
+The script walks every `revenue_profit_center_*` chart on every
+configured account, fetches `product_top` for each of the last N weeks,
+and emits a verdict per PC:
+
+| Verdict | Meaning | Action |
+|---|---|---|
+| `HEALTHY` | Data in recent 2 weeks AND older weeks. | None — running fine. |
+| `NEWLY_ACTIVE` | Data in recent 2 weeks but not older. | New location came online. Check `MEAL_ITEM_TYPE` covers the products. |
+| `MIGRATION_CANDIDATE` | Data in older weeks but NOT in recent 2 weeks. | **PC went silent** — has the location moved to another ledger? Investigate. |
+| `ALWAYS_SILENT` | No significant activity in the window. | None — empty PC, ignore. |
+
+Exits 1 when any `MIGRATION_CANDIDATE` is detected so cron / CI can
+surface the alert.
+
+Activity floors: recent 2 weeks ≥ 10 qty, older weeks ≥ 50 qty
+combined. Sub-floor noise (a single staff sale, a test transaction)
+doesn't trip the alert.
+
+This catches the failure mode that hid the original 7-week breakage:
+when Centraal + TestTafel migrated from Account 1 to Account 2 around
+2026-04-10, our scraper kept polling Account 1's now-dormant PCs for
+weeks. Running this against both tokens periodically (or wired into
+cron) would have surfaced "Account 1 Centraal/TestTafel went silent
+mid-April" within ~2 weeks of the migration.
+
 ### "Something looks broken."
 
 Run, in order:
@@ -757,6 +792,11 @@ scripts/
   probe-tebi-history.ts        26-week probe against Account 2 to find data boundaries.
   probe-tebi-account1-history.ts  Same for Account 1.
 
+  detect-pc-migrations.ts      Auto-detect PC migrations: walks each (ledger, PC) for the
+                               last N weeks and classifies activity (HEALTHY / NEWLY_ACTIVE /
+                               MIGRATION_CANDIDATE / ALWAYS_SILENT). Read-only. Exits 1 if
+                               any MIGRATION_CANDIDATE so cron/CI can react.
+
 lib/
   tebi-sync.ts                 Spawn helper for the worker; keeps state for /api/finance/sync-status.
                                Telemetry hydration of last-known state. MANUAL_TIMEOUT_MS = 15 min.
@@ -808,10 +848,14 @@ prisma/
 4. **Programmatic Bearer-token refresh.** Currently Playwright is the
    only refresh mechanism. If Tebi ever exposes a partner API or a
    service account, Playwright vanishes.
-5. **Auto-detect PC migrations.** When Centraal moved to Account 2,
-   our scraper kept looking at Account 1's now-dormant Centraal PC for
-   weeks. A periodic data-presence check per (ledger, PC) could surface
-   "this PC went silent — check if it migrated" alerts.
+5. ~~**Auto-detect PC migrations.**~~ Done 2026-05-09 —
+   `scripts/detect-pc-migrations.ts`. Standalone today; the natural
+   follow-up is wiring it into the cron worker so a
+   `MIGRATION_CANDIDATE` verdict emits a `finance_pc_migration_detected`
+   telemetry event without failing the sync. That requires the worker
+   to capture both Bearer tokens during sync and pass them to the
+   detector after the day-loop completes, plus per-PC alert throttling
+   so it doesn't fire every cron tick after first detection.
 
 ---
 
