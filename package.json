@@ -48,7 +48,8 @@
       "**/test/**/*.test.ts"
     ],
     "testPathIgnorePatterns": [
-      "/node_modules/"
+      "/node_modules/",
+      "/.claude/"
     ],
     "setupFiles": [
       "<rootDir>/test/setup-env.ts",
