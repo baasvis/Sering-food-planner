@@ -26,9 +26,11 @@ router.get('/', (req: Request, res: Response) => {
   // Send initial connection confirmation
   res.write(`data: ${JSON.stringify({ type: 'connected', clientId })}\n\n`);
 
-  // Keep-alive every 30s to prevent proxy/load-balancer timeouts
+  // Keep-alive every 30s. Sent as a real data event (not an SSE comment) so
+  // EventSource fires onmessage on the client — the client uses that to bump
+  // its _lastEventAt timestamp and skip the health-check-driven reconnect.
   const keepAlive = setInterval(() => {
-    res.write(': keepalive\n\n');
+    res.write(`data: ${JSON.stringify({ type: 'ping' })}\n\n`);
   }, 30000);
 
   clients.set(clientId, { res, user });

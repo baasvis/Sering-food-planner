@@ -4,8 +4,37 @@ import { INGREDIENTS_SEED, asyncHandler } from '../lib/config';
 import { Prisma } from '@prisma/client';
 import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, recalcAllRecipeCosts, withWriteLock, checkId, validateIngredients } from '../lib/db';
 import { addBackendEvent } from './telemetry';
+import { broadcast } from './events';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
+
+// Slim wire shape for SSE broadcasts. Mirrors the projection in the GET / handler
+// below — keep the two in lockstep so a remote patch matches the GET response.
+function toIngredientWire(ing: Ingredient) {
+  return {
+    id: ing.id,
+    name: ing.name,
+    supplierName: ing.supplierName,
+    types: ing.types || [],
+    category: ing.category,
+    measureMode: ing.measureMode || 'weight',
+    unit: ing.unit,
+    supplier: ing.supplier,
+    orderCode: ing.orderCode,
+    orderUnit: ing.orderUnit,
+    orderPrice: ing.orderPrice || '',
+    orderUnitSize: ing.orderUnitSize || 0,
+    priceLevel: ing.priceLevel || '',
+    pricePer100: ing.pricePer100 || 0,
+    priceAlert: ing.priceAlert || false,
+    storageLocations: ing.storageLocations || {},
+    stock: ing.stock || {},
+    targetStock: ing.targetStock || {},
+    allergens: ing.allergens,
+    notes: ing.notes,
+    active: ing.active,
+  };
+}
 
 const router = express.Router();
 
@@ -221,6 +250,13 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   }
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'ingredients-bulk', `saved ${ingredients.length} ingredients (recalculated ${recalcUpdated} recipe costs)`);
+  // Bulk reload trigger — too many rows to ship through SSE; receivers re-fetch
+  // both ingredients and recipes (since costs may have changed).
+  broadcast(user.email, 'patch', {
+    user: user.name,
+    ingredientsBulkReload: true,
+    ...(recalcUpdated > 0 ? { recipesReload: true as const } : {}),
+  });
   res.json({ ok: true, count: ingredients.length, recipeCostsUpdated: recalcUpdated });
 }));
 
@@ -243,6 +279,11 @@ router.post('/target-stock', asyncHandler(async (req: Request, res: Response) =>
     return { notFound: false };
   });
   if (result.notFound) return res.status(404).json({ error: 'Ingredient not found' });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  const updated = await prisma.ingredient.findUnique({ where: { id: ingredientId } });
+  if (updated) {
+    broadcast(user.email, 'patch', { user: user.name, ingredients: [toIngredientWire(updated as unknown as Ingredient)] });
+  }
   res.json({ ok: true });
 }));
 
@@ -262,6 +303,11 @@ router.post('/stock', asyncHandler(async (req: Request, res: Response) => {
     return { notFound: false };
   });
   if (result.notFound) return res.status(404).json({ error: 'Ingredient not found' });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  const updated = await prisma.ingredient.findUnique({ where: { id: ingredientId } });
+  if (updated) {
+    broadcast(user.email, 'patch', { user: user.name, ingredients: [toIngredientWire(updated as unknown as Ingredient)] });
+  }
   res.json({ ok: true });
 }));
 
@@ -283,6 +329,17 @@ router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
   });
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'stock-update', `bulk stock update: ${updates.length} items`);
+  // Re-fetch the affected rows in one query and broadcast as ingredient upserts
+  const ids = Array.from(new Set(updates.map((u: { ingredientId: string }) => u.ingredientId).filter(Boolean)));
+  if (ids.length > 0) {
+    const rows = await prisma.ingredient.findMany({ where: { id: { in: ids } } });
+    if (rows.length > 0) {
+      broadcast(user.email, 'patch', {
+        user: user.name,
+        ingredients: rows.map(r => toIngredientWire(r as unknown as Ingredient)),
+      });
+    }
+  }
   res.json({ ok: true, updated: updates.length });
 }));
 
@@ -339,14 +396,25 @@ router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
       message,
     });
   });
+  // Re-fetch and broadcast. Recipe-cost staleness from this path's
+  // fire-and-forget recalc is accepted for v1 — recipe cost displays update
+  // on next page load.
+  const updated = await prisma.ingredient.findUnique({ where: { id: req.params.id as string } });
+  if (updated) {
+    broadcast(user.email, 'patch', { user: user.name, ingredients: [toIngredientWire(updated as unknown as Ingredient)] });
+  }
   res.json({ ok: true });
 }));
 
 // Delete ingredient
 router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
   await withWriteLock(async () => {
-    await prisma.ingredient.delete({ where: { id: req.params.id as string } });
+    await prisma.ingredient.delete({ where: { id } });
   });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'ingredient-delete', `deleted ingredient ${id}`);
+  broadcast(user.email, 'patch', { user: user.name, deletedIngredients: [id] });
   res.json({ ok: true });
 }));
 

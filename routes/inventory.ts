@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { prisma, dbAppendLog, withWriteLock } from '../lib/db';
 import { asyncHandler, AppError } from '../lib/config';
+import { broadcast } from './events';
 
 const router = express.Router();
 
@@ -52,6 +53,8 @@ router.post('/storage-config', asyncHandler(async (req: Request, res: Response) 
       update: { config },
     });
   });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  broadcast(user.email, 'patch', { user: user.name, storageConfig: config });
   res.json({ ok: true });
 }));
 
@@ -92,6 +95,11 @@ router.post('/kitchen-equipment', asyncHandler(async (req: Request, res: Respons
     create: { id: 'default', pots, gasBurners, inductionBurners, bigBurnerThreshold: threshold },
     update: { pots, gasBurners, inductionBurners, bigBurnerThreshold: threshold },
   });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  broadcast(user.email, 'patch', {
+    user: user.name,
+    kitchenEquipment: { pots, gasBurners, inductionBurners, bigBurnerThreshold: threshold },
+  });
   res.json({ ok: true });
 }));
 
@@ -109,17 +117,23 @@ router.get('/prep-checklist', asyncHandler(async (req: Request, res: Response) =
 router.post('/prep-checklist', asyncHandler(async (req: Request, res: Response) => {
   const { loc, date, checked } = req.body;
   if (!loc || !date) return res.status(400).json({ error: 'loc and date required' });
+  const checkedArr: string[] = Array.isArray(checked) ? checked : [];
   await withWriteLock(async () => {
     await prisma.prepChecklist.upsert({
       where: { loc_date: { loc, date } },
-      create: { loc, date, checked: Array.isArray(checked) ? checked : [] },
-      update: { checked: Array.isArray(checked) ? checked : [], updatedAt: new Date() },
+      create: { loc, date, checked: checkedArr },
+      update: { checked: checkedArr, updatedAt: new Date() },
     });
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 3);
     await prisma.prepChecklist.deleteMany({
       where: { updatedAt: { lt: cutoff } },
     });
+  });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  broadcast(user.email, 'patch', {
+    user: user.name,
+    prepChecklist: { loc, date, checked: checkedArr },
   });
   res.json({ ok: true });
 }));
@@ -140,6 +154,10 @@ router.post('/inventory-completions', asyncHandler(async (req: Request, res: Res
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   const completedAt = new Date().toISOString();
   await dbAppendLog(user.email, user.name, 'inventory-complete', `${loc}|${window}`);
+  broadcast(user.email, 'patch', {
+    user: user.name,
+    inventoryCompletion: { loc, window, completedAt },
+  });
   res.json({ ok: true, loc, window, completedAt });
 }));
 

@@ -1,6 +1,8 @@
 import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories, restoreGlobalLocation } from './state';
 import type { Location } from '@shared/types';
-import { loadData, connectLiveSync, saveState } from './utils';
+import { loadData, connectLiveSync, saveState,
+         loadIngredientDb, loadStorageConfig, loadKitchenEquipment,
+         loadGuestHistory, loadGuestsNextWeeks, loadInventoryCompletions } from './utils';
 import { flushUndo } from './undo';
 import { rebuildPlanner } from './core';
 import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
@@ -143,6 +145,18 @@ window.addEventListener('popstate', () => {
 
 export async function initApp() {
   await loadData();
+  // Wait for cold-load resources (ingredient DB, storage config, etc.) before
+  // SSE connects, so a remote patch can't land against half-loaded state and
+  // be clobbered when the cold loader resolves. allSettled so a single
+  // failing loader doesn't block startup.
+  await Promise.allSettled([
+    loadIngredientDb(),
+    loadStorageConfig(),
+    loadKitchenEquipment(),
+    loadGuestHistory(),
+    loadGuestsNextWeeks(),
+    loadInventoryCompletions(),
+  ]);
   rebuildPlanner();
   // Restore screen from URL hash (e.g. #planner, #orders) or default to dashboard
   const startScreen = getScreenFromHash();
