@@ -224,11 +224,17 @@ export function renderLocationPlan(loc: string) {
 }
 
 // ── BATCH POOL (per-type, below each calendar) ─────────
+//
+// A batch shows up in a location's pool when it's either physically here
+// or has an UPCOMING service here. Past-only service ties are excluded —
+// once the food is served, a Centraal-located batch shouldn't keep
+// appearing in the West tab just because it served West last week.
 export function getPoolBatches(loc: string) {
   return S.batches.filter(d => {
     const locatedHere = d.location === loc;
-    const hasSvcHere = (d.services || []).some(s => s.loc === loc);
-    return locatedHere || hasSvcHere;
+    const hasUpcomingSvcHere = (d.services || []).some(s =>
+      s.loc === loc && !isServicePast(s));
+    return locatedHere || hasUpcomingSvcHere;
   });
 }
 

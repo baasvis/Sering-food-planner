@@ -281,6 +281,9 @@
   /* ═══════════ FIX MY MENU ═══════════ */
   .btn-fix-menu{background:linear-gradient(135deg, var(--purple, #6b46c1), var(--blue, #2563eb));color:#fff;border:none;font-weight:500;}
   .btn-fix-menu:hover{opacity:.9;transform:translateY(-1px);}
+  .btn-fix-menu:disabled{opacity:.85;transform:none;cursor:wait;}
+  .btn-fix-menu .btn-spinner{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,0.4);border-top-color:#fff;border-radius:50%;animation:fix-menu-spin 0.7s linear infinite;vertical-align:-2px;margin-right:6px;}
+  @keyframes fix-menu-spin{to{transform:rotate(360deg);}}
 
   /* ═══════════ KITCHEN EQUIPMENT MODAL ═══════════ */
   .btn-keq{background:var(--bg-2,#f3f4f6);color:var(--text);border:1px solid var(--border,#d1d5db);}

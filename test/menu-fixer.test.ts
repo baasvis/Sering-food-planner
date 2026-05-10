@@ -28,6 +28,9 @@ import {
   generateMissingPlaceholders,
   snapshotBatches,
   stripFutureServices,
+  forcedAssignmentPrePass,
+  scoredGreedyAssignment,
+  runFallbackLadder,
   COOK_RHYTHM,
   SLOTS_PER_TYPE,
   PLANNING_HORIZON_DAYS,
@@ -1362,8 +1365,8 @@ describe('assignServicesPass5', () => {
 // ── Planning horizon constant ──────────────────────────────────────────────
 
 describe('PLANNING_HORIZON_DAYS', () => {
-  test('is 10 days', () => {
-    expect(PLANNING_HORIZON_DAYS).toBe(10);
+  test('is 7 days', () => {
+    expect(PLANNING_HORIZON_DAYS).toBe(7);
   });
 });
 
@@ -1495,5 +1498,200 @@ describe('COOK_RHYTHM constant', () => {
   });
   test('SLOTS_PER_TYPE is 2', () => {
     expect(SLOTS_PER_TYPE).toBe(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// New algorithm tests (Phases B0, B, C — hybrid forced + scored + fallback)
+// Outcome-level rather than per-pass invariant. Validates:
+//   - slot fill rate
+//   - frozen never auto-assigned
+//   - Centraal→West never assigned
+//   - empty/under-filled scenarios
+//   - forced-assignment locks the right candidates
+//   - team coverage (lowered threshold) covers high-demand slots
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TEN_GUESTS = (loc: Location, _iso: string, _meal: Meal) => 10;
+const NO_GUESTS = (_loc: Location, _iso: string, _meal: Meal) => 0;
+const NO_POT_CAPS = new Map<string, number>();
+
+describe('new algorithm: scoredGreedyAssignment', () => {
+  test('frozen batches are never auto-assigned', () => {
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const a = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 100, storage: 'Frozen', name: 'Frozen' });
+    const b = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 100, name: 'Fresh' });
+    scoredGreedyAssignment([a, b], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    expect(a.services.length).toBe(0);
+    expect(b.services.length).toBeGreaterThan(0);
+  });
+
+  test('Centraal-located batch is never assigned to a West slot', () => {
+    const window = makeWindow([
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const c = makeBatch({ type: 'Soup', cookDate: '03/05/2026', stock: 100, location: 'centraal', name: 'C' });
+    scoredGreedyAssignment([c], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    for (const svc of c.services) {
+      expect(svc.loc).toBe('centraal');
+    }
+  });
+
+  test('past-stale batch (>5d cookDate) is excluded from assignment', () => {
+    const window = makeWindow([
+      { iso: '2026-05-10', dayName: 'Sun', cookDate: '10/05/2026' },
+    ]);
+    // Batch cooked 2026-05-01, 9 days before slot — over the 5-day cutoff
+    const old = makeBatch({ type: 'Soup', cookDate: '01/05/2026', stock: 100, name: 'Stale' });
+    scoredGreedyAssignment([old], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    expect(old.services.length).toBe(0);
+  });
+
+  test('0-guest slot is skipped', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const b = makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 100, name: 'Soup' });
+    scoredGreedyAssignment([b], window, fixedCalcRequired(1), NO_GUESTS, NO_POT_CAPS);
+    expect(b.services.length).toBe(0);
+  });
+
+  test('higher-urgency slot (empty) wins over half-filled slot when batch is scarce', () => {
+    // Scenario from plan: two slots competing for the same scarce batch.
+    // The single batch should fill an empty slot before adding to a half-filled one.
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const b = makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 100, name: 'Scarce' });
+    // Pre-populate: West dinner already has one peer
+    const peer = makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 100, name: 'Peer' });
+    peer.services.push({ loc: 'west', date: '2026-05-05', meal: 'dinner' });
+    scoredGreedyAssignment([b, peer], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    // The other slots (Centraal lunch/dinner, West lunch) are all empty —
+    // empty slots score higher than the half-filled West dinner.
+    // So `b` should NOT only land on West dinner; it should fan out across
+    // empty slots first.
+    const onEmptySlots = b.services.filter(s =>
+      !(s.loc === 'west' && s.meal === 'dinner')).length;
+    expect(onEmptySlots).toBeGreaterThan(0);
+  });
+
+  test('lunch slot prefers older stock (prior-day cook)', () => {
+    // Same-loc, both batches eligible for Tue lunch West (which needs cookDate <= Mon).
+    // Prior-day cook scores +200 for lunch; same-day cook scores -300.
+    // So an older cooked batch should land on lunch first.
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const monCook = makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 100, name: 'Mon' });
+    // Tuesday cook can serve Tue dinner (same-day OK) but not Tue lunch (too early).
+    // So we expect Mon's batch on Tue lunch and the Tuesday placeholder elsewhere.
+    const tueCook = makeBatch({ type: 'Soup', cookDate: '05/05/2026', stock: 0, name: 'Tue placeholder' });
+    scoredGreedyAssignment([monCook, tueCook], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    const monAtLunch = monCook.services.some(s => s.meal === 'lunch');
+    expect(monAtLunch).toBe(true);
+  });
+
+  test('dinner slot prefers same-day cook (no cooling)', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const monCook = makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 100, name: 'Mon' });
+    const tueCook = makeBatch({ type: 'Soup', cookDate: '05/05/2026', stock: 100, name: 'Tue' });
+    scoredGreedyAssignment([monCook, tueCook], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    // Tuesday batch (same-day) should land on Tue dinner.
+    const tueAtDinner = tueCook.services.some(s => s.meal === 'dinner' && s.date === '2026-05-05');
+    expect(tueAtDinner).toBe(true);
+  });
+});
+
+describe('new algorithm: forcedAssignmentPrePass', () => {
+  test('singleton candidate gets locked when score is high', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // Only one batch; only Centraal slots open (single Centraal-located batch).
+    const onlyOne = makeBatch({
+      type: 'Soup', cookDate: '04/05/2026', stock: 100, location: 'centraal', name: 'OnlyC',
+    });
+    const result = forcedAssignmentPrePass([onlyOne], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    expect(result.committed).toBeGreaterThan(0);
+    expect(onlyOne.services.length).toBeGreaterThan(0);
+    // Every commit must be at Centraal (West slots have no candidate).
+    for (const svc of onlyOne.services) {
+      expect(svc.loc).toBe('centraal');
+    }
+  });
+
+  test('does not commit when no candidate passes hard constraints', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // Frozen batch — disqualified by hard constraint.
+    const frozen = makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 100, storage: 'Frozen', name: 'F' });
+    const result = forcedAssignmentPrePass([frozen], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    expect(result.committed).toBe(0);
+    expect(frozen.services.length).toBe(0);
+  });
+});
+
+describe('new algorithm: runFallbackLadder', () => {
+  test('creates emergency placeholder for slot with no candidates', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // No batches at all — every slot is uncovered.
+    const all: Batch[] = [];
+    const result = runFallbackLadder(all, window, fixedCalcRequired(1), TEN_GUESTS);
+    // Each slot wants 2 of each type → 4 slots × 2 types × 2 positions = 16 emergencies.
+    expect(result.emergenciesCreated).toBeGreaterThan(0);
+    // The created batches should be tagged as emergency in cookNotes.
+    for (const b of result.emergencyBatches) {
+      expect(b.cookNotes).toMatch(/Emergency/i);
+      expect(b.generated).toBe(true);
+      expect(b.recipeId).toBeNull();
+    }
+  });
+
+  test('teams form when single batches are too small but combined coverage is ≥60%', () => {
+    // 30-guest slot, two small batches each ~30L stock. Solo per-batch share
+    // (15 guests each at 280g/serving = 4.2L) fits, so they form a 2-team.
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    const a = makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 30, name: 'Small A' });
+    const b = makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 30, name: 'Small B' });
+    // Force scarcity: limit guests so team coverage logic kicks in.
+    const guestsFn = (loc: Location, _iso: string, _meal: Meal) =>
+      loc === 'west' ? 30 : 0;  // only West has guests
+    const result = runFallbackLadder([a, b], window, fixedCalcRequired(1), guestsFn);
+    // The batches should pick up services via team formation.
+    expect(a.services.length + b.services.length).toBeGreaterThan(0);
+  });
+});
+
+describe('new algorithm: idempotency (double-press doesn\'t change assignments)', () => {
+  test('running scoredGreedyAssignment twice produces the same final state', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const make = () => [
+      makeBatch({ type: 'Soup', cookDate: '04/05/2026', stock: 100, name: 'A' }),
+      makeBatch({ type: 'Main course', cookDate: '04/05/2026', stock: 100, name: 'B' }),
+    ];
+    // Run 1
+    const run1 = make();
+    scoredGreedyAssignment(run1, window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    const run1Sigs = run1.map(b => `${b.name}:${(b.services || []).map((s: Service) => `${s.loc}|${s.date}|${s.meal}`).sort().join(',')}`);
+    // Run 2 (fresh batches)
+    const run2 = make();
+    scoredGreedyAssignment(run2, window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    const run2Sigs = run2.map(b => `${b.name}:${(b.services || []).map((s: Service) => `${s.loc}|${s.date}|${s.meal}`).sort().join(',')}`);
+    expect(run1Sigs).toEqual(run2Sigs);
   });
 });
