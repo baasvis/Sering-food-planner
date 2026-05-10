@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, RecipeFull, Ingredient, StorageConfig } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
@@ -21,6 +21,13 @@ export function setOnBatchesChanged(fn: () => void) { _onBatchesChanged = fn; }
 // Callback to flush pending undo before remote patch (avoids circular import with undo.ts)
 let _flushUndo: (() => void) | null = null;
 export function setFlushUndo(fn: () => void) { _flushUndo = fn; }
+
+// Callback to load the full (rich) ingredient shape (avoids circular import with ingredient-db.ts).
+// Used by the bulk-reload path: when the user has the rich shape loaded, we
+// must re-fetch with the rich shape so priceHistory/nutrition/pricePer100g
+// don't get silently stripped by a slim-shape replace.
+let _loadIngredientDbFull: (() => Promise<void>) | null = null;
+export function setLoadIngredientDbFull(fn: () => Promise<void>) { _loadIngredientDbFull = fn; }
 
 // ═══════════════════════════════════════════════════════════════════
 // API + SAVE SYSTEM
@@ -224,14 +231,11 @@ export async function loadData(): Promise<void> {
     if (data.transportItems) S.transportItems = data.transportItems;
     takeSnapshot();
     rebuildPlanner();
-    // Load ingredient DB + storage config in background (for order overview)
-    loadIngredientDb();
-    loadStorageConfig();
-    loadKitchenEquipment();
-    // Load guest history + next weeks in background (for Guests tab)
-    loadGuestHistory();
-    loadGuestsNextWeeks();
-    loadInventoryCompletions();
+    // Cold loaders (ingredient DB, storage config, kitchen equipment, guest
+    // history, next weeks, inventory completions) are awaited from initApp()
+    // so they finish BEFORE connectLiveSync(). That ordering matters: if SSE
+    // connects first, an incoming patch can merge into half-loaded state and
+    // get clobbered when the cold load resolves.
     hideDataError();
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Unknown error';
@@ -266,6 +270,17 @@ export async function retryLoad(): Promise<void> {
     if (span) span.textContent = 'Retrying...';
   }
   await loadData();
+  // Cold loaders moved out of loadData() into the bootstrap path; replicate
+  // here so a retry after a transient error doesn't leave S.ingredientDb /
+  // S.storageConfig / etc. empty until full page reload.
+  await Promise.allSettled([
+    loadIngredientDb(),
+    loadStorageConfig(),
+    loadKitchenEquipment(),
+    loadGuestHistory(),
+    loadGuestsNextWeeks(),
+    loadInventoryCompletions(),
+  ]);
   rebuildPlanner();
   rerenderCurrentView();
 }
@@ -441,12 +456,56 @@ export function cancelPendingSave(): void {
 // ═══════════════════════════════════════════════════════════════════
 
 let _eventSource: EventSource | null = null;
+let _lastEventAt = 0;
+let _healthInterval: ReturnType<typeof setInterval> | null = null;
+let _visibilityHandlerInstalled = false;
+
+// Force reconnect: tear down the existing EventSource and re-open. After a
+// disconnect we may have missed patches, so resync core data + cold loaders.
+// Toast is suppressed since this is recovery, not a remote edit.
+async function reconnectLiveSync(reason: string): Promise<void> {
+  console.warn('Live sync: forcing reconnect —', reason);
+  if (_eventSource) {
+    try { _eventSource.close(); } catch (_e) { /* ignore */ }
+    _eventSource = null;
+  }
+  // Flush pending local writes BEFORE pulling fresh server state. Otherwise
+  // loadData() overwrites S with the server snapshot and takeSnapshot() makes
+  // those values the new baseline — any unsaved local edits typed during the
+  // disconnect would be silently dropped on the next computePatch().
+  // Cancel the debounce and run doSave synchronously; if it fails (server
+  // still unreachable), we proceed with the resync anyway.
+  cancelPendingSave();
+  if (_flushUndo) _flushUndo();
+  try {
+    await doSave();
+  } catch (_e: unknown) { /* save failed — best-effort, continue resync */ }
+  // Resync core + cold-load data we may have missed.
+  try {
+    await loadData();
+    await Promise.allSettled([
+      loadIngredientDb(),
+      loadStorageConfig(),
+      loadKitchenEquipment(),
+      loadGuestHistory(),
+      loadGuestsNextWeeks(),
+      loadInventoryCompletions(),
+    ]);
+    rebuildPlanner();
+    rerenderCurrentView();
+  } catch (e: unknown) {
+    console.warn('Live sync: resync failed', e);
+  }
+  connectLiveSync();
+}
 
 export function connectLiveSync(): void {
   if (_eventSource) return; // already connected
   _eventSource = new EventSource('/api/events');
+  _lastEventAt = Date.now();
 
   _eventSource.onmessage = (event: MessageEvent) => {
+    _lastEventAt = Date.now();
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === 'connected') {
@@ -462,12 +521,35 @@ export function connectLiveSync(): void {
   };
 
   _eventSource.onerror = () => {
-    // EventSource auto-reconnects — just log it
-    console.warn('Live sync: connection lost, reconnecting...');
+    // EventSource auto-reconnects on transient failure; we just log here.
+    // The health interval will force a reconnect if no events for >90s.
+    console.warn('Live sync: connection error');
   };
+
+  // Health check: server keepalives every 30s ([routes/events.ts:30]). If we
+  // haven't seen any traffic in 90s (3× keepalive), the connection is wedged.
+  if (_healthInterval) clearInterval(_healthInterval);
+  _healthInterval = setInterval(() => {
+    if (!_eventSource) return;
+    if (Date.now() - _lastEventAt > 90000) {
+      reconnectLiveSync('no events for >90s');
+    }
+  }, 60000);
+
+  // visibilitychange handler: when a tab is foregrounded after being hidden
+  // long enough that we missed at least one keepalive, force reconnect.
+  if (!_visibilityHandlerInstalled) {
+    _visibilityHandlerInstalled = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && Date.now() - _lastEventAt > 30000) {
+        reconnectLiveSync('tab restored after >30s');
+      }
+    });
+  }
 }
 
 export function disconnectLiveSync(): void {
+  if (_healthInterval) { clearInterval(_healthInterval); _healthInterval = null; }
   if (_eventSource) {
     _eventSource.close();
     _eventSource = null;
@@ -477,6 +559,7 @@ export function disconnectLiveSync(): void {
 // Remote patch message shape (from SSE)
 interface RemotePatchMessage {
   user?: string;
+  // Existing — handled by computePatch() snapshot diff
   batches?: Batch[];
   deletedBatches?: string[];
   guests?: GuestsData;
@@ -484,6 +567,23 @@ interface RemotePatchMessage {
   deletedCaterings?: string[];
   transportItems?: TransportItem[];
   deletedTransportItems?: string[];
+  // Item-delta resources (per-resource save endpoints; not in computePatch)
+  recipes?: RecipeFull[];
+  deletedRecipes?: string[];
+  ingredients?: Ingredient[];
+  deletedIngredients?: string[];
+  // Full-replace resources
+  storageConfig?: StorageConfig;
+  kitchenEquipment?: KitchenEquipment;
+  // Partial slot-keyed
+  prepChecklist?: { loc: string; date: string; checked: string[] };
+  inventoryCompletion?: { loc: string; window: 'lunch' | 'dinner'; completedAt: string };
+  // Partial week-keyed (subset of S.guestsNextWeeks)
+  guestsNextWeeks?: Record<string, Record<string, Record<string, Record<string, number>>>>;
+  // Reload triggers — too expensive to ship through SSE
+  ingredientsBulkReload?: true;
+  guestHistoryReload?: true;
+  recipesReload?: true;
 }
 
 // Merge a patch from another user into local state
@@ -491,7 +591,13 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   if (_flushUndo) _flushUndo();
   const { user, batches, deletedBatches, guests,
           caterings, deletedCaterings,
-          transportItems, deletedTransportItems } = msg;
+          transportItems, deletedTransportItems,
+          recipes, deletedRecipes,
+          ingredients, deletedIngredients,
+          storageConfig, kitchenEquipment,
+          prepChecklist, inventoryCompletion,
+          guestsNextWeeks,
+          ingredientsBulkReload, guestHistoryReload, recipesReload } = msg;
 
   let changed = false;
 
@@ -536,13 +642,117 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     changed = true;
   }
 
+  // Merge recipes (item-delta by id)
+  if ((recipes && recipes.length) || (deletedRecipes && deletedRecipes.length)) {
+    const recipeMap = new Map(S.recipes.map((r: RecipeFull) => [r.id, r]));
+    if (deletedRecipes) deletedRecipes.forEach((id: string) => recipeMap.delete(id));
+    if (recipes) recipes.forEach((r: RecipeFull) => recipeMap.set(r.id, r));
+    S.recipes = [...recipeMap.values()];
+    changed = true;
+  }
+
+  // Merge ingredients (item-delta by id). When the rich shape is loaded,
+  // do a per-row field merge so wire-shape-only fields don't strip
+  // priceHistory/nutrition/pricePer100g from the existing rich row.
+  if ((ingredients && ingredients.length) || (deletedIngredients && deletedIngredients.length)) {
+    const ingMap = new Map(S.ingredientDb.map((i: Ingredient) => [i.id, i]));
+    if (deletedIngredients) deletedIngredients.forEach((id: string) => ingMap.delete(id));
+    if (ingredients) {
+      ingredients.forEach((i: Ingredient) => {
+        const existing = ingMap.get(i.id);
+        if (existing && S.ingredientDbFullyLoaded) {
+          ingMap.set(i.id, { ...existing, ...i });
+        } else {
+          ingMap.set(i.id, i);
+        }
+      });
+    }
+    S.ingredientDb = [...ingMap.values()];
+    invalidateCategoryCache();
+    window.dispatchEvent(new CustomEvent('ingredientDbReady'));
+    changed = true;
+  }
+
+  // Storage config (full-replace)
+  if (storageConfig) {
+    S.storageConfig = storageConfig;
+    rebuildStorageCategories(S.currentLoc || 'west');
+    changed = true;
+  }
+
+  // Kitchen equipment (full-replace)
+  if (kitchenEquipment) {
+    S.kitchenEquipment = kitchenEquipment;
+    changed = true;
+  }
+
+  // Prep checklist (only apply if the patch is for today's date)
+  if (prepChecklist && prepChecklist.date === todayIso()) {
+    S.prepChecklist[prepChecklist.loc] = new Set(prepChecklist.checked);
+    changed = true;
+  }
+
+  // Inventory completion timestamp
+  if (inventoryCompletion) {
+    const { loc, window: win, completedAt } = inventoryCompletion;
+    if (!S.inventoryCompletions[loc as Location]) {
+      S.inventoryCompletions[loc as Location] = { lunch: null, dinner: null };
+    }
+    S.inventoryCompletions[loc as Location][win] = completedAt;
+    changed = true;
+  }
+
+  // Guests next weeks (merge by mondayKey)
+  if (guestsNextWeeks) {
+    for (const mondayKey of Object.keys(guestsNextWeeks)) {
+      S.guestsNextWeeks[mondayKey] = guestsNextWeeks[mondayKey];
+    }
+    changed = true;
+  }
+
+  // Reload triggers — fire-and-forget, but mark changed so toast still shows.
+  // Serialize ingredient-bulk + recipe reload to avoid clobber.
+  if (ingredientsBulkReload) {
+    // If the user already has the rich shape (Ingredient DB editor), re-fetch
+    // the rich shape so priceHistory/nutrition/pricePer100g don't get stripped
+    // by the slim /api/ingredients projection.
+    const reloadIngs = (S.ingredientDbFullyLoaded && _loadIngredientDbFull)
+      ? _loadIngredientDbFull()
+      : loadIngredientDb();
+    if (recipesReload) {
+      reloadIngs.then(() => apiGet('/api/recipes')).then((r: RecipeFull[]) => {
+        if (Array.isArray(r)) S.recipes = r;
+        rebuildPlanner();
+        rerenderCurrentView();
+      }).catch(() => { /* logged inside loaders */ });
+    }
+    changed = true;
+  } else if (recipesReload) {
+    apiGet('/api/recipes').then((r: RecipeFull[]) => {
+      if (Array.isArray(r)) S.recipes = r;
+      rebuildPlanner();
+      rerenderCurrentView();
+    }).catch(() => { /* ignored */ });
+    changed = true;
+  }
+  if (guestHistoryReload) {
+    loadGuestHistory();
+    changed = true;
+  }
+
   if (changed) {
     // Only update the snapshot for items that came FROM the remote patch.
     // A full takeSnapshot() would absorb unsaved local changes into the snapshot,
     // causing computePatch() to miss them and silently drop them.
     updateSnapshotForRemote(msg);
-    // Re-render current view
-    rebuildPlanner();
+    // Skip rebuildPlanner for changes that don't affect the planner data structure
+    // (storage config, kitchen equipment, prep checklist, inventory completion).
+    const needsPlanner = !!(batches || deletedBatches || guests
+      || caterings || deletedCaterings
+      || recipes || deletedRecipes
+      || ingredients || deletedIngredients
+      || guestsNextWeeks);
+    if (needsPlanner) rebuildPlanner();
     rerenderCurrentView();
     toast(`${user || 'Someone'} made changes — updated live`);
   }

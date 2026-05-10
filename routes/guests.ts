@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { prisma, withWriteLock } from '../lib/db';
 import { asyncHandler } from '../lib/config';
+import { broadcast } from './events';
 import type { GuestHistory, GuestHistoryMeta, GuestsNextWeeks } from '@prisma/client';
 
 const router = express.Router();
@@ -179,6 +180,10 @@ router.post('/guest-history', asyncHandler(async (req: Request, res: Response) =
     }
   });
   });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  // Reload trigger — guest history mutations are too varied (per-day buckets +
+  // metadata + flow distribution) to ship through SSE; receivers re-fetch.
+  broadcast(user.email, 'patch', { user: user.name, guestHistoryReload: true });
   res.json({ ok: true });
 }));
 
@@ -220,6 +225,9 @@ router.post('/guests-next-weeks', asyncHandler(async (req: Request, res: Respons
       prisma.guestsNextWeeks.createMany({ data: rows }),
     ]);
   });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  // Echo the body — frontend merges by mondayKey so unaffected weeks survive.
+  broadcast(user.email, 'patch', { user: user.name, guestsNextWeeks: data });
   res.json({ ok: true });
 }));
 

@@ -174,14 +174,15 @@ router.post('/recipes', asyncHandler(async (req: Request, res: Response) => {
 
   dbAppendLog(user.email, user.name, 'recipe-create', `created "${body.name}"`);
   const result = toRecipeFull(recipe);
-  broadcast(user.email, 'recipe', { action: 'create', recipe: result });
+  broadcast(user.email, 'patch', { user: user.name, recipes: [result] });
   res.json(result);
 }));
 
 // Recalculate costs for all recipes (must be before /:id routes).
 // withWriteLock prevents the loop's per-row updates from racing with
 // concurrent recipe edits or another recalc trigger.
-router.post('/recipes/recalculate-costs', asyncHandler(async (_req: Request, res: Response) => {
+router.post('/recipes/recalculate-costs', asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   const recipes = await prisma.recipe.findMany({
     include: { ingredients: true },
   });
@@ -202,11 +203,15 @@ router.post('/recipes/recalculate-costs', asyncHandler(async (_req: Request, res
     return count;
   });
 
+  if (updated > 0) {
+    broadcast(user.email, 'patch', { user: user.name, recipesReload: true });
+  }
   res.json({ ok: true, updated, total: recipes.length });
 }));
 
 // Bulk re-import cooked amounts from Google Sheets for all v2 recipes with legacySheetId
-router.post('/recipes/import-cooked-amounts', asyncHandler(async (_req: Request, res: Response) => {
+router.post('/recipes/import-cooked-amounts', asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   const sheets = getSheetsClient();
   if (!sheets) return res.status(503).json({ error: 'Google Sheets not configured' });
 
@@ -333,6 +338,9 @@ router.post('/recipes/import-cooked-amounts', asyncHandler(async (_req: Request,
     await Promise.all(chunk.map(processRecipe));
   }
 
+  if (updated > 0) {
+    broadcast(user.email, 'patch', { user: user.name, recipesReload: true });
+  }
   res.json({ ok: true, updated, skipped, failed, total: recipes.length, details });
 }));
 
@@ -414,7 +422,7 @@ router.patch('/recipes/:id', asyncHandler(async (req: Request, res: Response) =>
 
   dbAppendLog(user.email, user.name, 'recipe-update', `updated "${recipe.name}"`);
   const result = toRecipeFull(recipe);
-  broadcast(user.email, 'recipe', { action: 'update', recipe: result });
+  broadcast(user.email, 'patch', { user: user.name, recipes: [result] });
   res.json(result);
 }));
 
@@ -435,7 +443,7 @@ router.delete('/recipes/:id', asyncHandler(async (req: Request, res: Response) =
 
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'recipe-delete', `deleted recipe ${id}`);
-  broadcast(user.email, 'recipe', { action: 'delete', recipeId: id });
+  broadcast(user.email, 'patch', { user: user.name, deletedRecipes: [id] });
   res.json({ ok: true });
 }));
 
@@ -478,7 +486,9 @@ router.post('/recipes/:id/version', asyncHandler(async (req: Request, res: Respo
 
   if (result.notFound) return res.status(404).json({ error: 'Recipe not found' });
   dbAppendLog(user.email, user.name, 'recipe-version', `saved version ${result.nextVersion} of "${result.recipe.name}"`);
-  res.json(toRecipeFull(result.updated));
+  const recipeFull = toRecipeFull(result.updated);
+  broadcast(user.email, 'patch', { user: user.name, recipes: [recipeFull] });
+  res.json(recipeFull);
 }));
 
 // Get version history
@@ -508,6 +518,7 @@ const PHOTO_MIME_WHITELIST: Record<string, string> = {
 // Upload photo
 router.post('/recipes/:id/photo', upload.single('photo'), asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   const existing = await prisma.recipe.findUnique({ where: { id }, select: { id: true } });
   if (!existing) return res.status(404).json({ error: 'Recipe not found' });
 
@@ -538,6 +549,10 @@ router.post('/recipes/:id/photo', upload.single('photo'), asyncHandler(async (re
     await prisma.recipe.update({ where: { id }, data: { photoUrl } });
   });
 
+  // Re-fetch with ingredients so the broadcast carries the canonical RecipeFull shape
+  const updated = await prisma.recipe.findUnique({ where: { id }, include: includeIngredients });
+  if (updated) broadcast(user.email, 'patch', { user: user.name, recipes: [toRecipeFull(updated)] });
+
   res.json({ ok: true, photoUrl });
 }));
 
@@ -563,10 +578,15 @@ router.get('/recipes/:id/photo', asyncHandler(async (req: Request, res: Response
 // Delete photo
 router.delete('/recipes/:id/photo', asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   await withWriteLock(async () => {
     await prisma.recipePhoto.deleteMany({ where: { recipeId: id } });
     await prisma.recipe.update({ where: { id }, data: { photoUrl: null } });
   });
+
+  const updated = await prisma.recipe.findUnique({ where: { id }, include: includeIngredients });
+  if (updated) broadcast(user.email, 'patch', { user: user.name, recipes: [toRecipeFull(updated)] });
+
   res.json({ ok: true });
 }));
 
