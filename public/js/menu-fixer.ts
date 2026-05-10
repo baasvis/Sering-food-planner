@@ -28,9 +28,10 @@ export const COOK_RHYTHM: Record<string, { soup: number; main: number }> = {
 };
 
 export const SLOTS_PER_TYPE = 2;
-export const PLANNING_HORIZON_DAYS = 10;
+export const PLANNING_HORIZON_DAYS = 7;
 export const STALE_THRESHOLD_DAYS = 3;
 export const TYPES_TO_PLAN: DishType[] = ['Soup', 'Main course'];
+
 
 // All four service slots per day, in the canonical order Pass 2 will use later
 // (Centraal before West so Centraal slots get filled first when the algorithm
@@ -1215,27 +1216,581 @@ function findCombinationTeam(
   return [];
 }
 
-// ── Entry point ─────────────────────────────────────────────────────────────
+// ── New algorithm (Phases A/B0/B/C/D/E) ────────────────────────────────────
+//
+// Hybrid: forced-assignment pre-pass + single scored greedy loop +
+// fallback ladder for under-filled slots. Replaces the five sequential
+// passes with one scored function + a named relaxation ladder.
+// See .claude/plans/i-want-to-look-jazzy-toast.md for the design rationale.
+
+/** Hard cutoff for cooked stock: a batch is stale when the slot date is
+ *  this many days or more after the cook date. So with FRESH_LIMIT_DAYS=5,
+ *  legal ages are 0–4 days; 5+ days is excluded. Matches the legacy
+ *  `isStaleAtSlot` semantics (`diff >= threshold` is stale). Within the
+ *  legal range, staleness is a graduated score penalty (see scoreCandidate). */
+const FRESH_LIMIT_DAYS = 5;
+
+/** Floor for forced-assignment lock-in. A unique-candidate slot only gets
+ *  pre-locked if its score clears this — bad-only-options should compete
+ *  normally and may need the fallback ladder. */
+const FORCED_ASSIGN_MIN_SCORE = 200;
+
+/** Pass-5-style team threshold for the fallback ladder, lowered from 0.8
+ *  to 0.6 since "some coverage" beats "none." */
+const FALLBACK_TEAM_MIN_COVERAGE = 0.6;
+
+/** Per-cook-event production estimate. A "normal" cook produces ~90L of
+ *  food, so a day with N rhythm cook events has a ~N×90L workload
+ *  baseline. Used as the threshold for the workload-overload escape:
+ *  when projected load on a cook day exceeds this baseline meaningfully,
+ *  the algorithm prefers to extend older stock by an extra day rather
+ *  than pile yet more demand onto an already-busy kitchen. */
+const PER_DISH_LITERS = 90;
+
+/** A cook day is considered "overloaded" when its projected demand
+ *  exceeds (rhythm-threshold × this factor). 1.2 = "20% over" — a
+ *  meaningful overrun, not every minor bump. Below this, fresh
+ *  placeholders are preferred over older stock as usual. */
+const WORKLOAD_OVERLOAD_TRIGGER_FACTOR = 1.2;
+
+/** Score penalty per litre that a fresh placeholder's cook day projects
+ *  beyond the (1.2 × threshold) trigger. Tuned so 4-day extensions
+ *  become viable when overload reaches ~25–30% (e.g., Tue/Wed above
+ *  ~240L). Pure workload deterrent — doesn't apply to already-cooked
+ *  stock (the cook already happened). */
+const WORKLOAD_PENALTY_PER_LITER = 30;
+
+/** Score weights. Tuned so empty-slot urgency dominates everything else. */
+const SCORE = {
+  EMPTY_SLOT: 1000,
+  HALF_FILLED_SLOT: 300,
+  CENTRAAL_SLOT_PRIORITY: 150,
+  COOKED_WITH_STOCK: 80,
+  SAME_DAY_DINNER: 200,
+  PRIOR_DAY_LUNCH: 200,
+  SAME_DAY_LUNCH_PENALTY: -300,
+  PRIOR_DAY_DINNER: 30,
+  STALE_PENALTY_PER_DAY: -50,
+  /** Extra penalty applied at age 4 days. Pushes 4-day extensions from
+   *  "preferred" to "last resort" — without it the per-day penalty
+   *  isn't strong enough to lose against a fresh placeholder. The
+   *  workload-overload escape can reverse this when a cook day is
+   *  overloaded. */
+  STALE_DAY_4_SURCHARGE: -600,
+  CENTRAAL_STOCK_AT_CENTRAAL: 100,
+  SAME_LOCATION: 50,
+  POT_FILL_BONUS_MAX: 30,
+  ALLERGEN_DIVERSITY: 25,
+};
+
+/** Workload threshold for a cook day = (rhythm cook events) × 90L.
+ *  Used by the workload-overload escape to detect heavily-loaded
+ *  cook days. Sundays (3+3 = 540L) are explicitly excluded from the
+ *  escape elsewhere — cooks accept heavy Sundays. */
+function cookDayThreshold(dayName: string): number {
+  const r = COOK_RHYTHM[dayName];
+  if (!r) return 0;
+  return (r.soup + r.main) * PER_DISH_LITERS;
+}
+
+interface CandidatePlace {
+  batch: Batch;
+  slot: PlanSlot;
+  day: PlanDay;
+  type: DishType;
+}
+
+interface AbandonedSlot {
+  loc: Location;
+  date: string;
+  meal: Meal;
+  type: DishType;
+  reason: string;
+}
 
 /**
- * Slice 2 entry point: cleanup → window → snapshot → placeholders → save.
- * Service assignment (Pass 1, Pass 2) and the validation/rescue UI come in
- * later slices.
+ * Hard constraints for the new scored algorithm. Returns true if the
+ * candidate is legal in the current state (services already on batches
+ * count via `alreadyInSlot` and `countTypeInSlot`).
+ *
+ * Differs from the legacy passes in two ways:
+ *   - Stale becomes a 5-day hard cutoff (not 3-day). Within 5 days,
+ *     staleness is a soft score penalty.
+ *   - Capacity check is unified: per-batch fit (real or optimistic),
+ *     and family-level fit for multi-member families.
  */
-export function fixMyMenu(): void {
-  const ok = window.confirm(
-    "Fix my menu will fill empty cook days with placeholder batches and clean up unused placeholders from previous runs.\n\n" +
-    "Existing batches won't be removed or renamed.\n\n" +
-    "Continue?"
-  );
-  if (!ok) return;
+function scoredHardConstraintsOk(
+  c: CandidatePlace,
+  allBatches: Batch[],
+  _calcReq: (b: Batch) => number,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+): boolean {
+  const { batch, slot, day, type } = c;
+  if (batch.type !== type) return false;
+  if (!batch.cookDate) return false;
+  if (batch.storage === 'Frozen') return false;
+  if (slot.isPast) return false;
+  if (getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) return false;
+  if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, batch.location)) return false;
+  if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal, allBatches)) return false;
+  if (countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) return false;
+  const cookIso = cookDateToIso(batch.cookDate);
+  if (!cookIso) return false;
+  // 5-day hard cutoff for cooked stock (was 3-day in old algorithm; now graduated).
+  if (batch.stock > 0 && diffDaysIso(cookIso, day.isoDate) >= FRESH_LIMIT_DAYS) return false;
+  if (batch.stock <= 0) return true;  // placeholder — capacity is whatever the cook decides
+  // Capacity check: tentatively add and verify using calcReqOptimistic.
+  // Optimistic walks b.services directly — doesn't depend on the global
+  // planner cache, so we don't need a rebuildPlanner per candidate (which
+  // would be O(n^2) in the scored loop). For multi-member families we
+  // additionally check the family stock pool.
+  batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+  let fits: boolean;
+  try {
+    const perBatchFits = calcReqOptimistic(batch, allBatches) <= batch.stock;
+    const family = allBatches.filter(m => getRootId(m, allBatches) === getRootId(batch, allBatches));
+    if (family.length <= 1) {
+      fits = perBatchFits;
+    } else {
+      const familyStock = family.reduce((s, m) => s + (m.stock || 0), 0);
+      const familyDemand = family.reduce((s, m) => s + calcReqOptimistic(m, allBatches), 0);
+      fits = perBatchFits && familyDemand <= familyStock;
+    }
+  } finally {
+    batch.services.pop();
+  }
+  return fits;
+}
 
-  // Step −2: consolidate same-loc same-family duplicates. Real prod data had
-  // Miso & ginger soup at Centraal as 3 separate splits (12.1L + 12.6L +
-  // 18L) — visually messy AND it broke peer math (calcRequired counted 3
-  // peers when there's really 1 menu option). After consolidation the rest
-  // of the algorithm operates on a clean dataset where each (recipe,
-  // location, storage, transit-state) is exactly one record.
+/**
+ * Score a candidate (batch, slot, day, type) against the live state. Higher
+ * is better. Score 0 or negative means "do not commit." Slot-coverage
+ * urgency dominates so the algorithm fills empty slots before refining
+ * already-half-filled ones.
+ */
+function scoreCandidate(
+  c: CandidatePlace,
+  allBatches: Batch[],
+  _calcReq: (b: Batch) => number,
+  potCaps: Map<string, number>,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+): number {
+  const { batch, slot, day, type } = c;
+  let score = 0;
+
+  const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+  if (filled === 0) score += SCORE.EMPTY_SLOT;
+  else if (filled === 1) score += SCORE.HALF_FILLED_SLOT;
+
+  if (slot.loc === 'centraal') score += SCORE.CENTRAAL_SLOT_PRIORITY;
+  if (batch.stock > 0) score += SCORE.COOKED_WITH_STOCK;
+
+  const cookIso = cookDateToIso(batch.cookDate)!;
+  const days = diffDaysIso(cookIso, day.isoDate);
+  if (slot.meal === 'dinner') {
+    if (days === 0) score += SCORE.SAME_DAY_DINNER;
+    else score += SCORE.PRIOR_DAY_DINNER;
+  } else {
+    if (days === 0) score += SCORE.SAME_DAY_LUNCH_PENALTY;
+    else score += SCORE.PRIOR_DAY_LUNCH;
+  }
+  if (days > 0) score += SCORE.STALE_PENALTY_PER_DAY * days;
+  // Day-4 surcharge: pushes 4-day extensions to "last resort." Defeated
+  // by the workload-overload escape (below) when the alternative is a
+  // genuinely overloaded cook day.
+  if (days >= 4) score += SCORE.STALE_DAY_4_SURCHARGE;
+
+  // Workload-overload escape: applies only to fresh placeholder
+  // candidates (no stock yet — committing this slot makes the
+  // placeholder's cook day busier). Not applied to already-cooked
+  // batches (no impact on cook days), and not applied on Sundays
+  // (cooks accept heavy Sundays). Reduces the placeholder's score
+  // when its cook day is projected past 1.2× the rhythm threshold —
+  // letting an older but already-cooked candidate win.
+  if (batch.stock <= 0 && batch.cookDate) {
+    const cookIso = cookDateToIso(batch.cookDate);
+    const cookDayName = cookIso ? dateToDayName(cookIso) : '';
+    if (cookDayName !== 'Sun') {
+      const threshold = cookDayThreshold(cookDayName);
+      if (threshold > 0) {
+        // Project this cook day's load AFTER committing the candidate.
+        const slotGuests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
+        const myShare = (slotGuests / SLOTS_PER_TYPE) * (batch.serving || 280) / 1000;
+        let load = myShare;
+        for (const b of allBatches) {
+          if (b.cookDate !== batch.cookDate) continue;
+          if (!TYPES_TO_PLAN.includes(b.type)) continue;
+          load += calcReqOptimistic(b, allBatches);
+        }
+        const trigger = threshold * WORKLOAD_OVERLOAD_TRIGGER_FACTOR;
+        if (load > trigger) {
+          score -= WORKLOAD_PENALTY_PER_LITER * (load - trigger);
+        }
+      }
+    }
+  }
+
+  if (batch.location === 'centraal' && slot.loc === 'centraal') {
+    score += SCORE.CENTRAAL_STOCK_AT_CENTRAAL;
+  }
+  if (batch.location === slot.loc) score += SCORE.SAME_LOCATION;
+
+  const cap = potCaps.get(batch.id);
+  if (cap != null && cap > 0) {
+    const slotGuests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
+    // Use calcReqOptimistic (doesn't need the planner cache) so the score
+    // function stays cheap inside the inner candidate loop.
+    const projected = calcReqOptimistic(batch, allBatches)
+      + (slotGuests / SLOTS_PER_TYPE) * (batch.serving || 280) / 1000;
+    if (projected <= cap) {
+      const fill = Math.min(1, projected / cap);
+      score += SCORE.POT_FILL_BONUS_MAX * fill;
+    }
+  }
+
+  // Allergen diversity: bonus when this batch's allergens differ from
+  // the slot's existing peer (only kicks in for the 2nd position).
+  if (filled > 0 && batch.allergens && batch.allergens.length > 0) {
+    const peerAllergens = new Set<string>();
+    for (const b of allBatches) {
+      if (b.id === batch.id) continue;
+      if (b.type !== type) continue;
+      if (!(b.services || []).some(s => s.loc === slot.loc && s.date === day.isoDate && s.meal === slot.meal)) continue;
+      for (const a of b.allergens || []) peerAllergens.add(a);
+    }
+    if (peerAllergens.size > 0) {
+      const myAllergens = new Set(batch.allergens);
+      const overlap = [...peerAllergens].filter(a => myAllergens.has(a)).length;
+      if (overlap < peerAllergens.size) score += SCORE.ALLERGEN_DIVERSITY;
+    }
+  }
+
+  return score;
+}
+
+/**
+ * Phase B0: forced-assignment pre-pass. For each (slot, type) gap, find
+ * candidates passing hard constraints. If exactly ONE candidate exists
+ * AND its score clears FORCED_ASSIGN_MIN_SCORE, commit it. Repeat until
+ * no new singletons emerge (later commits can unlock further singletons).
+ *
+ * Purpose: prevent the classic greedy failure where a versatile batch is
+ * spent on a high-scoring slot, leaving a different slot with no options.
+ */
+export function forcedAssignmentPrePass(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+  potCaps: Map<string, number>,
+): { committed: number } {
+  let committed = 0;
+  let changed = true;
+  let safetyMax = 200;  // cycle guard
+  while (changed && safetyMax-- > 0) {
+    changed = false;
+    for (const day of window) {
+      for (const slot of day.slots) {
+        if (slot.isPast) continue;
+        if (getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
+        for (const type of TYPES_TO_PLAN) {
+          const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+          if (filled >= SLOTS_PER_TYPE) continue;
+          const eligible: CandidatePlace[] = [];
+          for (const batch of allBatches) {
+            const c: CandidatePlace = { batch, slot, day, type };
+            if (scoredHardConstraintsOk(c, allBatches, calcReq, getGuestsFn)) {
+              eligible.push(c);
+              if (eligible.length > 1) break;  // not a singleton — let scored loop handle
+            }
+          }
+          // Naked-single rule: exactly ONE candidate exists for this gap.
+          // Lock it here so a versatile batch isn't spent elsewhere first.
+          if (eligible.length !== 1) continue;
+          const c = eligible[0];
+          const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn);
+          if (score < FORCED_ASSIGN_MIN_SCORE) continue;
+          c.batch.services.push({ loc: c.slot.loc, date: c.day.isoDate, meal: c.slot.meal });
+          committed++;
+          changed = true;
+        }
+      }
+    }
+  }
+  return { committed };
+}
+
+/**
+ * Phase B: single scored greedy loop. Each iteration scores every
+ * (batch, slot, type) candidate against the live state, picks the
+ * highest-scoring one, commits it, and repeats. Stops when no candidate
+ * has positive score.
+ *
+ * Iteration cost is O(slots × batches × types) per commit; in practice
+ * ~40 slots × ~50 batches × 2 types × ~80 max commits ≈ 320k operations
+ * per fixMyMenu run. Plenty fast.
+ */
+export function scoredGreedyAssignment(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+  potCaps: Map<string, number>,
+): { committed: number } {
+  let committed = 0;
+  let safetyMax = 500;  // cycle guard — should never hit in practice
+  while (safetyMax-- > 0) {
+    let bestScore = 0;
+    let best: CandidatePlace | null = null;
+    let bestId = '';
+    for (const day of window) {
+      for (const slot of day.slots) {
+        if (slot.isPast) continue;
+        if (getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) continue;
+        for (const type of TYPES_TO_PLAN) {
+          const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+          if (filled >= SLOTS_PER_TYPE) continue;
+          for (const batch of allBatches) {
+            const c: CandidatePlace = { batch, slot, day, type };
+            if (!scoredHardConstraintsOk(c, allBatches, calcReq, getGuestsFn)) continue;
+            const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn);
+            if (score <= 0) continue;
+            if (best === null
+              || score > bestScore
+              || (score === bestScore && batch.id.localeCompare(bestId) < 0)) {
+              best = c;
+              bestScore = score;
+              bestId = batch.id;
+            }
+          }
+        }
+      }
+    }
+    if (!best) break;
+    best.batch.services.push({ loc: best.slot.loc, date: best.day.isoDate, meal: best.slot.meal });
+    committed++;
+  }
+  return { committed };
+}
+
+/**
+ * Phase C fallback ladder: for slots still under-filled after Phase B,
+ * try in order:
+ *   1. Multi-batch teams (Pass-5 logic) with 60% coverage threshold (down
+ *      from the legacy 80%, since "some" beats "none").
+ *   2. Create an emergency placeholder labelled as such — cook day = the
+ *      slot's day, location = West (more flexible to improvise).
+ *   3. If even step 2 isn't viable, mark as abandoned.
+ *
+ * (Step "relax pot caps" from the plan is a no-op here: the new scored
+ * loop never enforces pot caps as hard constraints — only as score
+ * modulation. So that ladder rung is implicitly always taken.)
+ */
+export function runFallbackLadder(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+): { teamsFormed: number; emergenciesCreated: number; abandoned: AbandonedSlot[]; emergencyBatches: Batch[] } {
+  let teamsFormed = 0;
+  let emergenciesCreated = 0;
+  const abandoned: AbandonedSlot[] = [];
+  const emergencyBatches: Batch[] = [];
+  for (const day of window) {
+    for (const slot of day.slots) {
+      if (slot.isPast) continue;
+      const guests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
+      if (guests <= 0) continue;
+      for (const type of TYPES_TO_PLAN) {
+        let filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+        let safety = 8;  // bound the inner loop in case progress stalls
+        while (filled < SLOTS_PER_TYPE && safety-- > 0) {
+          const startFilled = filled;
+          // Step 1: try team coverage with the lowered threshold. If a team
+          // is found it fills all remaining positions at once.
+          const team = findCombinationTeamLowered(
+            allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq,
+          );
+          if (team.length > 0) {
+            for (const b of team) b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+            teamsFormed++;
+            filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+            continue;
+          }
+          // Step 2: emergency placeholder. Cook at the slot's location
+          // (so cross-location servability is satisfied for same-day
+          // dinner slots). Skip emergency creation when even an emergency
+          // can't physically reach the slot — fall through to abandoned.
+          const emergency = createEmergencyPlaceholder(type, slot.loc, day);
+          if (isServableBy(emergency.cookDate, day.isoDate, slot.meal, slot.loc, emergency.location)) {
+            emergency.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+            allBatches.push(emergency);
+            emergencyBatches.push(emergency);
+            emergenciesCreated++;
+            filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+            continue;
+          }
+          // Step 3: nothing worked this iteration — abandon.
+          if (filled === startFilled) {
+            abandoned.push({
+              loc: slot.loc, date: day.isoDate, meal: slot.meal, type,
+              reason: 'no batch could cover this slot, even with team coverage or emergency placeholder',
+            });
+            break;
+          }
+        }
+      }
+    }
+  }
+  return { teamsFormed, emergenciesCreated, abandoned, emergencyBatches };
+}
+
+function findCombinationTeamLowered(
+  allBatches: Batch[],
+  type: DishType,
+  loc: Location,
+  isoDate: string,
+  meal: Meal,
+  guests: number,
+  existingFamilies: number,
+  calcReq: (b: Batch) => number,
+): Batch[] {
+  // Same shape as legacy findCombinationTeam but threshold lowered to
+  // FALLBACK_TEAM_MIN_COVERAGE (0.6) and stale window extended to 5d.
+  const eligible = allBatches.filter(b => {
+    if (b.type !== type) return false;
+    if (!b.cookDate) return false;
+    if (b.storage === 'Frozen') return false;
+    if (alreadyInSlot(b, loc, isoDate, meal, allBatches)) return false;
+    if (!isServableBy(b.cookDate, isoDate, meal, loc, b.location)) return false;
+    if (b.stock > 0) {
+      const cookIso = cookDateToIso(b.cookDate);
+      if (!cookIso) return false;
+      if (diffDaysIso(cookIso, isoDate) >= FRESH_LIMIT_DAYS) return false;
+    }
+    return true;
+  });
+  if (eligible.length === 0) return [];
+  const byFamily = new Map<string, Batch>();
+  for (const c of eligible) {
+    const root = getRootId(c, allBatches);
+    const cur = byFamily.get(root);
+    if (!cur) { byFamily.set(root, c); continue; }
+    const cIsSame = c.location === loc ? 1 : 0;
+    const curIsSame = cur.location === loc ? 1 : 0;
+    if (cIsSame > curIsSame) byFamily.set(root, c);
+    else if (cIsSame === curIsSame && c.stock > cur.stock) byFamily.set(root, c);
+  }
+  const familyReps = Array.from(byFamily.values());
+  familyReps.sort((a, b) => {
+    const aSame = a.location === loc ? 1 : 0;
+    const bSame = b.location === loc ? 1 : 0;
+    if (aSame !== bSame) return bSame - aSame;
+    const aIso = cookDateToIso(a.cookDate)!;
+    const bIso = cookDateToIso(b.cookDate)!;
+    if (aIso !== bIso) return aIso < bIso ? -1 : 1;
+    if (a.stock !== b.stock) return b.stock - a.stock;
+    return a.id.localeCompare(b.id);
+  });
+
+  const minK = Math.max(1, SLOTS_PER_TYPE - existingFamilies);
+  const maxK = Math.max(minK, 4 - existingFamilies);
+
+  for (let k = minK; k <= maxK; k++) {
+    const totalPeers = existingFamilies + k;
+    const guestsPerPeer = guests / totalPeers;
+    const maxGuestsPerBatch = guests * 0.6;
+    if (guestsPerPeer > maxGuestsPerBatch) continue;
+    const team: Batch[] = [];
+    let coverageGuests = existingFamilies * guestsPerPeer;
+    for (const cand of familyReps) {
+      if (team.length >= k) break;
+      const shareLitersAtThisSlot = guestsPerPeer * (cand.serving || 280) / 1000;
+      const family = allBatches.filter(m => getRootId(m, allBatches) === getRootId(cand, allBatches));
+      const familyStock = family.reduce((s, m) => s + (m.stock || 0), 0);
+      const existingFamilyDemand = family.reduce((s, m) => s + calcReq(m), 0);
+      const projectedFamilyDemand = existingFamilyDemand + shareLitersAtThisSlot;
+      if (familyStock > 0 && projectedFamilyDemand > familyStock) continue;
+      team.push(cand);
+      coverageGuests += guestsPerPeer;
+    }
+    if (team.length < k) continue;
+    const coverageFraction = coverageGuests / guests;
+    if (coverageFraction < FALLBACK_TEAM_MIN_COVERAGE) continue;
+    return team;
+  }
+  return [];
+}
+
+function createEmergencyPlaceholder(type: DishType, loc: Location, day: PlanDay): Batch {
+  const typeLabel = type === 'Main course' ? 'main' : 'soup';
+  const ddmm = day.cookDateStr.split('/').slice(0, 2).join('/');
+  const locLabel = loc === 'centraal' ? 'C' : 'W';
+  return {
+    id: newId(),
+    name: `${day.dayName} emergency ${typeLabel} ${locLabel} ${ddmm}`,
+    type,
+    stock: 0,
+    serving: 280,
+    storage: 'Gastro',
+    // Emergency cook location matches the slot — for a Centraal slot this
+    // means a Centraal cook (rare, but the only same-day option). For a
+    // West slot it's a West cook. The fallback ladder pre-checks
+    // serviceability before adding the service: lunch slots that can't
+    // be reached even by a same-day same-loc cook fall through to the
+    // abandoned warning instead.
+    location: loc,
+    inTransit: false,
+    allergens: [],
+    extraAllergens: [],
+    orderFor: false,
+    parentId: null,
+    cookDate: day.cookDateStr,
+    recipeSheetId: null,
+    recipeVolume: null,
+    recipeIngredients: null,
+    note: '',
+    services: [],
+    createdAt: new Date().toISOString(),
+    recipeId: null,
+    actualIngredients: null,
+    cookNotes: 'Emergency cook (auto-created by Fix My Menu)',
+    stockDeducted: false,
+    generated: true,
+  };
+}
+
+/**
+ * Toggle the spinner + disabled state on every Fix-My-Menu button on the
+ * page. The actual work runs synchronously and blocks the main thread,
+ * so callers must `setTimeout(work, 0)` after switching loading on so
+ * the browser gets a paint cycle to show the spinner before the freeze.
+ */
+function setFixMyMenuLoading(loading: boolean): void {
+  if (typeof document === 'undefined') return;
+  const btns = document.querySelectorAll<HTMLButtonElement>('.btn-fix-menu');
+  for (const b of btns) {
+    if (loading) {
+      if (!b.dataset.origHtml) b.dataset.origHtml = b.innerHTML;
+      b.innerHTML = '<span class="btn-spinner"></span>Working…';
+      b.disabled = true;
+    } else {
+      if (b.dataset.origHtml) {
+        b.innerHTML = b.dataset.origHtml;
+        delete b.dataset.origHtml;
+      }
+      b.disabled = false;
+    }
+  }
+}
+
+/** Fix-My-Menu body — split out so the public `fixMyMenu` entry can
+ *  show a spinner before the synchronous algorithm blocks the main
+ *  thread. Runs: consolidate → strip future services → clean orphan
+ *  placeholders → generate missing placeholders → forced-assignment
+ *  pre-pass → scored greedy loop → fallback ladder (teams → emergency
+ *  placeholder → abandoned warning) → pot allocation → warnings. */
+function _fixMyMenuBody(): void {
   const consolidation = consolidateFamilies(S.batches);
   if (consolidation.removed.length > 0) {
     S.batches = consolidation.kept;
@@ -1243,15 +1798,8 @@ export function fixMyMenu(): void {
     for (const id of consolidation.removed) S.deletedBatches.push(id);
   }
 
-  // Step −1: strip every future service entry. Past services (already served)
-  // stay; everything else gets re-decided by the assignment passes below.
-  // This makes the algorithm REDISTRIBUTIVE rather than purely additive —
-  // existing pinned assignments are reshuffled if the algorithm finds a
-  // better arrangement.
   stripFutureServices(S.batches);
 
-  // Step 0: cleanup orphan placeholders from previous runs (now that future
-  // services are stripped, generated empty placeholders are easier to spot).
   const orphans = findOrphanPlaceholders(S.batches);
   if (orphans.length > 0) {
     const orphanIds = new Set(orphans.map(b => b.id));
@@ -1260,108 +1808,107 @@ export function fixMyMenu(): void {
     for (const id of orphanIds) S.deletedBatches.push(id);
   }
 
-  // Step 1: build the 14-day planning window
   const planWindow = buildPlanningWindow(getToday());
-
-  // Step 2: snapshot existing batches keyed by cookDate
   const snapshot = snapshotBatches(S.batches, planWindow);
-
-  // Step 3: generate placeholders for missing cook events
   const newPlaceholders = generateMissingPlaceholders(planWindow, snapshot);
-  for (const b of newPlaceholders) {
-    S.batches.push(b);
-  }
-
-  // Rebuild the planner index BEFORE running the assigner — calcRequired uses
-  // S.planner to count peer batches per slot.
+  for (const b of newPlaceholders) S.batches.push(b);
   rebuildPlanner();
 
-  // The pass functions tentatively-add a service then immediately call calcReq
-  // to check capacity. Without this wrapper, calcReq reads a stale S.planner
-  // that doesn't include the just-pushed service, so the "peer count" for the
-  // new slot is missing one entry. With two batches at a slot, peers come back
-  // as 1 instead of 2 — demand is computed at solo rates, the add overshoots
-  // stock, and the slot ends up empty even though it would fit fine when peers
-  // actually split the demand. Rebuilding before every calcReq is cheap (~150
-  // ops × ~300 calls per fixMyMenu run) and keeps the contract of calcReq
-  // unchanged elsewhere.
   const calcReqLive = (b: Batch): number => {
     rebuildPlanner();
     return calcRequired(b);
   };
 
-  // Step 4 — Pass 1: extend cooked batches forward through the window.
-  // All passes skip 0-guest slots — no point planning food where nobody eats.
-  // Pot capacity is NOT enforced during assignment — pots get allocated by
-  // demand AFTER all passes complete (see allocatePotCaps below).
-  const pass1 = assignServicesPass1(S.batches, planWindow, calcReqLive, getGuests);
-  rebuildPlanner();
-
-  // Step 4 — Pass 2: fill remaining empty positions with the 2-newest rule.
-  // Pass the small-pot-threshold + biggest-pot size as soft concentration
-  // hints: spread evenly while batches are still small (<80L), then pile
-  // demand into one batch up to 140L so the rest stay induction-eligible.
-  const biggestPot = S.kitchenEquipment && S.kitchenEquipment.pots.length > 0
-    ? Math.max(...S.kitchenEquipment.pots)
-    : undefined;
-  const pass2 = assignServicesPass2(S.batches, planWindow, calcReqLive, getGuests, biggestPot);
-  rebuildPlanner();
-
-  // Step 4 — Pass 3: fill anything still empty. Uses the same Sun-bias and
-  // most-loaded-under-bigPot logic as Pass 2 so it doesn't undo concentration.
-  const pass3 = assignServicesPass3(S.batches, planWindow, calcReqLive, getGuests, biggestPot);
-  rebuildPlanner();
-
-  // Step 4.4 — Pass 4 (finish-off): cooked batches with leftover stock get
-  // added as a 3rd peer to slots that are already 2/2. Drains the surplus
-  // that would otherwise sit in the walk-in until it freezes or spoils.
-  const pass4 = assignServicesPass4(S.batches, planWindow, calcReqLive, getGuests);
-  rebuildPlanner();
-
-  // Step 4.45 — Pass 5 (combination fill): for slots still under-filled, try
-  // multi-batch teams that share guest demand. Solves the high-demand-slot
-  // problem where Pass 1-4's per-batch fit checks reject every individual
-  // candidate because solo share exceeds stock — but 3-4 batches together
-  // cover it cleanly. 60% cap per batch + 80% coverage floor.
-  const pass5 = assignServicesPass5(S.batches, planWindow, calcReqLive, getGuests);
-  rebuildPlanner();
-
-  // Step 4.5 — Allocate kitchen pots to batches by ACTUAL demand.
-  // Biggest pot goes to the batch that needs the most food. This way the
-  // 140L pot is never wasted on a low-demand batch just because it sorts
-  // first by id. Over-pot batches are flagged by collectWarnings.
-  const inWindowBatches = S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type));
-  const potCaps = allocatePotCaps(inWindowBatches, S.kitchenEquipment, calcRequired);
-
-  // Step 5: collect warnings (after rebuild so calcRequired sees current peers)
-  const warnings = collectWarnings(
-    S.batches,
-    planWindow,
-    S.caterings || [],
-    calcRequired,
-    potCaps,
-    S.kitchenEquipment,
-    getGuests,
+  // Pre-allocate pot caps once for scoring. Re-compute after each phase
+  // since demand changes and re-allocations would shift caps.
+  let potCaps = allocatePotCaps(
+    S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type)),
+    S.kitchenEquipment, calcRequired,
   );
 
-  // Mark Fix My Menu as run today — read by the dashboard transport card's
-  // readiness banner (localStorage-backed; persists across reloads, resets on
-  // local-day boundary).
-  markFixMyMenuRun();
+  const phaseB0 = forcedAssignmentPrePass(S.batches, planWindow, calcReqLive, getGuests, potCaps);
+  rebuildPlanner();
+  potCaps = allocatePotCaps(
+    S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type)),
+    S.kitchenEquipment, calcRequired,
+  );
 
+  const phaseB = scoredGreedyAssignment(S.batches, planWindow, calcReqLive, getGuests, potCaps);
+  rebuildPlanner();
+
+  const phaseC = runFallbackLadder(S.batches, planWindow, calcReqLive, getGuests);
+  rebuildPlanner();
+
+  // Final pot allocation (Phase D) for warning generation.
+  const finalPotCaps = allocatePotCaps(
+    S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type)),
+    S.kitchenEquipment, calcRequired,
+  );
+
+  const warnings = collectWarnings(
+    S.batches, planWindow, S.caterings || [], calcRequired,
+    finalPotCaps, S.kitchenEquipment, getGuests,
+  );
+
+  // New: surface explicit warnings for abandoned slots and emergency
+  // placeholders so cooks see them prominently.
+  for (const a of phaseC.abandoned) {
+    const typeLabel = a.type === 'Main course' ? 'main' : 'soup';
+    const locLabel = a.loc === 'centraal' ? 'Centraal' : 'West';
+    const dayName = dateToDayName(a.date);
+    warnings.unshift({
+      category: 'under-filled-slot',
+      message: `${dayName} ${a.meal} at ${locLabel} couldn't be covered for ${typeLabel} — every fallback step failed (${a.reason}). Manual intervention needed.`,
+      anchor: { kind: 'slot', loc: a.loc, date: a.date, meal: a.meal },
+    });
+  }
+  for (const eb of phaseC.emergencyBatches) {
+    warnings.push({
+      category: 'under-filled-slot',
+      message: `Created emergency placeholder "${eb.name}" — slot couldn't be covered by existing stock or teams. Fill in a recipe ASAP.`,
+      anchor: { kind: 'batch', batchId: eb.id },
+    });
+  }
+
+  markFixMyMenuRun();
   rerenderCurrentView();
   scheduleSave();
 
   showResultsModal({
     cleaned: orphans.length,
-    created: newPlaceholders.length,
-    assigned: pass1.servicesAdded + pass2.servicesAdded + pass3.servicesAdded + pass4.servicesAdded + pass5.servicesAdded,
+    created: newPlaceholders.length + phaseC.emergenciesCreated,
+    assigned: phaseB0.committed + phaseB.committed,
     consolidated: consolidation.removed.length,
-    placeholderNames: newPlaceholders.map(p => p.name),
-    teamsFormed: pass5.teamsFormed,
+    placeholderNames: [...newPlaceholders.map(p => p.name), ...phaseC.emergencyBatches.map(p => p.name)],
+    teamsFormed: phaseC.teamsFormed,
     warnings,
   });
 }
+
+// ── Entry point ─────────────────────────────────────────────────────────────
+
+/**
+ * Fix-My-Menu entry point. Runs the hybrid algorithm: forced-assignment
+ * pre-pass (naked-single rule) → single scored greedy loop → fallback
+ * ladder (multi-batch teams → emergency placeholder → abandoned warning)
+ * → demand-based pot allocation → warnings.
+ *
+ * The body runs synchronously and blocks the main thread for a couple
+ * of seconds on real-sized data, so we set the spinner state then
+ * defer the actual work via `setTimeout(0)` to give the browser one
+ * paint cycle before the freeze.
+ */
+export function fixMyMenu(): void {
+  const ok = window.confirm(
+    "Fix my menu will fill empty cook days with placeholder batches and clean up unused placeholders from previous runs.\n\n" +
+    "Existing batches won't be removed or renamed.\n\n" +
+    "Continue?"
+  );
+  if (!ok) return;
+  setFixMyMenuLoading(true);
+  setTimeout(() => { try { _fixMyMenuBody(); } finally { setFixMyMenuLoading(false); } }, 0);
+}
+
 
 // ── Step 5: validation ─────────────────────────────────────────────────────
 
@@ -1495,6 +2042,9 @@ export function collectWarnings(
 
   // 5. Burner overload per cook day: too many >threshold pots needed for
   // available gas burners (which can run pots > threshold). Info-only for v1.
+  // Counts distinct FAMILIES, not individual batch records — a 100L cook
+  // split into a parent + Centraal-bound split container is still ONE
+  // pot on ONE burner, even though it shows up as 2 batches in the data.
   if (equipment && equipment.gasBurners >= 0) {
     const threshold = equipment.bigBurnerThreshold || 80;
     const byDay = new Map<string, Batch[]>();
@@ -1505,11 +2055,14 @@ export function collectWarnings(
       byDay.get(b.cookDate)!.push(b);
     }
     for (const [day, dayBatches] of byDay) {
-      let bigPotCount = 0;
+      const bigFamilies = new Set<string>();
       for (const b of dayBatches) {
         const cap = potCaps.get(b.id);
-        if (cap != null && cap > threshold) bigPotCount++;
+        if (cap != null && cap > threshold) {
+          bigFamilies.add(getRootId(b, allBatches));
+        }
       }
+      const bigPotCount = bigFamilies.size;
       if (bigPotCount > equipment.gasBurners) {
         const cookIso = cookDateToIso(day) || '';
         const dayLabel = cookIso ? dateToDayName(cookIso) : day;
@@ -1526,12 +2079,16 @@ export function collectWarnings(
   // service on the same day as cookDate. Food is delivered to Centraal in the
   // morning, so anything cooked today can't reach Centraal until tomorrow.
   // Catches manual pre-existing assignments that violate the rule.
+  // Past services are excluded — the food was already served (or wasn't),
+  // and surfacing a "won't arrive in time" warning for last week's lunch
+  // is just noise.
   for (const b of allBatches) {
     if (!TYPES_TO_PLAN.includes(b.type)) continue;
     if (!b.cookDate || b.location !== 'west') continue;
     const cookIso = cookDateToIso(b.cookDate);
     if (!cookIso) continue;
-    const violating = (b.services || []).filter(s => s.loc === 'centraal' && s.date === cookIso);
+    const violating = (b.services || []).filter(s =>
+      s.loc === 'centraal' && s.date === cookIso && !isServicePast(s));
     if (violating.length > 0) {
       const meals = violating.map(s => s.meal).join(' + ');
       warnings.push({
@@ -1546,10 +2103,11 @@ export function collectWarnings(
   // no van going Centraal→West, so a Centraal batch can't physically reach a
   // West slot. Catches manual assignments that violate the no-reverse-flow
   // rule. (Pass 1/2/3 honour the rule via isServableBy and never create these.)
+  // Past services excluded — they're history, not actionable warnings.
   for (const b of allBatches) {
     if (!TYPES_TO_PLAN.includes(b.type)) continue;
     if (b.location !== 'centraal') continue;
-    const violating = (b.services || []).filter(s => s.loc === 'west');
+    const violating = (b.services || []).filter(s => s.loc === 'west' && !isServicePast(s));
     if (violating.length > 0) {
       warnings.push({
         category: 'centraal-batch-at-west',

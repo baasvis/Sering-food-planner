@@ -44,12 +44,14 @@
         "@swc/jest"
       ]
     },
+    "roots": [
+      "<rootDir>/test"
+    ],
     "testMatch": [
-      "**/test/**/*.test.ts"
+      "**/*.test.ts"
     ],
     "testPathIgnorePatterns": [
-      "/node_modules/",
-      "/.claude/"
+      "/node_modules/"
     ],
     "setupFiles": [
       "<rootDir>/test/setup-env.ts",
