@@ -153,6 +153,29 @@ export function findOrphanPlaceholders(batches: Batch[]): Batch[] {
   );
 }
 
+/**
+ * Returns batches that are "spent": food is gone (`stock <= 0`), they had
+ * services historically (so they're real cooked batches that have been
+ * served, not just empty placeholders), and every service is in the past.
+ * These are dead historical records — they clutter the planner without
+ * any active role. Daan has been trying to delete them by hand; auto-
+ * retiring them as part of Fix-My-Menu makes the cleanup self-healing
+ * (so even if a stale session resurrects them via SSE/save, the next
+ * Fix-My-Menu run wipes them again).
+ *
+ * Past-service-only is checked via `services.every(isServicePast)` so a
+ * batch with even one upcoming service is preserved (e.g. someone left
+ * it on the planner deliberately even though stock is depleted).
+ */
+export function findSpentBatches(batches: Batch[]): Batch[] {
+  return batches.filter(b =>
+    TYPES_TO_PLAN.includes(b.type)
+    && (b.stock || 0) <= 0
+    && b.services && b.services.length > 0
+    && b.services.every(s => isServicePast(s))
+  );
+}
+
 // ── Step 3: Generate missing placeholders ───────────────────────────────────
 
 interface PlaceholderInput {
@@ -1814,6 +1837,27 @@ function _fixMyMenuBody(): void {
     S.batches = S.batches.filter(b => !orphanIds.has(b.id));
     if (!S.deletedBatches) S.deletedBatches = [];
     for (const id of orphanIds) S.deletedBatches.push(id);
+  }
+
+  // Retire "spent" batches: stock=0, all services in past. These are real
+  // cooked batches whose food has been served — they linger in the data
+  // (and on the planner) with no active role. Cooks have been deleting
+  // them by hand and they keep coming back because some stale session
+  // re-uploads them via Fix-My-Menu's save path. Cleaning them up here
+  // makes the retirement self-healing — even if SSE resurrects them, the
+  // next run wipes them again. Catering refs to spent batches are also
+  // cleaned so we don't leave dangling pointers.
+  const spent = findSpentBatches(S.batches);
+  if (spent.length > 0) {
+    const spentIds = new Set(spent.map(b => b.id));
+    S.batches = S.batches.filter(b => !spentIds.has(b.id));
+    if (!S.deletedBatches) S.deletedBatches = [];
+    for (const id of spentIds) S.deletedBatches.push(id);
+    for (const c of (S.caterings || [])) {
+      if (c.dishes && c.dishes.length > 0) {
+        c.dishes = c.dishes.filter(d => !spentIds.has(d.dishId));
+      }
+    }
   }
 
   const planWindow = buildPlanningWindow(getToday());
