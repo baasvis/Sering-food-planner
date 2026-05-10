@@ -657,7 +657,6 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
   const showPhoto = !!recipe.photoUrl && !longBody;
   const showStorage = !veryLongBody;
   const compact = veryLongBody;
-  const twoColIngredients = ingCount >= 14;
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -668,31 +667,29 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
   @page { size: A4; margin: ${compact ? '12mm' : '15mm'} ${compact ? '12mm' : '14mm'}; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: auto; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: ${compact ? '10.5px' : '12px'}; line-height: ${compact ? '1.35' : '1.45'}; color: #1a1a18; }
-  h1 { font-size: ${compact ? '18px' : '22px'}; margin-bottom: 2px; }
-  h2 { font-size: ${compact ? '12px' : '13px'}; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #555; margin: ${compact ? '8px 0 4px' : '10px 0 6px'}; border-bottom: 1px solid #ddd; padding-bottom: 3px; page-break-after: avoid; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: ${compact ? '10.5px' : '12px'}; line-height: ${compact ? '1.35' : '1.45'}; color: #000; }
+  h1 { font-size: ${compact ? '18px' : '22px'}; margin-bottom: 2px; color: #000; }
+  h2 { font-size: ${compact ? '12px' : '13px'}; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #000; margin: ${compact ? '8px 0 4px' : '10px 0 6px'}; border-bottom: 1px solid #000; padding-bottom: 3px; page-break-after: avoid; }
   .header { display: flex; gap: 14px; align-items: flex-start; margin-bottom: ${compact ? '6px' : '10px'}; }
   .header-photo { width: ${compact ? '78px' : '90px'}; height: ${compact ? '78px' : '90px'}; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
-  .meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10px; color: #666; margin-bottom: 6px; }
-  .meta span { background: #f0f0f0; padding: 1px 7px; border-radius: 10px; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10px; color: #000; margin-bottom: 6px; }
+  .meta span { border: 1px solid #000; padding: 1px 7px; border-radius: 10px; }
   .allergens { display: flex; gap: 3px; flex-wrap: wrap; margin-bottom: 0; }
-  .allergen { background: #fce4e4; color: #993c1d; font-size: 9.5px; padding: 1px 7px; border-radius: 10px; font-weight: 600; }
+  .allergen { border: 1px solid #000; color: #000; font-size: 9.5px; padding: 1px 7px; border-radius: 10px; font-weight: 700; }
   table { width: 100%; border-collapse: collapse; font-size: ${compact ? '10.5px' : '12px'}; margin-bottom: ${compact ? '6px' : '10px'}; }
-  th { text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; color: #888; padding: ${compact ? '2px 4px' : '3px 5px'}; border-bottom: 2px solid #ccc; }
-  td { padding: ${compact ? '2px 4px' : '3px 5px'}; border-bottom: 1px solid #eee; vertical-align: top; }
-  tr.flexible td { font-style: italic; color: #534ab7; }
+  th { text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; color: #000; padding: ${compact ? '2px 4px' : '3px 5px'}; border-bottom: 2px solid #000; }
+  td { padding: ${compact ? '2px 4px' : '3px 5px'}; border-bottom: 1px solid #000; vertical-align: top; color: #000; }
+  tr.flexible td { font-style: italic; color: #000; font-weight: 600; }
   td.amt { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; width: 60px; }
-  td.unit { white-space: nowrap; width: 60px; color: #666; font-size: 10.5px; }
-  .ing-cols { display: flex; gap: 18px; align-items: flex-start; }
-  .ing-cols > table { flex: 1; min-width: 0; }
+  td.unit { white-space: nowrap; width: 60px; color: #000; font-size: 10.5px; }
   .steps { counter-reset: step; padding: 0; list-style: none; }
-  .steps li { counter-increment: step; padding: ${compact ? '3px 0 3px 22px' : '5px 0 5px 26px'}; position: relative; border-bottom: 1px solid #f0f0f0; break-inside: avoid; }
-  .steps li::before { content: counter(step); position: absolute; left: 0; width: ${compact ? '17px' : '19px'}; height: ${compact ? '17px' : '19px'}; background: #1a1a18; color: #fff; border-radius: 50%; font-size: ${compact ? '9px' : '10px'}; font-weight: 600; display: flex; align-items: center; justify-content: center; top: ${compact ? '4px' : '5px'}; }
-  .step-note { font-size: ${compact ? '10px' : '11px'}; color: #ba7517; font-style: italic; margin-top: 1px; }
-  .storage-box { background: #f7f6f3; border: 1px solid #e0e0e0; border-radius: 6px; padding: 6px 10px; margin-bottom: 6px; font-size: 11px; }
-  .storage-box strong { display: block; font-size: 10px; text-transform: uppercase; color: #888; margin-bottom: 2px; }
-  .footer { margin-top: 10px; padding-top: 6px; border-top: 1px solid #ddd; font-size: 9px; color: #999; display: flex; justify-content: space-between; }
-  ${scaleFactor !== 1 ? '.scale-note { background: #e6f1fb; color: #185fa5; padding: 4px 8px; border-radius: 5px; font-size: 10.5px; margin-bottom: 8px; font-weight: 500; }' : ''}
+  .steps li { counter-increment: step; padding: ${compact ? '3px 0 3px 22px' : '5px 0 5px 26px'}; position: relative; border-bottom: 1px solid #000; break-inside: avoid; color: #000; }
+  .steps li::before { content: counter(step); position: absolute; left: 0; width: ${compact ? '17px' : '19px'}; height: ${compact ? '17px' : '19px'}; background: #000; color: #fff; border-radius: 50%; font-size: ${compact ? '9px' : '10px'}; font-weight: 700; display: flex; align-items: center; justify-content: center; top: ${compact ? '4px' : '5px'}; }
+  .step-note { font-size: ${compact ? '10px' : '11px'}; color: #000; font-style: italic; font-weight: 600; margin-top: 1px; }
+  .storage-box { border: 1px solid #000; border-radius: 6px; padding: 6px 10px; margin-bottom: 6px; font-size: 11px; color: #000; }
+  .storage-box strong { display: block; font-size: 10px; text-transform: uppercase; color: #000; margin-bottom: 2px; }
+  .footer { margin-top: 10px; padding-top: 6px; border-top: 1px solid #000; font-size: 9px; color: #000; display: flex; justify-content: space-between; }
+  ${scaleFactor !== 1 ? '.scale-note { border: 1px solid #000; color: #000; padding: 4px 8px; border-radius: 5px; font-size: 10.5px; margin-bottom: 8px; font-weight: 700; }' : ''}
   @media print {
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .no-print { display: none; }
@@ -728,25 +725,16 @@ ${scaleFactor !== 1 ? `<div class="scale-note">Scaled ${scaleFactor > 1 ? 'up' :
 
 ${ingredients.length > 0 ? `
 <h2>Ingredients</h2>
-<div class="ing-cols">
-${(() => {
-  const renderTable = (rows: typeof ingredients) => `<table>
+<table>
   <thead><tr><th>Ingredient</th><th class="amt">Amounts</th><th class="unit">Unit</th></tr></thead>
   <tbody>
-    ${rows.map(i => `<tr${i.isFlexible ? ' class="flexible"' : ''}>
-      <td>${esc(i.name)}${i.allergens ? ` <span style="font-size:9px;color:#993c1d;">(${esc(i.allergens)})</span>` : ''}</td>
+    ${ingredients.map(i => `<tr${i.isFlexible ? ' class="flexible"' : ''}>
+      <td>${esc(i.name)}${i.allergens ? ` <span style="font-size:9px;color:#000;font-weight:600;">(${esc(i.allergens)})</span>` : ''}</td>
       <td class="amt">${i.amount}</td>
       <td class="unit">${esc(i.unit)}</td>
     </tr>`).join('')}
   </tbody>
-</table>`;
-  if (twoColIngredients) {
-    const half = Math.ceil(ingredients.length / 2);
-    return renderTable(ingredients.slice(0, half)) + renderTable(ingredients.slice(half));
-  }
-  return renderTable(ingredients);
-})()}
-</div>` : ''}
+</table>` : ''}
 
 ${prepSteps.length > 0 ? `
 <h2>Prep Steps</h2>
