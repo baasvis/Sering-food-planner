@@ -1340,21 +1340,29 @@ function scoredHardConstraintsOk(
   if (batch.stock > 0 && diffDaysIso(cookIso, day.isoDate) >= FRESH_LIMIT_DAYS) return false;
   if (batch.stock <= 0) return true;  // placeholder — capacity is whatever the cook decides
   // Capacity check: tentatively add and verify using calcReqOptimistic.
-  // Optimistic walks b.services directly — doesn't depend on the global
-  // planner cache, so we don't need a rebuildPlanner per candidate (which
-  // would be O(n^2) in the scored loop). For multi-member families we
-  // additionally check the family stock pool.
+  //
+  // Same-origin batches (parent + Centraal-bound split children, linked
+  // via parentId) physically share one cook event — once the split
+  // arrives at Centraal it goes in the same gastro pot. So for
+  // multi-member families the only ceiling that matters is the family
+  // pool (combined stock across all members). The split's own 5L doesn't
+  // gate Centraal services on it; if the family has 65L total, the
+  // services across the family can use that whole pool. Cooks handle the
+  // physical redistribution (extra shipments, etc.) — the algorithm
+  // tracks intent, not container-level inventory.
+  //
+  // Singleton batches (no parent / no split) keep the per-batch check —
+  // they really do have only their own stock to draw from.
   batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
   let fits: boolean;
   try {
-    const perBatchFits = calcReqOptimistic(batch, allBatches) <= batch.stock;
     const family = allBatches.filter(m => getRootId(m, allBatches) === getRootId(batch, allBatches));
     if (family.length <= 1) {
-      fits = perBatchFits;
+      fits = calcReqOptimistic(batch, allBatches) <= batch.stock;
     } else {
       const familyStock = family.reduce((s, m) => s + (m.stock || 0), 0);
       const familyDemand = family.reduce((s, m) => s + calcReqOptimistic(m, allBatches), 0);
-      fits = perBatchFits && familyDemand <= familyStock;
+      fits = familyDemand <= familyStock;
     }
   } finally {
     batch.services.pop();
@@ -1986,18 +1994,36 @@ export function collectWarnings(
     }
   }
 
-  // 2. Cooked stockout: a cooked batch's projected demand exceeds its stock.
+  // 2. Cooked stockout: family-level — same-origin batches (parent +
+  // Centraal-bound splits) physically share one cook, so the family
+  // pool is the real ceiling. A 5L split with 16L of services isn't
+  // "running out" if the parent has 60L still at West to back it up.
+  // One warning per family root, against family stock vs family demand.
+  const seenStockoutFamilies = new Set<string>();
   for (const b of allBatches) {
     if (!TYPES_TO_PLAN.includes(b.type)) continue;
-    if (b.stock <= 0) continue;
     if (b.storage === 'Frozen') continue;
-    const demand = calcReq(b);
-    if (demand > b.stock) {
-      const short = (demand - b.stock).toFixed(1);
+    const root = getRootId(b, allBatches);
+    if (seenStockoutFamilies.has(root)) continue;
+    const family = allBatches.filter(m =>
+      TYPES_TO_PLAN.includes(m.type)
+      && m.storage !== 'Frozen'
+      && getRootId(m, allBatches) === root
+    );
+    const familyStock = family.reduce((s, m) => s + (m.stock || 0), 0);
+    if (familyStock <= 0) continue;
+    const familyDemand = family.reduce((s, m) => s + calcReq(m), 0);
+    if (familyDemand > familyStock) {
+      seenStockoutFamilies.add(root);
+      const primary = family.find(m => !m.parentId) || family[0];
+      const short = (familyDemand - familyStock).toFixed(1);
+      const familyDesc = family.length > 1
+        ? `${primary.name} family`
+        : primary.name;
       warnings.push({
         category: 'cooked-stockout',
-        message: `${b.name} will run out — about ${short}L short across the services it covers. The last service might run dry.`,
-        anchor: { kind: 'batch', batchId: b.id },
+        message: `${familyDesc} will run out — about ${short}L short across the services it covers. The last service might run dry.`,
+        anchor: { kind: 'batch', batchId: primary.id },
       });
     }
   }
