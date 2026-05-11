@@ -200,27 +200,33 @@ describe('POST /api/data', () => {
 });
 
 // ── Batch CRUD ──
+//
+// Unified-batch model (post-C5): no `stock`/`location`/`storage`/`inTransit`
+// on the wire. Stock per-loc lives in `inventory[]`; in-flight stock lives
+// in `shipments[]`. The DELETE guard is "totalQty + pendingShipmentQty > 0",
+// not "stock > 0".
 
 describe('Batch CRUD API', () => {
   const batchId = T + 'batch-1';
 
-  it('POST /api/batches — creates a batch', async () => {
+  it('POST /api/batches — creates a batch with inventory[]', async () => {
     const res = await request(app)
       .post('/api/batches')
       .send({
         id: batchId,
         name: 'Test Tomatensoep',
         type: 'Soup',
-        stock: 0,
         serving: 280,
-        storage: 'Gastro',
-        location: 'west',
+        cookDate: '01/04/2026',
+        inventory: [],
+        shipments: [],
         services: [{ loc: 'west', date: '2026-04-01', meal: 'lunch' }],
       });
     expect(res.status).toBe(201);
     expect(res.body.id).toBe(batchId);
     expect(res.body.name).toBe('Test Tomatensoep');
-    expect(res.body.location).toBe('west');
+    expect(res.body.inventory).toEqual([]);
+    expect(res.body.shipments).toEqual([]);
     expect(res.body.services).toHaveLength(1);
   });
 
@@ -231,30 +237,44 @@ describe('Batch CRUD API', () => {
         id: batchId,
         name: 'Duplicate',
         type: 'Soup',
-        stock: 0,
         serving: 280,
-        storage: 'Gastro',
-        location: 'west',
+        inventory: [],
+        shipments: [],
         services: [],
       });
     expect(res.status).toBe(409);
   });
 
-  it('POST /api/batches — rejects invalid location', async () => {
+  it('POST /api/batches — rejects invalid inventory entry loc', async () => {
     const res = await request(app)
       .post('/api/batches')
       .send({
         id: T + 'bad-loc',
         name: 'Bad Location',
         type: 'Soup',
-        stock: 0,
         serving: 280,
-        storage: 'Gastro',
-        location: 'invalid',
+        inventory: [{ loc: 'invalid', storage: 'Gastro', qty: 5, cookDate: '01/04/2026' }],
+        shipments: [],
         services: [],
       });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/invalid location/i);
+    expect(res.body.error).toMatch(/invalid loc/i);
+  });
+
+  it('POST /api/batches — rejects invalid storage on inventory entry', async () => {
+    const res = await request(app)
+      .post('/api/batches')
+      .send({
+        id: T + 'bad-storage',
+        name: 'Bad Storage',
+        type: 'Soup',
+        serving: 280,
+        inventory: [{ loc: 'west', storage: 'NotAStorage', qty: 5, cookDate: '01/04/2026' }],
+        shipments: [],
+        services: [],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid storage/i);
   });
 
   it('GET /api/batches — lists batches', async () => {
@@ -270,6 +290,8 @@ describe('Batch CRUD API', () => {
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(batchId);
     expect(res.body.name).toBe('Test Tomatensoep');
+    expect(Array.isArray(res.body.inventory)).toBe(true);
+    expect(Array.isArray(res.body.shipments)).toBe(true);
   });
 
   it('GET /api/batches/:id — 404 for unknown id', async () => {
@@ -277,12 +299,16 @@ describe('Batch CRUD API', () => {
     expect(res.status).toBe(404);
   });
 
-  it('PATCH /api/batches/:id — partial update', async () => {
+  it('PATCH /api/batches/:id — partial update merges inventory and note', async () => {
     const res = await request(app)
       .patch('/api/batches/' + batchId)
-      .send({ stock: 5.0, note: 'Extra thick today' });
+      .send({
+        inventory: [{ loc: 'west', storage: 'Gastro', qty: 5, cookDate: '01/04/2026' }],
+        note: 'Extra thick today',
+      });
     expect(res.status).toBe(200);
-    expect(res.body.stock).toBe(5.0);
+    expect(res.body.inventory).toHaveLength(1);
+    expect(res.body.inventory[0].qty).toBe(5);
     expect(res.body.note).toBe('Extra thick today');
     expect(res.body.name).toBe('Test Tomatensoep');
   });
@@ -290,20 +316,45 @@ describe('Batch CRUD API', () => {
   it('PATCH /api/batches/:id — 404 for unknown id', async () => {
     const res = await request(app)
       .patch('/api/batches/nonexistent')
-      .send({ stock: 1 });
+      .send({ note: 'will not stick' });
     expect(res.status).toBe(404);
   });
 
-  it('DELETE /api/batches/:id — rejects when stock > 0', async () => {
+  it('DELETE /api/batches/:id — rejects when total inventory qty > 0', async () => {
     const res = await request(app).delete('/api/batches/' + batchId);
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/stock > 0/);
+    expect(res.body.error).toMatch(/stock or pending shipments/i);
   });
 
-  it('DELETE /api/batches/:id — succeeds when stock = 0', async () => {
+  it('DELETE /api/batches/:id — rejects when there is a pending shipment (qty=0 inventory)', async () => {
+    // Drain inventory to 0 but leave a pending shipment record. New guard:
+    // a batch isn't safe to delete while food sits on a truck (locked §29 +
+    // routes/batches.ts:119 comment).
+    const drainRes = await request(app)
+      .patch('/api/batches/' + batchId)
+      .send({
+        inventory: [{ loc: 'west', storage: 'Gastro', qty: 0, cookDate: '01/04/2026' }],
+        shipments: [{
+          id: 'pending-ship-' + Date.now(),
+          fromLoc: 'west',
+          toLoc: 'centraal',
+          storage: 'Gastro',
+          qty: 5,
+          sentAt: '2026-04-01T08:00:00.000Z',
+          arrived: false,
+          cookDate: '01/04/2026',
+        }],
+      });
+    expect(drainRes.status).toBe(200);
+    const res = await request(app).delete('/api/batches/' + batchId);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/stock or pending shipments/i);
+  });
+
+  it('DELETE /api/batches/:id — succeeds when inventory and shipments are both empty / qty=0', async () => {
     await request(app)
       .patch('/api/batches/' + batchId)
-      .send({ stock: 0 });
+      .send({ inventory: [], shipments: [] });
 
     const res = await request(app).delete('/api/batches/' + batchId);
     expect(res.status).toBe(200);
@@ -1108,7 +1159,8 @@ describe('Data Patch API', () => {
   const patchBatchId = T + 'patch-batch';
 
   it('POST /api/data/patch — adds a batch, then deletes it', async () => {
-    // Add a batch via patch
+    // Add a batch via patch (unified-batch shape — inventory[]/shipments[],
+    // no legacy stock/location/storage).
     const addRes = await request(app)
       .post('/api/data/patch')
       .send({
@@ -1116,10 +1168,10 @@ describe('Data Patch API', () => {
           id: patchBatchId,
           name: 'Patch Test Soup',
           type: 'Soup',
-          stock: 0,
           serving: 280,
-          storage: 'Gastro',
-          location: 'west',
+          cookDate: '01/04/2026',
+          inventory: [],
+          shipments: [],
           services: [],
         }],
       });

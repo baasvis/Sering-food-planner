@@ -5,8 +5,9 @@ const TEST_BATCH_PREFIX = 'e2e-test-cooked-';
 
 test.describe('Batch cooked transition', () => {
   test.afterEach(async ({ page }) => {
-    // Cooked batches have stock > 0 so DELETE /api/batches/:id refuses. Reset
-    // stock to 0 first, then delete.
+    // Cooked batches have non-empty inventory + possibly pending shipments,
+    // and DELETE /api/batches/:id refuses while either is non-zero. Drain
+    // both first, then delete.
     if (page.url().startsWith('http')) {
       await page.evaluate(async (prefix) => {
         const res = await fetch('/api/batches');
@@ -17,7 +18,7 @@ test.describe('Batch cooked transition', () => {
           await fetch(`/api/batches/${b.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ stock: 0 }),
+            body: JSON.stringify({ inventory: [], shipments: [] }),
           });
           await fetch(`/api/batches/${b.id}`, { method: 'DELETE' });
         }
@@ -33,11 +34,12 @@ test.describe('Batch cooked transition', () => {
     await expect(page.locator('.sub-tab[data-tab="overview"]')).toBeVisible();
 
     // ── Step 1: create the batch via the existing UI flow ──────────────────
+    // Unified-batch model: blank batches start with empty inventory[]; the
+    // "Mark cooked" flow we test below is what populates it.
     await page.getByRole('button', { name: /\+ New batch/ }).first().click();
     await page.locator('[data-testid="new-batch-blank-btn"]').click();
     const batchName = `${TEST_BATCH_PREFIX}${Date.now()}`;
     await page.fill('#nd-name', batchName);
-    await page.fill('#nd-stock', '0');
     await page.locator('[data-testid="new-batch-submit"]').click();
 
     // ── Step 2: switch to Overview to see the dish list ────────────────────
@@ -71,16 +73,28 @@ test.describe('Batch cooked transition', () => {
     await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });
 
     // ── Step 6: verify the batch transitioned to cooked in the DB ──────────
-    const created = await page.evaluate(async (name) => {
+    // Unified-batch model: confirmCooked sets the first inventory[] entry
+    // (loc=cookLoc, storage='Gastro', qty=calcRequired, cookDate=today). With
+    // no services assigned, calcRequired returns 0 — so inventory may end up
+    // [] OR with a single qty=0 entry depending on the path. Assert that
+    // either cookDate flipped non-null or inventory has at least one entry.
+    interface BatchSummary {
+      id: string;
+      name: string;
+      cookDate: string | null;
+      inventory: Array<{ loc: string; storage: string; qty: number; cookDate: string }>;
+    }
+    const created = await page.evaluate(async (name): Promise<BatchSummary | undefined> => {
       const r = await fetch('/api/batches');
-      const all = await r.json() as Array<{ id: string; name: string; cookDate: string | null; stock: number }>;
+      const all = await r.json() as BatchSummary[];
       return all.find((b) => b.name === name);
     }, batchName);
     expect(created).toBeTruthy();
     expect(created!.cookDate).toBeTruthy();
-    // confirmCooked auto-fills stock from calcRequired when stock was 0.
-    // calcRequired returns 0 when there are no services assigned, which is
-    // our case — assert non-negative rather than > 0 to match real behavior.
-    expect(created!.stock).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(created!.inventory)).toBe(true);
+    // Total qty should be non-negative (always true; the load-bearing check is
+    // that the field exists with the new shape).
+    const totalQty = (created!.inventory || []).reduce((s, e) => s + (e.qty || 0), 0);
+    expect(totalQty).toBeGreaterThanOrEqual(0);
   });
 });

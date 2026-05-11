@@ -5,7 +5,8 @@ const TEST_BATCH_PREFIX = 'e2e-test-assign-';
 
 test.describe('Batch assign via modal', () => {
   test.afterEach(async ({ page }) => {
-    // Batches with stock > 0 cannot be deleted directly — zero stock first.
+    // Cooked batches (non-empty inventory[] or pending shipments) can't be
+    // deleted directly — drain both first.
     if (page.url().startsWith('http')) {
       await page.evaluate(async (prefix) => {
         const res = await fetch('/api/batches');
@@ -16,7 +17,7 @@ test.describe('Batch assign via modal', () => {
           await fetch(`/api/batches/${b.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ stock: 0 }),
+            body: JSON.stringify({ inventory: [], shipments: [] }),
           });
           await fetch(`/api/batches/${b.id}`, { method: 'DELETE' });
         }
@@ -32,19 +33,41 @@ test.describe('Batch assign via modal', () => {
     await page.locator('.nav-btn[data-screen="planner"]').click();
     await expect(page.locator('.sub-tab[data-tab="overview"]')).toBeVisible();
 
-    // Create a Soup batch with stock=10 so it appears in the "Cooked" tab of
-    // the slot-assign modal (isBatchCooked checks stock > 0).
+    // Create a Soup batch (type defaults to Soup; the new-batch modal has no
+    // stock field anymore in the unified-batch model). PATCH inventory in
+    // before showing it in the assign modal so isBatchCooked() (which now
+    // reads inventory + pending shipments) returns true.
     await page.getByRole('button', { name: /\+ New batch/ }).first().click();
     await page.locator('[data-testid="new-batch-blank-btn"]').click();
     const batchName = `${TEST_BATCH_PREFIX}${Date.now()}`;
     await page.fill('#nd-name', batchName);
-    // Type defaults to "Soup"; leave it. Stock > 0 makes isBatchCooked() true.
-    await page.fill('#nd-stock', '10');
     await page.locator('[data-testid="new-batch-submit"]').click();
 
-    // Wait for the save debounce to flush so the batch is in the DB before
-    // the slot-assign round-trip.
+    // Wait for the creation save to flush before patching inventory.
     await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });
+
+    // Seed inventory via the API so the batch shows up in the "Cooked" tab.
+    await page.evaluate(async (name) => {
+      const r = await fetch('/api/batches');
+      const all = (await r.json()) as Array<{ id: string; name: string }>;
+      const target = all.find((b) => b.name === name);
+      if (!target) throw new Error(`Batch ${name} not found after creation`);
+      const today = new Date();
+      const dd = String(today.getDate()).padStart(2, '0');
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const cookDate = `${dd}/${mm}/${today.getFullYear()}`;
+      await fetch(`/api/batches/${target.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cookDate,
+          inventory: [{ loc: 'west', storage: 'Gastro', qty: 10, cookDate }],
+        }),
+      });
+    }, batchName);
+    // Reload so S.batches mirrors the new inventory state.
+    await page.reload();
+    await expect(page.locator('.sub-tab[data-tab="overview"]')).toBeVisible();
 
     // Switch to the West week-grid sub-tab where the slot add buttons live.
     await page.locator('.sub-tab[data-tab="west"]').click();
