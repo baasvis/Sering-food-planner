@@ -1511,9 +1511,13 @@ describe('S3/S4 — AUTH_MODE=production runtime gates', () => {
 
 describe('S2 — id charset validation rejects XSS-shaped ids', () => {
   const XSS_ID = "');alert(1);('";
+  // Unified-batch fixture (post-C5): no legacy stock/storage/location.
+  // The id-charset reject fires before validateBatch reaches inventory[],
+  // but keeping the fixture realistic prevents stale-shape rot if the
+  // validator order changes.
   const baseBatch = {
-    name: 'XSS Test', type: 'Soup', stock: 0, serving: 280,
-    storage: 'Gastro', location: 'west', services: [],
+    name: 'XSS Test', type: 'Soup', serving: 280,
+    inventory: [], shipments: [], services: [],
   };
 
   it('POST /api/batches — rejects id with quote/paren', async () => {

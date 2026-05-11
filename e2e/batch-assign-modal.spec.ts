@@ -91,7 +91,8 @@ test.describe('Batch assign via modal', () => {
     await expect(page.locator('#toast')).toContainText(batchName, { timeout: 5_000 });
 
     // The save debounce (1.5 s) fires after the assign; wait for it so the
-    // afterEach cleanup can PATCH stock=0 and DELETE without a conflict.
+    // afterEach cleanup can PATCH inventory=[]/shipments=[] and DELETE
+    // without a conflict.
     await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });
   });
 });

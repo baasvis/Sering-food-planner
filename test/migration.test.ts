@@ -391,7 +391,12 @@ describe('data-migrate: cycle handling (audit S15)', () => {
 // ── Idempotency ───────────────────────────────────────────────────────────
 
 describe('data-migrate: idempotency', () => {
-  it('a second run is a no-op against an already-migrated batch', async () => {
+  it('a second run does not re-mutate an already-migrated batch', async () => {
+    // Asserts on OUR specific row's before/after JSON instead of grepping
+    // global stdout — Jest runs test files in parallel and other suites
+    // (api.test.ts, shipment-flow.test.ts) seed batches in the same DB, so
+    // the script's "Already migrated" branch may not fire on a global level
+    // even when it's effectively a no-op for our row.
     const id = tid('once');
     await insertLegacyBatch({
       id, name: 'Soup', stock: 30, location: 'west', cookDate: '01/05/2026',
@@ -401,20 +406,24 @@ describe('data-migrate: idempotency', () => {
     expect(r1.status).toBe(0);
     const after1 = await readBatch(id);
     const inv1JSON = JSON.stringify(after1!.inventory);
+    const ship1JSON = JSON.stringify(after1!.shipments);
+    expect(after1!.inventory).toHaveLength(1); // sanity: first run did populate
 
     const r2 = runMigrate();
     expect(r2.status).toBe(0);
-    expect(r2.stdout).toMatch(/Already migrated|No-op|nothing/i);
 
     const after2 = await readBatch(id);
     expect(JSON.stringify(after2!.inventory)).toBe(inv1JSON);
+    expect(JSON.stringify(after2!.shipments)).toBe(ship1JSON);
   });
 });
 
 // ── Dry-run safety ────────────────────────────────────────────────────────
 
 describe('data-migrate: --dry-run', () => {
-  it('writes nothing when --dry-run is set', async () => {
+  it('writes nothing to OUR test batch when --dry-run is set', async () => {
+    // Same reasoning as the idempotency test: assert on our row's state
+    // rather than parsing stdout, so parallel-run pollution can't flake us.
     const id = tid('dry');
     await insertLegacyBatch({
       id, name: 'Soup', stock: 30, location: 'west', cookDate: '01/05/2026',
@@ -424,9 +433,12 @@ describe('data-migrate: --dry-run', () => {
 
     const r = runMigrate(['--dry-run']);
     expect(r.status).toBe(0);
+    // Stdout sanity check (still local to this run, not affected by parallel
+    // suites — every invocation prints its own DRY RUN header).
     expect(r.stdout).toMatch(/DRY RUN|dry-run/i);
 
     const after = await readBatch(id);
-    expect(after!.inventory).toHaveLength(0); // unchanged
+    expect(after!.inventory).toHaveLength(0); // OUR row unchanged
+    expect(after!.shipments).toHaveLength(0);
   });
 });
