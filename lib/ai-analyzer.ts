@@ -152,18 +152,27 @@ export async function runDataQualityChecks(): Promise<DataQualityReport> {
 export async function aggregateTelemetry(hours = 24): Promise<TelemetrySummary> {
   const since = new Date(Date.now() - hours * 3600000);
 
+  // §1.9: explicit allowlist on every insight-feeding telemetry query so Hub
+  // events (source='hub' once the Sering Hub extraction lands) can't pollute
+  // the planner's AI analysis. The allowlist (`'backend'` + `'frontend'`) is
+  // deliberately preserved instead of `source != 'hub'`: any new source label
+  // added later (e.g. Phase 2's Lightspeed importer) gets excluded by default
+  // and must be added here intentionally before it reaches Claude's prompt.
+  // The unique-users and total-events queries get the same filter because
+  // they're sized for the planner's user base / event volume — mixing other
+  // services' counts in would distort the numbers the prompt sees.
   const [errors, screenViews, apiPerf, featureUsage, uniqueUsersResult, totalEventsResult] = await Promise.all([
     // Error summary
     prisma.$queryRaw<Array<{ name: string; count: number; last_seen: Date }>>`
       SELECT name, COUNT(*)::int as count, MAX(timestamp) as last_seen
-      FROM telemetry_event WHERE type = 'error' AND timestamp > ${since}
+      FROM telemetry_event WHERE type = 'error' AND source IN ('backend', 'frontend') AND timestamp > ${since}
       GROUP BY name ORDER BY count DESC LIMIT 20
     `,
     // Screen usage
     prisma.$queryRaw<Array<{ name: string; views: number; avg_duration: number | null }>>`
       SELECT name, COUNT(*)::int as views,
              AVG((data->>'duration')::float) as avg_duration
-      FROM telemetry_event WHERE type = 'screen_view' AND timestamp > ${since}
+      FROM telemetry_event WHERE type = 'screen_view' AND source IN ('backend', 'frontend') AND timestamp > ${since}
       GROUP BY name ORDER BY views DESC
     `,
     // API performance
@@ -172,23 +181,23 @@ export async function aggregateTelemetry(hours = 24): Promise<TelemetrySummary> 
              AVG((data->>'duration')::float) as avg_ms,
              MAX((data->>'duration')::float) as max_ms,
              COUNT(*) FILTER (WHERE (data->>'statusCode')::int >= 500)::int as errors
-      FROM telemetry_event WHERE type = 'api_call' AND timestamp > ${since}
+      FROM telemetry_event WHERE type = 'api_call' AND source IN ('backend', 'frontend') AND timestamp > ${since}
       GROUP BY name ORDER BY avg_ms DESC LIMIT 20
     `,
     // Feature usage
     prisma.$queryRaw<Array<{ name: string; uses: number }>>`
       SELECT name, COUNT(*)::int as uses
-      FROM telemetry_event WHERE type = 'feature_use' AND timestamp > ${since}
+      FROM telemetry_event WHERE type = 'feature_use' AND source IN ('backend', 'frontend') AND timestamp > ${since}
       GROUP BY name ORDER BY uses DESC
     `,
     // Unique users
     prisma.$queryRaw<Array<{ count: number }>>`
       SELECT COUNT(DISTINCT user_id)::int as count
-      FROM telemetry_event WHERE timestamp > ${since} AND user_id IS NOT NULL
+      FROM telemetry_event WHERE source IN ('backend', 'frontend') AND timestamp > ${since} AND user_id IS NOT NULL
     `,
     // Total events
     prisma.$queryRaw<Array<{ count: number }>>`
-      SELECT COUNT(*)::int as count FROM telemetry_event WHERE timestamp > ${since}
+      SELECT COUNT(*)::int as count FROM telemetry_event WHERE source IN ('backend', 'frontend') AND timestamp > ${since}
     `,
   ]);
 
