@@ -461,7 +461,7 @@ export function renderTransportCard(): string {
          <button class="btn btn-primary tcard-confirm" onclick="confirmTransportPlan()">Pack and send</button>
        </div>`;
 
-  return `<div class="dash-card tcard ${lit}">
+  return `<div class="dash-card tcard ${lit}" data-testid="transport-card">
     <div class="dash-card-title">
       <span class="dash-card-icon">🚚</span> Pack for Centraal — tomorrow
       ${modeToggle()}
