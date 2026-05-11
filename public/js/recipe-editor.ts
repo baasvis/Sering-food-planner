@@ -4,7 +4,7 @@
 
 import { S, ALLERGENS, INGREDIENT_CATEGORIES } from './state';
 import { apiGet, apiPost, toast, toastError, loadIngredientDb } from './utils';
-import { typeBadge, TYPES } from './core';
+import { typeBadge, TYPES, getTotalStock } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
@@ -1188,7 +1188,8 @@ export function openBatchRecipe(batchId: string) {
   if (!recipe) return;
 
   const recipeVolume = recipe.recipeVolume || 0;
-  const batchLiters = (batch.stock || 0) > 0 ? batch.stock : recipeVolume;
+  const batchTotal = getTotalStock(batch);
+  const batchLiters = batchTotal > 0 ? batchTotal : recipeVolume;
   let scaleFactor = 1;
   if (recipeVolume > 0) {
     scaleFactor = batchLiters / recipeVolume;
@@ -1374,7 +1375,7 @@ function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock
     <div class="br-header">
       <div class="br-header-title">
         <h3>${esc(batch.name)}</h3>
-        <span class="br-header-sub">Batch recipe &mdash; ${batch.stock}L</span>
+        <span class="br-header-sub">Batch recipe &mdash; ${getTotalStock(batch)}L</span>
       </div>
       <div class="br-header-actions">
         <button class="btn btn-sm" onclick="brToggleFullscreen()" title="${br.isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}">
@@ -1594,7 +1595,17 @@ export async function brSave() {
       // /api/ingredients/stock/bulk SETS absolute stock per ingredient (it's
       // the stocktake endpoint), so we read current stock locally, subtract
       // the cooked amount, and send the new absolute value. (T18 fix.)
-      const stockUpdates = computeStockDeductionUpdates(actualIngredients, batch.location, S.ingredientDb);
+      //
+      // Cook location in the unified-batch model is `inventory[0].loc`
+      // (sticky from first confirmCooked per the plan's Primary location
+      // decision). Pre-cook batches with empty inventory default to 'west'
+      // — the deduct-stock path only fires AFTER the cook completes, so
+      // inventory[0] should always be populated at this point, but the
+      // fallback keeps the call safe even if invoked with a stale state.
+      const batchLoc = (batch.inventory && batch.inventory.length > 0)
+        ? batch.inventory[0].loc
+        : 'west';
+      const stockUpdates = computeStockDeductionUpdates(actualIngredients, batchLoc, S.ingredientDb);
       if (stockUpdates.length > 0) {
         try {
           await apiPost('/api/ingredients/stock/bulk', stockUpdates);

@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { PrismaClient, Prisma } from '@prisma/client';
-import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient, Ingredient } from '../shared/types';
+import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient, Ingredient, InventoryEntry, Shipment } from '../shared/types';
 import { toGrams } from '../shared/units';
 
 export const prisma = new PrismaClient();
@@ -26,6 +26,13 @@ const VALID_MEALS = ['lunch', 'dinner'];
 // Existing prod + staging IDs (1256 + 1251 rows checked 2026-05-03) all match.
 const VALID_ID_PATTERN = /^[a-zA-Z0-9_-]{1,200}$/;
 
+// DD/MM/YYYY for cookDate fields (matches Catering.date format).
+const DDMMYYYY_PATTERN = /^\d{2}\/\d{2}\/\d{4}$/;
+
+// ISO 8601 toISOString format for shipment timestamps. Matches
+// `new Date().toISOString()` output: optional fractional seconds, always Z.
+const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
 /** Validate an id-shaped string field. Pass `field` for a useful error. */
 export function checkId(value: unknown, field: string): string | null {
   if (typeof value !== 'string' || !VALID_ID_PATTERN.test(value)) {
@@ -38,21 +45,44 @@ export function validateBatch(b: Batch, prefix = ''): string | null {
   const p = prefix ? `${prefix}: ` : '';
   if (!b.id || typeof b.id !== 'string') return `${p}missing or invalid id`;
   if (!VALID_ID_PATTERN.test(b.id)) return `${p}invalid id charset`;
-  if (b.parentId !== null && b.parentId !== undefined && !VALID_ID_PATTERN.test(b.parentId)) return `${p}invalid parentId charset`;
   if (b.recipeId !== null && b.recipeId !== undefined && !VALID_ID_PATTERN.test(b.recipeId)) return `${p}invalid recipeId charset`;
   if (!b.name || typeof b.name !== 'string' || b.name.length > 200) return `${p}invalid name`;
   if (!VALID_TYPES.includes(b.type)) return `${p}invalid type "${b.type}"`;
-  if (typeof b.stock !== 'number' || b.stock < 0 || b.stock > 99999) return `${p}invalid stock`;
   if (typeof b.serving !== 'number' || b.serving < 1 || b.serving > 9999) return `${p}invalid serving`;
-  if (!VALID_STORAGE.includes(b.storage)) return `${p}invalid storage`;
-  if (!VALID_LOCATIONS.includes(b.location)) return `${p}invalid location "${b.location}"`;
-  if (typeof b.inTransit !== 'undefined' && typeof b.inTransit !== 'boolean') return `${p}inTransit must be boolean`;
   if (typeof b.note !== 'undefined' && (typeof b.note !== 'string' || b.note.length > 1000)) return `${p}invalid note`;
   if (!Array.isArray(b.services)) return `${p}services must be an array`;
   for (const svc of b.services) {
     if (!VALID_LOCATIONS.includes(svc.loc)) return `${p}invalid service location`;
     if (!svc.date || typeof svc.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(svc.date)) return `${p}invalid service date (expected YYYY-MM-DD)`;
     if (!VALID_MEALS.includes(svc.meal)) return `${p}invalid service meal`;
+  }
+  // Unified-batch model (Task A): inventory + shipments are required arrays.
+  // Per-entry shape checks mirror validateBatch's domain-set discipline so a
+  // bad payload is rejected at the API boundary instead of corrupting JSON.
+  if (!Array.isArray(b.inventory)) return `${p}inventory must be an array`;
+  if (b.inventory.length > 100) return `${p}too many inventory entries (max 100)`;
+  for (let i = 0; i < b.inventory.length; i++) {
+    const e = b.inventory[i] as InventoryEntry;
+    if (!e || typeof e !== 'object') return `${p}inventory[${i}]: must be an object`;
+    if (!VALID_LOCATIONS.includes(e.loc)) return `${p}inventory[${i}]: invalid loc`;
+    if (!VALID_STORAGE.includes(e.storage)) return `${p}inventory[${i}]: invalid storage`;
+    if (typeof e.qty !== 'number' || !Number.isFinite(e.qty) || e.qty < 0 || e.qty > 99999) return `${p}inventory[${i}]: invalid qty`;
+    if (typeof e.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(e.cookDate)) return `${p}inventory[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
+  }
+  if (!Array.isArray(b.shipments)) return `${p}shipments must be an array`;
+  if (b.shipments.length > 50) return `${p}too many shipments (max 50)`;
+  for (let i = 0; i < b.shipments.length; i++) {
+    const s = b.shipments[i] as Shipment;
+    if (!s || typeof s !== 'object') return `${p}shipments[${i}]: must be an object`;
+    if (typeof s.id !== 'string' || !VALID_ID_PATTERN.test(s.id)) return `${p}shipments[${i}]: invalid id`;
+    if (!VALID_LOCATIONS.includes(s.fromLoc)) return `${p}shipments[${i}]: invalid fromLoc`;
+    if (!VALID_LOCATIONS.includes(s.toLoc)) return `${p}shipments[${i}]: invalid toLoc`;
+    if (!VALID_STORAGE.includes(s.storage)) return `${p}shipments[${i}]: invalid storage`;
+    if (typeof s.qty !== 'number' || !Number.isFinite(s.qty) || s.qty < 0 || s.qty > 99999) return `${p}shipments[${i}]: invalid qty`;
+    if (typeof s.sentAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.sentAt)) return `${p}shipments[${i}]: invalid sentAt (expected ISO 8601)`;
+    if (typeof s.arrived !== 'boolean') return `${p}shipments[${i}]: arrived must be boolean`;
+    if (s.arrivedAt !== undefined && (typeof s.arrivedAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.arrivedAt))) return `${p}shipments[${i}]: invalid arrivedAt (expected ISO 8601)`;
+    if (typeof s.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(s.cookDate)) return `${p}shipments[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
   }
   return null;
 }
@@ -244,25 +274,21 @@ export function getDefaultGuests(): GuestsData {
 
 // ── Row transformers (frontend shape ↔ Prisma shape) ──
 
+// Writes new-shape only. Old cols (stock/storage/location/inTransit/parentId/
+// recipeSheetId/recipeVolume/recipeIngredients) intentionally omitted: Prisma
+// retains existing column values on update, and on insert the schema-defined
+// defaults (stock=0, location='west', etc.) populate them. They are dropped
+// in the Task B follow-up migration once the data-migrate script has run.
 export function toBatchRow(b: Batch) {
   return {
     id: b.id,
     name: b.name,
     type: b.type,
-    stock: b.stock,
     serving: b.serving || 280,
-    storage: b.storage || 'Gastro',
-    location: b.location || 'west',
-    inTransit: !!b.inTransit,
     allergens: b.allergens || [],
     extraAllergens: b.extraAllergens || [],
     orderFor: !!b.orderFor,
     cookDate: b.cookDate || null,
-    recipeSheetId: b.recipeSheetId || null,
-    recipeVolume: b.recipeVolume || null,
-    // Prisma Json fields need cast: our typed arrays lack the index signature Prisma expects
-    recipeIngredients: (b.recipeIngredients || undefined) as Prisma.InputJsonValue | undefined,
-    parentId: b.parentId || null,
     note: b.note || '',
     services: (b.services || []) as unknown as Prisma.InputJsonValue,
     createdAt: b.createdAt || new Date().toISOString(),
@@ -271,6 +297,57 @@ export function toBatchRow(b: Batch) {
     cookNotes: b.cookNotes || '',
     stockDeducted: !!b.stockDeducted,
     generated: !!b.generated,
+    inventory: (b.inventory || []) as unknown as Prisma.InputJsonValue,
+    shipments: (b.shipments || []) as unknown as Prisma.InputJsonValue,
+  };
+}
+
+// Map a Prisma batch row → frontend Batch. After the unified-batch deploy
+// completes (data-migrate + drop_cols), the legacy columns are gone and
+// every row carries inventory/shipments JSON arrays in the canonical shape,
+// so this is a straight pass-through with the array parses.
+export function mapBatchRow(b: {
+  id: string;
+  name: string;
+  type: string;
+  serving: number;
+  allergens: string[];
+  extraAllergens: string[];
+  orderFor: boolean;
+  cookDate: string | null;
+  note: string;
+  services: Prisma.JsonValue;
+  createdAt: string;
+  recipeId: string | null;
+  actualIngredients: Prisma.JsonValue;
+  cookNotes: string;
+  stockDeducted: boolean;
+  generated: boolean;
+  inventory: Prisma.JsonValue;
+  shipments: Prisma.JsonValue;
+}): Batch {
+  const inventory: InventoryEntry[] = Array.isArray(b.inventory) ? (b.inventory as unknown as InventoryEntry[]) : [];
+  const shipments: Shipment[] = Array.isArray(b.shipments) ? (b.shipments as unknown as Shipment[]) : [];
+
+  return {
+    id: b.id,
+    name: b.name,
+    type: b.type as Batch['type'],
+    serving: b.serving,
+    allergens: b.allergens,
+    extraAllergens: b.extraAllergens,
+    orderFor: b.orderFor,
+    cookDate: b.cookDate,
+    note: b.note,
+    services: Array.isArray(b.services) ? (b.services as unknown as Service[]) : [],
+    createdAt: b.createdAt,
+    recipeId: b.recipeId,
+    actualIngredients: (b.actualIngredients ?? null) as ActualIngredient[] | null,
+    cookNotes: b.cookNotes,
+    stockDeducted: b.stockDeducted,
+    generated: b.generated,
+    inventory,
+    shipments,
   };
 }
 
@@ -350,32 +427,7 @@ export async function dbReadAll(): Promise<DataResponse> {
     prisma.recipe.findMany({ include: { ingredients: { orderBy: { sortOrder: 'asc' } } } }),
   ]);
 
-  const batches: Batch[] = batchRows.map(b => ({
-    id: b.id,
-    name: b.name,
-    type: b.type as Batch['type'],
-    stock: b.stock,
-    serving: b.serving,
-    storage: b.storage as Batch['storage'],
-    location: b.location as Batch['location'],
-    inTransit: b.inTransit,
-    allergens: b.allergens,
-    extraAllergens: b.extraAllergens,
-    orderFor: b.orderFor,
-    cookDate: b.cookDate,
-    recipeSheetId: b.recipeSheetId,
-    recipeVolume: b.recipeVolume,
-    recipeIngredients: (b.recipeIngredients ?? null) as Batch['recipeIngredients'],
-    parentId: b.parentId,
-    note: b.note,
-    services: Array.isArray(b.services) ? (b.services as unknown as Service[]) : [],
-    createdAt: b.createdAt,
-    recipeId: b.recipeId,
-    actualIngredients: (b.actualIngredients ?? null) as ActualIngredient[] | null,
-    cookNotes: b.cookNotes,
-    stockDeducted: b.stockDeducted,
-    generated: b.generated,
-  }));
+  const batches: Batch[] = batchRows.map(b => mapBatchRow(b));
 
   const guests = getDefaultGuests();
   for (const row of guestRows) {
@@ -446,92 +498,32 @@ export async function dbWriteTransportItems(items: TransportItem[]): Promise<voi
 // ── Targeted patch helpers (upsert/delete only changed items) ──
 
 /**
- * Sanitize a proposed parentId value: if it references a batch that does not
- * exist in the DB (and is not being created in the same save), return null
- * instead to avoid FK constraint violations.
+ * Upsert batches: merge field-by-field with existing DB rows to prevent
+ * stale overwrites.
  *
- * Fixes AI insight #20: `batches_parent_id_fkey` errors caused silent save
- * failures when a user had stale local state referencing a batch another user
- * had already deleted. onDelete: SetNull nulls the column on delete, but a
- * client update with the stale parentId would reintroduce the bad reference.
+ * Audit S5 — the unified-batch model removes the parent/split family
+ * relation, so this no longer needs parentId-FK ordering, the
+ * parent-existence pre-check, the P2003 retry, or sanitizeParentId.
+ * The batched existing-row read is preserved (it was the perf fix for
+ * AI insight #12/#23, replacing N sequential reads with one).
  */
-export async function sanitizeParentId(
-  parentId: string | null | undefined,
-  siblingIds: Set<string> = new Set(),
-): Promise<string | null> {
-  if (!parentId) return null;
-  if (siblingIds.has(parentId)) return parentId;
-  const exists = await prisma.batch.findUnique({ where: { id: parentId }, select: { id: true } });
-  if (!exists) {
-    console.warn(`[dbUpsertBatches] dropping stale parentId ${parentId} (referenced batch no longer exists)`);
-    return null;
-  }
-  return parentId;
-}
-
-/** Upsert batches: merge field-by-field with existing DB rows to prevent stale overwrites */
 export async function dbUpsertBatches(batches: Batch[]): Promise<void> {
   if (batches.length === 0) return;
 
-  // Process parents before children so a newly-created parent exists when its
-  // child's insert references it. Batches without parentId go first.
-  const sorted = [...batches].sort((a, b) => (a.parentId ? 1 : 0) - (b.parentId ? 1 : 0));
-  const siblingIds = new Set(sorted.map(b => b.id));
-
-  // Batch the read queries up front to eliminate 2N sequential round-trips
-  // inside the loop (fix for /patch avg 760ms AI insight #12/#23). Railway
-  // EU→Postgres EU RTT is 10–50ms, so on a 10-batch patch this replaces
-  // 20 sequential queries with 2 parallel ones.
-  const incomingIds = sorted.map(b => b.id);
-  const parentIds = Array.from(new Set(
-    sorted.map(b => b.parentId).filter((p): p is string => !!p && !siblingIds.has(p)),
-  ));
-  const [existingRows, existingParents] = await Promise.all([
-    prisma.batch.findMany({ where: { id: { in: incomingIds } } }),
-    parentIds.length > 0
-      ? prisma.batch.findMany({ where: { id: { in: parentIds } }, select: { id: true } })
-      : Promise.resolve([]),
-  ]);
+  const incomingIds = batches.map(b => b.id);
+  const existingRows = await prisma.batch.findMany({ where: { id: { in: incomingIds } } });
   const existingMap = new Map(existingRows.map(r => [r.id, r]));
-  const validParentIds = new Set(existingParents.map(p => p.id));
 
-  for (const b of sorted) {
-    // Resolve parentId against batched parent-existence check (no DB round-trip)
-    const safeParentId = !b.parentId
-      ? null
-      : siblingIds.has(b.parentId) || validParentIds.has(b.parentId)
-        ? b.parentId
-        : (console.warn(`[dbUpsertBatches] dropping stale parentId ${b.parentId} (referenced batch no longer exists)`), null);
-    const bSafe: Batch = { ...b, parentId: safeParentId };
-
+  for (const b of batches) {
     const existing = existingMap.get(b.id);
-    try {
-      if (existing) {
-        // Merge: incoming fields overwrite existing, but fields not sent by client
-        // are preserved from the DB (protects against stale-field overwrites).
-        // Force the sanitized parentId so a stale client value can't reintroduce
-        // a dangling FK.
-        const merged = toBatchRow({ ...existing as unknown as Batch, ...bSafe, parentId: safeParentId });
-        await prisma.batch.update({ where: { id: b.id }, data: merged });
-      } else {
-        await prisma.batch.create({ data: toBatchRow(bSafe) });
-      }
-    } catch (e: unknown) {
-      // Last-resort retry: if Prisma still raises a FK error (P2003), retry
-      // with parentId cleared. Avoids dropping user edits for an obscure race.
-      const code = (e as { code?: string })?.code;
-      if (code === 'P2003') {
-        console.warn(`[dbUpsertBatches] retrying batch ${b.id} with parentId=null after P2003`);
-        const retryBatch: Batch = { ...bSafe, parentId: null };
-        if (existing) {
-          const merged = toBatchRow({ ...existing as unknown as Batch, ...retryBatch, parentId: null });
-          await prisma.batch.update({ where: { id: b.id }, data: merged });
-        } else {
-          await prisma.batch.create({ data: toBatchRow(retryBatch) });
-        }
-      } else {
-        throw e;
-      }
+    if (existing) {
+      // Merge: incoming fields overwrite existing, but fields not sent by
+      // client are preserved from the DB (protects against stale-field
+      // overwrites).
+      const merged = toBatchRow({ ...mapBatchRow(existing), ...b });
+      await prisma.batch.update({ where: { id: b.id }, data: merged });
+    } else {
+      await prisma.batch.create({ data: toBatchRow(b) });
     }
   }
 }

@@ -34,6 +34,25 @@ interface ParsedInsight {
   data?: Record<string, unknown>;
 }
 
+// ── Inventory helpers (private to this module) ──
+//
+// Used by the unified-batch Prisma queries below. JSON-field reads come
+// back as `Prisma.JsonValue` (which Array.isArray narrows), and each
+// entry's `qty` field can be NaN/missing on corrupted rows — defensive
+// numeric guard keeps the cron from throwing on bad data.
+
+function sumInventoryQty(inv: unknown): number {
+  if (!Array.isArray(inv)) return 0;
+  return (inv as Array<{ qty: number }>).reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0);
+}
+
+function sumNonFrozenInventoryQty(inv: unknown): number {
+  if (!Array.isArray(inv)) return 0;
+  return (inv as Array<{ storage: string; qty: number }>)
+    .filter(e => e.storage !== 'Frozen')
+    .reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0);
+}
+
 // ── Data Quality Checks ──
 
 export async function runDataQualityChecks(): Promise<DataQualityReport> {
@@ -41,23 +60,36 @@ export async function runDataQualityChecks(): Promise<DataQualityReport> {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
 
-  // Batches with cook date in the past and stock > 0 (possibly forgotten).
-  // Frozen batches are excluded — they legitimately sit in stock for weeks.
-  const staleBatches = await prisma.batch.findMany({
-    where: {
-      cookDate: { lt: today, not: null },
-      stock: { gt: 0 },
-      storage: { not: 'Frozen' },
-    },
-    select: { id: true, name: true, cookDate: true, stock: true, services: true },
-    take: 20,
+  // Batches with cook date in the past and stock > 0 at a non-Frozen
+  // storage (possibly forgotten). Frozen entries legitimately sit in stock
+  // for weeks. Unified-batch model means we filter on the inventory JSON
+  // array in JS (Prisma can't query into JSONB array elements without raw
+  // SQL); pre-filter by `cookDate < today` to keep the candidate pool
+  // small, then post-filter in memory. ~1.3k batches is well within
+  // budget for a daily cron.
+  const staleBatchCandidates = await prisma.batch.findMany({
+    where: { cookDate: { lt: today, not: null } },
+    select: { id: true, name: true, cookDate: true, inventory: true, services: true },
+    take: 100,
   });
-  // Filter to those with no future services
-  const staleBatchesFiltered = staleBatches.filter(b => {
-    const services = b.services as Array<{ date: string }> | null;
-    if (!services || !Array.isArray(services)) return true;
-    return !services.some(s => s.date >= today);
-  }).map(({ services: _s, ...rest }) => rest);
+  const staleBatchesFiltered = staleBatchCandidates
+    .filter(b => {
+      // Must have stock at a non-Frozen storage.
+      if (sumNonFrozenInventoryQty(b.inventory) <= 0) return false;
+      // No future services
+      const services = b.services as Array<{ date: string }> | null;
+      if (!services || !Array.isArray(services)) return true;
+      return !services.some(s => s.date >= today);
+    })
+    .map(b => ({
+      id: b.id,
+      name: b.name,
+      cookDate: b.cookDate,
+      // "stock" surfaces total non-Frozen liters — same semantic as the
+      // old scalar `b.stock` field on rows the legacy query returned.
+      stock: sumNonFrozenInventoryQty(b.inventory),
+    }))
+    .slice(0, 20);
 
   // Recipes with timesServed=0 older than 30 days
   const unusedRecipes = await prisma.recipe.findMany({
@@ -123,18 +155,26 @@ export async function runDataQualityChecks(): Promise<DataQualityReport> {
       .map(loc => `${loc}:${day}`)
   );
 
-  // Batches with stock > 0 but no services assigned
-  const batchesWithoutServices = await prisma.batch.findMany({
-    where: { stock: { gt: 0 } },
-    select: { id: true, name: true, stock: true, services: true },
-    take: 50,
+  // Batches with stock > 0 but no services assigned. Same JS-side filter
+  // story as staleBatches above — over-fetch with `take: 200` since we
+  // can't pre-filter on stock>0 against the JSONB inventory array, then
+  // post-filter + slice(20).
+  const orphanCandidates = await prisma.batch.findMany({
+    select: { id: true, name: true, inventory: true, services: true },
+    take: 200,
   });
-  const orphanBatches = batchesWithoutServices
+  const orphanBatches = orphanCandidates
     .filter(b => {
+      if (sumInventoryQty(b.inventory) <= 0) return false;
       const services = b.services as unknown[];
       return !services || !Array.isArray(services) || services.length === 0;
     })
-    .map(({ services: _s, ...rest }) => rest)
+    .map(b => ({
+      id: b.id,
+      name: b.name,
+      // "stock" surfaces total liters across all entries (any storage).
+      stock: sumInventoryQty(b.inventory),
+    }))
     .slice(0, 20);
 
   return {
@@ -205,12 +245,12 @@ export async function aggregateTelemetry(hours = 24): Promise<TelemetrySummary> 
 // ── Claude API Analysis ──
 
 const SYSTEM_PROMPT = `You are an app quality analyst for "De Sering Food Planner", a food planning web app used by a community kitchen organization in Amsterdam (~57 staff + volunteers). The app manages:
-- Batches of food (soups, mains, desserts) with lifecycle: PLANNED → COOKED → SERVING → DONE
+- Batches of food (soups, mains, desserts) with lifecycle: PLANNED → COOKED → SERVING → DONE. Each batch has an \`inventory\` array — entries shaped {loc, storage, qty, cookDate} — so a single batch can hold stock across multiple locations and storage types simultaneously. Pending transfers between locations live in a separate \`shipments\` array on the batch.
 - Guest counts per location (Sering West, Sering Centraal) per meal (lunch, dinner)
 - Recipes with ingredients, ratings, and cost tracking
 - Ingredient ordering with Hanos supplier integration
 - Finance tracking from Tebi POS system
-- Two locations: "west" (HQ, larger) and "centraal" (newer, growing)
+- Two locations: "west" (HQ, larger) and "centraal" (newer, growing). The \`stock\` field in the data quality reports below is a sum across inventory entries — non-Frozen for stale batches; total across all entries for orphan batches.
 
 Your job: analyze telemetry data and data quality checks, then produce actionable insights for the developer/maintainer. Each insight must be a JSON object with:
 - "category": one of "bug", "ux", "data_quality", "performance", "suggestion"

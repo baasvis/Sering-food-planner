@@ -1,30 +1,64 @@
 import crypto from 'crypto';
 import express, { Request, Response } from 'express';
-import { prisma, validateBatch, withWriteLock, dbAppendLog, toBatchRow, sanitizeParentId } from '../lib/db';
+import { Prisma } from '@prisma/client';
+import { prisma, validateBatch, withWriteLock, dbAppendLog, toBatchRow, mapBatchRow } from '../lib/db';
 import { asyncHandler, AppError } from '../lib/config';
 import { broadcast } from './events';
-import type { Batch } from '../shared/types';
+import { addBackendEvent } from './telemetry';
+import type { Batch, InventoryEntry, Shipment, Location, StorageType } from '../shared/types';
 
 const router = express.Router();
+
+const VALID_LOCATIONS: Location[] = ['west', 'centraal'];
+const VALID_STORAGE: StorageType[] = ['Gastro', 'Frozen', 'Vac-packed'];
+
+// ── Inventory / shipment helpers (private to this router) ──
+
+function parseInventory(j: unknown): InventoryEntry[] {
+  return Array.isArray(j) ? (j as InventoryEntry[]) : [];
+}
+
+function parseShipments(j: unknown): Shipment[] {
+  return Array.isArray(j) ? (j as Shipment[]) : [];
+}
+
+// Merge a qty into inventory by (loc, storage, cookDate). If a matching entry
+// exists, add to its qty; otherwise append. Mirrors the arrival-merge rule
+// (locked decision §38) so ship/arrive/cancel/transfer all use one invariant.
+function mergeIntoInventory(inv: InventoryEntry[], entry: InventoryEntry): InventoryEntry[] {
+  const idx = inv.findIndex(e =>
+    e.loc === entry.loc && e.storage === entry.storage && e.cookDate === entry.cookDate,
+  );
+  if (idx >= 0) {
+    inv[idx] = { ...inv[idx], qty: inv[idx].qty + entry.qty };
+    return inv;
+  }
+  inv.push(entry);
+  return inv;
+}
+
+// Today as DD/MM/YYYY — matches the format used elsewhere for Batch.cookDate
+// and InventoryEntry.cookDate.
+function todayDdMmYyyy(): string {
+  const d = new Date();
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${d.getFullYear()}`;
+}
+
+// ── CRUD ──
 
 // GET /api/batches — list all batches
 router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   const rows = await prisma.batch.findMany();
-  const batches = rows.map(b => ({
-    ...toBatchRow(b as unknown as Batch),
-    services: Array.isArray(b.services) ? b.services : [],
-  }));
-  res.json(batches);
+  res.json(rows.map(b => mapBatchRow(b)));
 }));
 
 // GET /api/batches/:id — get single batch
 router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   const b = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
   if (!b) return res.status(404).json({ error: 'Batch not found' });
-  res.json({
-    ...toBatchRow(b as unknown as Batch),
-    services: Array.isArray(b.services) ? b.services : [],
-  });
+  res.json(mapBatchRow(b));
 }));
 
 // POST /api/batches — create batch
@@ -32,11 +66,10 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const b = req.body;
   if (!b.id) b.id = crypto.randomUUID();
   if (!b.createdAt) b.createdAt = new Date().toISOString();
-  if (typeof b.stock === 'undefined') b.stock = 0;
   if (typeof b.serving === 'undefined') b.serving = 280;
-  if (!b.storage) b.storage = 'Gastro';
-  if (!b.location) b.location = 'west';
   if (!b.services) b.services = [];
+  if (!b.inventory) b.inventory = [];
+  if (!b.shipments) b.shipments = [];
 
   const err = validateBatch(b as Batch);
   if (err) return res.status(400).json({ error: err });
@@ -50,10 +83,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'batch-create', `${b.name} (${b.id})`);
 
-  res.status(201).json({
-    ...toBatchRow(created as unknown as Batch),
-    services: Array.isArray(created.services) ? created.services : [],
-  });
+  res.status(201).json(mapBatchRow(created));
 }));
 
 // PATCH /api/batches/:id — partial update
@@ -65,31 +95,20 @@ router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
     const existing = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
     if (!existing) throw new AppError(404, 'Batch not found');
 
-    const merged = {
-      ...toBatchRow(existing as unknown as Batch),
-      services: Array.isArray(existing.services) ? existing.services : [],
-      ...updates,
-    };
-    const err = validateBatch(merged as Batch);
+    const merged: Batch = { ...mapBatchRow(existing), ...updates };
+    const err = validateBatch(merged);
     if (err) throw new AppError(400, err);
-
-    // Drop stale parentId references that point at a batch another user has
-    // since deleted (fixes AI insight #20 — silent P2003 FK failures).
-    const safeParentId = await sanitizeParentId((merged as Batch).parentId);
 
     return prisma.batch.update({
       where: { id: req.params.id as string },
-      data: toBatchRow({ ...(merged as Batch), parentId: safeParentId }),
+      data: toBatchRow(merged),
     });
   });
 
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'batch-update', `${updated.name} (${req.params.id as string})`);
 
-  const batchJson = {
-    ...toBatchRow(updated as unknown as Batch),
-    services: Array.isArray(updated.services) ? updated.services : [],
-  };
+  const batchJson = mapBatchRow(updated);
 
   // Broadcast the updated batch to other clients (syncs orderFor toggles etc.)
   broadcast(user.email, 'patch', { batches: [batchJson] });
@@ -97,12 +116,22 @@ router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
   res.json(batchJson);
 }));
 
-// DELETE /api/batches/:id — delete batch (only if stock === 0)
+// DELETE /api/batches/:id — delete batch (only if total inventory qty === 0
+// AND no pending shipments). Pack-accumulate can leave a source entry at 0
+// while the food sits on a truck heading to Centraal — the batch row is not
+// safe to delete until the in-flight shipment lands.
 router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
   await withWriteLock(async () => {
     const existing = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
     if (!existing) throw new AppError(404, 'Batch not found');
-    if (existing.stock > 0) throw new AppError(400, 'Cannot delete batch with stock > 0');
+    const inv = parseInventory(existing.inventory);
+    const totalQty = inv.reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0);
+    const pendingShipmentQty = parseShipments(existing.shipments)
+      .filter(s => !s.arrived)
+      .reduce((sum, sh) => sum + (typeof sh.qty === 'number' ? sh.qty : 0), 0);
+    if (totalQty > 0 || pendingShipmentQty > 0) {
+      throw new AppError(400, 'Cannot delete batch with stock or pending shipments > 0');
+    }
     await prisma.batch.delete({ where: { id: req.params.id as string } });
   });
 
@@ -110,6 +139,337 @@ router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
   dbAppendLog(user.email, user.name, 'batch-delete', req.params.id as string);
 
   res.json({ ok: true });
+}));
+
+// ── Unified-batch model: ship / arrived / transfer / cancel ──
+
+interface ShipBody {
+  toLoc?: unknown;
+  qty?: unknown;
+  storage?: unknown;
+  fromInventoryIdx?: unknown;
+}
+
+// POST /api/batches/:id/ship — create or accumulate a pending shipment
+//
+// Body: { toLoc, qty, storage?, fromInventoryIdx? }
+//
+// Auto-caps to the source entry's available qty (locked decision §27) and
+// pack-accumulates into a non-arrived shipment with the same
+// (toLoc, storage, cookDate) (locked decision §29 + audit alignment with
+// arrival merge). Returns top-level `warning` when capped.
+router.post('/:id/ship', asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as ShipBody;
+  const toLoc = body.toLoc;
+  const qty = body.qty;
+  const storage = body.storage;
+  const fromInventoryIdx = body.fromInventoryIdx;
+
+  if (typeof toLoc !== 'string' || !VALID_LOCATIONS.includes(toLoc as Location)) {
+    throw new AppError(400, 'invalid toLoc');
+  }
+  if (typeof qty !== 'number' || !Number.isFinite(qty) || qty <= 0 || qty > 99999) {
+    throw new AppError(400, 'invalid qty');
+  }
+  if (storage !== undefined && (typeof storage !== 'string' || !VALID_STORAGE.includes(storage as StorageType))) {
+    throw new AppError(400, 'invalid storage');
+  }
+  if (fromInventoryIdx !== undefined && (typeof fromInventoryIdx !== 'number' || !Number.isInteger(fromInventoryIdx) || fromInventoryIdx < 0)) {
+    throw new AppError(400, 'invalid fromInventoryIdx');
+  }
+
+  const result = await withWriteLock(async () => {
+    const existing = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
+    if (!existing) throw new AppError(404, 'Batch not found');
+
+    const inv = parseInventory(existing.inventory);
+    const ship = parseShipments(existing.shipments);
+
+    // TODO(checkpoint-3): refine multi-entry source selection if cook UX
+    // needs it — frontend currently passes fromInventoryIdx explicitly.
+    let srcIdx = -1;
+    if (typeof fromInventoryIdx === 'number') {
+      const candidate = inv[fromInventoryIdx];
+      if (candidate && candidate.loc !== toLoc && candidate.qty > 0
+          && (storage === undefined || candidate.storage === storage)) {
+        srcIdx = fromInventoryIdx;
+      }
+    }
+    if (srcIdx < 0) {
+      srcIdx = inv.findIndex(e =>
+        e.loc !== toLoc && e.qty > 0
+        && (storage === undefined || e.storage === storage),
+      );
+    }
+    if (srcIdx < 0) throw new AppError(400, 'no source inventory available to ship from');
+
+    const source = inv[srcIdx];
+    const sendQty = Math.min(qty, source.qty);
+    const warning = sendQty < qty
+      ? `Capped to ${sendQty} L (only ${source.qty} L available)`
+      : undefined;
+
+    const destStorage = (storage as StorageType | undefined) ?? source.storage;
+    const nowIso = new Date().toISOString();
+
+    // Pack-accumulate: same destination + storage + cookDate AND not yet
+    // arrived → add to existing shipment instead of creating a new row.
+    const accIdx = ship.findIndex(s =>
+      !s.arrived
+      && s.toLoc === toLoc
+      && s.storage === destStorage
+      && s.cookDate === source.cookDate,
+    );
+    if (accIdx >= 0) {
+      ship[accIdx] = { ...ship[accIdx], qty: ship[accIdx].qty + sendQty, sentAt: nowIso };
+    } else {
+      ship.push({
+        id: crypto.randomUUID(),
+        fromLoc: source.loc,
+        toLoc: toLoc as Location,
+        storage: destStorage,
+        qty: sendQty,
+        sentAt: nowIso,
+        arrived: false,
+        cookDate: source.cookDate,
+      });
+    }
+
+    inv[srcIdx] = { ...source, qty: source.qty - sendQty };
+
+    const updated = await prisma.batch.update({
+      where: { id: req.params.id as string },
+      data: {
+        inventory: inv as unknown as Prisma.InputJsonValue,
+        shipments: ship as unknown as Prisma.InputJsonValue,
+      },
+    });
+    return { updated, sendQty, warning };
+  });
+
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(
+    user.email, user.name,
+    'batch-ship',
+    `${result.updated.name}: ${result.sendQty}L → ${toLoc as string}`,
+  );
+  addBackendEvent('feature_use', 'batch_ship', {
+    batchId: req.params.id, toLoc, qty: result.sendQty, capped: !!result.warning,
+  });
+
+  const batchJson = mapBatchRow(result.updated);
+  broadcast(user.email, 'patch', { batches: [batchJson] });
+
+  const response: { ok: true; batch: Batch; warning?: string } = { ok: true, batch: batchJson };
+  if (result.warning) response.warning = result.warning;
+  res.json(response);
+}));
+
+// POST /api/batches/:id/shipments/:shipmentId/arrived — flip to arrived,
+// merge qty into destination inventory.
+router.post('/:id/shipments/:shipmentId/arrived', asyncHandler(async (req: Request, res: Response) => {
+  const result = await withWriteLock(async () => {
+    const existing = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
+    if (!existing) throw new AppError(404, 'Batch not found');
+
+    const inv = parseInventory(existing.inventory);
+    const ship = parseShipments(existing.shipments);
+
+    const sIdx = ship.findIndex(s => s.id === req.params.shipmentId && !s.arrived);
+    if (sIdx < 0) throw new AppError(404, 'Pending shipment not found');
+
+    const s = ship[sIdx];
+    const nowIso = new Date().toISOString();
+    ship[sIdx] = { ...s, arrived: true, arrivedAt: nowIso };
+
+    // No qty adjustment on arrival per locked decision §28: cook fixes any
+    // discrepancy via the Edit modal.
+    mergeIntoInventory(inv, {
+      loc: s.toLoc, storage: s.storage, qty: s.qty, cookDate: s.cookDate,
+    });
+
+    const updated = await prisma.batch.update({
+      where: { id: req.params.id as string },
+      data: {
+        inventory: inv as unknown as Prisma.InputJsonValue,
+        shipments: ship as unknown as Prisma.InputJsonValue,
+      },
+    });
+    return { updated, shipment: s };
+  });
+
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(
+    user.email, user.name,
+    'shipment-arrived',
+    `${result.updated.name}: ${result.shipment.qty}L arrived at ${result.shipment.toLoc}`,
+  );
+  addBackendEvent('feature_use', 'shipment_mark_arrived', {
+    batchId: req.params.id, shipmentId: req.params.shipmentId,
+    toLoc: result.shipment.toLoc, qty: result.shipment.qty,
+  });
+
+  const batchJson = mapBatchRow(result.updated);
+  broadcast(user.email, 'patch', { batches: [batchJson] });
+
+  res.json({ ok: true, batch: batchJson });
+}));
+
+interface TransferBody {
+  fromLoc?: unknown;
+  fromStorage?: unknown;
+  toLoc?: unknown;
+  toStorage?: unknown;
+  qty?: unknown;
+  fromInventoryIdx?: unknown;
+}
+
+// POST /api/batches/:id/transfer — move stock between inventory entries
+// within the same batch (freeze, thaw, redistribute).
+router.post('/:id/transfer', asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as TransferBody;
+  const { fromLoc, fromStorage, toLoc, toStorage, qty, fromInventoryIdx } = body;
+
+  if (typeof fromLoc !== 'string' || !VALID_LOCATIONS.includes(fromLoc as Location)) {
+    throw new AppError(400, 'invalid fromLoc');
+  }
+  if (typeof fromStorage !== 'string' || !VALID_STORAGE.includes(fromStorage as StorageType)) {
+    throw new AppError(400, 'invalid fromStorage');
+  }
+  if (typeof toLoc !== 'string' || !VALID_LOCATIONS.includes(toLoc as Location)) {
+    throw new AppError(400, 'invalid toLoc');
+  }
+  if (typeof toStorage !== 'string' || !VALID_STORAGE.includes(toStorage as StorageType)) {
+    throw new AppError(400, 'invalid toStorage');
+  }
+  if (typeof qty !== 'number' || !Number.isFinite(qty) || qty <= 0 || qty > 99999) {
+    throw new AppError(400, 'invalid qty');
+  }
+  if (fromInventoryIdx !== undefined && (typeof fromInventoryIdx !== 'number' || !Number.isInteger(fromInventoryIdx) || fromInventoryIdx < 0)) {
+    throw new AppError(400, 'invalid fromInventoryIdx');
+  }
+  if (fromLoc === toLoc && fromStorage === toStorage) {
+    throw new AppError(400, 'Nothing to transfer (source and destination are identical)');
+  }
+
+  const result = await withWriteLock(async () => {
+    const existing = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
+    if (!existing) throw new AppError(404, 'Batch not found');
+
+    const inv = parseInventory(existing.inventory);
+    // Source selection mirrors /ship: explicit fromInventoryIdx wins (lets a
+    // cook pick which cookDate of West Gastro to freeze when there are
+    // multiple); else first entry where (loc, storage, qty>0) matches.
+    let srcIdx = -1;
+    if (typeof fromInventoryIdx === 'number') {
+      const candidate = inv[fromInventoryIdx];
+      if (candidate && candidate.loc === fromLoc && candidate.storage === fromStorage && candidate.qty > 0) {
+        srcIdx = fromInventoryIdx;
+      }
+    }
+    if (srcIdx < 0) {
+      srcIdx = inv.findIndex(e => e.loc === fromLoc && e.storage === fromStorage && e.qty > 0);
+    }
+    if (srcIdx < 0) throw new AppError(400, 'no source inventory available to transfer from');
+
+    const source = inv[srcIdx];
+    const moveQty = Math.min(qty, source.qty);
+    const warning = moveQty < qty ? `Capped to ${moveQty} L` : undefined;
+
+    // cookDate rules:
+    //   Gastro → Frozen   : reset to today (freezing resets freshness, locked §22).
+    //   Frozen → Gastro   : reset to today (thawed shelf-life starts today, default §1).
+    //   everything else   : carry source.cookDate.
+    let newCookDate = source.cookDate;
+    if (
+      (fromStorage === 'Gastro' && toStorage === 'Frozen')
+      || (fromStorage === 'Frozen' && toStorage === 'Gastro')
+    ) {
+      newCookDate = todayDdMmYyyy();
+    }
+
+    inv[srcIdx] = { ...source, qty: source.qty - moveQty };
+    mergeIntoInventory(inv, {
+      loc: toLoc as Location,
+      storage: toStorage as StorageType,
+      qty: moveQty,
+      cookDate: newCookDate,
+    });
+
+    const updated = await prisma.batch.update({
+      where: { id: req.params.id as string },
+      data: { inventory: inv as unknown as Prisma.InputJsonValue },
+    });
+    return { updated, moveQty, warning };
+  });
+
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(
+    user.email, user.name,
+    'batch-transfer',
+    `${result.updated.name}: ${result.moveQty}L ${fromLoc as string}/${fromStorage as string} → ${toLoc as string}/${toStorage as string}`,
+  );
+  addBackendEvent('feature_use', 'batch_transfer', {
+    batchId: req.params.id, fromLoc, fromStorage, toLoc, toStorage,
+    qty: result.moveQty, capped: !!result.warning,
+  });
+
+  const batchJson = mapBatchRow(result.updated);
+  broadcast(user.email, 'patch', { batches: [batchJson] });
+
+  const response: { ok: true; batch: Batch; warning?: string } = { ok: true, batch: batchJson };
+  if (result.warning) response.warning = result.warning;
+  res.json(response);
+}));
+
+// POST /api/batches/:id/shipments/:shipmentId/cancel — return a pending
+// shipment's qty to the source inventory entry; remove the shipment.
+router.post('/:id/shipments/:shipmentId/cancel', asyncHandler(async (req: Request, res: Response) => {
+  const result = await withWriteLock(async () => {
+    const existing = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
+    if (!existing) throw new AppError(404, 'Batch not found');
+
+    const inv = parseInventory(existing.inventory);
+    const ship = parseShipments(existing.shipments);
+
+    const sIdx = ship.findIndex(s => s.id === req.params.shipmentId && !s.arrived);
+    if (sIdx < 0) throw new AppError(404, 'Pending shipment not found');
+    const s = ship[sIdx];
+
+    // Symmetric with /ship: undo the source decrement by merging back at
+    // (fromLoc, storage, cookDate). If the entry still exists (likely, since
+    // we don't auto-prune zero-qty entries) it gets topped up; otherwise a
+    // new entry appears.
+    mergeIntoInventory(inv, {
+      loc: s.fromLoc, storage: s.storage, qty: s.qty, cookDate: s.cookDate,
+    });
+    ship.splice(sIdx, 1);
+
+    const updated = await prisma.batch.update({
+      where: { id: req.params.id as string },
+      data: {
+        inventory: inv as unknown as Prisma.InputJsonValue,
+        shipments: ship as unknown as Prisma.InputJsonValue,
+      },
+    });
+    return { updated, shipment: s };
+  });
+
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(
+    user.email, user.name,
+    'shipment-cancelled',
+    `${result.updated.name}: cancelled ${result.shipment.qty}L → ${result.shipment.toLoc}`,
+  );
+  addBackendEvent('feature_use', 'shipment_cancel', {
+    batchId: req.params.id, shipmentId: req.params.shipmentId,
+    fromLoc: result.shipment.fromLoc, toLoc: result.shipment.toLoc, qty: result.shipment.qty,
+  });
+
+  const batchJson = mapBatchRow(result.updated);
+  broadcast(user.email, 'patch', { batches: [batchJson] });
+
+  res.json({ ok: true, batch: batchJson });
 }));
 
 export default router;

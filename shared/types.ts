@@ -51,35 +51,56 @@ export interface Service {
   meal: Meal;
 }
 
+// Bumped on every breaking Batch shape change. Frontend SSE handler will
+// force a reload when the server's BATCH_SCHEMA_VERSION doesn't match the
+// value embedded in the bundle (consumed in Checkpoint 2).
+export const BATCH_SCHEMA_VERSION = 2;
+
+// Settled stock physically present at a location, available to serve.
+// Multiple entries per (loc, storage) are allowed — e.g. two cookDates of
+// the same Gastro stock at West sit as two entries until consolidated.
+export interface InventoryEntry {
+  loc: Location;
+  storage: StorageType;
+  qty: number;          // liters
+  cookDate: string;     // DD/MM/YYYY — freshness origin (resets on freeze)
+}
+
+// In-flight stock between locations. Not yet at the destination's inventory.
+export interface Shipment {
+  id: string;
+  fromLoc: Location;
+  toLoc: Location;
+  storage: StorageType; // storage type during transit; default destination storage
+  qty: number;
+  sentAt: string;       // ISO timestamp
+  arrived: boolean;
+  arrivedAt?: string;   // ISO timestamp, present iff arrived
+  cookDate: string;     // carried from source InventoryEntry on /ship (DD/MM/YYYY)
+}
+
 export interface Batch {
   id: string;
   name: string;
   type: DishType;
-  stock: number;
+  recipeId: string | null;
   serving: number;
-  storage: StorageType;
-  location: Location;
-  inTransit: boolean;
+  cookDate: string | null;            // primary cook date (= initial inventory entry cookDate)
+  inventory: InventoryEntry[];        // settled stock, available to serve
+  shipments: Shipment[];              // in-flight stock (NOT yet at destination)
+  services: Service[];
   allergens: string[];
   extraAllergens: string[];
-  orderFor: boolean;
-  cookDate: string | null;
-  recipeSheetId: string | null;
-  recipeVolume: number | null;
-  recipeIngredients: RecipeIngredient[] | null;
-  parentId: string | null;
   note: string;
-  services: Service[];
-  createdAt: string;
-  // Recipe v2 fields
-  recipeId: string | null;
-  actualIngredients: ActualIngredient[] | null;
   cookNotes: string;
-  stockDeducted: boolean;
+  actualIngredients: ActualIngredient[] | null;
+  orderFor: boolean;
   // Fix My Menu: true only for placeholders the algorithm created and that are
   // safe to clean up automatically on the next run. Optional so existing
   // (pre-migration) deserialized rows are still valid Batch values.
   generated?: boolean;
+  stockDeducted: boolean;
+  createdAt: string;
 }
 
 export interface KitchenEquipment {

@@ -3,8 +3,10 @@
 //
 // Lives on the West dashboard only. Surfaces what should leave Sering West for
 // Sering Centraal in the next 3 Centraal service slots, after subtracting
-// stock that's already at Centraal. "Pack and send" runs the existing
-// transport-split flow (doSplit(true, 'centraal', true)) per row.
+// stock that's already at Centraal. "Pack and send" calls
+// POST /api/batches/:id/ship per row — backend handles pack-accumulation
+// (same toLoc + storage + cookDate folds into an existing pending shipment)
+// so the frontend doesn't need to dedupe.
 //
 // Pure logic (computeTransportPlan, readiness helpers) is exported separately
 // from the DOM render/confirm so the same code can be unit-tested without a
@@ -12,12 +14,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Batch, Service, Location, DishType } from '@shared/types';
 import { S } from './state';
-import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner } from './core';
+import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner, getStockAt } from './core';
 import { esc } from './modal';
 import { trackEvent } from './telemetry';
 import { rerenderCurrentView } from './navigate';
-import { doSplit } from './dishes';
-import { toast } from './utils';
+import { toast, apiPost } from './utils';
 
 export type TransportMode = 'lean' | 'bulk';
 
@@ -186,11 +187,13 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
   const acc = new Map<string, Accum>(); // key = batch.id
   const includedBatchIds = new Set<string>();
 
-  // Lean pass — populate rows for any West batch that has a Centraal service
-  // within the 3-slot horizon.
+  // Lean pass — populate rows for any batch with stock at West that has a
+  // Centraal service within the 3-slot horizon. Unified-batch model: a
+  // batch is a "West batch" iff it has any qty at loc=west; there's no
+  // single `b.location` anymore. inTransit is replaced by per-shipment
+  // pending, and Pack-for-Centraal only cares about settled West stock.
   for (const b of batches) {
-    if (b.location !== 'west') continue;
-    if (b.inTransit) continue;
+    if (getStockAt(b, 'west') <= 0) continue;
     if (!isBatchCooked(b)) continue;
     let demand = 0;
     const svcs: Array<{ date: string; meal: string }> = [];
@@ -209,16 +212,15 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
     }
   }
 
-  // Bulk pass — for every dish identity already in `acc`, find ALL West
-  // batches of that same identity (cooked, not in-transit) and fold their
-  // bulk-horizon Centraal demand in.
+  // Bulk pass — for every dish identity already in `acc`, find ALL batches
+  // with West stock of that same identity and fold their bulk-horizon
+  // Centraal demand in.
   if (mode === 'bulk') {
     const includedIdentities = new Set<string>();
     for (const a of acc.values()) includedIdentities.add(dishIdentity(a.batch));
 
     for (const b of batches) {
-      if (b.location !== 'west') continue;
-      if (b.inTransit) continue;
+      if (getStockAt(b, 'west') <= 0) continue;
       if (!isBatchCooked(b)) continue;
       if (!includedIdentities.has(dishIdentity(b))) continue;
 
@@ -256,19 +258,20 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
     }
   }
 
-  // Step 2: build rows with destination-stock subtraction.
+  // Step 2: build rows with destination-stock subtraction. Per audit S12 the
+  // cross-batch dedup-by-recipe-identity stays — two different West batches
+  // of the same dish should both subtract from the same Centraal stock pile.
   const destStockByIdentity = new Map<string, number>();
   for (const b of batches) {
-    if (b.location !== 'centraal') continue;
-    if (b.inTransit) continue;
+    if (getStockAt(b, 'centraal') <= 0) continue;
     if (!isBatchCooked(b)) continue;
     const key = dishIdentity(b);
-    destStockByIdentity.set(key, (destStockByIdentity.get(key) || 0) + (b.stock || 0));
+    destStockByIdentity.set(key, (destStockByIdentity.get(key) || 0) + getStockAt(b, 'centraal'));
   }
 
   const rows: TransportRow[] = [];
   // Track destination stock that's already been consumed by an earlier row of
-  // the same identity, so two West splits of the same dish don't both think
+  // the same identity, so two West batches of the same dish don't both think
   // they have access to the full Centraal pile.
   const destStockUsedByIdentity = new Map<string, number>();
 
@@ -279,7 +282,10 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
     const alreadyUsed = destStockUsedByIdentity.get(identity) || 0;
     const destStockAvailable = Math.max(0, destStockTotal - alreadyUsed);
     const netDemand = Math.max(0, totalDemand - destStockAvailable);
-    const sendQty = Math.min(netDemand, a.batch.stock || 0);
+    // Cap sendQty at the batch's available West stock (was b.stock; now
+    // getStockAt(b, 'west')). Backend's /ship endpoint also caps and surfaces
+    // a warning, so this is a hint not a hard limit.
+    const sendQty = Math.min(netDemand, getStockAt(a.batch, 'west'));
     if (sendQty <= 0) continue;
     const consumedThisRow = Math.min(destStockAvailable, totalDemand);
     destStockUsedByIdentity.set(identity, alreadyUsed + consumedThisRow);
@@ -305,19 +311,21 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-/** Count West batches that *would* be in the lean plan if they were cooked —
- *  i.e. they have a Centraal service in the next-3-slot horizon, are not
- *  in-transit, but `isBatchCooked` is currently false. Used to differentiate
- *  the empty-state message: "nothing scheduled" vs "scheduled but not yet
- *  cooked". */
+/** Count batches that *would* be in the lean plan if they were cooked —
+ *  i.e. they have a Centraal service in the next-3-slot horizon and
+ *  `isBatchCooked` is currently false. Used to differentiate the empty-state
+ *  message: "nothing scheduled" vs "scheduled but not yet cooked".
+ *
+ *  Unified-batch model: a "would be cooked at West" batch is any uncooked
+ *  batch with a Centraal-direction service in the lean horizon. We don't
+ *  filter by location because uncooked batches have no inventory yet —
+ *  cookLoc is decided at confirmCooked time. */
 export function countPendingUncookedForCentraal(batches: Batch[]): number {
   const horizonSlots = nextCentraalSlots(batches, 3);
   if (horizonSlots.length === 0) return 0;
   const horizonKeys = new Set(horizonSlots.map(s => s.key));
   let count = 0;
   for (const b of batches) {
-    if (b.location !== 'west') continue;
-    if (b.inTransit) continue;
     if (isBatchCooked(b)) continue;
     const hasInHorizon = (b.services || []).some(svc => {
       if (svc.loc !== 'centraal') return false;
@@ -473,12 +481,14 @@ export function renderTransportCard(): string {
 
 // ── Confirm action ───────────────────────────────────────────────────────
 
-/** Iterate the current plan rows and call doSplit per batch. The existing
- *  doSplit() already handles per-batch capacity capping, in-transit flagging,
- *  service moves, and scheduleSave. We pre-set S.selected to a single batch
- *  per call so doSplit operates on exactly that one batch (it iterates
- *  S.selected internally). */
-export function confirmTransportPlan(): void {
+/** Iterate the current plan rows and call POST /api/batches/:id/ship per
+ *  batch. Backend handles auto-cap, pack-accumulate (same toLoc+storage+
+ *  cookDate folds into an existing pending shipment), and broadcasts the
+ *  updated batch via SSE. We update S.batches[idx] from each response (the
+ *  sender doesn't get its own SSE patch — see lead's clarification A).
+ *
+ *  Errors on individual rows don't abort the loop. */
+export async function confirmTransportPlan(): Promise<void> {
   if (S.currentLoc !== 'west') return;
   rebuildPlanner();
   const rows = computeTransportPlan(_mode, S.batches);
@@ -489,23 +499,29 @@ export function confirmTransportPlan(): void {
   const totalSendQty = round1(rows.reduce((s, r) => s + r.sendQty, 0));
   trackEvent('transport_card_confirmed', _mode, { rowCount: rows.length, totalVolume: totalSendQty });
 
-  // Stash the user's previous selection so we don't clobber an unrelated
-  // multi-select in the planner.
-  const prevSelection = new Set(S.selected);
   let okCount = 0;
+  let cappedCount = 0;
   for (const row of rows) {
-    S.selected = new Set([row.batchId]);
     try {
-      doSplit(true, 'centraal', true);
+      const res = await apiPost(`/api/batches/${row.batchId}/ship`, {
+        toLoc: 'centraal',
+        qty: row.sendQty,
+        storage: 'Gastro',
+      });
+      if (res && res.batch) {
+        const idx = S.batches.findIndex(b => b.id === row.batchId);
+        if (idx >= 0) S.batches[idx] = res.batch;
+      }
+      if (res && res.warning) cappedCount++;
       okCount++;
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown error';
       // Don't break the whole loop on a single failure — log and move on.
-      console.error('transport-card: doSplit failed', message);
+      console.error('transport-card: /ship failed for batch', row.batchId, message);
     }
   }
-  S.selected = prevSelection;
   if (okCount > 0) {
-    toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for Centraal`);
+    const cappedNote = cappedCount > 0 ? ` (${cappedCount} capped to available)` : '';
+    toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for Centraal${cappedNote}`);
   }
 }
