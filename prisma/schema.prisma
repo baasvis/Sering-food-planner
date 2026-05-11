@@ -359,6 +359,15 @@ model AiInsight {
 // constant per-account label would mis-attribute historical rows when we
 // backfill.
 //
+// **Phase 2 maintainer warning:** the Phase 1 Hub worker sets
+// `profitCenterId` and `profitCenterName` to `null` in BOTH the upsert
+// `create` AND `update` payloads (sources/tebi/worker.ts:upsertTebiInvoices).
+// Harmless today — nothing populates these at L1. But if Phase 2 ever
+// enriches these columns at L1 (vs. L2-only enrichment in Sales5MinBucket),
+// the worker's `update` path will silently clobber any backfilled value on
+// the next re-sync. Fix at that point: omit the PC fields from the update
+// payload, or set them only on create.
+//
 // Indexes pre-created so the Phase 2 enrichment doesn't pay the
 // add-index-to-populated-table cost.
 model TebiInvoice {
