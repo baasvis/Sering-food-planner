@@ -21,6 +21,9 @@ order.
   runs Postgres 15).
 - Coordinated deploy window with Daan — kitchen runs the app daily
   07:00–22:00. Pick a quiet hour and warn the team.
+- **Run the bash commands from Git Bash or WSL**, not PowerShell. The
+  `$DATABASE_URL`, `< file` redirect, and `mkdir -p` syntax below are
+  bash-only; PowerShell will silently misinterpret them.
 
 ## Sequence (executed at the Checkpoint 6 deploy window)
 
@@ -32,7 +35,34 @@ order.
    continuing (the script logs a `psql ... < snapshot.sql` recipe).
    Without a verified restore path, this is not a real backup.
 
-2. **Apply add-cols migration** (additive, safe).
+2. **Enable maintenance mode** — close the write door before any
+   schema or data change touches prod.
+
+   In the Railway dashboard, set the env var:
+   ```
+   MAINTENANCE_MODE=1
+   ```
+   Railway will redeploy automatically (~1 minute). Once redeployed,
+   every write endpoint returns 503 `{ error: 'maintenance', message: 'Planner is upgrading. Please refresh in a few minutes.' }`.
+   Reads, login, telemetry, and SSE keep working — cooks can still see
+   the planner, they just can't save anything. Frontend's debounced
+   save retries on 5xx with exponential backoff, so once you turn the
+   flag off, any saves queued during the window drain naturally.
+
+   This step closes the corruption window where a cook saving during
+   the deploy could strand legacy `stock`/`location`/`storage` data
+   that the data-migrate script would then skip. With MAINTENANCE_MODE
+   on, no writes can land; the script sees clean pre-migration rows.
+
+   **Heads-up to the team in chat before flipping**: "Planner upgrade
+   in progress — saves disabled for ~10 minutes. Don't refresh."
+
+3. **Apply add-cols migration** (additive, safe). At this point app
+   code on `main` (newly deployed by Railway) is already reading the
+   new `inventory`/`shipments` shape — but those columns are empty
+   JSONB arrays for every row until step 5 runs. MAINTENANCE_MODE
+   from step 2 is the only thing keeping cooks from saving against
+   this in-between state.
    ```
    npx prisma migrate deploy
    ```
@@ -41,7 +71,7 @@ order.
    `batches`. Existing rows now have empty arrays; the legacy cols are
    still present and populated.
 
-3. **Dry-run the data migrate** — review the proposed mutations.
+4. **Dry-run the data migrate** — review the proposed mutations.
    ```
    npm run migrate:data-migrate:dry -- --db "$DATABASE_URL" --allow-prod
    ```
@@ -49,7 +79,7 @@ order.
    Cycle warnings, big-family notices, and name/type divergences are
    non-blocking but worth a spot-check.
 
-4. **Run the data migrate** — populates `inventory` + `shipments`,
+5. **Run the data migrate** — populates `inventory` + `shipments`,
    deletes collapsed children, rewrites + dedups catering refs (audit
    S6 fix), writes one activity-log row.
    ```
@@ -64,10 +94,10 @@ order.
    impossible. Idempotent — a re-run after success is a no-op
    (per-batch guard skips already-migrated rows).
 
-5. **Apply drop-cols via psql** (destructive — NOT a Prisma migration
+6. **Apply drop-cols via psql** (destructive — NOT a Prisma migration
    file; see explanation at the top).
 
-   > ⚠️ STOP — must run AFTER data-migrate (step 4) succeeds.
+   > ⚠️ STOP — must run AFTER data-migrate (step 5) succeeds.
 
    The SQL lives at `prisma/migrations/drop-cols.sql` (top level of
    `prisma/migrations/`, NOT under a `<ts>_*/` directory — that's why
@@ -80,21 +110,32 @@ order.
    and rewrote `lib/ai-analyzer.ts` + `routes/recipes.ts:642`). The
    running app won't notice the columns disappearing.
 
-   The SQL is fully `IF EXISTS`-guarded, so re-running step 5 against
+   The SQL is fully `IF EXISTS`-guarded, so re-running step 6 against
    an already-migrated DB is a no-op.
 
-6. **Smoke test** — open the app, walk a cook flow (planner, dishes,
-   orders). Watch the activity log for the `system / migration /
-   unified-batch-collapse` entry confirming the data move ran.
+7. **Smoke test under maintenance** — with MAINTENANCE_MODE still on,
+   open the app yourself, navigate the planner / dishes / orders
+   screens. You won't be able to save anything (503), but you'll see
+   whether reads render the migrated data correctly. Watch the
+   activity log for the `system / migration / unified-batch-collapse`
+   entry confirming the data move ran.
 
-7. **Reconcile Prisma migration history** — record that the schema is
+8. **Disable maintenance mode**. In the Railway dashboard, unset
+   `MAINTENANCE_MODE` (delete the env var, or set it to `0`). Railway
+   redeploys (~1 minute). Once it's back up, do one real cook-flow
+   action (mark something cooked, send to Centraal, mark arrived) to
+   confirm writes flow end-to-end. Cooks' queued saves from the
+   maintenance window will retry automatically as the backoff timer
+   fires.
+
+9. **Reconcile Prisma migration history** — record that the schema is
    already in its post-drop state.
 
    > ⚠️ DO NOT RUN `npx prisma migrate dev` ON PROD.
    >
    > `migrate dev` builds a shadow DB by replaying ALL migrations in
    > `prisma/migrations/`, then diffs the shadow against prod. Because
-   > step 5's SQL is OUTSIDE Prisma's migration history, the shadow DB
+   > step 6's SQL is OUTSIDE Prisma's migration history, the shadow DB
    > would contain the FULL legacy schema (stock/location/storage/
    > parentId/etc.) while prod has those cols dropped. Prisma detects
    > drift and offers `migrate reset` — which **WIPES THE DATABASE**.
@@ -106,7 +147,7 @@ order.
    > migration file (which is `IF EXISTS`-guarded so it's a no-op
    > against the already-dropped prod DB).
 
-   **7a.** Generate the reconciliation SQL locally (does NOT touch any DB):
+   **9a.** Generate the reconciliation SQL locally (does NOT touch any DB):
    ```
    npx prisma migrate diff \
      --from-migrations prisma/migrations \
@@ -117,21 +158,21 @@ order.
    CONSTRAINT` (parent_id_fkey), 2 `DROP INDEX` (parent_id_idx,
    location_idx), and 8 `ALTER TABLE ... DROP COLUMN` (parent_id,
    location, stock, storage, in_transit, recipe_sheet_id,
-   recipe_volume, recipe_ingredients). Same shape as step 5's
+   recipe_volume, recipe_ingredients). Same shape as step 6's
    drop-cols.sql, generated fresh by Prisma off the schema/migrations
    pair so it stays in sync if anything's added since.
 
-   **7b.** Hand-edit `/tmp/post-unify-cleanup.sql` to add `IF EXISTS`
+   **9b.** Hand-edit `/tmp/post-unify-cleanup.sql` to add `IF EXISTS`
    guards to every `DROP` statement. Prisma's `--script` output omits
    them by default, which would cause `column "stock" does not exist`
-   errors on apply (since step 5 already dropped them). Concrete:
+   errors on apply (since step 6 already dropped them). Concrete:
    - `ALTER TABLE "batches" DROP CONSTRAINT "batches_parent_id_fkey";`
      → `ALTER TABLE "batches" DROP CONSTRAINT IF EXISTS "batches_parent_id_fkey";`
    - `DROP INDEX "batches_parent_id_idx";` → `DROP INDEX IF EXISTS "batches_parent_id_idx";`
    - `ALTER TABLE "batches" DROP COLUMN "stock";` → `ALTER TABLE "batches" DROP COLUMN IF EXISTS "stock";`
    - …and the same edit for the remaining 7 DROP statements.
 
-   **7c.** Move the file into a new migration directory:
+   **9c.** Move the file into a new migration directory:
    ```
    TS=$(date -u +%Y%m%d%H%M%S)
    mkdir -p "prisma/migrations/${TS}_post_unify_cleanup"
@@ -141,35 +182,36 @@ order.
    (`20260511120000`) so Prisma applies them in the right order. UTC
    `date +%Y%m%d%H%M%S` is the convention.
 
-   **7d.** Commit the new migration directory. On the next push:
+   **9d.** Commit the new migration directory. On the next push:
    - Railway auto-deploys → `prisma migrate deploy` applies it.
    - Every DROP has `IF EXISTS` → no-op against the post-drop DB.
    - `_prisma_migrations` table records it as applied.
    - Future fresh-DB setups (staging clones, PR review DBs) replay
      the full sequence correctly.
 
-   **Alternative — `prisma migrate resolve --applied`**: skip 7b's hand-edit
+   **Alternative — `prisma migrate resolve --applied`**: skip 9b's hand-edit
    and instead mark the migration as already-applied on prod:
    ```
    railway run npx prisma migrate resolve --applied "${TS}_post_unify_cleanup"
    ```
    Pros: no `IF EXISTS` edit needed. Cons: requires Railway CLI
-   shell-into-prod access at deploy time. **Default to 7a–7d** — the
+   shell-into-prod access at deploy time. **Default to 9a–9d** — the
    `IF EXISTS` guards are declarative and don't require interactive
    prod access. Use the alternative only if Daan is comfortable with
    Railway CLI.
 
 ## Rollback
 
-If something goes wrong **before step 5** (drop-cols psql), the legacy
+If something goes wrong **before step 6** (drop-cols psql), the legacy
 columns are still present. Roll back by reverting the deploy (revert
-the schema-stripping commit + redeploy old code). The legacy data is
+the schema-stripping commit + redeploy old code). Leave MAINTENANCE_MODE
+on through the revert so no half-state writes land. The legacy data is
 still in `stock`/`location`/`storage`/etc.; the old app reads it
 unchanged.
 
-If something goes wrong **after step 5**, restore from the snapshot
+If something goes wrong **after step 6**, restore from the snapshot
 taken in step 1 — the legacy columns are gone and there's no in-place
-undo.
+undo. Keep MAINTENANCE_MODE on through the restore.
 
 ## Why this 4-piece shape (not one big migration)
 
