@@ -14,7 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Batch, Service, Location, DishType } from '@shared/types';
 import { S } from './state';
-import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner, getStockAt } from './core';
+import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner, getStockAt, getPendingFromShipments } from './core';
 import { esc } from './modal';
 import { trackEvent } from './telemetry';
 import { rerenderCurrentView } from './navigate';
@@ -263,10 +263,17 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
   // of the same dish should both subtract from the same Centraal stock pile.
   const destStockByIdentity = new Map<string, number>();
   for (const b of batches) {
-    if (getStockAt(b, 'centraal') <= 0) continue;
     if (!isBatchCooked(b)) continue;
+    // Pending shipments to Centraal already reduce what needs packing TODAY,
+    // even though their qty hasn't physically arrived yet. Without this,
+    // confirmTransportPlan ships the row, /ship reduces source qty + creates
+    // a pending shipment to centraal, and the very next renderTransportCard
+    // call sees destStock unchanged and re-suggests the same row.
+    const settled = getStockAt(b, 'centraal');
+    const inFlight = getPendingFromShipments(b, 'centraal');
+    if (settled + inFlight <= 0) continue;
     const key = dishIdentity(b);
-    destStockByIdentity.set(key, (destStockByIdentity.get(key) || 0) + getStockAt(b, 'centraal'));
+    destStockByIdentity.set(key, (destStockByIdentity.get(key) || 0) + settled + inFlight);
   }
 
   const rows: TransportRow[] = [];

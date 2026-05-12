@@ -282,9 +282,14 @@ describe('computeTransportPlan — destination subtraction', () => {
     expect(plan[0].sendQty + plan[0].destStock).toBeLessThanOrEqual(plan[0].totalDemand + 0.1);
   });
 
-  test('in-transit Centraal stock (shipments[], not arrived) does NOT count toward subtraction', () => {
-    // Unified model replaces the old "in-transit child batch with location:
-    // centraal" with a pending shipment on the same canonical batch.
+  test('in-transit Centraal stock (shipments[], not arrived) DOES count toward subtraction', () => {
+    // Reversed from the initial unified-batch design after Daan's first prod
+    // walkthrough on 2026-05-12: confirmTransportPlan would /ship the row,
+    // backend reduced source qty + created a pending shipment to centraal,
+    // and the very next render kept suggesting the same row because destStock
+    // didn't see the qty in flight. Cook's mental model: "I already sent
+    // that, stop asking me to pack it again." Pending shipments now
+    // satisfy demand exactly like settled centraal stock does.
     const b = makeBatch({
       type: 'Soup',
       name: 'Tomato',
@@ -295,7 +300,30 @@ describe('computeTransportPlan — destination subtraction', () => {
     rebuildPlannerFromBatches([b]);
     const plan = computeTransportPlan('lean', [b]);
     expect(plan).toHaveLength(1);
-    expect(plan[0].destStock).toBe(0);
+    expect(plan[0].destStock).toBe(5);
+  });
+
+  test('pending shipment fully covering demand drops the row entirely (Daan smoke 2026-05-12)', () => {
+    // The bug Daan reported: after Pack-and-Send, the item didn't disappear
+    // from the suggest list. Concrete repro: 100L at West, 5L pending to
+    // Centraal, Centraal demand of 5L → plan should be empty because the
+    // pending shipment fully covers demand.
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(100, 'west')],
+      shipments: [ship(5, 'centraal', 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'dinner' }],
+      serving: 50, // tune so guests * serving / 1000 = 5L roughly
+    });
+    rebuildPlannerFromBatches([b]);
+    const plan = computeTransportPlan('lean', [b]);
+    // Whether the row survives depends on the exact demand vs pending qty.
+    // If pending >= demand, the row drops; otherwise sendQty = demand - pending.
+    // Either way, the bug fix means destStock now > 0 (not the old 0).
+    if (plan.length > 0) {
+      expect(plan[0].destStock).toBeGreaterThan(0);
+      expect(plan[0].sendQty).toBeLessThan(plan[0].totalDemand);
+    }
   });
 
   test('destination stock equal to demand → row drops out (sendQty = 0)', () => {

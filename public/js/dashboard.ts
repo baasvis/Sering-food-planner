@@ -312,7 +312,12 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
   if (ctx.liters !== undefined) {
     html += `<span class="dash-chip-liters">${ctx.liters} L</span>`;
   } else if (ctx.showStock && getTotalStock(dish) > 0) {
-    html += `<span class="dash-chip-liters">${getTotalStock(dish)} L</span>`;
+    // toFixed(1) prevents float-precision dribble like 76.40000000000002 L
+    // (which happens after a cancel-shipment merges qty back into an entry
+    // whose original cookDate matched — the addition is exact-ish but the
+    // IEEE754 representation isn't, and getTotalStock just sums entries
+    // without rounding).
+    html += `<span class="dash-chip-liters">${getTotalStock(dish).toFixed(1)} L</span>`;
   }
 
   html += `<span class="dash-chip-arrow">${expanded ? '▾' : '›'}</span>
@@ -349,7 +354,7 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
     const cooked = isBatchCooked(dish);
     html += `<div class="dash-chip-detail-row">
       <span class="dash-chip-detail-label">Stock</span>
-      <span>${getTotalStock(dish)} L ${cooked ? '<span class="dash-chip-badge-ok">cooked</span>' : '<span class="dash-chip-badge-warn">uncooked</span>'}</span>
+      <span>${getTotalStock(dish).toFixed(1)} L ${cooked ? '<span class="dash-chip-badge-ok">cooked</span>' : '<span class="dash-chip-badge-warn">uncooked</span>'}</span>
     </div>`;
     if (dish.cookDate) {
       html += `<div class="dash-chip-detail-row">
