@@ -22,10 +22,19 @@ try { require('dotenv').config(); } catch (_e) {}
 const request = require('supertest');
 const app = require('../app').default;
 const { prisma } = require('../lib/db');
+const { flushBuffer } = require('../routes/telemetry');
 
 const T = 'test-ship-' + Date.now() + '-';
 let nextId = 0;
 const tid = (suffix: string) => `${T}${suffix}-${++nextId}`;
+
+// Same rationale as migration.test.ts: each test makes one or more supertest
+// calls against the test DB (Railway staging proxy in local use). RTT to
+// shuttle.proxy.rlwy.net plus Windows process overhead routinely pushes a
+// multi-step test (the new full-lifecycle telemetry assertion does 5 POSTs
+// + a flushBuffer + a raw query) past Jest's 5s default. 30s gives ample
+// headroom and stays well under the migration-test budget. Test-only.
+jest.setTimeout(30_000);
 
 interface BatchPayload {
   id: string;
@@ -67,6 +76,18 @@ async function createBatch(overrides: Partial<BatchPayload> & { name?: string } 
 
 afterAll(async () => {
   await prisma.batch.deleteMany({ where: { id: { startsWith: T } } });
+  // Drain any leftover telemetry rows the assertion test wrote — keeps the
+  // telemetryEvent table free of test data. Safe to delete by name+source
+  // since prod feature_use rows from these endpoints arrive identically named
+  // but with non-test batch IDs (we filter on data.batchId in the assertion,
+  // not here, so this delete is over-inclusive on purpose: scopes by recent
+  // test-run window via the batch ID prefix in the data JSON).
+  try {
+    await prisma.$executeRaw`DELETE FROM telemetry_event
+      WHERE source = 'backend'
+        AND name IN ('batch_ship','batch_transfer','shipment_mark_arrived','shipment_cancel')
+        AND (data->>'batchId') LIKE ${T + '%'}`;
+  } catch (_e) { /* best-effort cleanup */ }
   await prisma.$disconnect();
 });
 
@@ -495,5 +516,97 @@ describe('full lifecycle: ship → arrive → re-ship → cancel', () => {
     const cancel = await request(app).post(`/api/batches/${b.id}/shipments/${pending.id}/cancel`).send({});
     expect(cancel.body.batch.shipments.filter((s: any) => !s.arrived)).toHaveLength(0);
     expect(cancel.body.batch.inventory.find((e: any) => e.loc === 'west').qty).toBe(55);
+  });
+});
+
+// ── Backend telemetry: the 4 endpoints fire addBackendEvent ───────────────
+//
+// C5.5 playbook §18. Each of /ship, /shipments/:id/arrived, /shipments/:id/cancel,
+// and /transfer calls addBackendEvent('feature_use', <name>, { batchId, ... }).
+// addBackendEvent buffers in-memory; flushBuffer() drains the buffer into the
+// telemetry_event table. Asserts the rows land with the right name, source,
+// type, and that data.batchId carries the originating batch (so the weekly
+// coverage agent + AI insights pipeline can correlate events to a single
+// kitchen action).
+
+describe('backend telemetry: 4 batch/shipment endpoints write feature_use rows', () => {
+  it('emits batch_ship, shipment_mark_arrived, shipment_cancel, batch_transfer with correct payloads', async () => {
+    // One batch, one full lifecycle. Each step is wrapped in supertest to
+    // exercise the real route handler (incl. its addBackendEvent call).
+    const b = await createBatch({
+      name: 'Telemetry Soup',
+      inventory: [{ loc: 'west', storage: 'Gastro', qty: 60, cookDate: '01/05/2026' }],
+    });
+
+    // /ship
+    const ship1 = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: 'centraal', qty: 20 });
+    expect(ship1.status).toBe(200);
+    const ship1Id = ship1.body.batch.shipments[0].id;
+
+    // /shipments/:id/arrived
+    const arr = await request(app).post(`/api/batches/${b.id}/shipments/${ship1Id}/arrived`).send({});
+    expect(arr.status).toBe(200);
+
+    // Second /ship so we have a pending shipment to cancel.
+    const ship2 = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: 'centraal', qty: 5 });
+    expect(ship2.status).toBe(200);
+    const ship2Id = ship2.body.batch.shipments.find((s: any) => !s.arrived).id;
+
+    // /shipments/:id/cancel
+    const cancel = await request(app).post(`/api/batches/${b.id}/shipments/${ship2Id}/cancel`).send({});
+    expect(cancel.status).toBe(200);
+
+    // /transfer
+    const xfer = await request(app)
+      .post(`/api/batches/${b.id}/transfer`)
+      .send({ fromLoc: 'west', fromStorage: 'Gastro', toLoc: 'west', toStorage: 'Frozen', qty: 8 });
+    expect(xfer.status).toBe(200);
+
+    // Drain the buffer so the rows are visible in the DB. flushBuffer is
+    // best-effort and idempotent — safe to call directly here.
+    await flushBuffer();
+
+    // Read back. Filter by data.batchId (JSON path) so we only see THIS
+    // test's rows, not parallel/sibling test pollution. Order by id ASC so
+    // the array reflects emission order (id is autoincrement).
+    const rows: Array<{ name: string; source: string; type: string; data: Record<string, unknown> }> =
+      await prisma.$queryRaw`
+        SELECT name, source, type, data
+        FROM telemetry_event
+        WHERE source = 'backend'
+          AND type = 'feature_use'
+          AND name IN ('batch_ship','batch_transfer','shipment_mark_arrived','shipment_cancel')
+          AND (data->>'batchId') = ${b.id}
+        ORDER BY id ASC
+      `;
+
+    const names = rows.map(r => r.name);
+    // Two /ship calls + one /arrived + one /cancel + one /transfer = 5 events.
+    expect(names).toEqual([
+      'batch_ship',
+      'shipment_mark_arrived',
+      'batch_ship',
+      'shipment_cancel',
+      'batch_transfer',
+    ]);
+
+    // Every row has source='backend', type='feature_use', and carries our batchId.
+    for (const r of rows) {
+      expect(r.source).toBe('backend');
+      expect(r.type).toBe('feature_use');
+      expect(r.data.batchId).toBe(b.id);
+    }
+
+    // Spot-check a couple of payloads have the discriminating fields the
+    // AI-insights prompt template will read (qty + toLoc for ship, qty for
+    // transfer). If these keys go missing, the weekly insight gets vaguer.
+    const shipRow = rows.find(r => r.name === 'batch_ship');
+    expect(shipRow!.data.toLoc).toBe('centraal');
+    expect(shipRow!.data.qty).toBe(20);
+
+    const xferRow = rows.find(r => r.name === 'batch_transfer');
+    expect(xferRow!.data.fromStorage).toBe('Gastro');
+    expect(xferRow!.data.toStorage).toBe('Frozen');
+    expect(xferRow!.data.qty).toBe(8);
   });
 });
