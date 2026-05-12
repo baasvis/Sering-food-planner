@@ -896,35 +896,33 @@ export function addPlaceholderDish() {
   if (!s) return;
   const { loc, date, meal, typeFilter } = s;
   const dayName = dateToDayName(date);
-  const type = typeFilter || 'Soup';
+  const type: DishType = (typeFilter as DishType) || 'Soup';
   const typeLabel = type === 'Main course' ? 'Main' : type;
   const name = `${dayName} ${typeLabel}`;
 
+  // Unified-batch shape. The legacy-field version (stock/location/storage/
+  // parentId/recipeSheetId/...) was missed during the C1–C5 rewrite and
+  // shipped to prod 2026-05-12; validateBatch on the server then rejected
+  // saves with "Batch 0: inventory must be an array". Daan caught this
+  // trying to add a placeholder via the slot's + button.
   const newDish: Batch = {
     id: newId(),
     name,
     type,
-    stock: 0,
     serving: 280,
-    storage: 'Gastro',
-    location: loc,
-    inTransit: false,
+    cookDate: dateToStr(new Date(date)),
+    inventory: [],
+    shipments: [],
+    services: [{ loc: loc as Location, date, meal: meal as Meal }],
     allergens: [],
     extraAllergens: [],
-    orderFor: false,
-    parentId: null,
-    cookDate: dateToStr(new Date(date)),
-    recipeSheetId: null,
-    recipeVolume: null,
-    recipeIngredients: null,
     note: '',
-    services: [{ loc, date, meal }],
-    createdAt: new Date().toISOString(),
-    recipeId: null,
-    actualIngredients: null,
     cookNotes: '',
+    actualIngredients: null,
+    orderFor: false,
     stockDeducted: false,
-    generated: false,
+    recipeId: null,
+    createdAt: new Date().toISOString(),
   };
   S.batches.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
