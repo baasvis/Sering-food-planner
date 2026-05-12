@@ -278,7 +278,7 @@ export function renderBatchTileOverview(d: Batch) {
     </div>
     <div class="col-cook">${cookHtml}</div>
     <div class="col-stock">
-      <span class="batch-stock-total" style="font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openEditDish('${d.id}','power')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L</span>
+      <span class="batch-stock-total" style="font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L</span>
     </div>
     <div class="col-diff ${cls}" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</div>
     <div class="col-logistics" style="display:flex;flex-wrap:wrap;gap:3px;">
@@ -288,7 +288,7 @@ export function renderBatchTileOverview(d: Batch) {
     <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
     <div class="m-stock-row">
       <span style="font-size:12px;color:var(--text2);">Stock</span>
-      <span class="batch-stock-total" style="font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openEditDish('${d.id}','power')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L</span>
+      <span class="batch-stock-total" style="font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L</span>
       <span class="${cls}" style="font-size:12px;" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</span>
       <span style="display:flex;flex-wrap:wrap;gap:3px;font-size:10px;">${inventoryBadges}</span>
       <button class="btn btn-sm served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')" style="margin-left:auto;">Served</button>
@@ -375,7 +375,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
       <span class="batch-tile-name">${esc(d.name)}</span>
       <span class="batch-status ${isBatchCooked(d) ? ((hasStaleEntry || isStale) ? 'status-stale' : 'status-cooked') : 'status-tocook'}">${isBatchCooked(d) ? ((hasStaleEntry || isStale) ? 'Stale' : 'Cooked') : 'To cook'}</span>
       <span class="batch-tile-cook">${batchCookLabel(d)}</span>
-      <span class="batch-tile-stock ${cls}" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openEditDish('${d.id}','power')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L <small>${str}</small></span>
+      <span class="batch-tile-stock ${cls}" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L <small>${str}</small></span>
       ${tooBigBadge}
       <span class="batch-tile-logistics" style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;">${renderInventoryBadges(d)}</span>
       ${opts.showAssign && !S.assigningBatchId ? `<button class="batch-assign-btn" onclick="event.stopPropagation();startAssignMode('${d.id}')">Assign</button>` : ''}
@@ -482,7 +482,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
         <div class="bx-section bx-col-main">
           <div class="bx-section-title">Stock & services</div>
           <div class="bx-row bx-stock">
-            <span class="bx-stock-input" style="font-size:18px;font-weight:600;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;" onclick="event.stopPropagation();openEditDish('${d.id}','power')" title="Click to edit per-location stock">${totalStock.toFixed(1)}</span>
+            <span class="bx-stock-input" style="font-size:18px;font-weight:600;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}</span>
             <span class="bx-stock-unit">L total</span>
             <span class="bx-diff ${cls}">${str}</span>
             <span style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;margin-left:8px;">${renderInventoryBadges(d)}</span>
@@ -1217,6 +1217,168 @@ let _editMode: 'normal' | 'power' = 'normal';
 export function openEditDish(id: string, mode: 'normal' | 'power' = 'normal') {
   _editMode = mode;
   renderEditDish(id);
+}
+
+// ── Simplified inventory editor ────────────────────────────────────────────
+//
+// Daan asked (smoke 2026-05-12, items 2+3): "When I click the liters I want
+// to see only what's needed to change amounts and where they live, with
+// Freeze and Send buttons right next to each row."
+//
+// This is a stripped-down modal: just the inventory grid, per-row Freeze
+// and "→ Send to {other}" buttons that open an inline qty form, and a
+// "More options" escape hatch to the full Edit dish modal (name, type,
+// allergens, etc.) for the rare case the cook needs them.
+//
+// Per-row pending action state lives module-local — only one row can be in
+// "asking for qty" mode at a time. Clicking a different action button on
+// another row replaces it; clicking the action button again on the same
+// row cancels.
+
+interface PendingInvAction {
+  rowIdx: number;
+  kind: 'freeze' | 'send';
+}
+let _invPending: PendingInvAction | null = null;
+
+export function openInventoryEditor(id: string) {
+  _invPending = null;
+  renderInventoryEditor(id);
+}
+
+function renderInventoryEditor(id: string) {
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  const inv = d.inventory || [];
+  const otherLoc = (loc: Location): Location => (loc === 'west' ? 'centraal' : 'west');
+
+  const rowsHtml = inv.length === 0
+    ? '<tr><td colspan="5" style="padding:12px;color:var(--text3);text-align:center;">No inventory yet — use + Add row.</td></tr>'
+    : inv.map((e, i) => {
+        // Per-row action buttons. Hide Freeze on already-frozen rows.
+        const freezeBtn = e.storage === 'Frozen'
+          ? ''
+          : `<button class="btn btn-sm" onclick="setInvAction('${id}',${i},'freeze')" title="Freeze some of this stock">❄️ Freeze</button>`;
+        const sendBtn = `<button class="btn btn-sm" onclick="setInvAction('${id}',${i},'send')" title="Send some of this stock to ${locName(otherLoc(e.loc))}">→ ${locName(otherLoc(e.loc))}</button>`;
+        const removeBtn = `<button class="btn btn-sm btn-danger" onclick="removeInventoryEntry('${id}',${i})" title="Remove this row entirely">&times;</button>`;
+        const isActive = _invPending && _invPending.rowIdx === i;
+        const actionForm = isActive
+          ? `<tr><td colspan="5" style="padding:6px 8px;background:var(--bg2);">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:12px;color:var(--text2);">
+                  ${_invPending!.kind === 'freeze'
+                    ? `❄️ How many liters to freeze from <strong>${locName(e.loc)} ${e.storage}</strong>?`
+                    : `→ How many liters to send to <strong>${locName(otherLoc(e.loc))}</strong>?`}
+                </span>
+                <input type="number" id="inv-qty-${i}" step="0.5" min="0.1" max="${e.qty}" value="${e.qty.toFixed(1)}" style="width:80px;" autofocus
+                  onkeydown="if(event.key==='Enter')confirmInvAction('${id}',${i});if(event.key==='Escape')cancelInvAction('${id}')" />
+                <span style="font-size:12px;color:var(--text3);">of ${e.qty.toFixed(1)}L available</span>
+                <button class="btn btn-sm btn-primary" onclick="confirmInvAction('${id}',${i})">Confirm</button>
+                <button class="btn btn-sm" onclick="cancelInvAction('${id}')">Cancel</button>
+              </div>
+            </td></tr>`
+          : '';
+        return `<tr>
+          <td style="padding:6px 8px;"><select onchange="updateInventoryField('${id}',${i},'loc',this.value)">${LOCATIONS.map(l => `<option value="${l}"${e.loc === l ? ' selected' : ''}>${locName(l)}</option>`).join('')}</select></td>
+          <td style="padding:6px 8px;"><select onchange="updateInventoryField('${id}',${i},'storage',this.value)">${STORAGE.map(s => `<option value="${s}"${e.storage === s ? ' selected' : ''}>${s}</option>`).join('')}</select></td>
+          <td style="padding:6px 8px;"><input type="number" value="${e.qty}" step="0.5" min="0" style="width:72px;" onchange="updateInventoryField('${id}',${i},'qty',this.value)" /></td>
+          <td style="padding:6px 8px;font-family:monospace;font-size:11px;color:var(--text2);">${esc(e.cookDate)}</td>
+          <td style="padding:6px 8px;"><div style="display:flex;gap:4px;align-items:center;justify-content:flex-end;">${freezeBtn}${sendBtn}${removeBtn}</div></td>
+        </tr>${actionForm}`;
+      }).join('');
+
+  showModal(`<h3>Edit stock &mdash; ${esc(d.name)}</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr style="text-align:left;color:var(--text2);font-weight:500;">
+        <th style="padding:6px 8px;">Where</th>
+        <th style="padding:6px 8px;">Storage</th>
+        <th style="padding:6px 8px;">Qty (L)</th>
+        <th style="padding:6px 8px;">Cooked</th>
+        <th style="padding:6px 8px;text-align:right;">Actions</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <button class="btn btn-sm" style="margin-top:8px;" onclick="addInventoryEntry('${id}')">+ Add row</button>
+    <div class="modal-actions">
+      <button class="btn" onclick="event.stopPropagation();closeModal();openEditDish('${id}','normal')" title="Full edit (name, allergens, etc.)">More options&hellip;</button>
+      <button class="btn btn-primary" onclick="closeModal()">Done</button>
+    </div>`);
+}
+
+/** Per-row "Freeze" / "Send" button click → flip the inline qty form on
+ *  that row. Clicking the same button again cancels. */
+export function setInvAction(id: string, rowIdx: number, kind: string) {
+  if (kind !== 'freeze' && kind !== 'send') return;
+  if (_invPending && _invPending.rowIdx === rowIdx && _invPending.kind === kind) {
+    _invPending = null;
+  } else {
+    _invPending = { rowIdx, kind };
+  }
+  renderInventoryEditor(id);
+}
+
+export function cancelInvAction(id: string) {
+  _invPending = null;
+  renderInventoryEditor(id);
+}
+
+/** Read the inline qty input, fire the appropriate POST, then re-render
+ *  with the fresh batch state from the response. */
+export async function confirmInvAction(id: string, rowIdx: number) {
+  if (!_invPending || _invPending.rowIdx !== rowIdx) return;
+  const action = _invPending;
+  const d = S.batches.find(x => x.id === id);
+  if (!d || !d.inventory || !d.inventory[rowIdx]) {
+    _invPending = null;
+    return;
+  }
+  const entry = d.inventory[rowIdx];
+  const input = document.getElementById('inv-qty-' + rowIdx) as HTMLInputElement | null;
+  const qty = input ? parseFloat(input.value) : NaN;
+  if (isNaN(qty) || qty <= 0) {
+    toastError('Please enter a positive quantity.');
+    return;
+  }
+  if (qty > entry.qty + 0.001) {
+    toastError(`Can't move ${qty}L — only ${entry.qty.toFixed(1)}L available in this row.`);
+    return;
+  }
+
+  try {
+    if (action.kind === 'freeze') {
+      // /transfer with toStorage='Frozen'. Backend resets cookDate.
+      trackEvent('batch_transfer', '', { batchId: id, fromLoc: entry.loc, fromStorage: entry.storage, toLoc: entry.loc, toStorage: 'Frozen', qty });
+      const res = await apiPost(`/api/batches/${id}/transfer`, {
+        fromLoc: entry.loc, fromStorage: entry.storage,
+        toLoc: entry.loc, toStorage: 'Frozen',
+        qty, fromInventoryIdx: rowIdx,
+      });
+      if (res && res.batch) {
+        const idx = S.batches.findIndex(b => b.id === id);
+        if (idx >= 0) S.batches[idx] = res.batch;
+      }
+      toast(res && res.warning ? res.warning : `Froze ${qty}L at ${locName(entry.loc)}`);
+    } else {
+      // /ship to the other loc.
+      const toLoc: Location = entry.loc === 'west' ? 'centraal' : 'west';
+      trackEvent('batch_ship', '', { batchId: id, toLoc, qty });
+      const res = await apiPost(`/api/batches/${id}/ship`, {
+        toLoc, qty, storage: entry.storage, fromInventoryIdx: rowIdx,
+      });
+      if (res && res.batch) {
+        const idx = S.batches.findIndex(b => b.id === id);
+        if (idx >= 0) S.batches[idx] = res.batch;
+      }
+      toast(res && res.warning ? res.warning : `Sent ${qty}L to ${locName(toLoc)}`);
+    }
+    _invPending = null;
+    rebuildPlanner();
+    renderInventoryEditor(id);
+    rerenderCurrentView();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    toastError((action.kind === 'freeze' ? 'Freeze' : 'Send') + ' failed: ' + msg);
+  }
 }
 
 export function setEditMode(id: string, mode: string) {
