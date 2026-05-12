@@ -14,12 +14,12 @@ test.describe('Batch deletion', () => {
     await page.locator('.nav-btn[data-screen="planner"]').click();
     await expect(page.locator('.sub-tab[data-tab="overview"]')).toBeVisible();
 
-    // Create a batch with stock=0 (cooked batches cannot be deleted).
+    // Create a blank batch — unified-batch model starts with empty inventory[]
+    // so the DELETE guard is satisfied (totalQty + pending shipments = 0).
     await page.getByRole('button', { name: /\+ New batch/ }).first().click();
     await page.locator('[data-testid="new-batch-blank-btn"]').click();
     const batchName = `${TEST_BATCH_PREFIX}${Date.now()}`;
     await page.fill('#nd-name', batchName);
-    await page.fill('#nd-stock', '0');
     await page.locator('[data-testid="new-batch-submit"]').click();
 
     // Switch to Overview tab and confirm the tile is present.

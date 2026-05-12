@@ -1,6 +1,6 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS, rebuildStorageCategories } from './state';
 import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ingredientDbLoaded, ingredientDbError } from './utils';
-import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, batchHasRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
+import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, batchHasRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
 import { trackEvent } from './telemetry';
@@ -40,6 +40,16 @@ interface IngredientRuntime extends Omit<Ingredient, 'stock' | 'storageLocations
 /** Cast S.ingredientDb items to the runtime shape (stock/storageLocations are richer JSON at runtime) */
 function ingredientDb(): IngredientRuntime[] {
   return S.ingredientDb as unknown as IngredientRuntime[];
+}
+
+/**
+ * Cook location for ingredient-order purposes. In the unified-batch model the
+ * cook location is `inventory[0].loc` (sticky from first confirmCooked per the
+ * plan's Primary location decision). Uncooked batches have empty inventory; we
+ * default to 'west' which matches the default cook location.
+ */
+function batchCookLoc(b: Batch): Location {
+  return (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west');
 }
 
 /** A single item in a Hanos cart request */
@@ -604,7 +614,7 @@ export function renderStandardInventoryTab() {
 /** Initialise batchIngredientToggles from batch.orderFor (server state) — idempotent */
 function ensureBatchTogglesInitialized(loc: string) {
   if (batchIngredientTogglesInitialized) return;
-  const eligible = S.batches.filter(b => b.location === loc && !isBatchCooked(b) && batchHasRecipe(b));
+  const eligible = S.batches.filter(b => batchCookLoc(b) === loc && !isBatchCooked(b) && batchHasRecipe(b));
   batchIngredientToggles = {};
   eligible.forEach(b => {
     batchIngredientToggles[b.id] = !!b.orderFor;
@@ -638,7 +648,7 @@ export function toggleBatchIngredient(batchId: string) {
   }
   // Update header count
   const curLoc = S.currentLoc;
-  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
+  const eligible = S.batches.filter(b => batchCookLoc(b) === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
   const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
   const header = document.querySelector('.section-title span');
   if (header && header.textContent.includes('selected')) {
@@ -660,7 +670,7 @@ export function toggleCombinedIncludeDishes() {
 /** Toggle all batches on or off */
 export function toggleAllBatchIngredients(on: boolean) {
   const curLoc = S.currentLoc;
-  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
+  const eligible = S.batches.filter(b => batchCookLoc(b) === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
   eligible.forEach(b => {
     batchIngredientToggles[b.id] = on;
     persistBatchOrderFor(b.id, !!on);
@@ -685,7 +695,7 @@ export function renderDishesTab() {
   const curLoc = S.currentLoc;
 
   // Uncooked batches at this location with recipe data
-  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
+  const eligible = S.batches.filter(b => batchCookLoc(b) === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
 
   // Initialize toggles from localStorage (or fall back to orderFor for new batches)
   ensureBatchTogglesInitialized(curLoc);
@@ -696,12 +706,10 @@ export function renderDishesTab() {
 
   // ── Batch toggle list ──
   const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
-  const dishesWithSheets = eligible.filter(d => d.recipeSheetId);
   let html = `<div style="margin-bottom:16px;">
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <span>Batches at ${locName(curLoc)} (${onCount}/${eligible.length} selected)</span>
       <div style="display:flex;align-items:center;gap:8px;">
-        ${dishesWithSheets.length ? `<button class="copy-all-btn" onclick="refreshAllRecipes()">↻ Refresh recipe data</button>` : ''}
         <button class="copy-all-btn" onclick="toggleAllBatchIngredients(true)">All on</button>
         <button class="copy-all-btn" onclick="toggleAllBatchIngredients(false)">All off</button>
       </div>
@@ -716,7 +724,7 @@ export function renderDishesTab() {
       const color = batchColorMap[b.id];
       const typeBadge = b.type ? `<span class="batch-type-pill" style="background:${color}20;color:${color};border:1px solid ${color}40;">${esc(b.type)}</span>` : '';
       const cookLabel = b.cookDate ? b.cookDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, (_: string, _y: string, m: string, d: string) => `${parseInt(d)}/${parseInt(m)}`) : '';
-      const cookBadge = cookLabel ? `<span style="font-size:11px;color:${b.stock > 0 ? 'var(--green)' : 'var(--blue)'};font-weight:500;">${cookLabel}</span>` : '';
+      const cookBadge = cookLabel ? `<span style="font-size:11px;color:${isBatchCooked(b) ? 'var(--green)' : 'var(--blue)'};font-weight:500;">${cookLabel}</span>` : '';
       html += `<div class="batch-toggle-row${isOn ? ' on' : ''}" data-batch-id="${esc(b.id)}" onclick="toggleBatchIngredient('${esc(b.id)}')">
         <span class="batch-toggle-dot" style="background:${color};"></span>
         <span class="batch-toggle-name">${esc(b.name)}</span>
@@ -745,7 +753,7 @@ export function renderDishesTab() {
 /** Render just the ingredient aggregation table for toggled-on batches */
 export function renderBatchIngredientTable() {
   const curLoc = S.currentLoc;
-  const eligible = S.batches.filter(b => b.location === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
+  const eligible = S.batches.filter(b => batchCookLoc(b) === curLoc && !isBatchCooked(b) && batchHasRecipe(b));
 
   // Assign colors (same stable order as toggle list)
   const batchColorMap: Record<string, string> = {};
@@ -918,7 +926,7 @@ export function renderCombinedOrderTab() {
   // Use the same per-batch toggles as the Batch Ingredients tab (initialized from localStorage)
   ensureBatchTogglesInitialized(curLoc);
   const orderedDishes = S.batches.filter(d =>
-    d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]
+    batchCookLoc(d) === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]
   );
 
   function addToMap(name: string, amtGrams: number, isStandard: boolean, dishName: string | null) {
@@ -952,7 +960,13 @@ export function renderCombinedOrderTab() {
   });
 
   if (!Object.keys(combined).length) {
-    return `<div class="empty">No items to order. Add items to Standard Inventory or flag batches for ordering in the Week plan.</div>`;
+    // Stocktake is independent of having an order — cooks start a stocktake
+    // to FIND OUT what to order. Surface the button here too so a fresh
+    // location/week with nothing to order isn't a dead end.
+    return `<div class="empty">No items to order. Add items to Standard Inventory or flag batches for ordering in the Week plan.</div>
+      <div style="margin-top:12px;text-align:center;">
+        <button class="btn btn-sm" data-testid="stocktake-start-btn" style="background:var(--blue);color:white;" onclick="startStocktake()">📋 Do stocktake</button>
+      </div>`;
   }
 
   const ingList = Object.values(combined).sort((a: CombinedOrderEntry, b: CombinedOrderEntry) => a.name.localeCompare(b.name)).map(ing => {
@@ -1151,7 +1165,7 @@ export function copyOrderCodes(supplier: string) {
   const curLoc = S.currentLoc;
   ensureBatchTogglesInitialized(curLoc);
   const items = [];
-  S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
+  S.batches.filter(d => batchCookLoc(d) === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
       if (db && db.orderCode && !db.orderCode.startsWith('http') && (db.supplier || '').toLowerCase().includes(supplier.toLowerCase())) {
@@ -1166,7 +1180,7 @@ export function copyDishOrderCodes(storageCat: string) {
   const curLoc = S.currentLoc;
   ensureBatchTogglesInitialized(curLoc);
   const items = new Set();
-  S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
+  S.batches.filter(d => batchCookLoc(d) === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
       if (db && db.orderCode && !db.orderCode.startsWith('http')) {
@@ -1196,7 +1210,7 @@ export function copyCombinedOrderCodes(supplier: string) {
   const curLoc = S.currentLoc;
   ensureBatchTogglesInitialized(curLoc);
   const items = new Set();
-  S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
+  S.batches.filter(d => batchCookLoc(d) === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]).forEach(dish => {
     calcIngredientsFromRecipe(dish).forEach(ing => {
       const db = lookupIngredient(ing.name);
       if (db && db.orderCode && !db.orderCode.startsWith('http') && normalizeSupplier(db.supplier || '').toLowerCase().includes(supplier.toLowerCase())) {
@@ -1619,27 +1633,11 @@ export function updateCombinedOrderStock(key: string, val: string) {
   updateOrderStockInput('', key, val);
 }
 
-export async function refreshAllRecipes() {
-  const curLoc = S.currentLoc;
-  ensureBatchTogglesInitialized(curLoc);
-  const dishes = S.batches.filter(d => d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id] && d.recipeSheetId);
-  if (!dishes.length) { toast('No batches with recipe sheets to refresh'); return; }
-  toast('Refreshing ' + dishes.length + ' recipe(s)...');
-  let ok = 0;
-  for (const d of dishes) {
-    try {
-      const recipe = await apiGet(`/api/recipe?sheetId=${d.recipeSheetId}`);
-      if (recipe.allergens) d.allergens = recipe.allergens;
-      if (recipe.recipeVolume) d.recipeVolume = recipe.recipeVolume;
-      if (recipe.serving) d.serving = recipe.serving;
-      if (recipe.ingredients) d.recipeIngredients = recipe.ingredients;
-      ok++;
-    } catch (e: unknown) { console.error('Failed to refresh ' + d.name, e); }
-  }
-  scheduleSave();
-  renderOrders();
-  toast(ok + ' recipe(s) refreshed');
-}
+// refreshAllRecipes() was a legacy v1 Google Sheets refresh path. The
+// underlying GET /api/recipe?sheetId= endpoint and the Batch.recipeSheetId /
+// recipeVolume / recipeIngredients fields were dropped in the unified-batch
+// migration. v2 recipes (referenced by recipeId) keep their data live in
+// S.recipes and never need a manual refresh.
 
 // ── Stocktake Mode ────────────────────────────────────────
 
@@ -1656,7 +1654,7 @@ export function buildCombinedOrderData() {
   // Use the same per-batch toggles as the Batch Ingredients tab
   ensureBatchTogglesInitialized(curLoc);
   const orderedDishes = S.batches.filter(d =>
-    d.location === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]
+    batchCookLoc(d) === curLoc && !isBatchCooked(d) && !!batchIngredientToggles[d.id]
   );
 
   function addToMap(name: string, amtGrams: number, isStandard: boolean, dishName: string | null) {

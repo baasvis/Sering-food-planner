@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import express, { Request, Response } from 'express';
+import { BATCH_SCHEMA_VERSION } from '../shared/types';
 
 const router = express.Router();
 
@@ -45,8 +46,14 @@ router.get('/', (req: Request, res: Response) => {
 });
 
 // ── Broadcast a patch to all clients EXCEPT the sender ──
+//
+// schemaVersion is injected first so the spread of `data` can override it
+// for tests; in normal use no caller passes the field. The frontend's
+// applyRemotePatch (public/js/utils.ts) compares against its bundle's
+// BATCH_SCHEMA_VERSION constant and force-reloads on mismatch — this is
+// the deploy-window safety net for stale browser tabs (audit S4).
 export function broadcast(senderEmail: string, eventType: string, data: Record<string, unknown>) {
-  const payload = JSON.stringify({ type: eventType, ...data });
+  const payload = JSON.stringify({ type: eventType, schemaVersion: BATCH_SCHEMA_VERSION, ...data });
   const message = `data: ${payload}\n\n`;
 
   for (const [id, client] of clients) {

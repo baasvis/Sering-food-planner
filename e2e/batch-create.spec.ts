@@ -30,9 +30,12 @@ test.describe('Batch creation', () => {
 
     // Fill the form. Form input IDs (#nd-*) are stable selectors set by
     // openNewDishScratch() in dishes.ts.
+    //
+    // Unified-batch model (post-C5): the new-batch modal no longer has a
+    // stock field — blank batches start with empty inventory[] and the cook
+    // fills it via "Mark cooked" or the Edit modal's Power view.
     const batchName = `${TEST_BATCH_PREFIX}${Date.now()}`;
     await page.fill('#nd-name', batchName);
-    await page.fill('#nd-stock', '5');
 
     await page.locator('[data-testid="new-batch-submit"]').click();
 

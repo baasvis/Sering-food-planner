@@ -12,25 +12,35 @@ async function main() {
   const stag = new PrismaClient({ datasources: { db: { url: STAGING_URL } } });
 
   try {
-    // ── READ from production via raw SQL (prod schema is older — no `generated` col)
+    // ── Schema probe: confirm prod is on the unified-batch schema. If the
+    // `inventory` column is missing, this DB is pre-migration — abort before
+    // we try to read columns that don't exist.
+    const probe = await prod.$queryRawUnsafe(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'batches' AND column_name = 'inventory'`,
+    );
+    if (probe.length === 0) {
+      console.error('ERROR: prod database does not have the unified-batch schema. Run the migration first (see prisma/migrations/DEPLOY.md). Aborting.');
+      console.error('Schema probe: SELECT column_name FROM information_schema.columns WHERE table_name=batches AND column_name=inventory returned 0 rows — prod has not been migrated yet.');
+      process.exit(1);
+    }
+
+    // ── READ from production via raw SQL (unified-batch schema)
     console.log('[1/5] Reading from production...');
     const prodBatches = await prod.$queryRawUnsafe(`
-      SELECT id, name, type, stock, serving, storage, location,
-             in_transit AS "inTransit",
+      SELECT id, name, type, serving,
              allergens, extra_allergens AS "extraAllergens",
              order_for AS "orderFor",
              cook_date AS "cookDate",
-             recipe_sheet_id AS "recipeSheetId",
-             recipe_volume AS "recipeVolume",
-             recipe_ingredients AS "recipeIngredients",
-             parent_id AS "parentId",
              note,
              services,
              created_at AS "createdAt",
              recipe_id AS "recipeId",
              actual_ingredients AS "actualIngredients",
              cook_notes AS "cookNotes",
-             stock_deducted AS "stockDeducted"
+             stock_deducted AS "stockDeducted",
+             generated,
+             inventory,
+             shipments
       FROM batches
     `);
     const prodGuests = await prod.$queryRawUnsafe(`SELECT location, day, lunch, dinner FROM guests`);
@@ -69,20 +79,10 @@ async function main() {
       return {
         ...b,
         recipeId: keepRecipeId ? b.recipeId : null,
-        generated: false,
       };
     });
     if (batchData.length > 0) {
-      // First insert without parentId (avoids FK race), then patch parents in
-      const noParents = batchData.map(b => ({ ...b, parentId: null }));
-      await stag.batch.createMany({ data: noParents });
-      // Patch parents (only for those whose parent ended up in the new set)
-      const newIds = new Set(batchData.map(b => b.id));
-      for (const b of batchData) {
-        if (b.parentId && newIds.has(b.parentId)) {
-          await stag.batch.update({ where: { id: b.id }, data: { parentId: b.parentId } });
-        }
-      }
+      await stag.batch.createMany({ data: batchData });
     }
     if (prodGuests.length > 0)   await stag.guest.createMany({ data: prodGuests });
     if (prodCaterings.length > 0) await stag.catering.createMany({ data: prodCaterings });

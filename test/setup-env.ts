@@ -15,6 +15,13 @@
  */
 try { require('dotenv').config(); } catch (_e) {}
 
+// Pin TZ so date-arithmetic tests (e.g. transport-card's getReadiness
+// "yesterday completion was 8pm UTC, today is 8am UTC") don't flake when
+// a contributor runs the suite in a non-UTC zone. CI is typically UTC but
+// local boxes vary. Set BEFORE the first `new Date()` is constructed by
+// any imported module.
+process.env.TZ = 'UTC';
+
 // Any of these host fragments means "you're talking to prod — refuse":
 const PROD_HOST_FRAGMENTS = [
   'centerbeam.proxy.rlwy.net',

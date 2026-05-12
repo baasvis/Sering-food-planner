@@ -11,19 +11,11 @@ model Batch {
   id                String   @id
   name              String
   type              String
-  stock             Float    @default(0)
   serving           Int      @default(280)
-  storage           String   @default("Gastro")
-  location          String   @default("west")
-  inTransit         Boolean  @default(false) @map("in_transit")
   allergens         String[]
   extraAllergens    String[] @map("extra_allergens")
   orderFor          Boolean  @default(false) @map("order_for")
   cookDate          String?  @map("cook_date")
-  recipeSheetId     String?  @map("recipe_sheet_id")
-  recipeVolume      Float?   @map("recipe_volume")
-  recipeIngredients Json?    @map("recipe_ingredients")
-  parentId          String?  @map("parent_id")
   note              String   @default("")
   services          Json     @default("[]")
   createdAt         String   @map("created_at")
@@ -32,14 +24,17 @@ model Batch {
   cookNotes         String   @default("") @map("cook_notes")
   stockDeducted     Boolean  @default(false) @map("stock_deducted")
   generated         Boolean  @default(false)
-  parent            Batch?   @relation("BatchParent", fields: [parentId], references: [id])
-  childBatches      Batch[]  @relation("BatchParent")
+  // Unified-batch model: per-(loc,storage) inventory entries + in-flight
+  // shipments. The legacy cols (stock/storage/location/inTransit/parentId
+  // + v1 recipe fields) and the parent self-FK will be dropped at deploy
+  // time via the manual psql step in prisma/migrations/DEPLOY.md (Step 5),
+  // immediately after data-migrate populates these JSON columns.
+  inventory         Json     @default("[]")
+  shipments         Json     @default("[]")
   recipe            Recipe?  @relation("BatchRecipe", fields: [recipeId], references: [id])
 
-  @@index([location])
   @@index([cookDate])
   @@index([recipeId])
-  @@index([parentId])
   @@map("batches")
 }
 
@@ -75,30 +70,30 @@ model TransportItem {
 }
 
 model Ingredient {
-  id                String                @id
-  name              String                @default("")
-  supplierName      String                @default("") @map("supplier_name")
-  types             Json                  @default("[]")
-  category          String                @default("")
-  unit              String                @default("Grams")
-  supplier          String                @default("")
-  orderCode         String                @default("") @map("order_code")
-  orderUnit         String                @default("") @map("order_unit")
-  orderPrice        Float?                @map("order_price")
-  priceLevel        String                @default("") @map("price_level")
-  priceHistory      Json                  @default("[]") @map("price_history")
-  priceAlert        Boolean               @default(false) @map("price_alert")
-  storageLocations  Json                  @default("{}") @map("storage_locations")
-  stock             Json                  @default("{}")
-  nutrition         Json                  @default("{}")
-  allergens         String                @default("")
-  notes             String                @default("")
-  active            Boolean               @default(true)
-  orderUnitSize     Float                 @default(0) @map("order_unit_size")
-  pricePer100       Float                 @default(0) @map("price_per_100")
-  measureMode       String                @default("weight") @map("measure_mode")
-  targetStock       Json                  @default("{}") @map("target_stock")
-  recipeUsages      RecipeIngredientRow[]
+  id               String                @id
+  name             String                @default("")
+  supplierName     String                @default("") @map("supplier_name")
+  types            Json                  @default("[]")
+  category         String                @default("")
+  unit             String                @default("Grams")
+  supplier         String                @default("")
+  orderCode        String                @default("") @map("order_code")
+  orderUnit        String                @default("") @map("order_unit")
+  orderPrice       Float?                @map("order_price")
+  priceLevel       String                @default("") @map("price_level")
+  priceHistory     Json                  @default("[]") @map("price_history")
+  priceAlert       Boolean               @default(false) @map("price_alert")
+  storageLocations Json                  @default("{}") @map("storage_locations")
+  stock            Json                  @default("{}")
+  nutrition        Json                  @default("{}")
+  allergens        String                @default("")
+  notes            String                @default("")
+  active           Boolean               @default(true)
+  orderUnitSize    Float                 @default(0) @map("order_unit_size")
+  pricePer100      Float                 @default(0) @map("price_per_100")
+  measureMode      String                @default("weight") @map("measure_mode")
+  targetStock      Json                  @default("{}") @map("target_stock")
+  recipeUsages     RecipeIngredientRow[]
 
   @@index([active])
   @@index([category])
@@ -210,8 +205,8 @@ model StorageConfig {
 model KitchenEquipment {
   id                 String @id @default("default")
   pots               Json   @default("[]") // array of liter sizes, e.g. [140, 140, 100, 100, ...]
-  gasBurners         Int    @default(0) @map("gas_burners")         // burners that can handle pots > 80L
-  inductionBurners   Int    @default(0) @map("induction_burners")   // burners that handle pots ≤ 80L
+  gasBurners         Int    @default(0) @map("gas_burners") // burners that can handle pots > 80L
+  inductionBurners   Int    @default(0) @map("induction_burners") // burners that handle pots ≤ 80L
   bigBurnerThreshold Int    @default(80) @map("big_burner_threshold") // pot size that requires a gas burner
 
   @@map("kitchen_equipment")
@@ -309,7 +304,7 @@ model RecipePhoto {
   data      Bytes
   createdAt String @map("created_at")
 
-  recipe    Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
 
   @@map("recipe_photos")
 }

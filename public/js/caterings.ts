@@ -1,9 +1,28 @@
 import { S, DAYS, MEALS, LOCATIONS, ALLERGENS } from './state';
 import { newId, scheduleSave, toast } from './utils';
 import { pushUndo } from './undo';
-import { rebuildPlanner, calcRequired, locationBadge, typeBadge, typeBadgeClass, TYPES, getToday, isBatchCooked, diffStr, logisticsBadgeClass, logisticsShort, storageBadge, strToDate } from './core';
+import { rebuildPlanner, calcRequired, typeBadge, typeBadgeClass, TYPES, getToday, isBatchCooked, diffStr, strToDate, getTotalStock, getStockAt } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { cookDateToISO, isoToCookDate } from './dishes';
+import { locName } from '@shared/location';
+import type { Batch, Location } from '@shared/types';
+
+/**
+ * Compact stock-location summary for the catering picker. Shows the primary
+ * cook location for empty-inventory batches, or a "WL/CL" badge with the
+ * non-zero loc qtys for batches with settled stock at one or both kitchens.
+ */
+function batchStockLocLabel(b: Batch): string {
+  const inv = b.inventory || [];
+  if (inv.length === 0) return locName('west');  // default cook loc for placeholders
+  const west = getStockAt(b, 'west');
+  const centraal = getStockAt(b, 'centraal');
+  if (west > 0 && centraal > 0) return `${locName('west')} + ${locName('centraal')}`;
+  if (west > 0) return locName('west');
+  if (centraal > 0) return locName('centraal');
+  // All inventory entries are zero-qty markers — fall back to the primary loc.
+  return locName(inv[0].loc as Location);
+}
 
 // ── CATERINGS ─────────────────────────────────────────────
 
@@ -160,18 +179,18 @@ export function renderCateringDishPicker(cateringId: any, query: any) {
   if (available.length > 0) {
     list += available.slice(0, SHOW_LIMIT).map(d => {
       const { str, cls } = diffStr(d);
-      const stockLoc = logisticsShort(d);
+      const stockLoc = batchStockLocLabel(d);
       const cookStatus = isBatchCooked(d) ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
       const serving = d.serving || 280;
       const sameTypePeers = (c.dishes || []).filter(cd => cd.type === d.type).length + 1;
       const cateringLiters = Math.round(((c.guestCount || 0) / sameTypePeers) * serving / 1000 * 10) / 10;
       return `<div class="dish-opt" onclick="addCateringDishFromPlanner('${cateringId}','${d.id}')">
         <div style="flex:1;">
-          <div><span style="font-weight:500;">${esc(d.name)}</span> ${typeBadge(d.type)} ${storageBadge(d.storage || 'Gastro')}</div>
+          <div><span style="font-weight:500;">${esc(d.name)}</span> ${typeBadge(d.type)}</div>
           <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
-            <span style="font-weight:600;">${d.stock}L stock</span>
+            <span style="font-weight:600;">${getTotalStock(d)}L stock</span>
             <span class="${cls}">${str}</span>
-            <span class="${logisticsBadgeClass(d)}" style="font-size:10px;">${stockLoc}</span>
+            <span style="font-size:10px;color:var(--text2);">${esc(stockLoc)}</span>
             <span style="color:var(--text3);">+${cateringLiters}L for this catering</span>
             ${cookStatus ? `<span style="color:var(--text3);">${cookStatus}</span>` : ''}
           </div>

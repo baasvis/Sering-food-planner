@@ -3,6 +3,7 @@
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
 import type { StorageArea, Batch, Catering, TransportItem, GuestsData, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, RecipeFull, Ingredient, StorageConfig } from '@shared/types';
+import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
@@ -559,6 +560,13 @@ export function disconnectLiveSync(): void {
 // Remote patch message shape (from SSE)
 interface RemotePatchMessage {
   user?: string;
+  // Schema-version envelope (audit S4 deploy-window safety net). Server emits
+  // BATCH_SCHEMA_VERSION on every patch via routes/events.ts:broadcast(); a
+  // mismatched version triggers a force-reload in applyRemotePatch so a
+  // stale browser tab doesn't silently merge new-shape data into old-shape
+  // local state. Optional because old backends won't emit it during the
+  // partial-deploy window — undefined === "compatible, don't reload".
+  schemaVersion?: number;
   // Existing — handled by computePatch() snapshot diff
   batches?: Batch[];
   deletedBatches?: string[];
@@ -588,6 +596,26 @@ interface RemotePatchMessage {
 
 // Merge a patch from another user into local state
 export function applyRemotePatch(msg: RemotePatchMessage): void {
+  // Schema-version safety net (audit S4). A stale browser tab open during a
+  // deploy would otherwise silently merge new-shape data into old-shape
+  // local state and produce zombie fields. Force-reload on mismatch so the
+  // tab picks up the fresh bundle.
+  //
+  // Defensive: undefined version === "old backend that doesn't emit version
+  // yet". Treat as compatible during the partial-deploy window so we don't
+  // force-reload everyone for a transient old-server response.
+  if (msg.schemaVersion !== undefined && msg.schemaVersion !== BATCH_SCHEMA_VERSION) {
+    toast('App updated. Reloading...');
+    // Belt-and-braces: clear both the in-memory snapshot AND the localStorage
+    // key (no-op if it doesn't exist) so a stale-data resave doesn't fire as
+    // the page reloads. The reload itself blows the JS heap so the in-memory
+    // nuke is mostly cosmetic, but cheap.
+    _lastSaved = { batches: new Map(), guests: '', caterings: new Map(), transportItems: new Map() };
+    try { localStorage.removeItem('lastSaved'); } catch (_e) { /* noop */ }
+    setTimeout(() => window.location.reload(), 400);
+    return;
+  }
+
   if (_flushUndo) _flushUndo();
   const { user, batches, deletedBatches, guests,
           caterings, deletedCaterings,

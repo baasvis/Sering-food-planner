@@ -1,15 +1,16 @@
-import type { Batch, RecipeFull, DishType, Location, Meal, Service } from '@shared/types';
+import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, Meal, Service, StorageType } from '@shared/types';
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost } from './utils';
-import { rebuildPlanner, isBatchCooked, locationBadge, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, cycleType, cycleStorage, cycleLocation, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, sortByCookDate, consolidateFamilies, getRootId, getFamilyMembers } from './core';
+import { rebuildPlanner, isBatchCooked, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
-import { renderBatchTile, renderFamilyGrouped, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, renderSplitBar, cleanCateringRefs } from './dishes';
+import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, cleanCateringRefs } from './dishes';
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
 import { showModal, closeModal, esc, setOpenInventoryFn } from './modal';
 import { renderCaterings } from './caterings';
 import { rerenderCurrentView, registerRenderer } from './navigate';
 import { trackEvent } from './telemetry';
+import { pushUndo } from './undo';
 import { locName } from '@shared/location';
 
 // ── WEEK PLAN (UNIFIED) ──────────────────────────────────
@@ -29,8 +30,10 @@ export function renderWeekPlan() {
   // Visible count of items currently in transport, shown as a badge on the
   // sub-tab so users can immediately see when there's something to move
   // (addresses feedback #351 — "I can't see the items set to transport").
+  // Pending-shipment count: one badge per shipment (not per batch), since
+  // a single batch can have multiple shipments (8am + 1pm sends).
   const transportCount =
-    S.batches.filter(d => d.inTransit === true).length +
+    S.batches.reduce((s, d) => s + (d.shipments || []).filter(sh => !sh.arrived).length, 0) +
     (S.transportItems || []).length;
   const transportLabel = transportCount > 0
     ? `To Transport <span class="sub-tab-badge">${transportCount}</span>`
@@ -153,53 +156,26 @@ export function renderLocationPlan(loc: string) {
           ? `assignBatchToSlot('${loc}','${isoDate}','${meal}')`
           : `openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')`;
         html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}${assignTarget}" data-loc="${loc}" data-date="${isoDate}" data-meal="${meal}" data-type="${tg.key}" onclick="${slotClick}" ondragover="slotDragOver(event)" ondragleave="slotDragLeave(event)" ondrop="slotDrop(event,'${loc}','${isoDate}','${meal}')">`;
-        // Group slot dishes by family root — guests see one menu option per
-        // family, not one per physical batch. So Tomato Soup (W parent) +
-        // Tomato Soup (split C) at the same slot render as ONE chip. The
-        // chip's × removes the service from EVERY family member at this slot.
-        const familyAtSlot = new Map<string, typeof slotDishes>();
-        slotDishes.forEach(dish => {
-          const root = getRootId(dish, S.batches);
-          if (!familyAtSlot.has(root)) familyAtSlot.set(root, []);
-          familyAtSlot.get(root)!.push(dish);
-        });
-        for (const members of familyAtSlot.values()) {
-          // Primary = parent (no parentId) if present, else first member.
-          const primary = members.find(m => !m.parentId) || members[0];
-          const familyName = primary.name.replace(/\s*\(split\)\s*$/i, '').trim();
-          const anyInTransit = members.some(m => m.inTransit);
-          const trClass = anyInTransit ? ' chip-tr-border' : '';
+        // One chip per batch — unified-batch model means each batch is its
+        // own canonical menu option. Cross-batch same-recipe duplicates
+        // (audit S7) intentionally render as separate chips: cook can see
+        // them as distinct pots and remove individually.
+        for (const dish of slotDishes) {
+          // Pending-shipment hint: if this batch has stock pending arrival
+          // at any loc, give the chip the transit-border treatment.
+          const hasPending = (dish.shipments || []).some(s => !s.arrived);
+          const trClass = hasPending ? ' chip-tr-border' : '';
           const servedClass = slotServed ? ' dish-chip-served' : '';
-          // From-tag: when this menu option draws stock from a DIFFERENT
-          // location than the slot, hint at it. With multiple family
-          // members the chip can pull from both — show the off-loc total.
-          // The off-loc label is determined relative to the SLOT (not the
-          // primary), since that's what the cook sees: "the slot is at C,
-          // some of its supply is at W".
-          const offLocStock = members
-            .filter(m => m.location !== loc)
-            .reduce((s, m) => s + (m.stock || 0), 0);
-          const fromOther = offLocStock > 0;
-          const offLocLabel = loc === 'west' ? 'C' : 'W';
-          // For a single off-loc member, keep the original "← West" / "← Centraal"
-          // arrow (matches the original chip behaviour for solo cross-loc dishes).
-          // For mixed (some at slot loc, some off), show "+ XL @ Other".
-          const memberLocs = new Set(members.map(m => m.location));
-          let fromTag = '';
-          if (fromOther && memberLocs.size === 1) {
-            fromTag = `<span class="chip-from">&larr; ${members[0].location === 'west' ? 'West' : 'Centraal'}</span>`;
-          } else if (fromOther) {
-            fromTag = `<span class="chip-from">+${offLocStock}L @ ${offLocLabel}</span>`;
-          }
-          const memberIds = members.map(m => m.id).join(',');
-          const memberCountTag = members.length > 1 ? ` <small class="chip-multi">×${members.length}</small>` : '';
-          const tooltip = members.length > 1
-            ? `${familyName} family · ${members.length} physical batches contribute (${members.map(m => `${m.stock||0}L @ ${m.location[0].toUpperCase()}`).join(' + ')})`
-            : familyName;
-          const removeHandler = members.length > 1
-            ? `removeFamilyFromSlot('${memberIds}','${loc}','${isoDate}','${meal}')`
-            : `removeDishFromSlot('${primary.id}','${loc}','${isoDate}','${meal}')`;
-          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(tooltip)}"><span class="chip-nm">${esc(familyName)}${memberCountTag}</span>${fromTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();${removeHandler}">&#10005;</span>`}</div>`;
+          // "Cross-loc" hint: if the slot is at this loc but the batch's
+          // stock is all at the OTHER loc (will require a ship), show an
+          // arrow from the off-loc to make this obvious.
+          const stockHere = getStockAt(dish, loc);
+          const stockOther = getTotalStock(dish) - stockHere;
+          const fromOther = stockHere === 0 && stockOther > 0;
+          const fromTag = fromOther
+            ? `<span class="chip-from">&larr; ${loc === 'west' ? 'Centraal' : 'West'}</span>`
+            : '';
+          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(dish.name)}"><span class="chip-nm">${esc(dish.name)}</span>${fromTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
         }
         if (!assigning) {
           html += `<div class="add-slot-btn" data-testid="slot-add-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div>`;
@@ -220,7 +196,14 @@ export function renderLocationPlan(loc: string) {
   html += renderShowAllBatches(loc);
 
   document.getElementById('planner-content').innerHTML = html;
-  renderSplitBar();
+}
+
+// Unified-batch: "all frozen" means every non-empty inventory entry is
+// Frozen. Single legacy `b.storage === 'Frozen'` check no longer fits.
+function isAllFrozen(b: Batch): boolean {
+  const inv = b.inventory || [];
+  if (inv.length === 0) return false;
+  return inv.every(e => e.qty === 0 || e.storage === 'Frozen');
 }
 
 // ── BATCH POOL (per-type, below each calendar) ─────────
@@ -231,10 +214,13 @@ export function renderLocationPlan(loc: string) {
 // appearing in the West tab just because it served West last week.
 export function getPoolBatches(loc: string) {
   return S.batches.filter(d => {
-    const locatedHere = d.location === loc;
+    // "Physically here" now means any stock at this loc, OR a pending
+    // shipment in-flight to this loc (so the cook can see incoming food).
+    const stockHere = getStockAt(d, loc as Location) > 0;
+    const incomingHere = getPendingFromShipments(d, loc as Location) > 0;
     const hasUpcomingSvcHere = (d.services || []).some(s =>
       s.loc === loc && !isServicePast(s));
-    return locatedHere || hasUpcomingSvcHere;
+    return stockHere || incomingHere || hasUpcomingSvcHere;
   });
 }
 
@@ -260,12 +246,12 @@ export function renderTypeBatchPool(loc: string, typeKey: string, typeLabel: str
   </button>`;
 
   if (isOpen) {
-    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && d.storage !== 'Frozen'));
-    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && d.storage !== 'Frozen'));
-    const frozen = poolBatches.filter(d => d.storage === 'Frozen');
+    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && !isAllFrozen(d)));
+    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && !isAllFrozen(d)));
+    const frozen = poolBatches.filter(d => isAllFrozen(d));
 
     const renderGroup = (batches: Batch[]) => {
-      return `<div class="batch-tile-grid">${renderFamilyGrouped(batches, true)}</div>`;
+      return `<div class="batch-tile-grid">${batches.map(b => renderBatchTile(b, true)).join('')}</div>`;
     };
 
     if (toCook.length) {
@@ -302,12 +288,12 @@ export function renderShowAllBatches(loc: string) {
   </button>`;
 
   if (S.showAllBatches) {
-    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && d.storage !== 'Frozen'));
-    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && d.storage !== 'Frozen'));
-    const frozen = poolBatches.filter(d => d.storage === 'Frozen');
+    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && !isAllFrozen(d)));
+    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && !isAllFrozen(d)));
+    const frozen = poolBatches.filter(d => isAllFrozen(d));
 
     const renderGroup = (batches: Batch[]) => {
-      return `<div class="batch-tile-grid">${renderFamilyGrouped(batches, true)}</div>`;
+      return `<div class="batch-tile-grid">${batches.map(b => renderBatchTile(b, true)).join('')}</div>`;
     };
 
     if (toCook.length) {
@@ -399,24 +385,17 @@ export function slotDrop(e: DragEvent, loc: string, date: string, meal: string) 
  *
  * The seed (the batch the user explicitly dragged/clicked) is always assigned
  * unless it already has that service entry — the user's explicit instruction
- * outranks logistics heuristics. Frozen + isServableBy filters apply only to
- * auto-pulled-in siblings, so we don't e.g. drag a Centraal split into a West
- * slot just because its parent was assigned.
+ * outranks logistics heuristics. (Note: legacy family-auto-assign logic is
+ * gone in the unified-batch model — each batch is its own canonical row,
+ * so dragging a batch into a slot adds only that batch's service. No
+ * sibling pull-in. The function signature is preserved for call-site
+ * compatibility; it now always returns a 1-element array.)
  */
 export function assignFamilyToSlot(seed: Batch, loc: string, date: string, meal: string): Batch[] {
-  const family = getFamilyMembers(seed, S.batches);
-  const added: Batch[] = [];
-  for (const m of family) {
-    if ((m.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal)) continue;
-    if (m.id !== seed.id) {
-      if (m.storage === 'Frozen') continue;
-      if (!isServableBy(m.cookDate, date, meal as 'lunch'|'dinner', loc as 'west'|'centraal', m.location)) continue;
-    }
-    if (!m.services) m.services = [];
-    m.services.push({ loc, date, meal } as Service);
-    added.push(m);
-  }
-  return added;
+  if ((seed.services || []).some(s => s.loc === loc && s.date === date && s.meal === meal)) return [];
+  if (!seed.services) seed.services = [];
+  seed.services.push({ loc, date, meal } as Service);
+  return [seed];
 }
 
 // ── ASSIGN MODE ─────────────────────────────────────────
@@ -454,9 +433,25 @@ export function assignBatchToSlot(loc: string, date: string, meal: string) {
 
 // ── TRANSPORT VIEW ───────────────────────────────────────
 export function renderTransportView() {
-  const transportDishes = S.batches.filter(d => d.inTransit === true);
+  // Unified-batch model: collect pending shipments (one row per shipment),
+  // grouped by batch so the cook sees N rows under each batch's header.
+  // 8am send + 1pm send of the same batch render as 2 rows (locked decision
+  // §"Repack mid-day").
+  type ShipRow = { batch: Batch; shipment: Shipment };
+  const shipRows: ShipRow[] = [];
+  for (const b of S.batches) {
+    for (const s of (b.shipments || [])) {
+      if (!s.arrived) shipRows.push({ batch: b, shipment: s });
+    }
+  }
+  // Stable sort: by batch name, then by sentAt ascending within a batch.
+  shipRows.sort((a, b) => {
+    const n = a.batch.name.localeCompare(b.batch.name);
+    if (n !== 0) return n;
+    return a.shipment.sentAt.localeCompare(b.shipment.sentAt);
+  });
 
-  let html = `<div id="split-bar-area"></div>`;
+  let html = '';
 
   // ── Transport items (custom free-text items) ──
   html += `<div class="type-section">`;
@@ -477,28 +472,45 @@ export function renderTransportView() {
   }
   html += `</div>`;
 
-  // ── Dishes being transported ──
-  if (transportDishes.length > 0) {
+  // ── Pending shipments — one row per shipment, grouped by batch ──
+  if (shipRows.length > 0) {
     html += `<div class="type-section">`;
-    html += `<div class="type-section-hdr">Batches in transport</div>`;
-    html += `<div style="margin-bottom:8px;display:flex;gap:6px;">
-      <button class="btn btn-sm" style="color:var(--green);border-color:var(--green);" onclick="markSelectedArrived()">Mark selected as arrived</button>
-    </div>`;
-
-    // Show all transport batches in a single flat list (no date grouping)
-    html += `<div class="batch-tile-grid">`;
-    transportDishes.forEach(d => {
-      html += renderBatchTile(d, false);
-    });
-    html += `</div>`;
-
-    html += `</div>`; // close dishes in transport section
+    html += `<div class="type-section-hdr">Pending shipments</div>`;
+    // Group rows by batch.id so each batch gets a header followed by its
+    // shipment rows. Iteration order is preserved (alphabetical by batch
+    // name, chronological within batch) thanks to the stable sort above.
+    let lastBatchId: string | null = null;
+    for (const { batch, shipment } of shipRows) {
+      if (batch.id !== lastBatchId) {
+        if (lastBatchId !== null) html += `</div>`; // close prior batch card
+        lastBatchId = batch.id;
+        html += `<div class="ship-batch-card" style="border:1px solid var(--border);border-radius:var(--radius);padding:8px;margin-bottom:8px;background:var(--bg);">
+          <div class="ship-batch-hdr" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-weight:500;">${esc(batch.name)}</span>
+            <span class="${typeBadgeClass(batch.type)}">${batch.type}</span>
+          </div>`;
+      }
+      const fromLocLabel = locName(shipment.fromLoc);
+      const toLocLabel = locName(shipment.toLoc);
+      const sentAtDate = new Date(shipment.sentAt);
+      const sentAtStr = !isNaN(sentAtDate.getTime())
+        ? sentAtDate.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+        : esc(shipment.sentAt);
+      html += `<div class="ship-row" style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-top:1px dashed var(--border);font-size:13px;">
+        <span class="ship-route" style="flex:1;">${fromLocLabel} &rarr; ${toLocLabel} &middot; ${shipment.storage} &middot; cooked ${esc(shipment.cookDate)}</span>
+        <span class="ship-qty" style="font-weight:500;min-width:48px;text-align:right;">${shipment.qty.toFixed(1)}L</span>
+        <span class="ship-when" style="font-size:11px;color:var(--text2);min-width:90px;text-align:right;">sent ${sentAtStr}</span>
+        <button class="btn btn-sm" style="color:var(--green);border-color:var(--green);" onclick="markShipmentArrived('${batch.id}','${shipment.id}')">Mark arrived</button>
+        <button class="btn btn-sm btn-danger" onclick="cancelShipment('${batch.id}','${shipment.id}')">× Cancel send</button>
+      </div>`;
+    }
+    if (lastBatchId !== null) html += `</div>`; // close final batch card
+    html += `</div>`; // close type-section
   } else {
-    html += `<div class="empty" style="margin-top:12px;">No batches marked for transport</div>`;
+    html += `<div class="empty" style="margin-top:12px;">No pending shipments</div>`;
   }
 
   document.getElementById('planner-content').innerHTML = html;
-  renderSplitBar();
 }
 
 // ── Transport item functions ─────────────────────────────
@@ -520,36 +532,89 @@ export function deliverTransportItem(id: string) {
   toast('Item delivered');
 }
 
+// Legacy bulk-mark-arrived flow is replaced by per-shipment buttons in the
+// transport tab. Keeping the function as a no-op stub avoids breaking any
+// external callers (e.g. old keyboard shortcuts); a real call surfaces a
+// helpful toast pointing the cook at the new per-row button.
 export function markSelectedArrived() {
-  const selected = [...S.selected];
-  if (selected.length === 0) { toast('Select batches first using the checkboxes'); return; }
-  let count = 0;
-  selected.forEach(id => {
-    const d = S.batches.find(x => x.id === id);
-    if (d && d.inTransit) {
-      d.inTransit = false;
-      count++;
+  toast('Use the per-shipment "Mark arrived" buttons in the Transport tab');
+}
+
+/** Per-shipment mark-arrived. POSTs the dedicated /arrived endpoint and
+ *  updates local state from the response. */
+export async function markShipmentArrived(batchId: string, shipmentId: string) {
+  trackEvent('shipment_mark_arrived', '', { batchId, shipmentId });
+  try {
+    const res = await apiPost(`/api/batches/${batchId}/shipments/${shipmentId}/arrived`, {});
+    if (res && res.batch) {
+      const idx = S.batches.findIndex(b => b.id === batchId);
+      if (idx >= 0) S.batches[idx] = res.batch;
     }
-  });
-  S.selected.clear();
-  if (count > 0) {
-    // Auto-merge: now that the batches arrived, fold them into any existing
-    // same-family same-location records (Daan's spec: "should become fully
-    // one"). Without this the cook ends up with N copies of the same recipe
-    // at the destination — exactly the mess we just cleaned up.
-    const consolidation = consolidateFamilies(S.batches);
-    let mergedNote = '';
-    if (consolidation.removed.length > 0) {
-      S.batches = consolidation.kept;
-      if (!S.deletedBatches) S.deletedBatches = [];
-      for (const id of consolidation.removed) S.deletedBatches.push(id);
-      mergedNote = ` (merged ${consolidation.removed.length} into existing batches)`;
-    }
+    toast('Shipment arrived');
     rebuildPlanner();
-    scheduleSave();
     rerenderCurrentView();
-    toast(`${count} batch${count > 1 ? 'es' : ''} marked as arrived${mergedNote}`);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    toastError('Mark arrived failed: ' + msg);
   }
+}
+
+/** Per-shipment cancel. Soft-deletes through the undo manager (5s window)
+ *  so a misclick is recoverable on a kitchen tablet. After 5s the dedicated
+ *  /cancel endpoint fires and the source-inventory restore happens
+ *  server-side. */
+export function cancelShipment(batchId: string, shipmentId: string) {
+  const b = S.batches.find(x => x.id === batchId);
+  if (!b) return;
+  const shipment = (b.shipments || []).find(s => s.id === shipmentId);
+  if (!shipment) return;
+
+  // Snapshot + position for restore
+  const snapshot = structuredClone(shipment);
+  const originalIdx = (b.shipments || []).indexOf(shipment);
+
+  // Optimistic local remove — UI updates immediately
+  b.shipments = (b.shipments || []).filter(s => s.id !== shipmentId);
+  rebuildPlanner();
+  rerenderCurrentView();
+
+  pushUndo({
+    label: `Cancelled shipment (${(shipment.qty || 0).toFixed(1)} L → ${locName(shipment.toLoc)})`,
+    restore: () => {
+      const bb = S.batches.find(x => x.id === batchId);
+      if (!bb) return;
+      if (!bb.shipments) bb.shipments = [];
+      const insertAt = Math.min(originalIdx, bb.shipments.length);
+      bb.shipments.splice(insertAt, 0, snapshot);
+      rebuildPlanner();
+      rerenderCurrentView();
+    },
+    commit: () => {
+      trackEvent('shipment_cancel', '', { batchId, shipmentId });
+      apiPost(`/api/batches/${batchId}/shipments/${shipmentId}/cancel`, {})
+        .then((res: { batch?: Batch } | undefined) => {
+          if (res && res.batch) {
+            const bidx = S.batches.findIndex(x => x.id === batchId);
+            if (bidx >= 0) S.batches[bidx] = res.batch;
+            rebuildPlanner();
+            rerenderCurrentView();
+          }
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : 'Unknown error';
+          // Restore optimistically-removed shipment so cook can retry
+          const bb = S.batches.find(x => x.id === batchId);
+          if (bb) {
+            if (!bb.shipments) bb.shipments = [];
+            const insertAt = Math.min(originalIdx, bb.shipments.length);
+            bb.shipments.splice(insertAt, 0, snapshot);
+            rebuildPlanner();
+            rerenderCurrentView();
+          }
+          toastError('Cancel failed: ' + msg + ' — shipment restored');
+        });
+    },
+  });
 }
 
 // ── ADD DISH MODAL ───────────────────────────────────────
@@ -654,7 +719,14 @@ export function renderAddModal(loc: string, date: string, meal: string, existing
   let allAvail = S.batches.filter(d => !existing.includes(d.id));
   if (typeFilter) allAvail = allAvail.filter(d => d.type === typeFilter);
 
-  const cookedDishes = allAvail.filter(d => isBatchCooked(d) && d.location === locFilter && !d.inTransit);
+  // "Available cooked at locFilter" = batch with any qty at this loc.
+  // Pending-incoming shipments also qualify (food is on the way; cook can
+  // pre-plan around it). Excludes batches whose stock lives entirely at the
+  // OTHER loc (would require a ship before serving at locFilter).
+  const cookedDishes = allAvail.filter(d => {
+    if (!isBatchCooked(d)) return false;
+    return getStockAt(d, locFilter as Location) > 0 || getPendingFromShipments(d, locFilter as Location) > 0;
+  });
   const plannedDishes = sortByCookDate(allAvail.filter(d => !isBatchCooked(d) && (d.services || []).length > 0));
   // Recipe v1 index removed in S12 — the legacy "Recipes" tab in this modal
   // now relies entirely on S.recipes (v2). Keeping the empty array here so
@@ -678,19 +750,26 @@ export function renderAddModal(loc: string, date: string, meal: string, existing
     filteredPlanned = plannedDishes.filter(d => d.name.toLowerCase().includes(q));
   }
 
-  // Render dish options helper
+  // Render dish options helper — unified-batch model: surface total stock +
+  // per-loc breakdown so the cook can see whether the batch has stock at
+  // THIS slot's loc or needs to be shipped.
   const renderDishOpts = (dishes: Batch[]) => dishes.map(d => {
-    const { diff, str, cls } = diffStr(d);
+    const { str, cls } = diffStr(d);
     const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
     const agHtml = allAg.slice(0, 4).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
     const cookInfo = isBatchCooked(d) ? 'Cooked' : d.cookDate ? 'Cook: ' + d.cookDate : '';
-    const stockLoc = logisticsShort(d);
+    const totalStock = getTotalStock(d);
+    const stockHere = getStockAt(d, loc as Location);
+    const stockOther = totalStock - stockHere;
+    // Compact "55L (here 30 · 25L W)" — only show breakdown when split.
+    const locHint = totalStock > 0 && stockOther > 0
+      ? ` <small style="color:var(--text2);">(${stockHere.toFixed(0)} here, ${stockOther.toFixed(0)} ${loc === 'west' ? 'C' : 'W'})</small>`
+      : '';
     return `<div class="dish-opt" data-testid="dish-opt" onclick="confirmAddDish('${d.id}','${loc}','${date}','${meal}')">
       <div style="flex:1;">
-        <div><span style="font-weight:500;">${esc(d.name)}</span> ${typeBadge(d.type)} ${storageBadge(d.storage || 'Gastro')}</div>
+        <div><span style="font-weight:500;">${esc(d.name)}</span> ${typeBadge(d.type)}</div>
         <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
-          <span class="${cls}">${d.stock}L stock &middot; ${str}</span>
-          <span class="${logisticsBadgeClass(d)}" style="font-size:10px;">${stockLoc}</span>
+          <span class="${cls}">${totalStock.toFixed(1)}L stock${locHint} &middot; ${str}</span>
           ${agHtml ? `<span>${agHtml}</span>` : ''}
           ${cookInfo ? `<span style="color:var(--text3);">${cookInfo}</span>` : ''}
         </div>
@@ -905,9 +984,16 @@ export function renderReplaceModal() {
     const cookInfo = d.cookDate ? 'Cook: ' + d.cookDate : '';
     const svcCount = (d.services || []).length;
     const svcNote = svcCount > 0 ? `${svcCount} service${svcCount > 1 ? 's' : ''}` : 'Unassigned';
+    // Unified-batch: surface the per-storage breakdown via storage badges
+    // (one per distinct storage type the batch holds). Single legacy
+    // `d.storage` doesn't exist anymore.
+    const storages = Array.from(new Set((d.inventory || []).filter(e => e.qty > 0).map(e => e.storage)));
+    const storageBadges = storages.length > 0
+      ? storages.map(s => storageBadge(s)).join(' ')
+      : '';
     return `<div class="dish-opt" onclick="confirmReplaceBatch('${d.id}')">
       <div style="flex:1;">
-        <div><span style="font-weight:500;">${esc(d.name)}</span> ${storageBadge(d.storage || 'Gastro')}</div>
+        <div><span style="font-weight:500;">${esc(d.name)}</span> ${storageBadges}</div>
         <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
           <span style="color:var(--text3);">${svcNote}</span>
           ${agHtml ? `<span>${agHtml}</span>` : ''}
@@ -1054,22 +1140,20 @@ export function replaceWithV2Recipe(recipeId: string) {
     cost: 0,
   }));
 
+  // Unified-batch model: new replacement starts with empty inventory and
+  // shipments. The cook decides where it's cooked at "Mark cooked" time.
+  // We don't auto-port `old`'s inventory because the new dish is a
+  // different recipe; copying stock would be a unit-of-account error.
   const newBatch: Batch = {
     id: newId(),
     name: r.name,
     type: (r.type || 'Soup') as DishType,
-    stock: 0,
     serving: r.servingSize || 280,
-    storage: 'Gastro',
-    location: old.location,
-    inTransit: false,
-    recipeSheetId: null,
-    recipeVolume: r.recipeVolume || null,
-    recipeIngredients: snapshotIngredients,
+    inventory: [],
+    shipments: [],
     allergens: allAllergens,
     extraAllergens: [],
     orderFor: false,
-    parentId: null,
     cookDate: old.cookDate || null,
     note: '',
     services: [...(old.services || [])],
@@ -1080,6 +1164,10 @@ export function replaceWithV2Recipe(recipeId: string) {
     stockDeducted: false,
     generated: false,  // a real recipe now, no longer an algorithm placeholder
   };
+  // Note: snapshotIngredients (the legacy recipe-ingredients snapshot) is
+  // no longer stored on Batch — actualIngredients is the v2 path, populated
+  // at post-cook time via openPostCookRecording.
+  void snapshotIngredients;
   S.batches.push(newBatch);
 
   cleanCateringRefs(old.id, newBatch.id);
@@ -1141,61 +1229,176 @@ export function getInventoryButton(loc: string) {
   return `<button class="btn ${cls}" onclick="openInventory('${loc}')">${st.label}</button>`;
 }
 
-export function openInventory(loc: string) {
-  const locLabel = locName(loc);
-  const dishes = S.batches.filter(d => {
-    if (!isBatchCooked(d)) return false; // Only cooked batches need inventory
-    return d.location === loc; // Only show batches physically at this location
-  });
+// ── INVENTORY MODAL (DAAN-CRITICAL) ─────────────────────────────────────────
+//
+// Two modes per the locked plan:
+//   - LOCATION-SCOPED (default): cook at West sees ONLY West stock; cook at
+//     Centraal sees ONLY Centraal stock. ONE row per (batch, storage) at the
+//     cook's location. Multiple cookDates at the same (batch, loc, storage)
+//     aggregate to one row; qty edits distribute FIFO (oldest cookDate
+//     absorbs delta first). This is the safety guarantee — cook never
+//     accidentally edits stock at the OTHER location.
+//   - POWER: full inventory view across all locs + storages. One row per
+//     literal InventoryEntry (no aggregation). For debugging / corrections.
+//
+// `_invMode` is module-local and ALWAYS resets to 'loc-scoped' on
+// `openInventory()` per Q4. Toggle button in the modal header re-renders
+// in place.
 
-  if (dishes.length === 0) {
-    toast('No cooked batches at ' + locLabel);
+let _invMode: 'loc-scoped' | 'power' = 'loc-scoped';
+
+export function openInventory(loc: string) {
+  _invMode = 'loc-scoped';
+  renderInventoryModal(loc);
+}
+
+export function setInvMode(loc: string, mode: string) {
+  if (mode !== 'loc-scoped' && mode !== 'power') return;
+  _invMode = mode;
+  renderInventoryModal(loc);
+}
+
+/** Aggregated row in location-scoped view: one (batchId, storage) tuple at
+ *  this loc may sum across multiple underlying InventoryEntry rows
+ *  (different cookDates). FIFO order: entries sorted oldest cookDate first
+ *  so the cook's qty delta lands on the oldest entry first, matching
+ *  food-safety FIFO. */
+interface LocScopedRow {
+  batchId: string;
+  batchName: string;
+  batchType: string;
+  storage: StorageType;
+  qty: number;
+  // Indices into the batch's inventory[] array, oldest cookDate first.
+  entryIdxsByAge: number[];
+  // Earliest cookDate among contributing entries (for stale check).
+  oldestCookDate: string;
+}
+
+/** Build the location-scoped rows: one per (batch, storage) at `loc`. */
+function buildLocScopedRows(loc: Location): LocScopedRow[] {
+  const rows: LocScopedRow[] = [];
+  for (const b of S.batches) {
+    if (!isBatchCooked(b)) continue;
+    // Group this batch's entries-at-this-loc by storage.
+    const byStorage = new Map<StorageType, { entries: Array<{ entry: InventoryEntry; idx: number }>; qty: number }>();
+    (b.inventory || []).forEach((e, idx) => {
+      if (e.loc !== loc) return;
+      if (e.qty <= 0) return;
+      let g = byStorage.get(e.storage);
+      if (!g) {
+        g = { entries: [], qty: 0 };
+        byStorage.set(e.storage, g);
+      }
+      g.entries.push({ entry: e, idx });
+      g.qty += e.qty;
+    });
+    for (const [storage, g] of byStorage) {
+      // FIFO: oldest cookDate first. cookDate is DD/MM/YYYY — sort via the
+      // strToDate helper (returns null for unparseable; null sorts last).
+      g.entries.sort((a, b) => {
+        const da = strToDate(a.entry.cookDate);
+        const db = strToDate(b.entry.cookDate);
+        if (!da && !db) return 0;
+        if (!da) return 1;
+        if (!db) return -1;
+        return da.getTime() - db.getTime();
+      });
+      const oldest = g.entries[0]?.entry.cookDate || '';
+      rows.push({
+        batchId: b.id,
+        batchName: b.name,
+        batchType: b.type,
+        storage,
+        qty: g.qty,
+        entryIdxsByAge: g.entries.map(x => x.idx),
+        oldestCookDate: oldest,
+      });
+    }
+  }
+  return rows;
+}
+
+function renderInventoryModal(loc: string) {
+  const locLabel = locName(loc);
+  const modeToggle = `<span class="modal-mode-toggle" style="display:inline-flex;gap:4px;margin-left:12px;font-size:12px;">
+    <button class="btn btn-sm${_invMode === 'loc-scoped' ? ' btn-primary' : ''}" onclick="setInvMode('${loc}','loc-scoped')" title="Show only stock physically at ${locLabel}">${locLabel} only</button>
+    <button class="btn btn-sm${_invMode === 'power' ? ' btn-primary' : ''}" onclick="setInvMode('${loc}','power')" title="Show full inventory across all locations">All inventory</button>
+  </span>`;
+
+  if (_invMode === 'loc-scoped') {
+    renderLocScopedInventory(loc, locLabel, modeToggle);
+  } else {
+    renderPowerInventory(loc, locLabel, modeToggle);
+  }
+}
+
+function renderLocScopedInventory(loc: string, locLabel: string, modeToggle: string) {
+  const rows = buildLocScopedRows(loc as Location);
+
+  if (rows.length === 0) {
+    showModal(`<h3>Inventory — ${locLabel}${modeToggle}</h3>
+      <div class="empty" style="margin:20px 0;">No cooked stock at ${locLabel}.</div>
+      <div class="modal-actions">
+        <button class="btn" onclick="S._inventoryLoc=null;closeModal()">Close</button>
+      </div>`);
+    const modal = document.querySelector('.modal') as HTMLElement | null;
+    if (modal) modal.style.width = '560px';
     return;
   }
 
-  let html = `<h3>Inventory — ${locLabel}</h3>`;
-  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Update stock for each batch, or mark as served.</div>`;
-  html += `<div class="inv-list">`;
-
   const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
-  const fresh = dishes.filter(d => d.storage !== 'Frozen').sort((a, b) => (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0));
-  const frozen = dishes.filter(d => d.storage === 'Frozen').sort((a, b) => (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0));
+  const fresh = rows.filter(r => r.storage !== 'Frozen').sort((a, b) =>
+    (typeOrder[a.batchType] || 0) - (typeOrder[b.batchType] || 0) || a.batchName.localeCompare(b.batchName));
+  const frozen = rows.filter(r => r.storage === 'Frozen').sort((a, b) =>
+    (typeOrder[a.batchType] || 0) - (typeOrder[b.batchType] || 0) || a.batchName.localeCompare(b.batchName));
 
-  const renderInvRow = (d: Batch) => {
-    const { str, cls } = diffStr(d);
-    return `<div class="inv-row" id="inv-row-${d.id}">
+  const renderRow = (r: LocScopedRow) => {
+    // Stale = oldest cookDate past shelf life for this storage. Reuses the
+    // same per-storage limits as isStaleEntry in core.ts.
+    const oldestEntry: InventoryEntry = { loc: loc as Location, storage: r.storage, qty: r.qty, cookDate: r.oldestCookDate };
+    const stale = isStaleEntry(oldestEntry);
+    const staleCls = stale ? 'stock-miss' : 'stock-ok';
+    const staleNote = stale ? `<span class="${staleCls}" style="font-size:11px;">stale</span>` : '';
+    // Entry-idx CSV for the FIFO distributor (oldest first).
+    const idxCsv = r.entryIdxsByAge.join(',');
+    return `<div class="inv-row" data-batch="${esc(r.batchId)}" data-storage="${r.storage}">
       <div class="inv-name">
-        <span style="font-weight:500;">${esc(d.name)}</span>
-        <span class="${storageBadgeClass(d.storage || 'Gastro')}" style="cursor:pointer;" onclick="cycleInventoryStorage('${d.id}','${loc}')" title="Click to change storage">${d.storage || 'Gastro'}</span>
-        <span class="${cls}" style="font-size:11px;">${str}</span>
+        <span style="font-weight:500;">${esc(r.batchName)}</span>
+        <span class="${storageBadgeClass(r.storage)}" style="cursor:pointer;" onclick="cycleInventoryStorageAt('${r.batchId}','${loc}','${r.storage}','${idxCsv}')" title="Click to change storage on this row's entries">${r.storage}</span>
+        ${staleNote}
       </div>
       <div class="inv-controls">
-        <label style="font-size:11px;color:var(--text2);">Current stock</label>
-        <input type="number" class="inv-stock-input" id="inv-stock-${d.id}" value="${d.stock || 0}" step="0.5" min="0" onchange="updateInventoryStock('${d.id}',this.value)" />
+        <label style="font-size:11px;color:var(--text2);">Stock here</label>
+        <input type="number" class="inv-stock-input" value="${r.qty.toFixed(1)}" step="0.5" min="0" onchange="updateLocScopedQty('${r.batchId}','${loc}','${r.storage}','${idxCsv}',this.value)" />
         <span style="display:inline-block;width:1px;height:24px;background:var(--border);margin:0 6px;vertical-align:middle;"></span>
-        <button class="btn btn-sm inv-served-btn" style="background:var(--red);color:#fff;border-color:var(--red);" onclick="openServedFromInventory('${d.id}','${loc}')">Served</button>
+        <button class="btn btn-sm inv-served-btn" style="background:var(--red);color:#fff;border-color:var(--red);" onclick="openServedFromInventory('${r.batchId}','${loc}')">Served</button>
       </div>
     </div>`;
   };
 
+  let html = `<h3>Inventory — ${locLabel}${modeToggle}</h3>`;
+  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Editing stock at ${locLabel} only. Multiple cookDates per (batch, storage) aggregate to one row; FIFO — oldest absorbs the delta first.</div>`;
+  html += `<div class="inv-list">`;
+
   let lastType = '';
-  fresh.forEach(d => {
-    if (d.type !== lastType) {
-      lastType = d.type;
-      html += `<div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text2);padding:8px 0 4px;border-bottom:1px solid var(--border);">${d.type}</div>`;
+  fresh.forEach(r => {
+    if (r.batchType !== lastType) {
+      lastType = r.batchType;
+      html += `<div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text2);padding:8px 0 4px;border-bottom:1px solid var(--border);">${r.batchType}</div>`;
     }
-    html += renderInvRow(d);
+    html += renderRow(r);
   });
 
   if (frozen.length) {
     html += `<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--blue);padding:12px 0 4px;border-bottom:2px solid var(--blue);margin-top:8px;">❄️ Frozen</div>`;
     lastType = '';
-    frozen.forEach(d => {
-      if (d.type !== lastType) {
-        lastType = d.type;
-        html += `<div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);padding:6px 0 2px;">${d.type}</div>`;
+    frozen.forEach(r => {
+      if (r.batchType !== lastType) {
+        lastType = r.batchType;
+        html += `<div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);padding:6px 0 2px;">${r.batchType}</div>`;
       }
-      html += renderInvRow(d);
+      html += renderRow(r);
     });
   }
 
@@ -1206,37 +1409,217 @@ export function openInventory(loc: string) {
   </div>`;
 
   showModal(html);
-  // Widen the modal for inventory
-  const modal = document.querySelector('.modal');
+  const modal = document.querySelector('.modal') as HTMLElement | null;
   if (modal) modal.style.width = '560px';
 }
 
-export function updateInventoryStock(id: string, value: string) {
+function renderPowerInventory(loc: string, locLabel: string, modeToggle: string) {
+  // Power view: ALL inventory across all locs + storages. One row per literal
+  // InventoryEntry (no aggregation by cookDate). Edits hit that exact entry.
+  const cooked = S.batches.filter(d => isBatchCooked(d));
+  if (cooked.length === 0) {
+    showModal(`<h3>Inventory — all locations${modeToggle}</h3>
+      <div class="empty" style="margin:20px 0;">No cooked stock.</div>
+      <div class="modal-actions">
+        <button class="btn" onclick="S._inventoryLoc=null;closeModal()">Close</button>
+      </div>`);
+    const modal = document.querySelector('.modal') as HTMLElement | null;
+    if (modal) modal.style.width = '720px';
+    return;
+  }
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  const sorted = [...cooked].sort((a, b) =>
+    (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0) || a.name.localeCompare(b.name));
+
+  let html = `<h3>Inventory — all locations${modeToggle}</h3>`;
+  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Power mode — per-entry editing across all locations. Use this for cross-loc corrections or to spot mixed cookDates. Default mode (${locLabel} only) is safer for daily inventory rounds.</div>`;
+  html += `<div class="inv-list">`;
+
+  for (const b of sorted) {
+    const inv = (b.inventory || []);
+    if (inv.length === 0) continue;
+    html += `<div class="inv-batch-card" style="border:1px solid var(--border);border-radius:var(--radius);padding:8px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span style="font-weight:500;">${esc(b.name)}</span>
+        <span class="${typeBadgeClass(b.type)}">${b.type}</span>
+        <button class="btn btn-sm inv-served-btn" style="margin-left:auto;background:var(--red);color:#fff;border-color:var(--red);" onclick="openServedFromInventory('${b.id}','${loc}')">Served</button>
+      </div>
+      <table style="width:100%;font-size:12px;border-collapse:collapse;">
+        <thead><tr style="text-align:left;color:var(--text2);">
+          <th style="padding:2px 4px;">Loc</th><th style="padding:2px 4px;">Storage</th><th style="padding:2px 4px;">Qty (L)</th><th style="padding:2px 4px;">Cook date</th>
+        </tr></thead>
+        <tbody>
+          ${inv.map((e, idx) => `<tr>
+            <td style="padding:2px 4px;">${locName(e.loc)}</td>
+            <td style="padding:2px 4px;"><span class="${storageBadgeClass(e.storage)}" style="cursor:pointer;font-size:10px;" onclick="cycleEntryStorageAt('${b.id}',${idx},'${loc}')">${e.storage}</span></td>
+            <td style="padding:2px 4px;"><input type="number" value="${e.qty.toFixed(1)}" step="0.5" min="0" style="width:80px;" onchange="updatePowerEntryQty('${b.id}',${idx},this.value,'${loc}')" /></td>
+            <td style="padding:2px 4px;font-family:monospace;font-size:11px;">${esc(e.cookDate)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  }
+
+  html += `</div>`;
+  html += `<div class="modal-actions">
+    <button class="btn" onclick="S._inventoryLoc=null;closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="finishInventory('${loc}')">Finish inventory</button>
+  </div>`;
+
+  showModal(html);
+  const modal = document.querySelector('.modal') as HTMLElement | null;
+  if (modal) modal.style.width = '720px';
+}
+
+/** Apply the cook's new total to an aggregated (batch, loc, storage) row.
+ *  FIFO distribution: delta is added to / subtracted from the OLDEST
+ *  cookDate entry first. If the delta exceeds an entry's qty, it spills
+ *  into the next-oldest entry. Mirrors food-safety FIFO ("oldest food used
+ *  first"). Negative qty is clamped to 0 — cook can't go negative. */
+export function updateLocScopedQty(id: string, loc: string, storage: string, idxCsv: string, valueStr: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
-  d.stock = parseFloat(value) || 0;
+  const newTotal = parseFloat(valueStr);
+  if (isNaN(newTotal) || newTotal < 0) {
+    toastError('Enter a non-negative number');
+    renderInventoryModal(loc);
+    return;
+  }
+  const idxs = idxCsv.split(',').map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+  if (idxs.length === 0) return;
+  const inv = d.inventory || [];
+  const currentTotal = idxs.reduce((s, i) => s + (inv[i]?.qty || 0), 0);
+  let delta = newTotal - currentTotal;
+  if (delta < 0) {
+    // Decreasing — drain from OLDEST first (FIFO).
+    let remaining = -delta;
+    for (const i of idxs) {
+      if (remaining <= 0) break;
+      const e = inv[i];
+      if (!e) continue;
+      const take = Math.min(remaining, e.qty);
+      e.qty = Math.round((e.qty - take) * 10) / 10;
+      remaining -= take;
+    }
+  } else if (delta > 0) {
+    // Increasing — add to OLDEST (so older food is what's "topped up").
+    // If only one entry exists at this (batch, loc, storage), this just
+    // bumps it. If multiple, oldest absorbs. Edge case: if cook entered
+    // a positive total but there are zero existing entries (idxs covers
+    // ZERO qty rows — should be impossible since buildLocScopedRows
+    // filters qty > 0, but defensive), add to the first index.
+    inv[idxs[0]].qty = Math.round((inv[idxs[0]].qty + delta) * 10) / 10;
+  }
+  scheduleSave();
+  // Re-render so the row's badge / total / stale-flag refresh.
+  renderInventoryModal(loc);
+}
+
+/** Cycle storage state on every underlying entry of an aggregated row.
+ *  Mirrors the backend /transfer cookDate-reset rules: Gastro↔Frozen
+ *  resets each entry's cookDate to today; other transitions preserve. */
+export function cycleInventoryStorageAt(id: string, loc: string, fromStorage: string, idxCsv: string) {
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  const idxs = idxCsv.split(',').map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+  const cur = STORAGE.indexOf(fromStorage as StorageType);
+  const next = STORAGE[(cur + 1) % STORAGE.length];
+  const inv = d.inventory || [];
+  const today = dateToStr(getToday());
+  const resetsCookDate =
+    (fromStorage === 'Gastro' && next === 'Frozen') ||
+    (fromStorage === 'Frozen' && next === 'Gastro');
+  for (const i of idxs) {
+    const e = inv[i];
+    if (!e) continue;
+    e.storage = next;
+    if (resetsCookDate) e.cookDate = today;
+  }
+  scheduleSave();
+  renderInventoryModal(loc);
+}
+
+/** Power view — cycle storage on a single InventoryEntry by index. Same
+ *  cookDate-reset rules as the aggregated path. */
+export function cycleEntryStorageAt(id: string, idx: number, loc: string) {
+  const d = S.batches.find(x => x.id === id);
+  if (!d || !d.inventory || idx < 0 || idx >= d.inventory.length) return;
+  const e = d.inventory[idx];
+  const cur = STORAGE.indexOf(e.storage);
+  const next = STORAGE[(cur + 1) % STORAGE.length];
+  const today = dateToStr(getToday());
+  const resetsCookDate =
+    (e.storage === 'Gastro' && next === 'Frozen') ||
+    (e.storage === 'Frozen' && next === 'Gastro');
+  e.storage = next;
+  if (resetsCookDate) e.cookDate = today;
+  scheduleSave();
+  renderInventoryModal(loc);
+}
+
+/** Power view — edit one entry's qty by absolute new value. */
+export function updatePowerEntryQty(id: string, idx: number, valueStr: string, loc: string) {
+  const d = S.batches.find(x => x.id === id);
+  if (!d || !d.inventory || idx < 0 || idx >= d.inventory.length) return;
+  const v = parseFloat(valueStr);
+  if (isNaN(v) || v < 0) {
+    toastError('Enter a non-negative number');
+    renderInventoryModal(loc);
+    return;
+  }
+  d.inventory[idx].qty = Math.round(v * 10) / 10;
+  scheduleSave();
+  // Don't re-render — the input is what the cook is editing; rerendering
+  // resets focus. Power-mode edits are typed-into-input → blur → save.
+  // Storage badge / stale-flag updates wait for next open.
+}
+
+// Legacy thin wrappers for older entry points. Both route through the new
+// aggregated/Power handlers. Kept until external callers (orders.ts, etc.)
+// migrate in Checkpoint 5.
+export function updateInventoryStock(id: string, value: string) {
+  // Legacy path: no entry idx info — fall back to applying the value to the
+  // first non-empty inventory entry. Cooks shouldn't hit this in the new
+  // modal; external callers will.
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  const inv = d.inventory || [];
+  const first = inv.find(e => e.qty > 0) || inv[0];
+  if (first) {
+    const v = parseFloat(value);
+    if (!isNaN(v) && v >= 0) first.qty = Math.round(v * 10) / 10;
+  }
   scheduleSave();
 }
 
 export function cycleInventoryStorage(id: string, loc: string) {
-  // Cycle the storage state (Gastro → Frozen → Vac-packed → ...) for a batch
-  // shown in the dashboard "Cooked Food Inventory" modal, then re-render the
-  // modal so the new label is visible without forcing the user to close and
-  // reopen it. This is the discoverable path for moving stale stock to the
-  // freezer.
+  // Legacy path: cycle storage on the first entry at this loc (or first
+  // entry overall if none at loc). Mirrors the cookDate-reset rules.
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
-  const idx = STORAGE.indexOf(d.storage || 'Gastro');
-  d.storage = STORAGE[(idx + 1) % STORAGE.length];
+  const inv = d.inventory || [];
+  const target = inv.find(e => e.loc === loc) || inv[0];
+  if (target) {
+    const cur = STORAGE.indexOf(target.storage);
+    const next = STORAGE[(cur + 1) % STORAGE.length];
+    const today = dateToStr(getToday());
+    const resetsCookDate =
+      (target.storage === 'Gastro' && next === 'Frozen') ||
+      (target.storage === 'Frozen' && next === 'Gastro');
+    target.storage = next;
+    if (resetsCookDate) target.cookDate = today;
+  }
   scheduleSave();
-  // Reopen the modal to refresh the rendered list (cheaper than diffing the DOM).
-  openInventory(loc);
+  renderInventoryModal(loc);
 }
 
 export function openServedFromInventory(id: string, loc: string) {
-  // Store that we came from inventory so we can reopen it
+  // Store that we came from inventory so we can reopen it after the dialog
+  // closes. Use the loc-scoped dialog path — only this kitchen's stock is
+  // consumed, other locs and pending shipments stay (audit BL1: prevents
+  // silent cross-loc data loss when cook marks a single-loc service done).
   S._inventoryLoc = loc;
-  openServedDialog(id);
+  openServedDialogForLoc(id, loc as Location);
 }
 
 export function finishInventory(loc: string) {

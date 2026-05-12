@@ -4,7 +4,7 @@ import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS } from './state';
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
 type DashBatch = Batch & { starch?: string | null };
 import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId, formatRelativeTime } from './utils';
-import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass } from './core';
+import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass, getTotalStock, getStockAt, getPendingFromShipments } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
 import { esc } from './modal';
@@ -127,8 +127,24 @@ export function isChoppableIngredient(name: string) {
 
 // ── HELPERS ──────────────────────────────────────────────────
 
+/**
+ * Whether `dish` is "at" `loc` for cook-planning purposes. In the unified-
+ * batch model "where is the batch" depends on intent:
+ *   - For uncooked batches (inventory empty): the cook location is
+ *     `inventory[0].loc` (sticky from first confirmCooked) — defaults to
+ *     'west' for never-cooked placeholders.
+ *   - For cooked batches with stock: the loc is wherever the stock sits.
+ *
+ * This helper handles both: a batch is at `loc` if its primary cook loc is
+ * `loc` OR it has any inventory at `loc`. Used by `getCookDateDishes` to
+ * find batches scheduled to cook at a kitchen on a given date.
+ */
+function batchPrimaryLoc(b: Batch): Location {
+  return (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west');
+}
+
 export function isDishAtLocation(dish: Batch, loc: Location) {
-  return dish.location === loc;
+  return batchPrimaryLoc(dish) === loc || getStockAt(dish, loc) > 0;
 }
 
 export function getCookDateDishes(loc: Location, date: Date) {
@@ -295,8 +311,8 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
 
   if (ctx.liters !== undefined) {
     html += `<span class="dash-chip-liters">${ctx.liters} L</span>`;
-  } else if (ctx.showStock && (dish.stock || 0) > 0) {
-    html += `<span class="dash-chip-liters">${dish.stock} L</span>`;
+  } else if (ctx.showStock && getTotalStock(dish) > 0) {
+    html += `<span class="dash-chip-liters">${getTotalStock(dish)} L</span>`;
   }
 
   html += `<span class="dash-chip-arrow">${expanded ? '▾' : '›'}</span>
@@ -333,7 +349,7 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
     const cooked = isBatchCooked(dish);
     html += `<div class="dash-chip-detail-row">
       <span class="dash-chip-detail-label">Stock</span>
-      <span>${dish.stock || 0} L ${cooked ? '<span class="dash-chip-badge-ok">cooked</span>' : '<span class="dash-chip-badge-warn">uncooked</span>'}</span>
+      <span>${getTotalStock(dish)} L ${cooked ? '<span class="dash-chip-badge-ok">cooked</span>' : '<span class="dash-chip-badge-warn">uncooked</span>'}</span>
     </div>`;
     if (dish.cookDate) {
       html += `<div class="dash-chip-detail-row">
@@ -342,12 +358,9 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
       </div>`;
     }
 
-    // Recipe link
-    if (dish.recipeSheetId) {
-      html += `<div class="dash-chip-detail-row">
-        <a class="dash-recipe-btn" href="https://docs.google.com/spreadsheets/d/${esc(dish.recipeSheetId)}" target="_blank" onclick="event.stopPropagation()">📄 Open Recipe</a>
-      </div>`;
-    } else if ((dish as Record<string, unknown>).recipeId) {
+    // Recipe link — only v2 recipes remain; legacy v1 recipeSheetId path
+    // was removed with the unified-batch migration.
+    if ((dish as Record<string, unknown>).recipeId) {
       html += `<div class="dash-chip-detail-row">
         <button class="dash-recipe-btn" onclick="event.stopPropagation();openRecipeDetail('${esc((dish as Record<string, unknown>).recipeId as string)}')">📄 View Recipe</button>
       </div>`;
@@ -915,10 +928,13 @@ export function renderDashboardContent() {
   const sortedMenu = [...menuDishes].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
 
   // ── Stock overview ──
+  // Show batches with settled stock at this loc (in-flight shipments are
+  // tracked separately in the transport view). Per-loc qty drives the
+  // sort + totals so the cook sees what's physically here.
   const stockBatches = S.batches
-    .filter(b => b.location === loc && (b.stock || 0) > 0 && !b.inTransit)
+    .filter(b => getStockAt(b, loc) > 0)
     .sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
-  const totalStock = Math.round(stockBatches.reduce((s, b) => s + (b.stock || 0), 0) * 10) / 10;
+  const totalStock = Math.round(stockBatches.reduce((s, b) => s + getStockAt(b, loc), 0) * 10) / 10;
 
   // ── Cook: uncooked batches for selected meal today ──
   const cookDishes = (S.planner[`${loc}-${todayStr}-${meal}`] || []).filter(d => !isBatchCooked(d));
@@ -991,8 +1007,18 @@ export function renderDashboardContent() {
           ${stockBatches.length === 0
             ? `<div class="dash-empty">No food in stock</div>`
             : (() => {
-                const fresh = stockBatches.filter(b => b.storage !== 'Frozen');
-                const frozen = stockBatches.filter(b => b.storage === 'Frozen');
+                // Per-loc Frozen split: a batch counts as "Frozen at this loc"
+                // when ALL its inventory entries at this loc are Frozen. Any
+                // non-frozen entry at the loc puts it in the "fresh" bucket
+                // (mixed batches surface in the fresh bucket so the cook sees
+                // them as available; the frozen-only batches show up explicitly
+                // under the ❄️ section).
+                const isFrozenAtLoc = (b: Batch) => {
+                  const here = (b.inventory || []).filter(e => e.loc === loc && (e.qty || 0) > 0);
+                  return here.length > 0 && here.every(e => e.storage === 'Frozen');
+                };
+                const fresh = stockBatches.filter(b => !isFrozenAtLoc(b));
+                const frozen = stockBatches.filter(b => isFrozenAtLoc(b));
                 let h = renderGroupedByType(fresh, b => renderDashChip(b, {
                   showStock: true,
                   note: !isBatchCooked(b) ? 'uncooked' : undefined,

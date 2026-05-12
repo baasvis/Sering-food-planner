@@ -7,7 +7,7 @@
  *
  * Tables copied (FK-safe order):
  *   ingredients → recipes → recipe_ingredients → recipe_photos →
- *   batches (null parentId first) → guests → guests_next_weeks →
+ *   batches → guests → guests_next_weeks →
  *   guest_history → guest_history_meta → caterings → transport_items →
  *   standard_inventory → storage_config → prep_checklist
  *
@@ -32,8 +32,7 @@ if (STAGING.includes('centerbeam.proxy.rlwy.net')) {
   process.exit(1);
 }
 
-// Tables in dependency order (parents before children). Batches need special
-// handling for self-reference on parent_id.
+// Tables in dependency order (parents before children).
 const COPY_ORDER = [
   'ingredients',
   'recipes',
@@ -94,16 +93,8 @@ async function copyTable(prod, staging, table) {
   }
   const colList = selectList;
 
-  // Special handling for batches: insert null-parent rows first, then non-null,
-  // to avoid self-reference FK violation (batches_parent_id_fkey).
-  let orderedRows = rows;
-  if (table === 'batches') {
-    const noParent = rows.filter(r => r.parent_id == null);
-    const withParent = rows.filter(r => r.parent_id != null);
-    orderedRows = [...noParent, ...withParent];
-  }
-
   // Insert in chunks of 200 to avoid huge single statements
+  const orderedRows = rows;
   const CHUNK = 200;
   let inserted = 0;
   for (let i = 0; i < orderedRows.length; i += CHUNK) {
@@ -143,6 +134,18 @@ async function copyTable(prod, staging, table) {
   await prod.connect();
   await staging.connect();
   console.log('Connected to both databases');
+
+  // Schema probe: confirm prod is on the unified-batch schema. If the
+  // `inventory` column is missing, this DB is pre-migration — abort before
+  // we try to copy columns that no longer exist on staging.
+  const probe = await prod.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'batches' AND column_name = 'inventory'`,
+  );
+  if (probe.rows.length === 0) {
+    console.error('ERROR: prod database does not have the unified-batch schema. Run the migration first (see prisma/migrations/DEPLOY.md). Aborting.');
+    console.error('Schema probe: SELECT column_name FROM information_schema.columns WHERE table_name=batches AND column_name=inventory returned 0 rows — prod has not been migrated yet.');
+    process.exit(1);
+  }
 
   // Verify we're hitting a staging-like host on the write side
   const stagingCheck = await staging.query('SELECT inet_server_addr() AS addr, current_database() AS db');
