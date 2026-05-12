@@ -1216,6 +1216,7 @@ let _editMode: 'normal' | 'power' = 'normal';
 
 export function openEditDish(id: string, mode: 'normal' | 'power' = 'normal') {
   _editMode = mode;
+  _activeInvRender = renderEditDish;
   renderEditDish(id);
 }
 
@@ -1241,8 +1242,20 @@ interface PendingInvAction {
 }
 let _invPending: PendingInvAction | null = null;
 
+// Tracks which modal is open so add/remove/update-row helpers re-render the
+// right one. Set whenever an inventory-aware modal opens; the helpers below
+// call this instead of jumping straight to renderEditDish (which would yank
+// the cook out of the simplified editor into the full Edit-dish modal — bug
+// reported during Daan's localhost test).
+let _activeInvRender: ((id: string) => void) | null = null;
+
+function reRenderActiveInvModal(id: string) {
+  if (_activeInvRender) _activeInvRender(id);
+}
+
 export function openInventoryEditor(id: string) {
   _invPending = null;
+  _activeInvRender = renderInventoryEditor;
   renderInventoryEditor(id);
 }
 
@@ -1252,55 +1265,60 @@ function renderInventoryEditor(id: string) {
   const inv = d.inventory || [];
   const otherLoc = (loc: Location): Location => (loc === 'west' ? 'centraal' : 'west');
 
-  const rowsHtml = inv.length === 0
-    ? '<tr><td colspan="5" style="padding:12px;color:var(--text3);text-align:center;">No inventory yet — use + Add row.</td></tr>'
+  // Card-per-entry layout (rather than the old table). Daan's smoke
+  // surfaced two issues with the table version: (a) per-row action
+  // buttons (Freeze, → other loc, ×) got clipped at the modal's right
+  // edge on narrower screens, and (b) it was visually busy. Cards give
+  // each entry its own breathing room with the action strip explicitly
+  // on a separate line, always visible.
+  const cardsHtml = inv.length === 0
+    ? '<div style="padding:24px;color:var(--text3);text-align:center;font-size:13px;border:1px dashed var(--border);border-radius:8px;">No inventory yet — use + Add row.</div>'
     : inv.map((e, i) => {
-        // Per-row action buttons. Hide Freeze on already-frozen rows.
         const freezeBtn = e.storage === 'Frozen'
           ? ''
           : `<button class="btn btn-sm" onclick="setInvAction('${id}',${i},'freeze')" title="Freeze some of this stock">❄️ Freeze</button>`;
         const sendBtn = `<button class="btn btn-sm" onclick="setInvAction('${id}',${i},'send')" title="Send some of this stock to ${locName(otherLoc(e.loc))}">→ ${locName(otherLoc(e.loc))}</button>`;
-        const removeBtn = `<button class="btn btn-sm btn-danger" onclick="removeInventoryEntry('${id}',${i})" title="Remove this row entirely">&times;</button>`;
+        const removeBtn = `<button class="btn btn-sm btn-danger" onclick="removeInventoryEntry('${id}',${i})" title="Remove this row entirely">×</button>`;
         const isActive = _invPending && _invPending.rowIdx === i;
         const actionForm = isActive
-          ? `<tr><td colspan="5" style="padding:6px 8px;background:var(--bg2);">
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <span style="font-size:12px;color:var(--text2);">
-                  ${_invPending!.kind === 'freeze'
-                    ? `❄️ How many liters to freeze from <strong>${locName(e.loc)} ${e.storage}</strong>?`
-                    : `→ How many liters to send to <strong>${locName(otherLoc(e.loc))}</strong>?`}
-                </span>
-                <input type="number" id="inv-qty-${i}" step="0.5" min="0.1" max="${e.qty}" value="${e.qty.toFixed(1)}" style="width:80px;" autofocus
-                  onkeydown="if(event.key==='Enter')confirmInvAction('${id}',${i});if(event.key==='Escape')cancelInvAction('${id}')" />
-                <span style="font-size:12px;color:var(--text3);">of ${e.qty.toFixed(1)}L available</span>
-                <button class="btn btn-sm btn-primary" onclick="confirmInvAction('${id}',${i})">Confirm</button>
-                <button class="btn btn-sm" onclick="cancelInvAction('${id}')">Cancel</button>
-              </div>
-            </td></tr>`
+          ? `<div style="margin-top:8px;padding:10px;background:var(--bg2);border-radius:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:12px;color:var(--text2);flex-basis:100%;">
+                ${_invPending!.kind === 'freeze'
+                  ? `❄️ How many liters to freeze from <strong>${locName(e.loc)} ${e.storage}</strong>?`
+                  : `→ How many liters to send to <strong>${locName(otherLoc(e.loc))}</strong>?`}
+              </span>
+              <input type="number" id="inv-qty-${i}" step="0.5" min="0.1" max="${e.qty}" value="${e.qty.toFixed(1)}" style="width:80px;" autofocus
+                onkeydown="if(event.key==='Enter')confirmInvAction('${id}',${i});if(event.key==='Escape')cancelInvAction('${id}')" />
+              <span style="font-size:12px;color:var(--text3);">of ${e.qty.toFixed(1)}L available</span>
+              <button class="btn btn-sm btn-primary" onclick="confirmInvAction('${id}',${i})">Confirm</button>
+              <button class="btn btn-sm" onclick="cancelInvAction('${id}')">Cancel</button>
+            </div>`
           : '';
-        return `<tr>
-          <td style="padding:6px 8px;"><select onchange="updateInventoryField('${id}',${i},'loc',this.value)">${LOCATIONS.map(l => `<option value="${l}"${e.loc === l ? ' selected' : ''}>${locName(l)}</option>`).join('')}</select></td>
-          <td style="padding:6px 8px;"><select onchange="updateInventoryField('${id}',${i},'storage',this.value)">${STORAGE.map(s => `<option value="${s}"${e.storage === s ? ' selected' : ''}>${s}</option>`).join('')}</select></td>
-          <td style="padding:6px 8px;"><input type="number" value="${e.qty}" step="0.5" min="0" style="width:72px;" onchange="updateInventoryField('${id}',${i},'qty',this.value)" /></td>
-          <td style="padding:6px 8px;font-family:monospace;font-size:11px;color:var(--text2);">${esc(e.cookDate)}</td>
-          <td style="padding:6px 8px;"><div style="display:flex;gap:4px;align-items:center;justify-content:flex-end;">${freezeBtn}${sendBtn}${removeBtn}</div></td>
-        </tr>${actionForm}`;
+        return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--bg);">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select onchange="updateInventoryField('${id}',${i},'loc',this.value)" style="min-width:130px;">
+              ${LOCATIONS.map(l => `<option value="${l}"${e.loc === l ? ' selected' : ''}>${locName(l)}</option>`).join('')}
+            </select>
+            <select onchange="updateInventoryField('${id}',${i},'storage',this.value)" style="min-width:110px;">
+              ${STORAGE.map(s => `<option value="${s}"${e.storage === s ? ' selected' : ''}>${s}</option>`).join('')}
+            </select>
+            <label style="font-size:12px;color:var(--text2);">Qty</label>
+            <input type="number" value="${e.qty}" step="0.5" min="0" style="width:72px;" onchange="updateInventoryField('${id}',${i},'qty',this.value)" />
+            <span style="font-size:11px;color:var(--text3);font-family:monospace;margin-left:auto;">cooked ${esc(e.cookDate)}</span>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+            ${freezeBtn}${sendBtn}
+            <span style="flex:1;"></span>
+            ${removeBtn}
+          </div>
+          ${actionForm}
+        </div>`;
       }).join('');
 
   showModal(`<h3>Edit stock &mdash; ${esc(d.name)}</h3>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;">
-      <thead><tr style="text-align:left;color:var(--text2);font-weight:500;">
-        <th style="padding:6px 8px;">Where</th>
-        <th style="padding:6px 8px;">Storage</th>
-        <th style="padding:6px 8px;">Qty (L)</th>
-        <th style="padding:6px 8px;">Cooked</th>
-        <th style="padding:6px 8px;text-align:right;">Actions</th>
-      </tr></thead>
-      <tbody>${rowsHtml}</tbody>
-    </table>
-    <button class="btn btn-sm" style="margin-top:8px;" onclick="addInventoryEntry('${id}')">+ Add row</button>
+    <div style="max-height:60vh;overflow-y:auto;margin-bottom:8px;">${cardsHtml}</div>
+    <button class="btn btn-sm" onclick="addInventoryEntry('${id}')">+ Add row</button>
     <div class="modal-actions">
-      <button class="btn" onclick="event.stopPropagation();closeModal();openEditDish('${id}','normal')" title="Full edit (name, allergens, etc.)">More options&hellip;</button>
       <button class="btn btn-primary" onclick="closeModal()">Done</button>
     </div>`);
 }
@@ -1509,8 +1527,11 @@ export function updateInventoryField(id: string, idx: number, field: string, val
   }
   if (mergeKeyChanged) {
     consolidateInventory(d);
-    // Re-render so the modal grid reflects the merged shape immediately.
-    renderEditDish(id);
+    // Re-render the SAME modal the cook is currently in (could be the
+    // simplified inventory editor OR the full Edit-dish in Power mode).
+    // Always calling renderEditDish ripped the cook out of the simplified
+    // editor and into the full form — Daan's smoke item 4.
+    reRenderActiveInvModal(id);
   }
   rebuildPlanner();
   scheduleSave();
@@ -1521,7 +1542,7 @@ export function removeInventoryEntry(id: string, idx: number) {
   if (!d) return;
   removeInventory(d, idx);
   scheduleSave();
-  renderEditDish(id);
+  reRenderActiveInvModal(id);
 }
 
 export function addInventoryEntry(id: string) {
@@ -1529,7 +1550,7 @@ export function addInventoryEntry(id: string) {
   if (!d) return;
   addInventory(d, { loc: 'west', storage: 'Gastro', qty: 0, cookDate: dateToStr(getToday()) });
   scheduleSave();
-  renderEditDish(id);
+  reRenderActiveInvModal(id);
 }
 
 export function cancelShipmentFromEdit(id: string, shipmentId: string) {
