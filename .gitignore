@@ -5,6 +5,11 @@ data/
 .env
 dist/
 
+# DB snapshots (may contain prod data — never commit)
+*-snapshot.json
+*-snapshot.sql
+pre-unify-snapshot.*
+
 # Playwright
 /test-results/
 /playwright-report/

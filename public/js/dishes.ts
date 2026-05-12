@@ -265,8 +265,7 @@ export function renderBatchTileOverview(d: Batch) {
     </div>
     <div class="col-cook">${cookHtml}</div>
     <div class="col-stock">
-      <span class="batch-stock-total" style="font-weight:500;">${totalStock.toFixed(1)}L</span>
-      <button class="btn btn-sm" style="font-size:10px;margin-left:4px;" onclick="event.stopPropagation();openEditDish('${d.id}')" title="Edit per-entry stock in the Power view">edit</button>
+      <span class="batch-stock-total" style="font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openEditDish('${d.id}','power')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L</span>
     </div>
     <div class="col-diff ${cls}" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</div>
     <div class="col-logistics" style="display:flex;flex-wrap:wrap;gap:3px;">
@@ -276,7 +275,7 @@ export function renderBatchTileOverview(d: Batch) {
     <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
     <div class="m-stock-row">
       <span style="font-size:12px;color:var(--text2);">Stock</span>
-      <span class="batch-stock-total" style="font-weight:500;">${totalStock.toFixed(1)}L</span>
+      <span class="batch-stock-total" style="font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openEditDish('${d.id}','power')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L</span>
       <span class="${cls}" style="font-size:12px;" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</span>
       <span style="display:flex;flex-wrap:wrap;gap:3px;font-size:10px;">${inventoryBadges}</span>
       <button class="btn btn-sm served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')" style="margin-left:auto;">Served</button>
@@ -363,7 +362,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
       <span class="batch-tile-name">${esc(d.name)}</span>
       <span class="batch-status ${isBatchCooked(d) ? ((hasStaleEntry || isStale) ? 'status-stale' : 'status-cooked') : 'status-tocook'}">${isBatchCooked(d) ? ((hasStaleEntry || isStale) ? 'Stale' : 'Cooked') : 'To cook'}</span>
       <span class="batch-tile-cook">${batchCookLabel(d)}</span>
-      <span class="batch-tile-stock ${cls}">${totalStock.toFixed(1)}L <small>${str}</small></span>
+      <span class="batch-tile-stock ${cls}" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openEditDish('${d.id}','power')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L <small>${str}</small></span>
       ${tooBigBadge}
       <span class="batch-tile-logistics" style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;">${renderInventoryBadges(d)}</span>
       ${opts.showAssign && !S.assigningBatchId ? `<button class="batch-assign-btn" onclick="event.stopPropagation();startAssignMode('${d.id}')">Assign</button>` : ''}
@@ -470,7 +469,7 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
         <div class="bx-section bx-col-main">
           <div class="bx-section-title">Stock & services</div>
           <div class="bx-row bx-stock">
-            <span class="bx-stock-input" style="font-size:18px;font-weight:600;">${totalStock.toFixed(1)}</span>
+            <span class="bx-stock-input" style="font-size:18px;font-weight:600;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;" onclick="event.stopPropagation();openEditDish('${d.id}','power')" title="Click to edit per-location stock">${totalStock.toFixed(1)}</span>
             <span class="bx-stock-unit">L total</span>
             <span class="bx-diff ${cls}">${str}</span>
             <span style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;margin-left:8px;">${renderInventoryBadges(d)}</span>
@@ -1202,8 +1201,8 @@ export async function saveNewDish() {
 
 let _editMode: 'normal' | 'power' = 'normal';
 
-export function openEditDish(id: string) {
-  _editMode = 'normal';
+export function openEditDish(id: string, mode: 'normal' | 'power' = 'normal') {
+  _editMode = mode;
   renderEditDish(id);
 }
 
