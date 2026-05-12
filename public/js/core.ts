@@ -80,7 +80,14 @@ export function isStaleEntry(entry: InventoryEntry): boolean {
   // trust; the cook visually inspects food anyway.
   if (!cooked) return false;
   const today = getToday();
-  const daysOld = Math.floor((today.getTime() - cooked.getTime()) / (1000 * 60 * 60 * 24));
+  // Calendar-day diff via UTC anchors. Naïve ms-division undercounts by one
+  // when the window straddles a DST spring-forward (one of the 24h slots is
+  // 23h, floor() rounds down). Anchoring both ends at midnight UTC sidesteps
+  // DST entirely — the local Y/M/D is the only thing that matters for shelf-
+  // life, and we never compare across actual zones.
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const cookedUtc = Date.UTC(cooked.getFullYear(), cooked.getMonth(), cooked.getDate());
+  const daysOld = Math.floor((todayUtc - cookedUtc) / 86_400_000);
   const limit = SHELF_LIFE_DAYS[entry.storage] ?? 3;
   return daysOld > limit;
 }

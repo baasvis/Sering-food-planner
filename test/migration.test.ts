@@ -38,6 +38,11 @@ let nextSeq = 0;
 const tid = (label: string) => `${T}${label}-${++nextSeq}`;
 
 function runMigrate(extraArgs: string[] = []): { stdout: string; stderr: string; status: number } {
+  // shell: true is REQUIRED for Windows. Without it, spawnSync('npx', ...)
+  // tries to exec a file literally named "npx" which doesn't exist —
+  // Windows has npx.cmd. The shell wrapper resolves PATHEXT for us on
+  // Windows and is a harmless pass-through on POSIX. Caught on Windows
+  // verification of b8d526d.
   const r = spawnSync('npx', ['tsx', SCRIPT_PATH, ...extraArgs], {
     env: {
       ...process.env,
@@ -45,6 +50,7 @@ function runMigrate(extraArgs: string[] = []): { stdout: string; stderr: string;
       DATABASE_URL: process.env.DATABASE_URL_TEST!,
     },
     encoding: 'utf-8',
+    shell: true,
   });
   return { stdout: r.stdout || '', stderr: r.stderr || '', status: r.status ?? -1 };
 }

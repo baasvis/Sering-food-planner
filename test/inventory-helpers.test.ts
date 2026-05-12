@@ -337,4 +337,30 @@ describe('isStaleEntry', () => {
     expect(isStaleEntry(entry({ cookDate: '' }))).toBe(false);
     expect(isStaleEntry(entry({ cookDate: 'not-a-date' }))).toBe(false);
   });
+
+  it('counts 61 calendar days correctly when the window spans Europe spring-forward (DST regression)', () => {
+    // Bug caught on Windows verification of b8d526d (host TZ = Europe/Brussels):
+    //   today = 2026-05-12; cookDate = 12/03/2026 (61 cal days back, spans
+    //   the 29-March spring-forward).
+    // Naïve ms-divide:
+    //   (May 12 00:00 CEST) − (Mar 12 00:00 CET) = 61·24h − 1h
+    //   floor((61·24 − 1) / 24) = 60   ← under by one
+    //   60 > 60 = false → REPORTED FRESH (wrong)
+    // UTC-anchored calendar-day diff:
+    //   Date.UTC(2026,4,12) − Date.UTC(2026,2,12) = 61 days exactly
+    //   61 > 60 = true → reported stale (correct)
+    //
+    // jest.setSystemTime pins "today" regardless of host TZ, so this assertion
+    // catches a regression to the naïve math even on UTC CI.
+    jest.useFakeTimers();
+    try {
+      jest.setSystemTime(new Date('2026-05-12T12:00:00Z'));
+      expect(isStaleEntry(entry({ storage: 'Frozen', cookDate: '12/03/2026' }))).toBe(true);
+      // Day 60 across the same DST boundary should still read as fresh —
+      // boundary semantics survive the rewrite.
+      expect(isStaleEntry(entry({ storage: 'Frozen', cookDate: '13/03/2026' }))).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
