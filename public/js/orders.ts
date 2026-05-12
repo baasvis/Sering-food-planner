@@ -960,7 +960,13 @@ export function renderCombinedOrderTab() {
   });
 
   if (!Object.keys(combined).length) {
-    return `<div class="empty">No items to order. Add items to Standard Inventory or flag batches for ordering in the Week plan.</div>`;
+    // Stocktake is independent of having an order — cooks start a stocktake
+    // to FIND OUT what to order. Surface the button here too so a fresh
+    // location/week with nothing to order isn't a dead end.
+    return `<div class="empty">No items to order. Add items to Standard Inventory or flag batches for ordering in the Week plan.</div>
+      <div style="margin-top:12px;text-align:center;">
+        <button class="btn btn-sm" data-testid="stocktake-start-btn" style="background:var(--blue);color:white;" onclick="startStocktake()">📋 Do stocktake</button>
+      </div>`;
   }
 
   const ingList = Object.values(combined).sort((a: CombinedOrderEntry, b: CombinedOrderEntry) => a.name.localeCompare(b.name)).map(ing => {

@@ -37,6 +37,15 @@ const T = 'test-mig-' + Date.now() + '-';
 let nextSeq = 0;
 const tid = (label: string) => `${T}${label}-${++nextSeq}`;
 
+// Each test in this file spawns `npx tsx data-migrate.ts` as a child process
+// against the test DB (Railway staging proxy in normal local use). On Windows,
+// `npx tsx` cold-starts in 2–4s and the DB RTT adds another 1–3s on top of
+// Jest's default 5s per-test timeout — that's the edge that fluked three tests
+// on a real machine even though the same suite ran ~25s green on a Linux
+// sandbox. 60s gives every spawn comfortable headroom; pure test-only setting
+// with zero impact on production code.
+jest.setTimeout(60_000);
+
 function runMigrate(extraArgs: string[] = []): { stdout: string; stderr: string; status: number } {
   // shell: true is REQUIRED for Windows. Without it, spawnSync('npx', ...)
   // tries to exec a file literally named "npx" which doesn't exist —
