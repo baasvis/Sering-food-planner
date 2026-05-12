@@ -1,7 +1,7 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet } from './utils';
 import { pushUndo } from './undo';
-import { rebuildPlanner, isBatchCooked, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, isStaleEntry } from './core';
+import { rebuildPlanner, isBatchCooked, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { trackEvent } from './telemetry';
@@ -47,14 +47,27 @@ function renderInventorySummary(d: Batch): string {
 }
 
 /** Storage-aware compact location chips for the tile. Returns one badge per
- *  inventory entry + one per pending shipment. */
+ *  inventory entry + one per pending shipment.
+ *
+ *  Color encoding (cook needs to read these at a glance during service):
+ *   - West Gastro/Vac-packed:     amber (b-west)
+ *   - Centraal Gastro/Vac-packed: green (b-centraal)
+ *   - West Frozen:                light blue (b-frozen-west)
+ *   - Centraal Frozen:            dark blue (b-frozen-centraal)
+ *  Frozen badges also carry a ❄️ prefix so colorblind cooks have a second
+ *  signal. Pending shipments stay in the destination color (green = "going
+ *  to Centraal" etc.) plus the → arrow. */
 function renderInventoryBadges(d: Batch): string {
   const inv = (d.inventory || []).filter(e => e.qty > 0);
   const ship = (d.shipments || []).filter(s => !s.arrived);
   const badges: string[] = [];
   for (const e of inv) {
-    const cls = e.loc === 'centraal' ? 'b-centraal' : 'b-west';
-    badges.push(`<span class="badge ${cls}" title="${e.qty.toFixed(1)}L at ${locName(e.loc)} (${e.storage})">${e.qty.toFixed(1)}L ${e.loc === 'centraal' ? 'C' : 'W'}</span>`);
+    const isFrozen = e.storage === 'Frozen';
+    const cls = isFrozen
+      ? (e.loc === 'centraal' ? 'b-frozen-centraal' : 'b-frozen-west')
+      : (e.loc === 'centraal' ? 'b-centraal' : 'b-west');
+    const prefix = isFrozen ? '❄️ ' : '';
+    badges.push(`<span class="badge ${cls}" title="${e.qty.toFixed(1)}L at ${locName(e.loc)} (${e.storage})">${prefix}${e.qty.toFixed(1)}L ${e.loc === 'centraal' ? 'C' : 'W'}</span>`);
   }
   for (const s of ship) {
     const cls = s.toLoc === 'centraal' ? 'b-twc' : 'b-tww';
@@ -1309,16 +1322,33 @@ function renderEditDish(id: string) {
 }
 
 /** Power view: edit one field of one inventory entry. Optimistic mutation +
- *  scheduleSave so the next debounced patch picks it up. */
+ *  scheduleSave so the next debounced patch picks it up.
+ *
+ *  After a loc or storage edit the entry may now share its (loc, storage,
+ *  cookDate) key with another row. consolidateInventory folds those together
+ *  on the spot, then re-renders the modal so the cook sees the merged
+ *  view (matches the Stocktake screen's "one batch" display). */
 export function updateInventoryField(id: string, idx: number, field: string, value: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d || !d.inventory || idx < 0 || idx >= d.inventory.length) return;
   const entry = d.inventory[idx];
-  if (field === 'loc' && (value === 'west' || value === 'centraal')) entry.loc = value;
-  else if (field === 'storage' && (value === 'Gastro' || value === 'Frozen' || value === 'Vac-packed')) entry.storage = value;
+  let mergeKeyChanged = false;
+  if (field === 'loc' && (value === 'west' || value === 'centraal')) {
+    entry.loc = value;
+    mergeKeyChanged = true;
+  }
+  else if (field === 'storage' && (value === 'Gastro' || value === 'Frozen' || value === 'Vac-packed')) {
+    entry.storage = value;
+    mergeKeyChanged = true;
+  }
   else if (field === 'qty') {
     const n = parseFloat(value);
     if (!isNaN(n) && n >= 0) entry.qty = n;
+  }
+  if (mergeKeyChanged) {
+    consolidateInventory(d);
+    // Re-render so the modal grid reflects the merged shape immediately.
+    renderEditDish(id);
   }
   rebuildPlanner();
   scheduleSave();
