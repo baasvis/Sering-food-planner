@@ -150,6 +150,49 @@ describe('POST /api/batches/:id/ship', () => {
     expect(second.body.batch.shipments[0].qty).toBe(17);
   });
 
+  it('does NOT pack-accumulate when storage differs (same dest+cookDate, different storage)', async () => {
+    // Locked §29 keys on (toLoc, storage, cookDate). Same-loc same-cookDate
+    // but different storage must produce two separate shipment rows.
+    const b = await createBatch({
+      inventory: [
+        { loc: 'west', storage: 'Gastro', qty: 30, cookDate: '01/05/2026' },
+        { loc: 'west', storage: 'Frozen', qty: 30, cookDate: '01/05/2026' },
+      ],
+    });
+    const first = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: 'centraal', qty: 10, storage: 'Gastro' });
+    const second = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: 'centraal', qty: 7, storage: 'Frozen' });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const pending = second.body.batch.shipments.filter((s: any) => !s.arrived);
+    expect(pending).toHaveLength(2);
+    expect(pending.find((s: any) => s.storage === 'Gastro').qty).toBe(10);
+    expect(pending.find((s: any) => s.storage === 'Frozen').qty).toBe(7);
+  });
+
+  it('does NOT pack-accumulate when cookDate differs (same dest+storage, different cookDate)', async () => {
+    // Two batches' worth of stock at West with different cookDates — ship
+    // from each. Two pending shipments, not one accumulated row.
+    const b = await createBatch({
+      inventory: [
+        { loc: 'west', storage: 'Gastro', qty: 30, cookDate: '01/05/2026' },
+        { loc: 'west', storage: 'Gastro', qty: 30, cookDate: '02/05/2026' },
+      ],
+    });
+    // The /ship source-selector looks for first matching (loc, qty>0, storage).
+    // Both source entries share storage so we can't directly target the
+    // second by index without specifying fromInventoryIdx. Use it explicitly.
+    const first = await request(app).post(`/api/batches/${b.id}/ship`)
+      .send({ toLoc: 'centraal', qty: 5, storage: 'Gastro', fromInventoryIdx: 0 });
+    const second = await request(app).post(`/api/batches/${b.id}/ship`)
+      .send({ toLoc: 'centraal', qty: 7, storage: 'Gastro', fromInventoryIdx: 1 });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const pending = second.body.batch.shipments.filter((s: any) => !s.arrived);
+    expect(pending).toHaveLength(2);
+    expect(pending.find((s: any) => s.cookDate === '01/05/2026').qty).toBe(5);
+    expect(pending.find((s: any) => s.cookDate === '02/05/2026').qty).toBe(7);
+  });
+
   it('does NOT pack-accumulate after the first shipment has arrived', async () => {
     const b = await createBatch();
     const ship1 = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: 'centraal', qty: 10 });
@@ -250,6 +293,25 @@ describe('POST /api/batches/:id/shipments/:shipmentId/arrived', () => {
     expect(res.status).toBe(404);
   });
 
+  it('ignores body-supplied qty — full shipment qty arrives unchanged (locked §28)', async () => {
+    // The cook may eyeball "looks like 23L not 25L" on arrival; locked
+    // decision §28 says the system DOES NOT accept a qty override here.
+    // Adjustments happen through the Edit modal after the fact.
+    const b = await createBatch();
+    const ship = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: 'centraal', qty: 25 });
+    const sId = ship.body.batch.shipments[0].id;
+    const res = await request(app)
+      .post(`/api/batches/${b.id}/shipments/${sId}/arrived`)
+      .send({ qty: 12345 }); // attempted override — must be ignored
+    expect(res.status).toBe(200);
+    const arrived = res.body.batch.shipments.find((s: any) => s.id === sId);
+    expect(arrived.qty).toBe(25);
+    const centraalEntry = res.body.batch.inventory.find(
+      (e: any) => e.loc === 'centraal' && e.storage === 'Gastro' && e.cookDate === '01/05/2026',
+    );
+    expect(centraalEntry.qty).toBe(25);
+  });
+
   it('returns 404 when shipment is already arrived (no double-arrive)', async () => {
     const b = await createBatch();
     const ship = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: 'centraal', qty: 10 });
@@ -314,7 +376,18 @@ describe('POST /api/batches/:id/transfer', () => {
     expect(centraal.qty).toBe(10);
   });
 
-  it('Gastro → Frozen at same loc resets cookDate to today (locked §22)', async () => {
+  // Build "today" in DD/MM/YYYY the same way routes/batches.ts:42-47 does,
+  // so freeze/thaw assertions catch off-by-one-month / off-by-one-day bugs
+  // (the original assertion only checked "different from source", which a
+  // wrong-month bug would have silently passed).
+  function todayDdMmYyyy(): string {
+    const d = new Date();
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    return `${dd}/${mm}/${d.getFullYear()}`;
+  }
+
+  it('Gastro → Frozen at same loc resets cookDate to TODAY (locked §22)', async () => {
     const b = await createBatch({
       inventory: [{ loc: 'west', storage: 'Gastro', qty: 30, cookDate: '01/01/2026' }],
     });
@@ -324,12 +397,10 @@ describe('POST /api/batches/:id/transfer', () => {
     expect(res.status).toBe(200);
     const frozen = res.body.batch.inventory.find((e: any) => e.storage === 'Frozen');
     expect(frozen.qty).toBe(20);
-    // Today's date in DD/MM/YYYY — not the original 01/01/2026.
-    expect(frozen.cookDate).not.toBe('01/01/2026');
-    expect(frozen.cookDate).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
+    expect(frozen.cookDate).toBe(todayDdMmYyyy());
   });
 
-  it('Frozen → Gastro resets cookDate to today (thawed shelf-life starts today, default §1)', async () => {
+  it('Frozen → Gastro resets cookDate to TODAY (thawed shelf-life starts today, default §1)', async () => {
     const b = await createBatch({
       inventory: [{ loc: 'west', storage: 'Frozen', qty: 20, cookDate: '01/01/2026' }],
     });
@@ -338,8 +409,7 @@ describe('POST /api/batches/:id/transfer', () => {
       .send({ fromLoc: 'west', fromStorage: 'Frozen', toLoc: 'west', toStorage: 'Gastro', qty: 5 });
     expect(res.status).toBe(200);
     const gastro = res.body.batch.inventory.find((e: any) => e.storage === 'Gastro');
-    expect(gastro.cookDate).not.toBe('01/01/2026');
-    expect(gastro.cookDate).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
+    expect(gastro.cookDate).toBe(todayDdMmYyyy());
   });
 
   it('Gastro → Vac-packed (cross-storage non-freeze) carries source cookDate', async () => {

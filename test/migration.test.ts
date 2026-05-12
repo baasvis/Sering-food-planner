@@ -325,6 +325,41 @@ describe('data-migrate: catering ref rewrite + dedup', () => {
     expect(dishes[0].dishId).toBe(parentId); // rewritten to canonical
   });
 
+  it('flags name/type divergence as an anomaly when deduping two refs (data-migrate.ts:328-335)', async () => {
+    // Two catering refs to parent+split that disagree on the displayed
+    // dish name (cook edited one row but not the other in the old UI).
+    // After migration both rewrite to canonical id; dedup keeps the first;
+    // divergence is reported as a cateringDivergence anomaly in stdout.
+    const parentId = tid('p');
+    const splitId = tid('s');
+    const cateringId = tid('cat');
+    await insertLegacyBatch({
+      id: parentId, name: 'Soup', stock: 40, location: 'west',
+      cookDate: '01/05/2026', createdAt: '2026-05-01T08:00:00Z',
+    });
+    await insertLegacyBatch({
+      id: splitId, name: 'Soup (split)', stock: 10, location: 'centraal',
+      cookDate: '01/05/2026', parentId, createdAt: '2026-05-01T09:00:00Z',
+    });
+    await insertLegacyCatering({
+      id: cateringId,
+      dishes: [
+        { dishId: parentId, name: 'Soup',                 type: 'Soup' },
+        { dishId: splitId,  name: 'Soup — kid portion', type: 'Soup' },
+      ],
+    });
+
+    const r = runMigrate();
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/cateringDivergences/);
+    // Scoped sanity: name divergence pair shows our exact strings.
+    expect(r.stdout).toMatch(/Soup — kid portion/);
+
+    const dishes = await readCateringDishes(cateringId);
+    expect(dishes).toHaveLength(1);
+    expect(dishes[0].dishId).toBe(parentId);
+  });
+
   it('dedups two refs to parent + split into one (audit S6 — "two peers" fix)', async () => {
     const parentId = tid('p');
     const splitId = tid('s');
@@ -376,13 +411,17 @@ describe('data-migrate: cycle handling (audit S15)', () => {
     const r = runMigrate();
     expect(r.status).toBe(0);
 
-    // The canonical row exists with both inventory entries; cycle was reported
-    // (not crashed). Either A or B is canonical depending on cycle resolution.
+    // The canonical row exists with BOTH members' inventory folded in;
+    // cycle was reported (not crashed). Either A or B is canonical
+    // depending on cycle resolution.
     const a = await readBatch(aId);
     const b = await readBatch(bId);
     const canonical = a ?? b;
     expect(canonical).toBeTruthy();
-    expect(canonical!.inventory.length).toBeGreaterThan(0);
+    // Both members contributed inventory — total qty across canonical's
+    // inventory[] is A's 20 + B's 10 = 30 (locked §15 + audit S15).
+    const totalQty = canonical!.inventory.reduce((s, e) => s + e.qty, 0);
+    expect(totalQty).toBe(30);
     // Output mentions the cycle anomaly.
     expect(r.stdout).toMatch(/cycleWarnings/);
   });
