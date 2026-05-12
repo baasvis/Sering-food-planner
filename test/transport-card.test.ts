@@ -282,6 +282,24 @@ describe('computeTransportPlan — destination subtraction', () => {
     expect(plan[0].sendQty + plan[0].destStock).toBeLessThanOrEqual(plan[0].totalDemand + 0.1);
   });
 
+  test('Frozen Centraal stock does NOT reduce sendQty (Daan smoke 2026-05-12 item 5)', () => {
+    // Item 5 of Daan's localhost smoke: a batch with 50L West + 5L FROZEN at
+    // Centraal shouldn't have its pack qty reduced by that 5L, because the
+    // frozen stock at Centraal can't directly serve a Centraal service —
+    // it has to thaw first, which is an explicit cook action. Compare to
+    // the "Gastro Centraal" case above which DOES reduce sendQty.
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(50, 'west'), inv(5, 'centraal', 'Frozen')],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'dinner' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    const plan = computeTransportPlan('lean', [b]);
+    expect(plan).toHaveLength(1);
+    // destStock should be 0 even though there's 5L (frozen) at Centraal.
+    expect(plan[0].destStock).toBe(0);
+  });
+
   test('in-transit Centraal stock (shipments[], not arrived) DOES count toward subtraction', () => {
     // Reversed from the initial unified-batch design after Daan's first prod
     // walkthrough on 2026-05-12: confirmTransportPlan would /ship the row,

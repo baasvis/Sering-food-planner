@@ -17,6 +17,7 @@ import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './
 import {
   rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName,
   isServicePast, calcRequired, getGuests, getTotalStock, getStockAt,
+  getServeableStockAt, getServeableTotalStock,
   consolidateInventory,
 } from './core';
 import { rerenderCurrentView } from './navigate';
@@ -480,18 +481,22 @@ function scoredHardConstraintsOk(
   const cookIso = cookDateToIso(batch.cookDate);
   if (!cookIso) return false;
   const totalStock = getTotalStock(batch);
+  const serveableStock = getServeableTotalStock(batch);
   // 5-day hard cutoff for cooked stock.
   if (totalStock > 0 && diffDaysIso(cookIso, day.isoDate) >= FRESH_LIMIT_DAYS) return false;
   if (totalStock <= 0) return true;  // placeholder — capacity is whatever the cook decides
   // Capacity check: tentatively add the service and verify the batch's
-  // total demand still fits its total stock. calcReq is calcReqLive which
-  // rebuilds the planner (refreshes _batchAllocations peer-share cache)
-  // so the speculative service is reflected in the next read. try/finally
-  // so a throwing calcReq can't leave the speculative service stuck.
+  // total demand still fits its SERVEABLE stock (Daan smoke 2026-05-12:
+  // frozen qty should stay frozen until explicitly assigned; the auto
+  // allocator must not satisfy a service slot by counting frozen
+  // coverage). calcReq is calcReqLive which rebuilds the planner
+  // (refreshes _batchAllocations peer-share cache) so the speculative
+  // service is reflected in the next read. try/finally so a throwing
+  // calcReq can't leave the speculative service stuck.
   batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
   let fits: boolean;
   try {
-    fits = calcReq(batch) <= totalStock;
+    fits = calcReq(batch) <= serveableStock;
   } finally {
     batch.services.pop();
   }
@@ -520,8 +525,14 @@ function scoreCandidate(
 
   if (slot.loc === 'centraal') score += SCORE.CENTRAAL_SLOT_PRIORITY;
 
+  // totalStock = anything in inventory (including frozen) — used for the
+  // "is this a placeholder?" check downstream.
+  // serveableStock = non-frozen — used for the "has cooked food ready
+  // for service" bonus. A frozen-only batch shouldn't get the
+  // COOKED_WITH_STOCK reward; the cook hasn't thawed it yet.
   const totalStock = getTotalStock(batch);
-  if (totalStock > 0) score += SCORE.COOKED_WITH_STOCK;
+  const serveableStock = getServeableTotalStock(batch);
+  if (serveableStock > 0) score += SCORE.COOKED_WITH_STOCK;
 
   const cookIso = cookDateToIso(batch.cookDate)!;
   const days = diffDaysIso(cookIso, day.isoDate);
@@ -563,14 +574,15 @@ function scoreCandidate(
 
   // Per-loc inventory bonuses (replaces the legacy batch.location read).
   // CENTRAAL_STOCK_AT_CENTRAAL: bonus when the slot is Centraal AND the
-  // batch has Centraal-located stock — drains Centraal-arrived inventory
-  // before pulling more across the morning van.
-  if (slot.loc === 'centraal' && getStockAt(batch, 'centraal') > 0) {
+  // batch has SERVEABLE Centraal-located stock — drains Centraal-arrived
+  // inventory before pulling more across the morning van. Frozen at
+  // Centraal doesn't qualify; it has to thaw before it can serve.
+  if (slot.loc === 'centraal' && getServeableStockAt(batch, 'centraal') > 0) {
     score += SCORE.CENTRAAL_STOCK_AT_CENTRAAL;
   }
-  // SAME_LOCATION: bonus when the batch has stock physically at the
-  // slot's location — drains local stock before remote.
-  if (getStockAt(batch, slot.loc) > 0) {
+  // SAME_LOCATION: bonus when the batch has serveable stock physically
+  // at the slot's location — drains local stock before remote.
+  if (getServeableStockAt(batch, slot.loc) > 0) {
     score += SCORE.SAME_LOCATION;
   }
 
@@ -792,11 +804,12 @@ function findCombinationTeam(
   });
   if (eligible.length === 0) return [];
 
-  // Sort: same-loc-stock first, then oldest cookDate (use up older food),
-  // then biggest total stock (more capacity), then id for determinism.
+  // Sort: same-loc-serveable-stock first (frozen-only doesn't count), then
+  // oldest cookDate (use up older food), then biggest total stock
+  // (more capacity), then id for determinism.
   eligible.sort((a, b) => {
-    const aSame = getStockAt(a, loc) > 0 ? 1 : 0;
-    const bSame = getStockAt(b, loc) > 0 ? 1 : 0;
+    const aSame = getServeableStockAt(a, loc) > 0 ? 1 : 0;
+    const bSame = getServeableStockAt(b, loc) > 0 ? 1 : 0;
     if (aSame !== bSame) return bSame - aSame;
     const aIso = cookDateToIso(a.cookDate)!;
     const bIso = cookDateToIso(b.cookDate)!;

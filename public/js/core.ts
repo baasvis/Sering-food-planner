@@ -33,6 +33,26 @@ export function getStockAt(b: Batch, loc: Location, storage?: StorageType): numb
     .reduce((s, e) => s + (e.qty || 0), 0);
 }
 
+/** Stock that's directly available to serve at `loc` — i.e. excludes Frozen.
+ *  Frozen stock has to be thawed (cook action) before it can serve, so the
+ *  auto-allocator (Fix My Menu, transport plan destination-coverage check)
+ *  treats it as reserved. Cooks can still ship/assign frozen manually; this
+ *  helper only governs what AUTOMATED logic counts as available. */
+export function getServeableStockAt(b: Batch, loc: Location): number {
+  return (b.inventory || [])
+    .filter(e => e.loc === loc && e.storage !== 'Frozen')
+    .reduce((s, e) => s + (e.qty || 0), 0);
+}
+
+/** Total stock across all locations that's directly available to serve.
+ *  Pair with getServeableStockAt when the allocator needs to know whether
+ *  a batch has any thawed coverage at all. */
+export function getServeableTotalStock(b: Batch): number {
+  return (b.inventory || [])
+    .filter(e => e.storage !== 'Frozen')
+    .reduce((s, e) => s + (e.qty || 0), 0);
+}
+
 export function getPendingFromShipments(b: Batch, loc: Location): number {
   return (b.shipments || [])
     .filter(s => !s.arrived && s.toLoc === loc)

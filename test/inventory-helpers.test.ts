@@ -17,6 +17,8 @@ import type { Batch, InventoryEntry, Shipment } from '../shared/types';
 import {
   getTotalStock,
   getStockAt,
+  getServeableStockAt,
+  getServeableTotalStock,
   getPendingFromShipments,
   consolidateInventory,
   addInventory,
@@ -148,6 +150,80 @@ describe('getStockAt', () => {
 
   it('returns 0 for empty inventory', () => {
     expect(getStockAt(makeBatch(), 'west')).toBe(0);
+  });
+});
+
+// ── getServeableStockAt / getServeableTotalStock ──────────────────────────
+//
+// Added 2026-05-12 after Daan's localhost smoke surfaced the "frozen counts
+// toward auto-allocation" bug. Serveable = non-Frozen. Auto-allocator
+// (menu-fixer, transport-card destStock) uses these in place of getStockAt
+// when deciding "is this batch's stock available to serve right now?"
+
+describe('getServeableStockAt', () => {
+  it('excludes Frozen entries at the loc', () => {
+    const b = makeBatch({
+      inventory: [
+        entry({ loc: 'west', storage: 'Gastro', qty: 40 }),
+        entry({ loc: 'west', storage: 'Frozen', qty: 20 }),
+        entry({ loc: 'centraal', storage: 'Gastro', qty: 15 }),
+        entry({ loc: 'centraal', storage: 'Frozen', qty: 10 }),
+      ],
+    });
+    expect(getServeableStockAt(b, 'west')).toBe(40); // 40 Gastro, 20 Frozen excluded
+    expect(getServeableStockAt(b, 'centraal')).toBe(15);
+  });
+
+  it('returns 0 when the loc has only Frozen', () => {
+    const b = makeBatch({
+      inventory: [entry({ loc: 'west', storage: 'Frozen', qty: 50 })],
+    });
+    expect(getServeableStockAt(b, 'west')).toBe(0);
+    // getStockAt should still see the frozen qty — only serveable filters it.
+    expect(getStockAt(b, 'west')).toBe(50);
+  });
+
+  it('counts Vac-packed as serveable (only Frozen is excluded)', () => {
+    const b = makeBatch({
+      inventory: [
+        entry({ loc: 'west', storage: 'Vac-packed', qty: 12 }),
+        entry({ loc: 'west', storage: 'Frozen', qty: 30 }),
+      ],
+    });
+    expect(getServeableStockAt(b, 'west')).toBe(12);
+  });
+
+  it('returns 0 for empty inventory', () => {
+    expect(getServeableStockAt(makeBatch(), 'west')).toBe(0);
+  });
+});
+
+describe('getServeableTotalStock', () => {
+  it('sums all locations excluding Frozen', () => {
+    const b = makeBatch({
+      inventory: [
+        entry({ loc: 'west', storage: 'Gastro', qty: 40 }),
+        entry({ loc: 'west', storage: 'Frozen', qty: 20 }),
+        entry({ loc: 'centraal', storage: 'Gastro', qty: 15 }),
+        entry({ loc: 'centraal', storage: 'Frozen', qty: 10 }),
+      ],
+    });
+    // 40 (west gastro) + 15 (centraal gastro) = 55. The 30L of frozen is
+    // present on the batch but doesn't count for auto-allocation.
+    expect(getServeableTotalStock(b)).toBe(55);
+    // getTotalStock still sees everything.
+    expect(getTotalStock(b)).toBe(85);
+  });
+
+  it('returns 0 when all stock is frozen', () => {
+    const b = makeBatch({
+      inventory: [
+        entry({ loc: 'west', storage: 'Frozen', qty: 30 }),
+        entry({ loc: 'centraal', storage: 'Frozen', qty: 15 }),
+      ],
+    });
+    expect(getServeableTotalStock(b)).toBe(0);
+    expect(getTotalStock(b)).toBe(45);
   });
 });
 
