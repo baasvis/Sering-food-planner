@@ -33,41 +33,43 @@ test.describe('Batch assign via modal', () => {
     await page.locator('.nav-btn[data-screen="planner"]').click();
     await expect(page.locator('.sub-tab[data-tab="overview"]')).toBeVisible();
 
-    // Create a Soup batch (type defaults to Soup; the new-batch modal has no
-    // stock field anymore in the unified-batch model). PATCH inventory in
-    // before showing it in the assign modal so isBatchCooked() (which now
-    // reads inventory + pending shipments) returns true.
+    // Create a Soup batch (type defaults to Soup; the new-batch modal no
+    // longer has a stock field in the unified-batch model). isBatchCooked
+    // now reads inventory + pending shipments, so we need to seed
+    // inventory before the batch shows up in the "Cooked" tab of the
+    // slot-assign modal.
     await page.getByRole('button', { name: /\+ New batch/ }).first().click();
     await page.locator('[data-testid="new-batch-blank-btn"]').click();
     const batchName = `${TEST_BATCH_PREFIX}${Date.now()}`;
     await page.fill('#nd-name', batchName);
     await page.locator('[data-testid="new-batch-submit"]').click();
-
-    // Wait for the creation save to flush before patching inventory.
     await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });
 
-    // Seed inventory via the API so the batch shows up in the "Cooked" tab.
-    await page.evaluate(async (name) => {
-      const r = await fetch('/api/batches');
-      const all = (await r.json()) as Array<{ id: string; name: string }>;
-      const target = all.find((b) => b.name === name);
-      if (!target) throw new Error(`Batch ${name} not found after creation`);
+    // Seed inventory by mutating S.batches in the browser context, then
+    // re-rendering + scheduleSave. Doing this in-page (instead of a server
+    // PATCH + page.reload()) avoids racing the reload against /api/data —
+    // the SAVE round-trip still verifies the wire shape on the server side.
+    await page.evaluate((name) => {
+      const win = window as unknown as { S: { batches: Array<{
+        id: string; name: string; cookDate: string | null;
+        inventory: Array<{ loc: string; storage: string; qty: number; cookDate: string }>;
+      }> }; rebuildPlanner: () => void; rerenderCurrentView: () => void; scheduleSave: () => void };
+      const target = win.S.batches.find((b) => b.name === name);
+      if (!target) throw new Error(`Batch ${name} not found in S.batches`);
       const today = new Date();
       const dd = String(today.getDate()).padStart(2, '0');
       const mm = String(today.getMonth() + 1).padStart(2, '0');
       const cookDate = `${dd}/${mm}/${today.getFullYear()}`;
-      await fetch(`/api/batches/${target.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cookDate,
-          inventory: [{ loc: 'west', storage: 'Gastro', qty: 10, cookDate }],
-        }),
-      });
+      target.cookDate = cookDate;
+      target.inventory = [{ loc: 'west', storage: 'Gastro', qty: 10, cookDate }];
+      win.rebuildPlanner();
+      win.rerenderCurrentView();
+      win.scheduleSave();
     }, batchName);
-    // Reload so S.batches mirrors the new inventory state.
-    await page.reload();
-    await expect(page.locator('.sub-tab[data-tab="overview"]')).toBeVisible();
+    // Wait for the inventory-seed save to complete BEFORE opening the modal,
+    // so the assign-modal's filter (which reads S.batches) sees the cooked
+    // state and so the afterEach cleanup PATCH races nothing.
+    await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });
 
     // Switch to the West week-grid sub-tab where the slot add buttons live.
     await page.locator('.sub-tab[data-tab="west"]').click();

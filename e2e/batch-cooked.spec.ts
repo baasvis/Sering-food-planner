@@ -73,16 +73,23 @@ test.describe('Batch cooked transition', () => {
     await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });
 
     // ── Step 6: verify the batch transitioned to cooked in the DB ──────────
-    // Unified-batch model: confirmCooked sets the first inventory[] entry
-    // (loc=cookLoc, storage='Gastro', qty=calcRequired, cookDate=today). With
-    // no services assigned, calcRequired returns 0 — so inventory may end up
-    // [] OR with a single qty=0 entry depending on the path. Assert that
-    // either cookDate flipped non-null or inventory has at least one entry.
+    // Unified-batch model: confirmCookedAt always sets cookDate=today. It
+    // only adds an inventory entry when calcRequired > 0 (i.e. the batch has
+    // services assigned). This test creates a blank batch with NO services
+    // and then marks-cooked, so the right signal of "cook fired" is that
+    // cookDate flipped from null to a date string. inventory[] stays []
+    // (legal — the cook fills it later via the Edit modal Power view).
+    //
+    // The earlier draft of this spec also asserted Array.isArray(inventory)
+    // but mapBatchRow guarantees that shape — the assertion was tautological
+    // noise that, when it failed, masked the real bug (a flaky page reload
+    // race, not a model regression).
     interface BatchSummary {
       id: string;
       name: string;
       cookDate: string | null;
       inventory: Array<{ loc: string; storage: string; qty: number; cookDate: string }>;
+      shipments: Array<{ id: string; arrived: boolean }>;
     }
     const created = await page.evaluate(async (name): Promise<BatchSummary | undefined> => {
       const r = await fetch('/api/batches');
@@ -91,10 +98,6 @@ test.describe('Batch cooked transition', () => {
     }, batchName);
     expect(created).toBeTruthy();
     expect(created!.cookDate).toBeTruthy();
-    expect(Array.isArray(created!.inventory)).toBe(true);
-    // Total qty should be non-negative (always true; the load-bearing check is
-    // that the field exists with the new shape).
-    const totalQty = (created!.inventory || []).reduce((s, e) => s + (e.qty || 0), 0);
-    expect(totalQty).toBeGreaterThanOrEqual(0);
+    expect(created!.cookDate).toMatch(/^\d{2}\/\d{2}\/\d{4}$/); // DD/MM/YYYY
   });
 });
