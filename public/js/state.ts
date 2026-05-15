@@ -139,7 +139,6 @@ export interface AppState {
   dashVegModeTomorrow: string;
   prepChecklist: Record<string, Set<string>>;
   heatChecked: Set<string>;
-  cookChecked: Set<string>;
   customTodos: CustomTodo[];
   teamTodosOpen: boolean;
   guestHistory: Record<string, unknown> | null;
@@ -193,7 +192,6 @@ export let S: AppState = {
   dashVegModeTomorrow:'combined',
   prepChecklist: {},
   heatChecked: new Set(),
-  cookChecked: new Set(),
   customTodos: [],
   teamTodosOpen: false,
   guestHistory:null,

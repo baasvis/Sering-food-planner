@@ -5,6 +5,7 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient, Ingredient, InventoryEntry, Shipment } from '../shared/types';
 import { toGrams } from '../shared/units';
+import { flexPricePer100g } from '../shared/recipe-cost';
 
 export const prisma = new PrismaClient();
 
@@ -747,7 +748,6 @@ export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> 
   const baseServings = (recipe.recipeVolume * 1000) / recipe.servingSize;
   if (baseServings <= 0) return;
 
-  const FLEX_PRICE_PER_100G = 0.15;
   let totalCost = 0;
 
   const totals = { energyKcal: 0, energyKj: 0, fat: 0, saturatedFat: 0, carbs: 0, sugar: 0, fiber: 0, protein: 0, salt: 0 };
@@ -757,7 +757,7 @@ export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> 
   for (const ing of recipe.ingredients) {
     const amountGrams = toGrams(ing.rawAmount, ing.unit);
     if (ing.isFlexible) {
-      totalCost += (amountGrams / 100) * FLEX_PRICE_PER_100G;
+      totalCost += (amountGrams / 100) * flexPricePer100g(ing.flexLabel);
       continue;
     }
     if (!ing.ingredientId) continue;
@@ -802,7 +802,7 @@ export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> 
 
 /** Compute cost per serving from ingredient prices and amounts */
 export async function calcRecipeCost(
-  ingredients: Array<{ ingredientId: string | null; rawAmount: number; unit: string; isFlexible: boolean }>,
+  ingredients: Array<{ ingredientId: string | null; rawAmount: number; unit: string; isFlexible: boolean; flexLabel?: string | null }>,
   servingSize: number,
   recipeVolume: number | null,
 ): Promise<number | null> {
@@ -818,13 +818,11 @@ export async function calcRecipeCost(
   const baseServings = (recipeVolume * 1000) / servingSize;
   if (baseServings <= 0) return null;
 
-  const FLEX_PRICE_PER_100G = 0.15; // €1.50/kg default for flex ingredients
-
   let totalCost = 0;
   for (const ing of ingredients) {
     const amountGrams = toGrams(ing.rawAmount, ing.unit);
     if (ing.isFlexible) {
-      totalCost += (amountGrams / 100) * FLEX_PRICE_PER_100G;
+      totalCost += (amountGrams / 100) * flexPricePer100g(ing.flexLabel);
       continue;
     }
     if (!ing.ingredientId) continue;
@@ -995,7 +993,6 @@ export async function recalcAllRecipeCosts(): Promise<number> {
     ? await prisma.ingredient.findMany({ where: { id: { in: allIngredientIds } }, select: { id: true, pricePer100: true } })
     : [];
   const priceMap = new Map(dbIngredients.map(i => [i.id, i.pricePer100 || 0]));
-  const FLEX_PRICE_PER_100G = 0.15;
 
   let updated = 0;
   for (const r of recipes) {
@@ -1008,7 +1005,7 @@ export async function recalcAllRecipeCosts(): Promise<number> {
         for (const ing of r.ingredients) {
           const amountGrams = toGrams(ing.rawAmount, ing.unit);
           if (ing.isFlexible) {
-            totalCost += (amountGrams / 100) * FLEX_PRICE_PER_100G;
+            totalCost += (amountGrams / 100) * flexPricePer100g(ing.flexLabel);
             continue;
           }
           if (!ing.ingredientId) continue;

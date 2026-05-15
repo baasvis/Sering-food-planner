@@ -9,6 +9,15 @@
 .dash-meal-count{font-size:13px;font-weight:600;opacity:.7;}
 .dash-date-label{font-size:11px;color:var(--text3);white-space:nowrap;flex-shrink:0;}
 
+/* ── Centraal transport arrival block ── */
+.dash-arrival-block{display:flex;align-items:center;gap:12px;padding:14px 18px;margin:0 0 12px;background:var(--red);color:#fff;border-radius:var(--radius-lg);cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 2px 12px rgba(153,60,29,.4);-webkit-tap-highlight-color:transparent;}
+.dash-arrival-block:hover{transform:translateY(-1px);box-shadow:0 5px 18px rgba(153,60,29,.55);}
+.dash-arrival-block:active{transform:translateY(0);box-shadow:0 2px 8px rgba(153,60,29,.4);}
+.dash-arrival-icon{font-size:26px;flex-shrink:0;line-height:1;}
+.dash-arrival-text{flex:1;min-width:0;}
+.dash-arrival-title{font-size:15px;font-weight:800;}
+.dash-arrival-sub{font-size:12px;font-weight:500;opacity:.92;margin-top:2px;}
+
 /* ── Service Block ── */
 .dash-service-cols{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start;margin-bottom:10px;}
 .dash-guest-big{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px 12px 8px;background:var(--bg2);border-radius:var(--radius);}

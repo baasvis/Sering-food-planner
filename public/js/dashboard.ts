@@ -17,7 +17,8 @@ import { trackScreenView } from './telemetry';
 import { showModal, closeModal } from './modal';
 import { getStorageConfigForLoc } from './state';
 import { locName } from '@shared/location';
-import { renderTransportCard } from './transport-card';
+import { renderTransportCard, renderCentraalArrivalBlock } from './transport-card';
+import { openBatchRecipe } from './recipe-editor';
 
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
@@ -287,12 +288,14 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
   const typeColors: Record<string, string> = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
   const col = typeColors[dish.type] || 'gray';
 
-  // Compact row
+  // Compact row — clicking the row body always expands the chip; the checkbox
+  // (cook chips only) is a separate click target that fires the cook action.
   let html = `<div class="dash-chip ${expanded ? 'expanded' : ''} ${ctx.checked ? 'checked' : ''}">
-    <div class="dash-chip-row" onclick="${ctx.checkable && ctx.toggleFn ? ctx.toggleFn + "('" + esc(dish.id) + "')" : "toggleDashChipExpand('" + esc(dish.id) + "')"}">`;
+    <div class="dash-chip-row" onclick="toggleDashChipExpand('${esc(dish.id)}')">`;
 
   if (ctx.checkable) {
-    html += `<div class="dash-prep-check">${ctx.checked ? '✓' : ''}</div>`;
+    const checkClick = ctx.toggleFn ? `event.stopPropagation();${ctx.toggleFn}('${esc(dish.id)}')` : '';
+    html += `<div class="dash-prep-check" onclick="${checkClick}">${ctx.checked ? '✓' : ''}</div>`;
   }
 
   html += `<span class="dash-chip-dot" style="background:var(--${col})"></span>
@@ -626,11 +629,9 @@ export function loadDayTodos() {
   try {
     const data = JSON.parse(localStorage.getItem(_dayTodosKey()) || '{}');
     S.heatChecked   = new Set(data.heat   || []);
-    S.cookChecked   = new Set(data.cook   || []);
     S.customTodos   = data.custom || [];
   } catch (e: unknown) {
     S.heatChecked = new Set();
-    S.cookChecked = new Set();
     S.customTodos = [];
   }
 }
@@ -638,7 +639,6 @@ export function loadDayTodos() {
 export function saveDayTodos() {
   localStorage.setItem(_dayTodosKey(), JSON.stringify({
     heat:   [...S.heatChecked],
-    cook:   [...S.cookChecked],
     custom: S.customTodos,
   }));
 }
@@ -649,18 +649,33 @@ export function toggleHeatItem(dishId: string) {
   renderDashboardContent();
 }
 
-export function toggleCookItem(dishId: string) {
+/** "What to Cook" checkbox handler. Batches with no recipe have nothing to
+ *  resolve, so they go straight to the standard mark-cooked flow (confirmCooked
+ *  forces the kitchen chooser itself on the dashboard). Recipe batches first
+ *  pick the kitchen — the dashboard's currentLoc is ambiguous — then open the
+ *  batch recipe editor in confirm-cook mode, where Save marks the batch cooked
+ *  at the chosen location. */
+export function startCookConfirm(dishId: string) {
   const d = S.batches.find(x => x.id === dishId);
-  if (d && !isBatchCooked(d)) {
+  if (!d) return;
+  if (!d.recipeId) {
     confirmCooked(dishId);
-    S.cookChecked.add(dishId);
-    saveDayTodos();
-    renderDashboardContent();
     return;
   }
-  S.cookChecked.has(dishId) ? S.cookChecked.delete(dishId) : S.cookChecked.add(dishId);
-  saveDayTodos();
-  renderDashboardContent();
+  showModal(`<h3>Where did you cook "${esc(d.name)}"?</h3>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Pick the kitchen — this sets where the cooked stock lands.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="cookConfirmAt('${esc(dishId)}','west')">Sering West</button>
+      <button class="btn btn-primary" onclick="cookConfirmAt('${esc(dishId)}','centraal')">Sering Centraal</button>
+    </div>`);
+}
+
+/** Kitchen picked from the startCookConfirm chooser → open the batch recipe
+ *  editor in confirm-cook mode for that location. */
+export function cookConfirmAt(dishId: string, cookLoc: Location) {
+  closeModal();
+  openBatchRecipe(dishId, { confirmCook: true, cookLoc });
 }
 
 // ── Team todos (inline) ──────────────────────────────────────
@@ -969,6 +984,9 @@ export function renderDashboardContent() {
       </button>
     </div>
 
+    <!-- ═══ CENTRAAL TRANSPORT ARRIVAL ═══ -->
+    ${renderCentraalArrivalBlock()}
+
     <!-- ═══ SERVICE BLOCK ═══ -->
     <div class="dash-service-cols">
       <div class="dash-card">
@@ -1054,11 +1072,10 @@ export function renderDashboardContent() {
             : cookDishes.map(d => renderDashChip(d, {
                 meal,
                 dateStr: todayStr,
-                liters: calcLitersForService(d, loc, todayStr, meal),
+                liters: calcRequired(d),
                 note: 'cook today',
                 checkable: true,
-                checked: S.cookChecked.has(d.id),
-                toggleFn: 'toggleCookItem',
+                toggleFn: 'startCookConfirm',
               })).join('')
           }
         </div>

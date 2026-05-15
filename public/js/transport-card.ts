@@ -18,7 +18,7 @@ import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIs
 import { esc } from './modal';
 import { trackEvent } from './telemetry';
 import { rerenderCurrentView } from './navigate';
-import { toast, apiPost } from './utils';
+import { toast, toastError, apiPost } from './utils';
 
 export type TransportMode = 'lean' | 'bulk';
 
@@ -530,4 +530,90 @@ export async function confirmTransportPlan(): Promise<void> {
     const cappedNote = cappedCount > 0 ? ` (${cappedCount} capped to available)` : '';
     toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for Centraal${cappedNote}`);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Centraal arrival block — "Did the transport arrive?"
+//
+// Lives on the Sering Centraal dashboard only, directly under the meal toggle.
+// Surfaces every pending (not-yet-arrived) shipment bound for Centraal; one tap
+// confirms them all, calling POST /api/batches/:id/shipments/:sid/arrived per
+// shipment (the same endpoint the Transport tab's per-row button uses), which
+// merges each shipment's qty into Centraal inventory.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PendingArrivalRef {
+  batchId: string;
+  shipmentId: string;
+}
+
+/** All not-yet-arrived shipments heading to Centraal, plus a liter total. */
+export function pendingCentraalArrivals(batches: Batch[]): { refs: PendingArrivalRef[]; liters: number } {
+  const refs: PendingArrivalRef[] = [];
+  let liters = 0;
+  for (const b of batches) {
+    for (const s of (b.shipments || [])) {
+      if (s.arrived || s.toLoc !== 'centraal') continue;
+      refs.push({ batchId: b.id, shipmentId: s.id });
+      liters += s.qty || 0;
+    }
+  }
+  return { refs, liters: round1(liters) };
+}
+
+/** Inner HTML for the red arrival block. Empty string unless the current loc
+ *  is Centraal AND something is actually in transit — a permanent red block
+ *  with nothing to confirm would just be noise. */
+export function renderCentraalArrivalBlock(): string {
+  if (S.currentLoc !== 'centraal') return '';
+  const { refs, liters } = pendingCentraalArrivals(S.batches);
+  if (refs.length === 0) return '';
+  const n = refs.length;
+  return `<div class="dash-arrival-block" role="button" tabindex="0"
+      onclick="confirmCentraalArrivals()"
+      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();confirmCentraalArrivals();}">
+    <span class="dash-arrival-icon">🚚</span>
+    <div class="dash-arrival-text">
+      <div class="dash-arrival-title">Did the transport arrive today?</div>
+      <div class="dash-arrival-sub">${n} batch${n === 1 ? '' : 'es'} (${liters} L) on the way from Sering West — tap to confirm it's here.</div>
+    </div>
+  </div>`;
+}
+
+/** Mark every pending Centraal-bound shipment arrived in one go. Mirrors
+ *  confirmTransportPlan: per-shipment POST, local state updated from each
+ *  response, an individual failure doesn't abort the loop. */
+export async function confirmCentraalArrivals(): Promise<void> {
+  const { refs } = pendingCentraalArrivals(S.batches);
+  if (refs.length === 0) {
+    toast('Nothing in transit');
+    return;
+  }
+  trackEvent('centraal_arrivals_confirmed', '', { count: refs.length });
+  let okCount = 0;
+  for (const ref of refs) {
+    try {
+      const res = await apiPost(`/api/batches/${ref.batchId}/shipments/${ref.shipmentId}/arrived`, {});
+      if (res && res.batch) {
+        const idx = S.batches.findIndex(b => b.id === ref.batchId);
+        if (idx >= 0) S.batches[idx] = res.batch;
+      }
+      okCount++;
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      console.error('confirmCentraalArrivals: /arrived failed for shipment', ref.shipmentId, message);
+    }
+  }
+  const failed = refs.length - okCount;
+  if (okCount > 0 && failed > 0) {
+    // Partial failure: the block re-renders and the unconfirmed shipments stay,
+    // so the cook can tap again — but tell them, don't show a plain success.
+    toastError(`${okCount} confirmed, ${failed} couldn't be — tap again to retry the rest.`);
+  } else if (okCount > 0) {
+    toast(`${okCount} shipment${okCount > 1 ? 's' : ''} arrived at Sering Centraal`);
+  } else {
+    toastError('Could not confirm arrivals — try the Transport tab');
+  }
+  rebuildPlanner();
+  rerenderCurrentView();
 }

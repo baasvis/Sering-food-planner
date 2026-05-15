@@ -1,5 +1,5 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
-import { newId, scheduleSave, toast, toastError, apiPost, apiGet } from './utils';
+import { newId, scheduleSave, toast, toastError, apiPost, apiGet, todayIso } from './utils';
 import { pushUndo } from './undo';
 import { rebuildPlanner, isBatchCooked, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
 import { showModal, closeModal, esc } from './modal';
@@ -908,6 +908,10 @@ export function confirmCookedAt(id: string, cookLoc: Location) {
   // auto-fill a single Gastro entry at cookLoc with calcRequired worth.
   const totalNow = getTotalStock(d);
   if (totalNow === 0) {
+    // calcRequired reads the family-allocation cache — refresh it first, or a
+    // stale cache can auto-fill 0 L and leave the cook with a cooked batch
+    // that has no stock.
+    rebuildPlanner();
     const qty = calcRequired(d);
     if (qty > 0) {
       addInventory(d, { loc: cookLoc, storage: 'Gastro', qty, cookDate: today });
@@ -1133,30 +1137,110 @@ export function openNewDish() {
   searchNewDishModal();
 }
 
+// Live recipe search for the "+ New batch" modal. Picking a recipe leads to a
+// small amount + cook-date form (pickRecipeForNewBatch); "Create blank batch"
+// keeps the from-scratch placeholder path untouched.
 export function searchNewDishModal() {
-  // Legacy v1 recipe-index lookup removed in S12. The v2 "pick from recipes"
-  // path lives in planner.ts (renderAddModal). This modal now leads users to
-  // either the planner's modal (for v2 picks) or the "Create blank batch"
-  // button below.
   const searchQuery = (document.getElementById('new-dish-search') as HTMLInputElement | null)?.value || '';
-  const recipeList = '<div class="empty" style="padding:12px;">To pick from a recipe, open the Week plan and click a slot. Or use "Create blank batch" below.</div>';
+  const q = searchQuery.trim().toLowerCase();
+  const recipes = (S.recipes || [])
+    .filter(r => !q || r.name.toLowerCase().includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  // If modal already open, only update the list
+  const listHtml = recipes.length === 0
+    ? `<div class="empty" style="padding:12px;">No recipes${q ? ` matching "${esc(searchQuery)}"` : ''}. Use "Create blank batch" below.</div>`
+    : recipes.slice(0, 50).map(r => {
+        const cost = r.costPerServing != null ? `€${r.costPerServing.toFixed(2)}/serving` : '';
+        return `<div class="dish-opt" data-testid="new-batch-recipe-opt" onclick="pickRecipeForNewBatch('${esc(r.id)}')">
+          <div style="flex:1;">
+            <div><span style="font-weight:500;">${esc(r.name)}</span> ${typeBadge((r.type || 'Soup') as DishType)}</div>
+            ${cost ? `<div style="font-size:11px;color:var(--text3);margin-top:2px;">${cost}</div>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+
+  // Search-input rule: once the modal is open, only swap the results list so
+  // the search field keeps focus and caret position.
   const existingList = document.getElementById('new-dish-list');
   if (existingList) {
-    existingList.innerHTML = recipeList;
+    existingList.innerHTML = listHtml;
     return;
   }
 
   showModal(`<h3>New batch</h3>
     <input type="text" class="dish-search" id="new-dish-search" placeholder="Search recipes..." value="${esc(searchQuery)}"
       oninput="searchNewDishModal()" autofocus />
-    <div class="dish-opts-list" style="max-height:260px;" id="new-dish-list">${recipeList}</div>
+    <div class="dish-opts-list" style="max-height:300px;" id="new-dish-list">${listHtml}</div>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
       <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Or create from scratch:</div>
       <button class="btn" data-testid="new-batch-blank-btn" onclick="openNewDishScratch()">Create blank batch</button>
     </div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+
+// Step 2 of "+ New batch": recipe picked → ask for liters + cook date. Per
+// Daan's spec these are the only two inputs when working from a recipe.
+export function pickRecipeForNewBatch(recipeId: string) {
+  const r = S.recipes.find(x => x.id === recipeId);
+  if (!r) { toastError('Recipe not found'); return; }
+  showModal(`<h3>New batch — ${esc(r.name)}</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Creates a cooked batch with stock at ${esc(locName(S.currentLoc))}.</p>
+    <div class="fr"><label>Amount (liters)</label>
+      <input type="number" id="nbr-amount" min="0" step="0.5" placeholder="e.g. 40"
+        onkeydown="if(event.key==='Enter')saveBatchFromRecipe('${esc(r.id)}')" /></div>
+    <div class="fr"><label>Cooking date</label>
+      <input type="date" id="nbr-date" value="${todayIso()}" /></div>
+    <div class="fr"><label>Storage</label>
+      <select id="nbr-storage">
+        ${STORAGE.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('')}
+      </select></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="openNewDish()">← Back</button>
+      <button class="btn btn-primary" data-testid="new-batch-recipe-submit" onclick="saveBatchFromRecipe('${esc(r.id)}')">Create batch</button>
+    </div>`);
+  setTimeout(() => (document.getElementById('nbr-amount') as HTMLInputElement | null)?.focus(), 0);
+}
+
+export function saveBatchFromRecipe(recipeId: string) {
+  const r = S.recipes.find(x => x.id === recipeId);
+  if (!r) { toastError('Recipe not found'); return; }
+  const amount = parseFloat((document.getElementById('nbr-amount') as HTMLInputElement).value);
+  if (!amount || amount <= 0) { toastError('Enter how many liters you are making'); return; }
+  const iso = (document.getElementById('nbr-date') as HTMLInputElement).value;
+  if (!iso) { toastError('Pick a cooking date'); return; }
+  const cookDate = dateToStr(new Date(iso + 'T12:00:00'));
+  const storage = (document.getElementById('nbr-storage') as HTMLSelectElement).value as StorageType;
+  const loc = S.currentLoc;
+  trackEvent('batch_create', 'from_recipe');
+  // Recipe-linked batch: recipeId drives ingredients (calcIngredientsFromRecipe)
+  // and the batch recipe editor, so ingredients aren't snapshotted here. The
+  // amount lands as one Gastro inventory entry — the batch is created cooked.
+  const allergens = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
+  const newBatch: Batch = {
+    id: newId(),
+    name: r.name,
+    type: (r.type || 'Soup') as DishType,
+    recipeId: r.id,
+    serving: r.servingSize || 280,
+    cookDate,
+    inventory: [{ loc, storage, qty: amount, cookDate }],
+    shipments: [],
+    services: [],
+    allergens,
+    extraAllergens: [],
+    note: '',
+    cookNotes: '',
+    actualIngredients: null,
+    orderFor: false,
+    stockDeducted: false,
+    createdAt: new Date().toISOString(),
+  };
+  S.batches.push(newBatch);
+  closeModal();
+  rebuildPlanner();
+  rerenderCurrentView();
+  scheduleSave();
+  toast(`"${r.name}" — ${amount}L created at ${locName(loc)}`);
 }
 
 export function openNewDishScratch() {

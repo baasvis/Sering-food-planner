@@ -4,12 +4,13 @@
 
 import { S, ALLERGENS, INGREDIENT_CATEGORIES } from './state';
 import { apiGet, apiPost, toast, toastError, loadIngredientDb } from './utils';
-import { typeBadge, TYPES, getTotalStock } from './core';
+import { typeBadge, TYPES, getTotalStock, calcRequired, rebuildPlanner, getToday, dateToStr } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
-import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType, Batch } from '@shared/types';
+import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType, Batch, InventoryEntry, Location } from '@shared/types';
 import { toGrams } from '@shared/units';
+import { flexPricePer100g } from '@shared/recipe-cost';
 import { renderChatPanel, resetChat, type AIRecipeStateClient } from './recipe-ai-chat';
 
 // ── Editor state ──
@@ -93,7 +94,15 @@ function calcEditorCostData(): { totalCost: number; hasPrice: number; totalNonFl
   let totalNonFlex = 0;
   ed.ingredients.forEach(ing => {
     if (!ing.isFlexible) totalNonFlex++;
-    if (ing.ingredientId && !ing.isFlexible) {
+    if (ing.isFlexible) {
+      // Flexible ("open amount") slots have no pinned product — estimate the
+      // cost from the flex price (see @shared/recipe-cost). Left out of the
+      // "X/Y priced" coverage stat, which tracks DB-linked ingredients only.
+      const grams = toGrams(ing.rawAmount, ing.unit);
+      if (grams > 0) totalCost += (grams / 100) * flexPricePer100g(ing.flexLabel);
+      return;
+    }
+    if (ing.ingredientId) {
       const dbIng = S.ingredientDb.find(i => i.id === ing.ingredientId);
       if (dbIng && dbIng.pricePer100 > 0) {
         const grams = toGrams(ing.rawAmount, ing.unit);
@@ -462,7 +471,15 @@ function calcIngredientPortionCosts(): number[] {
   if (!ed) return [];
   const { servings } = calcEditorCostData();
   return ed.ingredients.map(ing => {
-    if (ing.ingredientId && !ing.isFlexible) {
+    if (ing.isFlexible) {
+      const grams = toGrams(ing.rawAmount, ing.unit);
+      if (grams > 0) {
+        const total = (grams / 100) * flexPricePer100g(ing.flexLabel);
+        return servings && servings > 0 ? total / servings : total;
+      }
+      return 0;
+    }
+    if (ing.ingredientId) {
       const dbIng = S.ingredientDb.find(i => i.id === ing.ingredientId);
       if (dbIng && dbIng.pricePer100 > 0) {
         const grams = toGrams(ing.rawAmount, ing.unit);
@@ -1173,6 +1190,12 @@ interface BatchRecipeState {
   cookNotes: string;
   deductStock: boolean;
   isFullscreen: boolean;
+  /** True when opened from the dashboard "What to Cook" checkbox — Save also
+   *  marks the (still-uncooked) batch cooked. */
+  confirmCook: boolean;
+  /** Kitchen the confirm-cook stock lands at (picked before the editor opens).
+   *  null when not in confirm-cook mode. */
+  cookLoc: Location | null;
   targetLiters: number;
   recipeVolume: number;
   servingSize: number;
@@ -1181,15 +1204,27 @@ interface BatchRecipeState {
 let _brState: BatchRecipeState | null = null;
 
 /** Open batch recipe editor — used for pre-cook flex resolution AND post-cook recording */
-export function openBatchRecipe(batchId: string) {
+export function openBatchRecipe(batchId: string, opts?: { confirmCook?: boolean; cookLoc?: Location }) {
   const batch = S.batches.find(b => b.id === batchId);
   if (!batch || !batch.recipeId) return;
   const recipe = S.recipes.find(r => r.id === batch.recipeId);
   if (!recipe) return;
 
+  // Confirm-cook mode: opened from the dashboard "What to Cook" checkbox. The
+  // batch is still uncooked, so size the editor to the full amount that needs
+  // cooking (calcRequired across all the batch's services) rather than the
+  // recipe's base volume — saving will mark the batch cooked at that amount.
+  // cookLoc is the kitchen picked in the chooser before this opened.
+  const confirmCook = !!opts?.confirmCook;
+  const cookLoc: Location | null = opts?.cookLoc ?? null;
   const recipeVolume = recipe.recipeVolume || 0;
   const batchTotal = getTotalStock(batch);
-  const batchLiters = batchTotal > 0 ? batchTotal : recipeVolume;
+  let batchLiters = batchTotal > 0 ? batchTotal : recipeVolume;
+  if (confirmCook && batchTotal === 0) {
+    rebuildPlanner();
+    const required = calcRequired(batch);
+    if (required > 0) batchLiters = required;
+  }
   let scaleFactor = 1;
   if (recipeVolume > 0) {
     scaleFactor = batchLiters / recipeVolume;
@@ -1207,6 +1242,8 @@ export function openBatchRecipe(batchId: string) {
     cookNotes: batch.cookNotes || '',
     deductStock: false,
     isFullscreen: false,
+    confirmCook,
+    cookLoc,
     targetLiters: batchLiters,
     recipeVolume,
     servingSize: recipe.servingSize || 280,
@@ -1431,7 +1468,7 @@ function buildBatchRecipeHTML(br: BatchRecipeState, batch: Batch): string {
 
       <div class="modal-actions">
         <button class="btn" onclick="brClose()">Cancel</button>
-        <button class="btn btn-primary" onclick="brSave()">Save</button>
+        <button class="btn btn-primary" onclick="brSave()">${br.confirmCook ? 'Confirm cooked' : 'Save'}</button>
       </div>
     </div>`;
 }
@@ -1580,16 +1617,43 @@ export async function brSave() {
     .filter(i => !i.removed && i.resolved && i.ingredientId)
     .map(i => ({ ingredientId: i.ingredientId!, name: i.name, amount: i.amount, unit: i.unit }));
 
+  // Confirm-cook mode (opened from the dashboard "What to Cook" checkbox):
+  // saving the batch recipe is the moment a still-uncooked batch becomes
+  // cooked. A batch counts as uncooked when it has no stock yet — it may
+  // already carry a *planned* cookDate, so cookDate alone isn't the signal.
+  // cookDate + the initial inventory entry ride along in the same PATCH so
+  // it's one atomic write.
+  const cookingNow = br.confirmCook && getTotalStock(batch) === 0;
+  const patch: Record<string, unknown> = {
+    actualIngredients,
+    cookNotes: br.cookNotes,
+    stockDeducted: br.deductStock,
+  };
+  let cookedInventory: InventoryEntry[] | null = null;
+  if (cookingNow) {
+    const qty = Math.round((br.targetLiters || 0) * 10) / 10;
+    if (qty <= 0) {
+      // No amount to cook → don't claim it's cooked (that would set cookDate
+      // but no stock, leaving a "cooked" batch with 0 L stuck in the cook list).
+      toastError('Set the amount cooked first — Volume can’t be 0.');
+      return;
+    }
+    const cookDate = dateToStr(getToday());
+    patch.cookDate = cookDate;
+    cookedInventory = [{ loc: br.cookLoc || S.currentLoc, storage: 'Gastro', qty, cookDate }];
+    patch.inventory = cookedInventory;
+  }
+
   try {
-    await apiPost(`/api/batches/${br.batchId}`, {
-      actualIngredients,
-      cookNotes: br.cookNotes,
-      stockDeducted: br.deductStock,
-    }, 'PATCH');
+    await apiPost(`/api/batches/${br.batchId}`, patch, 'PATCH');
 
     batch.actualIngredients = actualIngredients;
     batch.cookNotes = br.cookNotes;
     batch.stockDeducted = br.deductStock;
+    if (cookingNow) {
+      batch.cookDate = patch.cookDate as string;
+      if (cookedInventory) batch.inventory = cookedInventory;
+    }
 
     if (br.deductStock) {
       // /api/ingredients/stock/bulk SETS absolute stock per ingredient (it's
@@ -1627,7 +1691,7 @@ export async function brSave() {
     const overlay = document.getElementById('br-fullscreen');
     if (overlay) overlay.remove();
     closeModal();
-    toast('Batch recipe saved');
+    toast(cookingNow ? `${batch.name} marked as cooked` : 'Batch recipe saved');
     rerenderCurrentView();
   } catch (e: unknown) {
     toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error'));
