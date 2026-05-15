@@ -45,7 +45,7 @@ export function renderCaterings() {
   const sorted = [...caterings].sort((a: any, b: any) => {
     const da = a.date ? strToDate(a.date) : new Date(9999, 0);
     const db = b.date ? strToDate(b.date) : new Date(9999, 0);
-    return da - db;
+    return da.getTime() - db.getTime();
   });
 
   let html = `<div class="btn-row" style="margin-bottom:12px;">
@@ -99,17 +99,17 @@ export function openNewCatering() {
 }
 
 export function saveNewCatering() {
-  const name = document.getElementById('ct-name').value.trim();
+  const name = (document.getElementById('ct-name') as HTMLInputElement).value.trim();
   if (!name) { alert('Please enter a name'); return; }
-  const dateInput = document.getElementById('ct-date').value;
+  const dateInput = (document.getElementById('ct-date') as HTMLInputElement).value;
   const catering = {
     id: newId(),
     name,
     date: dateInput ? isoToCookDate(dateInput) : null,
-    guestCount: parseInt(document.getElementById('ct-guests').value) || 50,
-    deliveryMode: document.getElementById('ct-delivery').value,
+    guestCount: parseInt((document.getElementById('ct-guests') as HTMLInputElement).value) || 50,
+    deliveryMode: (document.getElementById('ct-delivery') as HTMLSelectElement).value,
     dishes: [],
-    logisticsNotes: document.getElementById('ct-notes').value.trim(),
+    logisticsNotes: (document.getElementById('ct-notes') as HTMLTextAreaElement).value.trim(),
   };
   S.caterings.push(catering);
   closeModal(); renderCaterings(); scheduleSave();
@@ -242,12 +242,12 @@ export function removeCateringDish(cateringId: any, index: any) {
 export function saveEditCatering(id: any) {
   const c = S.caterings.find(x => x.id === id);
   if (!c) return;
-  c.name = document.getElementById('ct-name').value.trim() || c.name;
-  const dateInput = document.getElementById('ct-date').value;
+  c.name = (document.getElementById('ct-name') as HTMLInputElement).value.trim() || c.name;
+  const dateInput = (document.getElementById('ct-date') as HTMLInputElement).value;
   c.date = dateInput ? isoToCookDate(dateInput) : null;
-  c.guestCount = parseInt(document.getElementById('ct-guests').value) || 50;
-  c.deliveryMode = document.getElementById('ct-delivery').value;
-  c.logisticsNotes = document.getElementById('ct-notes').value.trim();
+  c.guestCount = parseInt((document.getElementById('ct-guests') as HTMLInputElement).value) || 50;
+  c.deliveryMode = (document.getElementById('ct-delivery') as HTMLSelectElement).value;
+  c.logisticsNotes = (document.getElementById('ct-notes') as HTMLTextAreaElement).value.trim();
   closeModal(); renderCaterings(); scheduleSave();
   toast('Catering saved');
 }

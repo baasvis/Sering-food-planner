@@ -57,7 +57,7 @@ export function renderWeekPlan() {
 export function setPlannerSubTab(tab: string) {
   S.plannerSubTab = tab;
   document.querySelectorAll('.sub-tab').forEach(b => {
-    b.classList.toggle('active', b.dataset.tab === tab);
+    b.classList.toggle('active', (b as HTMLElement).dataset.tab === tab);
   });
   renderPlannerSubTab();
 }
@@ -150,7 +150,7 @@ export function renderLocationPlan(loc: string) {
         const isoDate = dateToIso(d.date);
         const k = `${loc}-${isoDate}-${meal}`;
         const slotDishes = (S.planner[k] || []).filter(dish => dish.type === tg.key);
-        const slotServed = isServicePast({loc, date: isoDate, meal});
+        const slotServed = isServicePast({loc: loc as Location, date: isoDate, meal});
         const assignTarget = assigning ? ' slot-assign-target' : '';
         const slotClick = assigning
           ? `assignBatchToSlot('${loc}','${isoDate}','${meal}')`
@@ -169,7 +169,7 @@ export function renderLocationPlan(loc: string) {
           // "Cross-loc" hint: if the slot is at this loc but the batch's
           // stock is all at the OTHER loc (will require a ship), show an
           // arrow from the off-loc to make this obvious.
-          const stockHere = getStockAt(dish, loc);
+          const stockHere = getStockAt(dish, loc as Location);
           const stockOther = getTotalStock(dish) - stockHere;
           const fromOther = stockHere === 0 && stockOther > 0;
           const fromTag = fromOther
@@ -515,7 +515,7 @@ export function renderTransportView() {
 
 // ── Transport item functions ─────────────────────────────
 export function addTransportItem() {
-  const input = document.getElementById('transport-item-input');
+  const input = document.getElementById('transport-item-input') as HTMLInputElement | null;
   if (!input) return;
   const text = input.value.trim();
   if (!text) return;
@@ -683,7 +683,7 @@ export function copySlotToOther(fromLoc: string, date: string, meal: string) {
     const already = (dish.services || []).some(s => s.loc === toLoc && s.date === date && s.meal === meal);
     if (!already) {
       if (!dish.services) dish.services = [];
-      dish.services.push({ loc: toLoc, date, meal });
+      dish.services.push({ loc: toLoc, date, meal: meal as Meal });
       added++;
     }
   });
@@ -849,7 +849,7 @@ export function renderAddModal(loc: string, date: string, meal: string, existing
 }
 
 export function updateAddModal(loc: string, date: string, meal: string, existing: string[], typeFilter: string, tab: string) {
-  const searchQuery = (document.getElementById('planner-search') || {}).value || '';
+  const searchQuery = ((document.getElementById('planner-search') as HTMLInputElement | null) || ({} as HTMLInputElement)).value || '';
   const locFilter = S._addModalState ? S._addModalState.locFilter : loc;
   renderAddModal(loc, date, meal, existing, searchQuery, typeFilter, tab, locFilter);
 }
@@ -858,7 +858,7 @@ export function switchAddModalTab(tab: string) {
   const s = S._addModalState;
   if (!s) return;
   s.tab = tab;
-  const searchQuery = (document.getElementById('planner-search') || {}).value || '';
+  const searchQuery = ((document.getElementById('planner-search') as HTMLInputElement | null) || ({} as HTMLInputElement)).value || '';
   renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, tab, s.locFilter);
 }
 
@@ -866,21 +866,21 @@ export function switchAddModalLoc(newLoc: string) {
   const s = S._addModalState;
   if (!s) return;
   s.locFilter = newLoc;
-  const searchQuery = (document.getElementById('planner-search') || {}).value || '';
+  const searchQuery = ((document.getElementById('planner-search') as HTMLInputElement | null) || ({} as HTMLInputElement)).value || '';
   renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, s.tab, newLoc);
 }
 
 export function searchAddModal() {
   const s = S._addModalState;
   if (!s) return;
-  const searchQuery = (document.getElementById('planner-search') || {}).value || '';
+  const searchQuery = ((document.getElementById('planner-search') as HTMLInputElement | null) || ({} as HTMLInputElement)).value || '';
   renderAddModal(s.loc, s.date, s.meal, s.existing, searchQuery, s.typeFilter, s.tab, s.locFilter);
 }
 
 export function confirmAddDish(dishId: string, loc: string, date: string, meal: string) {
   trackEvent('batch_assign_modal');
   const dish = S.batches.find(d => d.id === dishId);
-  if (dish) { if (!dish.services) dish.services = []; dish.services.push({ loc, date, meal }); }
+  if (dish) { if (!dish.services) dish.services = []; dish.services.push({ loc: loc as Location, date, meal: meal as Meal }); }
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
   toast(`${dish.name} added to ${dateToDayName(date)} ${meal}`);
 }
@@ -1063,14 +1063,14 @@ export function switchReplaceTab(tab: string) {
   const rs = S._replaceState;
   if (!rs) return;
   rs.tab = tab;
-  rs.searchQuery = (document.getElementById('replace-search') || {}).value || '';
+  rs.searchQuery = ((document.getElementById('replace-search') as HTMLInputElement | null) || ({} as HTMLInputElement)).value || '';
   renderReplaceModal();
 }
 
 export function searchReplaceModal() {
   const rs = S._replaceState;
   if (!rs) return;
-  rs.searchQuery = (document.getElementById('replace-search') || {}).value || '';
+  rs.searchQuery = ((document.getElementById('replace-search') as HTMLInputElement | null) || ({} as HTMLInputElement)).value || '';
   renderReplaceModal();
 }
 

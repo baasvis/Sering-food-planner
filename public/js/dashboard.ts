@@ -8,7 +8,7 @@ import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePas
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
 import { esc } from './modal';
-import { registerRenderer, setOnScreenChange } from './navigate';
+import { registerRenderer, setOnScreenChange, showScreen, getScreenFromHash } from './navigate';
 // Stocktake helpers used by the dashboard chip — kept distinct from the
 // individual screen render fns (those self-register via navigate.ts now).
 import { startStocktake, renderStocktakeAreaPicker, enterStocktakeArea, renderStocktakeArea, saveStocktakeArea, exitStocktake, getIngredientsForArea } from './orders';
@@ -22,10 +22,12 @@ import { renderTransportCard } from './transport-card';
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
 // showScreen and getScreenFromHash now live in navigate.ts. Each screen
-// module self-registers via registerRenderer() at import time. Re-exported
-// here so consumers that already import { showScreen } from './dashboard'
-// don't break.
-export { showScreen, getScreenFromHash } from './navigate';
+// module self-registers via registerRenderer() at import time. Imported
+// above (not a bare `export ... from`) so the names are also in this
+// module's local scope — navTo() below calls showScreen() directly — and
+// re-exported here so consumers that already import { showScreen } from
+// './dashboard' don't break.
+export { showScreen, getScreenFromHash };
 
 // Wire telemetry into showScreen via the navigate.ts hook — keeps navigate.ts
 // free of any screen-specific imports while still preserving the original
@@ -365,9 +367,9 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
 
     // Recipe link — only v2 recipes remain; legacy v1 recipeSheetId path
     // was removed with the unified-batch migration.
-    if ((dish as Record<string, unknown>).recipeId) {
+    if (dish.recipeId) {
       html += `<div class="dash-chip-detail-row">
-        <button class="dash-recipe-btn" onclick="event.stopPropagation();openRecipeDetail('${esc((dish as Record<string, unknown>).recipeId as string)}')">📄 View Recipe</button>
+        <button class="dash-recipe-btn" onclick="event.stopPropagation();openRecipeDetail('${esc(dish.recipeId)}')">📄 View Recipe</button>
       </div>`;
     }
 

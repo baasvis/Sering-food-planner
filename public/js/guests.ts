@@ -1,3 +1,4 @@
+import type { GuestDay } from '@shared/types';
 import { S, DAYS, MEALS, LOCATIONS } from './state';
 import { scheduleSave, toast, apiGet, apiPost, scheduleNextWeeksSave, toastError } from './utils';
 import { getGuests, calcTotalGuests, getToday } from './core';
@@ -216,7 +217,7 @@ export function formatDateShort(dateStr: any) {
 // ── Upload Handlers ───────────────────────────────────────
 export function setupUploadHandlers() {
   const zone = document.getElementById('upload-zone');
-  const input = document.getElementById('csv-file-input');
+  const input = document.getElementById('csv-file-input') as HTMLInputElement | null;
   if (!zone || !input) return;
 
   zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
@@ -227,14 +228,14 @@ export function setupUploadHandlers() {
     handleFiles(e.dataTransfer.files);
   });
   zone.addEventListener('click', e => {
-    if (e.target.tagName !== 'BUTTON') input.click();
+    if ((e.target as Element).tagName !== 'BUTTON') input.click();
   });
   input.addEventListener('change', () => {
     if (input.files.length) handleFiles(input.files);
   });
 }
 
-export async function handleFiles(fileList: any) {
+export async function handleFiles(fileList: FileList) {
   const files = Array.from(fileList).filter(f => f.name.endsWith('.csv'));
   if (files.length === 0) { toastError('No CSV files found'); return; }
 
@@ -295,7 +296,7 @@ export function applyPredictions() {
 
         if (d.isCurrentWeek) {
           if (!S.guests[loc]) S.guests[loc] = {};
-          if (!S.guests[loc][d.dayName]) S.guests[loc][d.dayName] = {};
+          if (!S.guests[loc][d.dayName]) S.guests[loc][d.dayName] = {} as GuestDay;
           S.guests[loc][d.dayName][meal] = pred;
         } else {
           if (!S.guestsNextWeeks[d.mondayKey]) S.guestsNextWeeks[d.mondayKey] = {};
@@ -335,7 +336,7 @@ function seedMissingMealsFromPrediction(target: any, loc: any, day: any) {
 
 export function updateGuests(loc: any, day: any, meal: any, val: any) {
   if (!S.guests[loc]) S.guests[loc] = {};
-  if (!S.guests[loc][day]) S.guests[loc][day] = {};
+  if (!S.guests[loc][day]) S.guests[loc][day] = {} as GuestDay;
   seedMissingMealsFromPrediction(S.guests[loc][day], loc, day);
   S.guests[loc][day][meal] = parseInt(val) || 0;
   scheduleSave();
@@ -370,7 +371,7 @@ export function restoreFocusAfterRender(renderFn: any) {
   if (wasInput && tableIndex >= 0) {
     const tables = document.querySelectorAll('.guest-table');
     if (tables[tableIndex]) {
-      const row = tables[tableIndex].rows[rowIndex];
+      const row = (tables[tableIndex] as HTMLTableElement).rows[rowIndex];
       if (row && row.cells[cellIndex]) {
         const inp = row.cells[cellIndex].querySelector('input');
         if (inp) { inp.focus(); inp.select(); }

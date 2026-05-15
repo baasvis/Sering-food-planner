@@ -173,7 +173,9 @@ npm run test:all       # npm test && npm run test:e2e — full local test pass.
 npm run telemetry:mine # CLI: scans the telemetry table for user journeys, prints
                        # uncovered trackEvent() features. Used by the weekly
                        # coverage agent and for ad-hoc local exploration.
-npm run typecheck      # tsc --noEmit on backend
+npm run typecheck      # tsc --noEmit — backend (tsconfig.server.json) +
+                       # frontend (tsconfig.json). typecheck:server and
+                       # typecheck:client run a single side.
 ```
 
 Requires `DATABASE_URL` env var pointing to PostgreSQL.

@@ -8,6 +8,32 @@ import { locName } from '@shared/location';
 
 // ── INGREDIENT DATABASE TAB ──────────────────────────────────
 
+/**
+ * Runtime shape of a single `Ingredient.storageLocations` entry. The shared
+ * `StorageLocationMap` types each entry as a bare `string`, but in practice
+ * the ingredient DB stores (and reads) `{ category, location }` objects.
+ * Bare strings only survive as legacy/imported rows. Mirrors the
+ * `StorageLocValue` union in `orders.ts`.
+ */
+type StorageLocEntry = string | { category?: string; location?: string };
+type StorageLocsRuntime = Record<string, StorageLocEntry>;
+
+/** Read `ing.storageLocations` as the richer runtime shape (see StorageLocEntry). */
+function storLocsOf(ing: Ingredient): StorageLocsRuntime {
+  return (ing.storageLocations || {}) as unknown as StorageLocsRuntime;
+}
+
+/**
+ * Category/location of a single storage entry. Object entries carry the
+ * structured value; legacy bare-string entries have no structured
+ * category/location and read as empty — this matches the pre-cleanup
+ * behavior of `(entry && entry.category) || ''`.
+ */
+function storLocParts(entry: StorageLocEntry | undefined): { category: string; location: string } {
+  if (!entry || typeof entry === 'string') return { category: '', location: '' };
+  return { category: entry.category || '', location: entry.location || '' };
+}
+
 // State
 // `S.ingredientDb` is the single source of truth. `loadIngredientDb()` (utils)
 // fetches the slim shape; `loadIngredientDbFull()` below fetches the rich shape
@@ -313,7 +339,7 @@ export function renderIngredientDbTab() {
 
 export function renderIngredientEditRow(ing: Ingredient) {
   const types = ing.types || [];
-  const storLocs = ing.storageLocations || {};
+  const storLocs = storLocsOf(ing);
   const nutrition = ing.nutrition || {};
 
   // Type checkboxes
@@ -333,10 +359,8 @@ export function renderIngredientEditRow(ing: Ingredient) {
 
   // Storage location dropdowns (category + location per building)
   const storageCatNames = Object.keys(STORAGE_CATEGORIES);
-  const westCat = (storLocs.west && storLocs.west.category) || '';
-  const westLoc = (storLocs.west && storLocs.west.location) || '';
-  const centraalCat = (storLocs.centraal && storLocs.centraal.category) || '';
-  const centraalLoc = (storLocs.centraal && storLocs.centraal.location) || '';
+  const { category: westCat, location: westLoc } = storLocParts(storLocs.west);
+  const { category: centraalCat, location: centraalLoc } = storLocParts(storLocs.centraal);
   const westCatOpts = '<option value="">—</option>' + storageCatNames.map(c => `<option value="${esc(c)}"${westCat===c?' selected':''}>${esc(c)}</option>`).join('');
   const westLocOpts = '<option value="">—</option>' + (westCat && STORAGE_CATEGORIES[westCat] ? STORAGE_CATEGORIES[westCat] : []).map(l => `<option value="${esc(l)}"${westLoc===l?' selected':''}>${esc(l)}</option>`).join('');
   const centraalCatOpts = '<option value="">—</option>' + storageCatNames.map(c => `<option value="${esc(c)}"${centraalCat===c?' selected':''}>${esc(c)}</option>`).join('');
@@ -632,7 +656,7 @@ export async function openIngredientModal(name: string) {
 
   // Reuse the full edit form from renderIngredientEditRow, adapted for modal
   const types = ing.types || [];
-  const storLocs = ing.storageLocations || {};
+  const storLocs = storLocsOf(ing);
   const nutrition = ing.nutrition || {};
 
   const typeChecks = INGREDIENT_TYPES.map(t =>
@@ -649,10 +673,8 @@ export async function openIngredientModal(name: string) {
   ).join('');
 
   const storageCatNames = Object.keys(STORAGE_CATEGORIES);
-  const westCat = (storLocs.west && storLocs.west.category) || '';
-  const westLoc = (storLocs.west && storLocs.west.location) || '';
-  const centraalCat = (storLocs.centraal && storLocs.centraal.category) || '';
-  const centraalLoc = (storLocs.centraal && storLocs.centraal.location) || '';
+  const { category: westCat, location: westLoc } = storLocParts(storLocs.west);
+  const { category: centraalCat, location: centraalLoc } = storLocParts(storLocs.centraal);
   const westCatOpts = '<option value="">—</option>' + storageCatNames.map(c => `<option value="${esc(c)}"${westCat===c?' selected':''}>${esc(c)}</option>`).join('');
   const westLocOpts = '<option value="">—</option>' + (westCat && STORAGE_CATEGORIES[westCat] ? STORAGE_CATEGORIES[westCat] : []).map(l => `<option value="${esc(l)}"${westLoc===l?' selected':''}>${esc(l)}</option>`).join('');
   const centraalCatOpts = '<option value="">—</option>' + storageCatNames.map(c => `<option value="${esc(c)}"${centraalCat===c?' selected':''}>${esc(c)}</option>`).join('');
@@ -837,7 +859,7 @@ export async function saveIngredientFromModal(id: string) {
   ing.storageLocations = {
     west: { category: (document.getElementById('ing-edit-storageWestCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageWestLoc') as HTMLSelectElement | null)?.value || '' },
     centraal: { category: (document.getElementById('ing-edit-storageCentraalCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageCentraalLoc') as HTMLSelectElement | null)?.value || '' },
-  };
+  } as unknown as Ingredient['storageLocations'];
 
   const stockWest = (document.getElementById('ing-edit-stockWest') as HTMLInputElement | null)?.value;
   const stockCentraal = (document.getElementById('ing-edit-stockCentraal') as HTMLInputElement | null)?.value;
@@ -869,7 +891,7 @@ export async function saveIngredientFromModal(id: string) {
 
 /** Lookup a Hanos product by code or URL and fill in the form fields */
 export async function hanosLookupProduct() {
-  const input = document.getElementById('ing-hanos-lookup');
+  const input = document.getElementById('ing-hanos-lookup') as HTMLInputElement | null;
   const status = document.getElementById('ing-hanos-status');
   if (!input || !status) return;
 
@@ -1093,12 +1115,13 @@ export async function saveNewIngredient(id: string) {
     storageLocations: {
       west: { category: (document.getElementById('ing-edit-storageWestCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageWestLoc') as HTMLSelectElement | null)?.value || '' },
       centraal: { category: (document.getElementById('ing-edit-storageCentraalCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageCentraalLoc') as HTMLSelectElement | null)?.value || '' },
-    },
+    } as unknown as Ingredient['storageLocations'],
     measureMode: 'weight',
     pricePer100: 0,
     priceHistory: [],
     priceAlert: false,
     stock: {},
+    targetStock: {},
     nutrition: {},
   };
 
@@ -1128,15 +1151,13 @@ export function openStoragePopover(ingredientId: string, anchorEl: HTMLElement) 
   const ing = S.ingredientDb.find(i => i.id === ingredientId);
   if (!ing) return;
 
-  const storLocs = ing.storageLocations || {};
+  const storLocs = storLocsOf(ing);
   const rect = anchorEl.getBoundingClientRect();
   const catNames = Object.keys(STORAGE_CATEGORIES);
   const curLoc = S.currentLoc;
   const locLabel = locName(curLoc);
 
-  const s = storLocs[curLoc] || {};
-  const cat = s.category || '';
-  const loc = s.location || '';
+  const { category: cat, location: loc } = storLocParts(storLocs[curLoc]);
   const catOpts = '<option value="">—</option>' + catNames.map(c => `<option value="${esc(c)}"${cat===c?' selected':''}>${esc(c)}</option>`).join('');
   const locOpts = '<option value="">—</option>' + (cat && STORAGE_CATEGORIES[cat] ? STORAGE_CATEGORIES[cat] : []).map(l => `<option value="${esc(l)}"${loc===l?' selected':''}>${esc(l)}</option>`).join('');
 
@@ -1192,11 +1213,12 @@ export async function saveStorageFromPopover(ingredientId: string) {
 
   // Update in full DB — only change the current location, preserve the other
   const ingFull = S.ingredientDb.find(i => i.id === ingredientId);
-  const newLocs = ingFull ? { ...(ingFull.storageLocations || {}) } : {};
+  const newLocs: StorageLocsRuntime = ingFull ? { ...storLocsOf(ingFull) } : {};
   newLocs[curLoc] = { category: catEl.value, location: locEl.value };
+  const newLocsForIng = newLocs as unknown as Ingredient['storageLocations'];
 
   if (ingFull) {
-    ingFull.storageLocations = newLocs;
+    ingFull.storageLocations = newLocsForIng;
     try {
       await apiPost('/api/ingredients/' + ingredientId, ingFull);
       toast('Storage location saved');
@@ -1207,7 +1229,7 @@ export async function saveStorageFromPopover(ingredientId: string) {
 
   // Update in S.ingredientDb too
   const ingLight = S.ingredientDb.find(i => i.id === ingredientId);
-  if (ingLight) ingLight.storageLocations = newLocs;
+  if (ingLight) ingLight.storageLocations = newLocsForIng;
 
   const pop = document.getElementById('storage-popover');
   if (pop) pop.remove();

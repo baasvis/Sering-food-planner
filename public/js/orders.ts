@@ -273,7 +273,7 @@ export function hideSiSuggestions() {
     siSearchQuery = '';
     const sugContainer = document.getElementById('si-suggestions');
     if (sugContainer) { sugContainer.innerHTML = ''; sugContainer.style.display = 'none'; }
-    const input = document.getElementById('si-search-input');
+    const input = document.getElementById('si-search-input') as HTMLInputElement | null;
     if (input) input.value = '';
   }, 200);
 }
@@ -1252,10 +1252,11 @@ export function isHanosEnabled() {
 export function collectHanosItems(storageCat: string | null | undefined): HanosItem[] {
   const rows = document.querySelectorAll('.ing-table tr[data-combined-key]');
   const items: HanosItem[] = [];
-  rows.forEach(row => {
+  rows.forEach(rowEl => {
+    const row = rowEl as HTMLElement;
     // If filtering by storage category, check the group
     if (storageCat) {
-      const group = row.closest('.storage-group');
+      const group = row.closest('.storage-group') as HTMLElement | null;
       if (!group || !group.dataset.storageCat || group.dataset.storageCat !== storageCat) return;
     }
     const dbName = row.dataset.dbname;
@@ -1298,9 +1299,9 @@ export async function hanosAddSingle(orderCode: string | undefined, name: string
   const row = document.querySelector(`[data-combined-key="${key}"]`) || document.querySelector(`[data-stock-key="${key}"]`);
   let quantity = 1;
   if (row) {
-    const neededBase = parseFloat(row.dataset.needed) || 0;
+    const neededBase = parseFloat((row as HTMLElement).dataset.needed) || 0;
     const dbStock = getDbStockForLoc(db, S.currentLoc);
-    const skey = row.dataset.rowKey || stockKey(db, name, S.currentLoc);
+    const skey = (row as HTMLElement).dataset.rowKey || stockKey(db, name, S.currentLoc);
     const hasManual = orderStock[skey] !== undefined;
     const effectiveStockBase = hasManual
       ? (db.orderUnitSize > 0 ? (parseFloat(String(orderStock[skey])) || 0) * db.orderUnitSize : (parseFloat(String(orderStock[skey])) || 0))
@@ -1349,9 +1350,10 @@ export function hanosConfirmBulk(storageCat?: string) {
 export function collectHanosBatchItems(storageCat: string | null | undefined): HanosItem[] {
   const rows = document.querySelectorAll('.ing-table tr[data-stock-key]');
   const items: HanosItem[] = [];
-  rows.forEach(row => {
+  rows.forEach(rowEl => {
+    const row = rowEl as HTMLElement;
     if (storageCat) {
-      const group = row.closest('.storage-group');
+      const group = row.closest('.storage-group') as HTMLElement | null;
       if (!group || !group.dataset.storageCat || group.dataset.storageCat !== storageCat) return;
     }
     const key = row.dataset.stockKey;
@@ -1597,7 +1599,7 @@ export function updateOrderStockInput(ingredientId: string, ingName: string, val
 
   const row = document.querySelector(`[data-row-key="${skey}"]`);
   if (!row) return;
-  const neededBase = parseFloat(row.dataset.needed) || 0;
+  const neededBase = parseFloat((row as HTMLElement).dataset.needed) || 0;
   const stockUnits = parseFloat(val || '') || 0;
   const stockBase = (db && db.orderUnitSize > 0) ? stockUnits * db.orderUnitSize : stockUnits;
   const toOrderBase = Math.max(0, neededBase - stockBase);
@@ -1882,7 +1884,7 @@ export function _calcStocktakeToOrder(ing: { hasOrderUnit: boolean; orderUnitSiz
   if (stockUnitsVal === '' || stockUnitsVal === undefined || stockUnitsVal === null) {
     return '<span style="color:var(--text2);font-style:italic;">not counted</span>';
   }
-  const stockUnits = parseFloat(stockUnitsVal) || 0;
+  const stockUnits = parseFloat(String(stockUnitsVal)) || 0;
   const stockBase = ing.hasOrderUnit ? stockUnits * ing.orderUnitSize : stockUnits;
   const toOrderBase = Math.max(0, ing.neededBase - stockBase);
   if (ing.neededBase <= 0) return '<span style="color:var(--text2);">—</span>';
@@ -1898,7 +1900,7 @@ export function _calcStocktakeToOrder(ing: { hasOrderUnit: boolean; orderUnitSiz
 
 export function updateStocktakeToOrder(input: HTMLInputElement) {
   const row = input.closest('.stocktake-row');
-  const toOrderCell = row.querySelector('.stocktake-to-order');
+  const toOrderCell = row.querySelector('.stocktake-to-order') as HTMLElement | null;
   if (!toOrderCell) return;
   // Record value into module-level stocktakeValues (inline oninput can't access module scope)
   const ingId = input.dataset.ingId;
