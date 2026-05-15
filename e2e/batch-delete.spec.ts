@@ -27,12 +27,17 @@ test.describe('Batch deletion', () => {
     const tile = page.locator('[data-testid="batch-tile"]').filter({ hasText: batchName });
     await expect(tile).toBeVisible();
 
+    // The tile's name renders as an <input> once expanded, so a hasText filter
+    // stops matching it — pin to the stable data-id for post-expand steps.
+    const batchId = await tile.getAttribute('data-id');
+    const tileById = page.locator(`[data-testid="batch-tile"][data-id="${batchId}"]`);
+
     // Wait for the creation save to land before deleting — avoids a race where
     // the undo timer's commit() fires a second PATCH before the creation PATCH.
     await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });
 
     // Expand the tile so the action buttons are rendered.
-    await tile.locator('.batch-tile-compact').click();
+    await tileById.locator('.batch-tile-compact').click();
 
     // Arm a listener for the PATCH that the undo-timer commit will fire.
     // The deletion is optimistic: state updates immediately, but the DB write
@@ -42,10 +47,10 @@ test.describe('Batch deletion', () => {
       { timeout: 12_000 },
     );
 
-    await tile.locator('[data-testid="batch-delete-btn"]').click();
+    await tileById.locator('[data-testid="batch-delete-btn"]').click();
 
     // Tile must vanish from the UI immediately (optimistic remove).
-    await expect(tile).not.toBeVisible();
+    await expect(tileById).not.toBeVisible();
 
     // Wait for the background PATCH to complete so the DB agrees.
     const patchRes = await patchDone;
