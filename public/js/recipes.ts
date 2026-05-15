@@ -55,8 +55,6 @@ export function renderRecipeIndex() {
   <div class="btn-row" style="margin-bottom:12px;">
     <button class="btn btn-primary" data-testid="recipe-create-btn" onclick="openRecipeEditor()">+ Create recipe</button>
     ${isDirector ? '<button class="btn btn-primary" data-testid="recipe-ai-btn" onclick="openRecipeEditor(undefined, { aiMode: true })" title="Draft a recipe with AI" style="background:var(--purple,#7c3aed);border-color:var(--purple,#7c3aed);">✨ AI helper</button>' : ''}
-    <button class="btn" onclick="recalcAllCosts()" title="Recalculate all recipe costs from current ingredient prices">Recalculate costs</button>
-    <button class="btn" onclick="importCookedAmounts()" title="Re-import cooked amounts from Google Sheets for all recipes">Import cooked amounts</button>
     <span style="font-size:12px;color:var(--text2);margin-left:8px;">${v2Count} recipe${v2Count !== 1 ? 's' : ''}</span>
   </div>
   <input class="ri-search" id="ri-search-input" placeholder="Search recipes..." value="${esc(riSearch)}" oninput="updateRiSearch(this)" />
@@ -205,35 +203,6 @@ export function bulkAddRecipes() { toastError(V1_DEPRECATED_MSG); }
 export function openEditRecipe(_id: any) { toastError(V1_DEPRECATED_MSG); }
 export function saveEditRecipe(_id: any) { toastError(V1_DEPRECATED_MSG); }
 export function deleteRecipeIndex(_id: any) { toastError(V1_DEPRECATED_MSG); }
-
-// Add a dish to the menu planner from a recipe in the index
-export async function importCookedAmounts() {
-  try {
-    toast('Importing cooked amounts from Google Sheets... this may take a while');
-    const result = await apiPost('/api/recipes/import-cooked-amounts', {}) as { updated: number; skipped: number; failed: number; total: number };
-    // Refresh the recipe list from server
-    const freshRecipes = await apiGet('/api/recipes') as typeof S.recipes;
-    S.recipes = freshRecipes;
-    updateRecipeResults();
-    toast(`Cooked amounts imported: ${result.updated} updated, ${result.failed} failed, ${result.skipped} skipped out of ${result.total}`);
-  } catch (e: unknown) {
-    toastError('Could not import cooked amounts: ' + (e instanceof Error ? e.message : 'Unknown error'));
-  }
-}
-
-export async function recalcAllCosts() {
-  try {
-    toast('Recalculating all recipe costs...');
-    const updated = await apiPost('/api/recipes/recalculate-costs', {}) as { updated: number };
-    // Refresh the recipe list from server
-    const freshRecipes = await apiGet('/api/recipes') as typeof S.recipes;
-    S.recipes = freshRecipes;
-    updateRecipeResults();
-    toast(`Costs recalculated (${updated.updated} updated)`);
-  } catch (e: unknown) {
-    toastError('Could not recalculate costs: ' + (e instanceof Error ? e.message : 'Unknown error'));
-  }
-}
 
 // addDishFromRecipe was the v1-index path. Replaced with a deprecated stub —
 // addDishFromV2Recipe (below) is the supported path now.
