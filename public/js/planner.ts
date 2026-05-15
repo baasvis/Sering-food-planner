@@ -95,20 +95,10 @@ export function renderLocationPlan(loc: string) {
   ];
 
   const days = getVisibleDays(_plannerDayOffset);
-  const assigning = S.assigningBatchId;
-  const assignBatch = assigning ? S.batches.find(b => b.id === assigning) : null;
 
   // Only show inventory button on the user's current location
   const invBtn = loc === S.currentLoc ? getInventoryButton(loc) : '';
   let html = renderDayNav(_plannerDayOffset, -14, 14, 'changePlannerDay', '');
-
-  // Assign mode banner
-  if (assignBatch) {
-    html += `<div class="assign-banner">
-      <span>Click a slot to assign <strong>${esc(assignBatch.name)}</strong></span>
-      <button class="btn btn-sm" onclick="cancelAssignMode()">Cancel</button>
-    </div>`;
-  }
 
   // Fix My Menu button only on West (it plans both locations + caterings globally
   // — see .claude/plans/fix-my-menu.md §4.1). Equipment editor sits next to it.
@@ -151,11 +141,7 @@ export function renderLocationPlan(loc: string) {
         const k = `${loc}-${isoDate}-${meal}`;
         const slotDishes = (S.planner[k] || []).filter(dish => dish.type === tg.key);
         const slotServed = isServicePast({loc: loc as Location, date: isoDate, meal});
-        const assignTarget = assigning ? ' slot-assign-target' : '';
-        const slotClick = assigning
-          ? `assignBatchToSlot('${loc}','${isoDate}','${meal}')`
-          : `openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')`;
-        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}${assignTarget}" data-loc="${loc}" data-date="${isoDate}" data-meal="${meal}" data-type="${tg.key}" onclick="${slotClick}" ondragover="slotDragOver(event)" ondragleave="slotDragLeave(event)" ondrop="slotDrop(event,'${loc}','${isoDate}','${meal}')">`;
+        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}" data-loc="${loc}" data-date="${isoDate}" data-meal="${meal}" data-type="${tg.key}" onclick="openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')" ondragover="slotDragOver(event)" ondragleave="slotDragLeave(event)" ondrop="slotDrop(event,'${loc}','${isoDate}','${meal}')">`;
         // One chip per batch — unified-batch model means each batch is its
         // own canonical menu option. Cross-batch same-recipe duplicates
         // (audit S7) intentionally render as separate chips: cook can see
@@ -177,9 +163,7 @@ export function renderLocationPlan(loc: string) {
             : '';
           html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(dish.name)}"><span class="chip-nm">${esc(dish.name)}</span>${fromTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
         }
-        if (!assigning) {
-          html += `<div class="add-slot-btn" data-testid="slot-add-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div>`;
-        }
+        html += `<div class="add-slot-btn" data-testid="slot-add-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div>`;
         html += `</div>`;
       });
     });
@@ -251,7 +235,7 @@ export function renderTypeBatchPool(loc: string, typeKey: string, typeLabel: str
     const frozen = poolBatches.filter(d => isAllFrozen(d));
 
     const renderGroup = (batches: Batch[]) => {
-      return `<div class="batch-tile-grid">${batches.map(b => renderBatchTile(b, true)).join('')}</div>`;
+      return `<div class="batch-tile-grid">${batches.map(b => renderBatchTile(b)).join('')}</div>`;
     };
 
     if (toCook.length) {
@@ -293,7 +277,7 @@ export function renderShowAllBatches(loc: string) {
     const frozen = poolBatches.filter(d => isAllFrozen(d));
 
     const renderGroup = (batches: Batch[]) => {
-      return `<div class="batch-tile-grid">${batches.map(b => renderBatchTile(b, true)).join('')}</div>`;
+      return `<div class="batch-tile-grid">${batches.map(b => renderBatchTile(b)).join('')}</div>`;
     };
 
     if (toCook.length) {
@@ -396,39 +380,6 @@ export function assignFamilyToSlot(seed: Batch, loc: string, date: string, meal:
   if (!seed.services) seed.services = [];
   seed.services.push({ loc, date, meal } as Service);
   return [seed];
-}
-
-// ── ASSIGN MODE ─────────────────────────────────────────
-export function startAssignMode(batchId: string) {
-  S.assigningBatchId = batchId;
-  rerenderCurrentView();
-}
-
-export function cancelAssignMode() {
-  S.assigningBatchId = null;
-  rerenderCurrentView();
-}
-
-export function assignBatchToSlot(loc: string, date: string, meal: string) {
-  const batchId = S.assigningBatchId;
-  if (!batchId) return;
-  const batch = S.batches.find(d => d.id === batchId);
-  if (!batch) { S.assigningBatchId = null; return; }
-  S.assigningBatchId = null;
-  const added = assignFamilyToSlot(batch, loc, date, meal);
-  if (added.length === 0) {
-    toast('Already assigned to this slot');
-    return;
-  }
-  rebuildPlanner();
-  scheduleSave();
-  rerenderCurrentView();
-  if (added.length === 1) {
-    toast(`${batch.name} assigned to ${dateToDayName(date)} ${meal}`);
-  } else {
-    const familyName = batch.name.replace(/\s*\(split\)\s*$/i, '').trim();
-    toast(`${familyName} family assigned to ${dateToDayName(date)} ${meal} (${added.length} batches)`);
-  }
 }
 
 // ── TRANSPORT VIEW ───────────────────────────────────────

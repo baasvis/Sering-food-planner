@@ -122,7 +122,6 @@ export interface AppState {
   batches: Batch[];
   expandedBatches: Set<string>;
   expandedBreakdowns: Set<string>;
-  assigningBatchId: string | null;
   draggingBatchId: string | null;
   showAllBatches: boolean;
   recipes: RecipeFull[];
@@ -180,7 +179,6 @@ export let S: AppState = {
   batches:[],
   expandedBatches: new Set(),
   expandedBreakdowns: new Set(),
-  assigningBatchId: null,
   draggingBatchId: null,
   showAllBatches: false,
   recipes:[],
