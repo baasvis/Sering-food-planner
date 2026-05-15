@@ -1,4 +1,4 @@
-import type { Ingredient } from '@shared/types';
+import type { Ingredient, StorageLocationMap } from '@shared/types';
 import { S, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, rebuildStorageCategories, getStorageConfigForLoc, getStorageColor, DEFAULT_STORAGE_CONFIG } from './state';
 import { toast, toastError, apiGet, apiPost, saveStorageConfig, loadIngredientDb } from './utils';
 import { chipClass } from './core';
@@ -8,19 +8,9 @@ import { locName } from '@shared/location';
 
 // ── INGREDIENT DATABASE TAB ──────────────────────────────────
 
-/**
- * Runtime shape of a single `Ingredient.storageLocations` entry. The shared
- * `StorageLocationMap` types each entry as a bare `string`, but in practice
- * the ingredient DB stores (and reads) `{ category, location }` objects.
- * Bare strings only survive as legacy/imported rows. Mirrors the
- * `StorageLocValue` union in `orders.ts`.
- */
-type StorageLocEntry = string | { category?: string; location?: string };
-type StorageLocsRuntime = Record<string, StorageLocEntry>;
-
-/** Read `ing.storageLocations` as the richer runtime shape (see StorageLocEntry). */
-function storLocsOf(ing: Ingredient): StorageLocsRuntime {
-  return (ing.storageLocations || {}) as unknown as StorageLocsRuntime;
+/** Read `ing.storageLocations`, tolerating a missing map. */
+function storLocsOf(ing: Ingredient): StorageLocationMap {
+  return ing.storageLocations || {};
 }
 
 /**
@@ -29,7 +19,7 @@ function storLocsOf(ing: Ingredient): StorageLocsRuntime {
  * category/location and read as empty — this matches the pre-cleanup
  * behavior of `(entry && entry.category) || ''`.
  */
-function storLocParts(entry: StorageLocEntry | undefined): { category: string; location: string } {
+function storLocParts(entry: StorageLocationMap[string] | undefined): { category: string; location: string } {
   if (!entry || typeof entry === 'string') return { category: '', location: '' };
   return { category: entry.category || '', location: entry.location || '' };
 }
@@ -859,7 +849,7 @@ export async function saveIngredientFromModal(id: string) {
   ing.storageLocations = {
     west: { category: (document.getElementById('ing-edit-storageWestCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageWestLoc') as HTMLSelectElement | null)?.value || '' },
     centraal: { category: (document.getElementById('ing-edit-storageCentraalCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageCentraalLoc') as HTMLSelectElement | null)?.value || '' },
-  } as unknown as Ingredient['storageLocations'];
+  };
 
   const stockWest = (document.getElementById('ing-edit-stockWest') as HTMLInputElement | null)?.value;
   const stockCentraal = (document.getElementById('ing-edit-stockCentraal') as HTMLInputElement | null)?.value;
@@ -1115,7 +1105,7 @@ export async function saveNewIngredient(id: string) {
     storageLocations: {
       west: { category: (document.getElementById('ing-edit-storageWestCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageWestLoc') as HTMLSelectElement | null)?.value || '' },
       centraal: { category: (document.getElementById('ing-edit-storageCentraalCat') as HTMLSelectElement | null)?.value || '', location: (document.getElementById('ing-edit-storageCentraalLoc') as HTMLSelectElement | null)?.value || '' },
-    } as unknown as Ingredient['storageLocations'],
+    },
     measureMode: 'weight',
     pricePer100: 0,
     priceHistory: [],
@@ -1213,12 +1203,11 @@ export async function saveStorageFromPopover(ingredientId: string) {
 
   // Update in full DB — only change the current location, preserve the other
   const ingFull = S.ingredientDb.find(i => i.id === ingredientId);
-  const newLocs: StorageLocsRuntime = ingFull ? { ...storLocsOf(ingFull) } : {};
+  const newLocs: StorageLocationMap = ingFull ? { ...storLocsOf(ingFull) } : {};
   newLocs[curLoc] = { category: catEl.value, location: locEl.value };
-  const newLocsForIng = newLocs as unknown as Ingredient['storageLocations'];
 
   if (ingFull) {
-    ingFull.storageLocations = newLocsForIng;
+    ingFull.storageLocations = newLocs;
     try {
       await apiPost('/api/ingredients/' + ingredientId, ingFull);
       toast('Storage location saved');
@@ -1229,7 +1218,7 @@ export async function saveStorageFromPopover(ingredientId: string) {
 
   // Update in S.ingredientDb too
   const ingLight = S.ingredientDb.find(i => i.id === ingredientId);
-  if (ingLight) ingLight.storageLocations = newLocsForIng;
+  if (ingLight) ingLight.storageLocations = newLocs;
 
   const pop = document.getElementById('storage-popover');
   if (pop) pop.remove();
