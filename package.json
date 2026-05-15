@@ -18,6 +18,7 @@
     "test:all": "npm test && npm run test:e2e",
     "telemetry:mine": "tsx scripts/mine-telemetry-journeys.ts",
     "typecheck": "npx tsc -p tsconfig.server.json --noEmit",
+    "typecheck:client": "npx tsc -p tsconfig.json --noEmit",
     "migrate:data-migrate": "tsx prisma/migrations/20260511120000_unified_batch_inventory_add_cols/data-migrate.ts",
     "migrate:data-migrate:dry": "tsx prisma/migrations/20260511120000_unified_batch_inventory_add_cols/data-migrate.ts --dry-run",
     "db:snapshot": "node scripts/snapshot-db.js"

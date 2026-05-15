@@ -110,7 +110,7 @@ export interface AppState {
   currentLoc: Location;
   dashMeal: Meal;
   plannerSubTab: string;
-  filters: { loc: string; storage: string; inTransit: string };
+  filters: { loc: string; storage: string };
   selected: Set<string>;
   orderToggles: { batches: boolean; standard: boolean };
   caterings: Catering[];
@@ -166,7 +166,7 @@ export let S: AppState = {
   currentLoc:'west',
   dashMeal:'lunch',
   plannerSubTab:'west',
-  filters:{loc:'all',storage:'all',inTransit:'all'},
+  filters:{loc:'all',storage:'all'},
   selected:new Set(),
   orderToggles:{batches:true,standard:false},
   caterings:[],
