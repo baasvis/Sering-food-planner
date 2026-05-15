@@ -1,7 +1,7 @@
 /**
- * Guard: every frontend Batch-construction path must produce a batch in the
- * unified shape — inventory[] + shipments[] arrays, and none of the legacy
- * stock/location/storage/inTransit/parentId/recipeSheetId fields.
+ * Guard: the UI actions that hand-build a Batch object literal must produce a
+ * batch in the unified shape — inventory[] + shipments[] arrays, and none of
+ * the legacy stock/location/storage/inTransit/parentId/recipeSheetId fields.
  *
  * Why this file exists: the unified-batch rewrite (PR #60) migrated the
  * helpers and API endpoints but not every UI action that hand-builds a Batch
@@ -13,8 +13,11 @@
  * gate POST /api/data/patch uses), so a future drift back to the legacy shape
  * fails CI instead of reaching a cook.
  *
- * saveNewDish is the fourth construction path; it reads DOM form inputs, so it
- * is covered by e2e/batch-create.spec.ts rather than here.
+ * Covered here: addDishFromV2Recipe, addPlaceholderDish, replaceWithV2Recipe.
+ * saveNewDish reads DOM form inputs, so it is covered by
+ * e2e/batch-create.spec.ts instead. menu-fixer.ts also constructs batches
+ * (generated placeholders, emergency cooks) — those are exercised by
+ * test/menu-fixer.test.ts.
  */
 
 // Browser-global stubs (document, localStorage, ...) come from
