@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-04-13*
+*Last updated: 2026-05-15*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -69,161 +69,117 @@ Replace the current patchwork of poorly-fitting software with a single, intercon
 
 ## 3. Current State (What's Built)
 
-### Food Planner (v1 — live in production)
+### Food Planner (live in production)
 - **Repo**: https://github.com/baasvis/Sering-food-planner
 - **Stack**: Node.js/Express + TypeScript, frontend TypeScript ES modules bundled by Vite, PostgreSQL via Prisma
 - **Hosting**: Railway (auto-deploy from GitHub)
 - **Auth**: Google Sign-In with allowed email list
 
-**Completed features:**
-- Global location chooser: after login, users pick their kitchen (Sering West / Sering Centraal). Choice persists in localStorage. The app title ("Sering West" / "Sering Centraal") acts as a toggle to switch location. Dashboard, Orders, and Ingredient DB use the global location — no per-screen toggles. Finance keeps its own filter pills (has "all" + "testtafel") but defaults to global location. Planner and Guests retain their own location handling (sub-tabs / side-by-side). Planner defaults to the user's location tab and only shows DO INVENTORY on the user's current location.
-- Dashboard redesigned as kitchen-floor command center: centered meal toggle (Lunch/Dinner) at top filters all sections, auto-detects meal based on time (lunch before 15:00, dinner after). Side-by-side service block: menu card (left) with dish chips grouped by type (🥣 Soup / 🍛 Main / 🍨 Dessert), guests card (right) with large guest count + flow chart. Dish chips show inline allergen pills and are clickable with foldout (allergens, starch picker for mains, stock level, cook date, recipe link, per-service breakdown). Two-column desktop layout (Stock + Chef To-Dos), single column on mobile. Stock card groups batches by type with icons, frozen batches in separate "❄️ Frozen" section at bottom; includes "Cooked Food Inventory" button (opens batch inventory modal with frozen section) and "Ingredient Stocktake" button (opens area picker → count inputs → save). Ingredient name resolution: v2 recipes preferred over legacy denormalized data, ingredient names looked up from DB when not denormalized. Chef To-Dos: "What to Cook" filtered to selected meal only, "What to Chop" with improved ingredient filtering (unknown ingredients excluded by default, added pantry keywords for tofu/tempeh/lentils/canned/frozen/spice blends), team todos inline (no floating button). Removed greeting, removed "What to Heat Up" (redundant with menu), removed "Future service" from cook list
-- Guest flow chart on dashboard: canvas line chart showing estimated guest arrivals per 5-minute interval. Uses real per-5-min arrival distributions extracted from POS timestamps (Tebi Invoice ID + Lightspeed Creation Date), grouped by location/meal/day-of-week. Falls back to gaussian curve when no historical data exists. Lunch/Dinner toggle (amber/purple), "Now" time indicator with remaining guest count during service, peak label. Dark mode + HiDPI aware. Distributions stored in GuestHistoryMeta as normalized JSON fractions.
-- Guest count tables per location (West + Centraal) with live totals, day-by-day navigation (today ±14 days), editable for current and future weeks
-- Guest prediction from historical POS data: upload Tebi or Lightspeed CSV exports, auto-detect format, predict guest counts using winsorized weighted averages with trend detection
-  - Supports 3 CSV formats: Tebi ProductOrdersReport, Tebi ProductReportByProfitCenter, Lightspeed receipt-items
-  - Location detection: Tebi uses device ID mapping or Profit Center column; Lightspeed = always Centraal
-  - Staff meals split by time (before 17:00 = lunch, after = dinner), included in totals with separate "X staff" indicator
-  - Multiple sources for same day are averaged (not summed) to prevent double-counting during POS transition
-  - "Apply predictions" button fills guest inputs; staff can manually adjust for events/reservations
-- Unified Week Plan tab with sub-tabs: Sering West, Sering Centraal, To Transport, Caterings, Overview
-- Location sub-tabs: calendar grid organised by batch type (Soups/Mains/Desserts), each with day×meal slots. Day-by-day navigation (today ±14 days), same as Guests tab
-- Per-type batch pools directly below each type's calendar (soups under soups grid, mains under mains grid). Collapsed by default behind a toggle button (type name + count); click to expand. 3-column tile grid on desktop, 2 on tablet, 1 on mobile. Grouped by "To cook" / "Cooked" / "Frozen".
-  - Compact batch tiles show: status badge (TO COOK / COOKED / STALE), cook label (day name for planned e.g. "Tue", date for cooked e.g. "11/4"), stock + diff, location badge. Clickable to expand.
-  - Expanded tile: structured single-column layout with bordered sections. Header (name input + recipe link/button + serving size). Two-column desktop layout (single on mobile): left = "Stock & Services" (stock input + diff, service lines grouped by location with per-service liter amounts, always using day names), right = "Properties" (cook date picker/dropdown, type/storage/location badges, allergens, notes). Action bar at bottom (order toggle, replace, delete/served buttons). Reusable via `BatchTileOptions` interface (showAssign, showActions, showRecipe, compact).
-- "Show all batches" collapsible section at the bottom of the calendar showing every batch at the location regardless of type.
-- Drag-and-drop assignment: drag a batch tile onto any calendar slot to assign it. Visual feedback with slot highlighting on dragover.
-- Select-then-assign flow (alternative): click "Assign" on a batch tile → grid slots highlight as drop targets → click a slot to assign the batch there. The + button and add modal remain for creating new batches from recipes or placeholders (placeholders inherit the slot's date as cook date).
-- Replace batch: uncooked batches with services show a "Replace" button. Opens a modal to pick a replacement (existing same-type batch or recipe). All services and cook date transfer from old to new batch; catering references updated; old batch is deleted.
-- Cook date column: red highlight when unset, bold when planned. Stock locked until marked as cooked, auto-fills to required amount on cook.
-- Requirement breakdown tooltip on +/- column (hover to see per-service and per-catering demand)
-- Caterings module: name, date, guest count, delivery mode, auto-calculated dish requirements (guest count × serving size ÷ same-type peers), logistics notes
-- Transport view: "Mark selected as arrived" (changes logistics to destination), custom transport items list (free-text, disappear on delivery)
-- Dish management with inline editing, cook date tracking, stock levels, +/- status pills, sortable columns
-- Recipe index (library) with ratings, conditional cost colouring, "Recalculate costs" button (re-derives all recipe costs from current ingredient prices), "Import cooked amounts" button (bulk re-imports cooked column from linked Google Sheets for all v2 recipes)
-- Recipe system v2: full recipe editor with DB-linked ingredients, multi-step guided creation (basics → ingredients → prep steps → storage → review), ingredient autocomplete from DB (~2100 items), flexible ingredient slots ("Any vegetables" with category + suggestions), auto-allergen calculation from linked ingredients, live cost per serving, nutrition per serving (EU label format), photo upload (stored in PostgreSQL, resized client-side), manual versioning with snapshot history, printable A4 view (server-rendered HTML with @media print, supports ?scale= and ?liters= query params for scaled printing), post-cook recording (resolve flexible slots, adjust amounts, optional stock deduction, cook notes), auto-recalculate recipe costs when ingredient prices change (also recalculated on detail view open). Google Sheets import preserves both raw and cooked ingredient amounts (raw for cost, cooked for volume). All planner batches now use v2 recipes (legacy recipeIndex kept in DB as backup but no longer served to frontend). Recipe list shows v2 recipes in a sortable table (name, type, structure, cost, season, allergens, ratings, served, actions). Rows link to detail view on click, with Edit/+Menu/Delete actions. Flex ingredients priced at €1.50/kg in cost calculations. Detail view includes adjustable volume/portions scaling (changes ingredient amounts in-place, passes scale to print view). Batch recipe editor: unified fullscreen/modal editor for v2 recipe batches — shows ingredients with editable amounts, adjustable target liters/portions with live rescaling from base recipe amounts, prep steps (read-only), cook notes, stock deduction toggle. Replaces old resolve-flexible and post-cook-recording modals. Accessible from batch tile "Open batch recipe" button in planner.
-- Order overview with 4-tab layout: Combined Order (default), Set Standard Inventory, Batch Ingredients, Ingredient Database
-  - All tabs display amounts in order units (e.g. "5x Bak 1 kilogram") when ingredient has orderUnitSize, falling back to formatted metric (kg/L) otherwise. Stock inputs use order units with labels.
-  - Standard Inventory: cooks build a weekly base order (persistent, per-location PostgreSQL JSON), searchable from ingredient DB, target stock in order units
-  - Batch Ingredients: toggle list of batches at current location (with recipe data), on/off per batch, colored per-batch breakdown in ingredient table. "All on/off" buttons. Toggle state persisted to localStorage per location (batchIngredientToggles_west / _centraal); new batches default to their orderFor value.
-  - Combined Order: merges standard + batch ingredients, sums overlapping items, grouped by storage category per location, breakdown on click. Uses the same batch toggle state as Batch Ingredients tab. "Include batch ingredients" toggle shows/hides all batch ingredient rows at once.
-  - Hanos add-to-cart integration: top-level "Send all to Hanos" button + per-storage-group + per-row cart buttons. Confirmation modal lists items before sending. Uses Hanos OCC v2 API (OAuth login, cart management). Per-location credentials: HANOS_USER_WEST/HANOS_PASS_WEST and HANOS_USER_CENTRAAL/HANOS_PASS_CENTRAAL. Buttons only show for locations with configured credentials.
-  - Hanos product lookup: paste an order code or Hanos URL in the ingredient edit modal to auto-fill order code, unit, price, unit size, and supplier name. Uses GET /api/hanos/product/:code (OCC v2 product detail) + GET /api/hanos/search (catalog search).
-  - Clicking any ingredient name opens full edit modal (all fields: name, supplier, types, category, unit, order code/unit/price/size, storage locations, allergens, notes, stock, nutrition)
-  - Stocktake mode: "Do stocktake" button on Combined Order opens dedicated flow — area picker → per-area page with items grouped by spot → stock inputs with live to-order calculation → "Save & next area" or "Save & stop". Persists via /api/ingredients/stock/bulk. Inputs start empty ("not counted", skipped on save); entering 0 means "counted, nothing on stock" and is saved.
-- Ingredient database (PostgreSQL via Prisma) with supplier codes, units, prices, storage locations, stock tracking
-- Feedback system (floating purple button, structured form with 4 types, stores to PostgreSQL)
-- Feedback admin screen: view all submitted feedback, filter by type, "Copy for Claude" button exports feedback as structured text for pasting into Claude Code chat
-- Dashboard allergen editing: add/remove allergens directly on today's menu cards (same inline flow as week plan)
-- Mobile responsive layout (card-based dishes on phone, bottom-sheet modals, fixed bottom navigation bar with icons, compact sticky header)
-- Dark mode toggle: manual light/dark switch in top bar (moon/sun icon), saved to localStorage. Light mode is the default. CSS uses `:root.dark` class, not `prefers-color-scheme`.
-- Logistics colour coding with legend, filter bars, section grouping (To cook / Cooked / Frozen)
-- Finance v1: Tebi POS scraper (Playwright browser automation) pulls daily revenue data via Tebi's internal JSON API. Sync worker stores data in PostgreSQL DailyRevenue table. Finance screen shows weekly revenue table (per location per day), monthly summary cards (gross/net revenue, sales, covers), CSS bar chart of daily gross revenue, and week navigation. "Sync from Tebi" button triggers the scraper as a child process. Two Tebi accounts (as of 2026-04-26): TEBI_EMAIL/PASSWORD for Ledger 1 (Sering West, ledger 723192) and TEBI_EMAIL_2/PASSWORD_2 for Ledger 2 (TestTafel + Centraal, set TEBI_LEDGER_ID_2=724466). Each account is logged in separately, runs sequentially, with isolated auth tokens and profit-center state. Backward compat: if TEBI_LEDGER_ID_2 is set without _2 credentials, the primary credentials are reused (single-account fallback). Profit centers auto-discovered from Tebi dashboard API by label ("west", "centraal", "test"). Optional TEBI_FORCE_LOCATION env var bypasses profit center lookup. Tebi added a "Select location" intermediate page between login and the ledger dashboard around 2026-03-26; login() recognises this as a successful-login marker and runForAccount() then navigates straight to the ledger URL to bypass the picker. Failed sync runs emit `error:finance_sync_failed` telemetry events with stderr/stdout tails and survive server restart via `/api/finance/sync-status` hydration (lib/tebi-sync.ts).
-- Finance v2 — Product-level revenue breakdown: scraper parses Tebi invoice line items to extract per-product revenue. Classifies each invoice by service period (morning 09–12, lunch 12–14, afternoon 14–18, dinner 18–21, bar 21–06). Data stored in PostgreSQL ProductRevenue table. Finance screen shows horizontal category bar chart, sortable product table (top 50), and filter pills for 5 service periods + 4 locations. API: GET /api/finance/products with optional location, meal, groupBy=category filters. Discovery flag: `--dump-invoices` on scraper to inspect raw Tebi invoice structure.
-- Live sync via Server-Sent Events (SSE): when any user saves changes, all other connected users receive the patch instantly and their UI updates automatically. Uses native browser EventSource (auto-reconnects on connection loss). Server broadcasts patches to all clients except the sender (matched by email). No polling, no WebSocket library needed. Concurrent save safety (fixed 2026-04-13): incoming SSE patches update the snapshot only for remote items (not the full state), preserving any unsaved local changes so they aren't silently dropped. Server-side patch endpoint uses targeted upserts/deletes instead of delete-all/create-all, and merges incoming batches field-by-field with existing DB rows to prevent stale-field overwrites.
-- AI monitoring system (added 2026-04-13): developer-facing tool for automated app maintenance. Frontend telemetry collects errors, screen views, feature usage, and API performance via `navigator.sendBeacon`. Backend middleware tracks API response times and error rates. Events buffered in-memory, flushed to PostgreSQL every 60s. Daily cron sends telemetry + data quality report to Claude API (Sonnet), which generates structured insights (bugs, UX issues, data quality, performance, suggestions) stored in AiInsight table. Admin API: `POST /api/admin/analyze` (trigger analysis), `GET /api/admin/insights` (list insights with filters), `PATCH /api/admin/insights/:id` (update status), `GET /api/admin/telemetry/summary` (raw aggregation). Telemetry auto-cleanup removes events older than 90 days. Requires `ANTHROPIC_API_KEY` env var; optional `AI_ANALYSIS_CRON` and `AI_ANALYSIS_MODEL`.
-- Undo for destructive actions (added 2026-04-14): deleting batches, caterings, and recipes shows a 5-second "Undo" toast instead of a confirm() dialog. The save/API call is deferred until the undo window expires; clicking Undo restores state without touching the server. Frontend-only implementation in `public/js/undo.ts` — depth-1 stack (new delete commits previous), cancels pending save timer to prevent premature persistence, flushes on beforeunload and incoming SSE patches.
-- TypeScript strict typing (refactored 2026-03-31, cleaned 2026-04-09): `any` types nearly eliminated across both backend and frontend. Backend has 6 remaining (XLSX parsing in ingredients-import.ts); frontend's 5 largest files (orders, dishes, planner, dashboard, ingredient-db) are `any`-free with proper Ingredient/Batch/Service/Location types. Domain types (`Location`, `Meal`, `DishType`, `StorageType`) enforce valid values at compile time. Global state object `S` typed as `AppState`. All catch blocks use `catch (e: unknown)` with `errMsg()` helper. Prisma JSON boundary uses explicit casts with `AppError` class for typed HTTP errors. Single shared Prisma client instance. Cross-module `(window as any)` pattern eliminated — replaced with direct ES imports via `modal.ts` and `navigate.ts` registry pattern. All async route handlers wrapped in `asyncHandler()` with centralized error handling. 74 API integration tests.
+The food planner is in daily production use at Sering West and Sering
+Centraal. The paragraphs below describe the system as it stands today, by
+area — deliberately a description, not a changelog. When something changes,
+update the relevant paragraph; the dated history of how it was built lives
+in git.
+
+- **Access & location** — Google Sign-In against an allowed-email list, with
+  a dev-mode bypass when `GOOGLE_CLIENT_ID` is unset. After login the user
+  picks a kitchen (West / Centraal), which scopes the location-aware screens.
+
+- **Dashboard** — the kitchen-floor command center. A Lunch/Dinner toggle
+  (auto-set by time of day) filters everything below it: today's menu with
+  per-dish detail and allergens, the guest count with an arrival-time flow
+  chart, current stock, and the chef to-do lists.
+
+- **Week Plan** — a per-location calendar of day × meal slots organised by
+  dish type, plus a batch pool. Batches are assigned to slots by drag-drop
+  or select-then-assign and run through the cook workflow. Sub-tabs cover
+  each location, cross-location Transport, Caterings, and an Overview. "Fix
+  My Menu" auto-fills gaps with generated placeholder batches.
+
+- **Batches & inventory** — a batch is a physical container of food
+  (PLANNED → COOKED → SERVING → DONE). Its stock uses the unified-batch
+  model: an `inventory` array of per-(location, storage) entries plus a
+  `shipments` array of in-flight transfers between locations. Transport,
+  cooking and serving all read this model.
+
+- **Guests** — editable per-location guest-count tables with day navigation.
+  Counts auto-populate from the Tebi POS sync; a Tebi/Lightspeed CSV upload
+  is the manual fallback. A prediction engine fills upcoming weeks from
+  historical counts.
+
+- **Recipes** — the Recipe v2 system: recipes built from DB-linked
+  ingredients, a multi-step editor, autocomplete over the ingredient
+  database, flexible ingredient slots, auto-calculated allergens, live cost
+  and nutrition per serving, photo upload, manual versioning, a printable
+  scaled A4 view, and post-cook recording. A director-only AI recipe
+  assistant (Claude chat) helps draft and edit recipes. Recipe v1 is retired.
+
+- **Orders** — a combined order that merges the standard weekly inventory
+  with per-batch ingredient demand, grouped by storage area and shown in
+  supplier order units. Integrates with Hanos (product lookup + add-to-cart)
+  and includes a guided stocktake flow.
+
+- **Ingredient database** — ~2,100 ingredients with supplier codes, prices
+  and price history, units, storage locations, and per-location stock /
+  target stock. Supplier price lists import from XLSX.
+
+- **Finance** — daily, per-location and per-product revenue pulled from the
+  Tebi POS, with weekly/monthly views and service-period breakdowns. The
+  Tebi integration is fragile and is documented in full in `TEBI.md`.
+
+- **Cross-cutting** — live multi-user sync over Server-Sent Events;
+  database-backed sessions; an undo window for destructive actions; an
+  activity log; in-app feedback with an admin view; an AI monitoring system
+  (telemetry feeding a daily Claude insights report); a guided tutorial;
+  light/dark mode; a mobile-responsive layout; and a maintenance mode for
+  deploy windows.
+
+The whole codebase is TypeScript; `CLAUDE.md` carries the conventions, the
+file-by-file map, the API surface and the typing rules.
 
 **File structure:**
-```
-server.ts              — Express entry point (starts listening)
-app.ts                 — Express app, mounts routers, global error handler
-shared/
-  types.ts             — Shared interfaces + string literal union types (Location, Meal, DishType, etc.) used by both backend & frontend
-types/
-  express.d.ts         — Express Request augmentation (req.user)
-  globals.d.ts         — Window index signature for onclick handlers
-  multer.d.ts          — Multer module declaration
-lib/
-  config.ts            — Configuration, env vars, errMsg() helper, asyncHandler()
-  db.ts                — Prisma client, row transformers, validators
-  recipe-sheets.ts     — Google Sheets client (external recipe reading only)
-  hanos-parser.ts      — Hanos quantity parser
-  hanos-client.ts      — HanosClient class, OAuth login, cart management, product formatting
-  ai-analyzer.ts       — Data quality checks, telemetry aggregation, Claude API insights
-routes/
-  auth.ts              — Login, logout, session, requireAuth middleware
-  data.ts              — GET/POST /api/data + POST /api/data/patch (main planner state)
-  batches.ts           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches
-  recipes.ts           — Recipe index CRUD + single recipe fetch + Recipe v2 CRUD + photo + print + versioning + cost recalc
-  ingredients.ts       — Ingredient CRUD + stock management
-  ingredients-import.ts — Hanos XLSX upload + CSV migration
-  guests.ts            — Guest history + next-weeks predictions
-  inventory.ts         — Standard inventory + storage config + prep checklist + activity log
-  feedback.ts          — User feedback
-  hanos.ts             — Hanos API routes (imports client from lib/hanos-client.ts)
-  events.ts            — SSE live sync: client registry, broadcast patches to other users
-  finance.ts           — Finance revenue endpoints (GET revenue, POST sync, GET sync-status)
-  telemetry.ts         — Telemetry event ingestion (no auth, buffered writes)
-  admin.ts             — AI insights & telemetry admin endpoints
-  health.ts            — Health check endpoint
-public/
-  index.html           — Shell HTML + login screen (single module entry point)
-  css/                 — Per-screen CSS files (base, dashboard, guests, planner, orders, recipes, recipe-editor, finance, feedback, tutorial, mobile)
-  js/
-    main.ts            — Entry point: imports all modules, assigns onclick functions to window
-    state.ts           — Constants, NAV_SCREENS, storage config helpers, global state object S
-    auth.ts            — Google Sign-In, sessions
-    utils.ts           — API helpers, save system, toast, prep checklist, SSE live sync client
-    core.ts            — Planner rebuild, calculations, badges, served/archive
-    dashboard.ts       — showScreen(), Dashboard screen
-    predictions.ts     — CSV parsing, prediction engine, day-navigation helpers
-    guests.ts          — Guest counts screen, upload UI, predictions display
-    planner.ts         — Week plan: sub-tabs, location grids, batch pool, assign mode, transport view
-    dishes.ts          — Dish list + cook workflow + CRUD
-    caterings.ts       — Caterings CRUD, dish picker, auto-calculated requirements
-    recipes.ts         — Recipe index screen (v2 recipes)
-    recipe-editor.ts   — Recipe v2 editor (multi-step modal), detail view, post-cook recording
-    orders.ts          — Order overview (combined, standard inventory, dish ingredients tabs)
-    ingredient-db.ts   — Ingredient database editor + supplier import
-    finance.ts         — Finance screen (revenue dashboard, sync, week nav)
-    feedback.ts        — Feedback button and form
-    feedback-admin.ts  — Feedback admin screen (view, filter, export)
-    telemetry.ts       — Frontend telemetry (errors, screen views, feature usage, API perf)
-    undo.ts            — Undo manager for destructive actions (5s deferred save)
-    tutorial.ts        — Interactive guided tutorial system
-    modal.ts           — Standalone modal utilities (showModal, closeModal, esc)
-    navigate.ts        — Screen renderer registry, rerenderCurrentView()
-    init.ts            — buildNav(), beforeunload guard, initApp
-seeds/
-  ingredients.json     — Master ingredient database (~2,100 items, seed for first deploy)
-  standard-inventory.json  — Default weekly base order (~140 items)
-scripts/
-  tebi-scraper.js          — Playwright scraper: logs into Tebi POS, captures auth, fetches revenue/sales via internal API
-  tebi-sync-worker.js      — Sync worker: runs scraper + upserts results to PostgreSQL DailyRevenue table
-test/
-  api.test.ts          — API integration tests (Jest + @swc/jest)
-tsconfig.json          — Frontend TypeScript config
-tsconfig.server.json   — Backend TypeScript config (CommonJS output to dist/server/)
-vite.config.ts         — Vite config (root: public/, proxy /api to :3000)
-.env                   — Local environment variables (gitignored)
-railway.toml           — Railway deploy config (start command: prisma migrate + node dist/server/server.js)
-CLAUDE.md              — Claude Code project instructions
-DESIGN.md              — This document
-SETUP_GUIDE.md         — Installation instructions
-```
+
+`CLAUDE.md` ("Project Structure") holds the authoritative, current file-by-file
+map — it is kept in sync as features land. Top-level shape:
+
+- `server.ts` / `app.ts` — Express entry point and app wiring
+- `routes/` — one router per module (data, batches, recipes, ingredients, guests,
+  inventory, finance, hanos, telemetry, admin, recipe-ai, coverage, …)
+- `lib/` — backend helpers (Prisma/db, config, Tebi sync, Hanos client, AI analyzer,
+  recipe-ai, telemetry coverage)
+- `shared/types.ts` — interfaces shared by backend and frontend
+- `public/js/` — frontend ES modules, roughly one per screen, bundled by Vite
+- `public/css/` — per-screen stylesheets
+- `prisma/` — schema, migrations, seed script
+- `seeds/` — first-deploy seed data (ingredient catalogue, standard inventory)
+- `scripts/` — one-off importers and the Tebi diagnostics/backfills (catalogued in `TEBI.md`)
+- `test/` — Jest unit/API tests; `e2e/` — Playwright end-to-end specs
+- `.github/workflows/` — CI (PR tests, weekly coverage agent, staging sync)
 
 **Data model** (stored in PostgreSQL via Prisma):
 
 | Entity | Key Fields | Prisma Model / Table |
 |--------|-----------|-----------|
-| Batch | id, name, type, stock, serving, storage, location, inTransit, allergens, extraAllergens, cookDate, recipeSheetId, recipeId, recipeVolume, recipeIngredients, actualIngredients (JSON), cookNotes, stockDeducted, services (JSON), parentId, note, orderFor, createdAt | Batch / batches |
+| Batch | id, name, type, serving, allergens, extraAllergens, orderFor, cookDate, note, services (JSON), createdAt, recipeId, actualIngredients (JSON), cookNotes, stockDeducted, generated, inventory (JSON), shipments (JSON) | Batch / batches |
 | Guests | location, day, lunch, dinner | Guest / guests (one row per (location, day)) |
-| Recipe Index | id, name, type, recipeSheetId, allergens, costPerServing, structure, seasonality, ratings, timesServed | RecipeIndex / recipe_index (legacy — see Recipe v2) |
-| Recipe (v2) | id, name, type, structure, seasonality, servingTemp, servingSize, recipeVolume, autoAllergens, extraAllergens, costPerServing, prepSteps (JSON), coolingMethod, storageMethod, photoUrl, isComplete, versions (JSON), createdBy, updatedAt, legacySheetId | Recipe / recipes |
+| Recipe (v2) | id, name, type, structure, seasonality, servingTemp, servingSize, recipeVolume, autoAllergens, extraAllergens, costPerServing, avgSkill, avgSpeed, avgBanger, timesServed, prepSteps (JSON), coolingMethod, storageMethod, photoUrl, isComplete, versions (JSON), createdBy, createdAt, updatedAt, legacySheetId | Recipe / recipes |
 | Recipe Ingredient Row | id, recipeId, ingredientId, sortOrder, rawAmount, cookedAmount, unit, isFlexible, flexCategory, flexLabel, suggestedNames | RecipeIngredientRow / recipe_ingredients |
-| Recipe Photo | id, recipeId, mimeType, data (binary) | RecipePhoto / recipe_photos |
+| Recipe Photo | id, recipeId, mimeType, data (binary), createdAt | RecipePhoto / recipe_photos |
 | Catering | id, name, date, guestCount, deliveryMode, dishes (JSON), logisticsNotes, createdAt | Catering / caterings |
 | Transport Item | id, text | TransportItem / transport_items |
-| Feedback | timestamp, user, type, screen, text, userAgent, processed | Feedback / feedback |
-| Ingredient | id, name, supplierName, unit, types (JSON), category, orderCode, orderUnit, orderUnitSize, orderPrice, pricePer100, pricePer100g, priceLevel, priceAlert, storageLocations (JSON), stock (JSON), targetStock (JSON), nutrition (JSON), priceHistory (JSON), allergens, notes, active, measureMode | Ingredient / ingredients |
+| Feedback | id, timestamp, user, type, screen, text, userAgent, processed | Feedback / feedback |
+| Ingredient | id, name, supplierName, supplier, unit, measureMode, types (JSON), category, orderCode, orderUnit, orderUnitSize, orderPrice, pricePer100, priceLevel, priceAlert, priceHistory (JSON), storageLocations (JSON), stock (JSON), targetStock (JSON), nutrition (JSON), allergens, notes, active | Ingredient / ingredients |
 | Standard Inventory | id, name, amount, unit, location | StandardInventory / standard_inventory (one row per item) |
-| Storage Config | location, config (JSON) | StorageConfig |
-| Guest History | location, meal, date, count | GuestHistory (+ GuestHistoryMeta) |
-| Guests Next Weeks | mondayKey, location, day, meal, count | GuestsNextWeeks |
-| Daily Revenue | date, location, grossRevenue, netRevenue, sales, covers, invoiceCount, syncedAt | DailyRevenue |
-| Product Revenue | date, location, meal, productName, productCategory, quantity, grossRevenue, netRevenue, syncedAt | ProductRevenue |
+| Storage Config | id (always "default"), config (JSON — all locations) | StorageConfig / storage_config |
+| Kitchen Equipment | id (always "default"), pots (JSON), gasBurners, inductionBurners, bigBurnerThreshold | KitchenEquipment / kitchen_equipment |
+| Prep Checklist | id, loc, date, checked (JSON), updatedAt | PrepChecklist / prep_checklist |
+| Guest History | location, meal, date, count | GuestHistory / guest_history |
+| Guest History Meta | key, value (JSON-encoded string — holds flowDistribution curves) | GuestHistoryMeta / guest_history_meta |
+| Guests Next Weeks | mondayKey, location, day, meal, count | GuestsNextWeeks / guests_next_weeks |
+| Daily Revenue | date, location, grossRevenue, netRevenue, sales, covers, invoiceCount, syncedAt | DailyRevenue / daily_revenue |
+| Product Revenue | date, location, meal, productName, productCategory, quantity, grossRevenue, netRevenue, syncedAt | ProductRevenue / product_revenue |
+| Session | id, email, name, picture, createdAt, expiresAt | Session / sessions |
+| Log | id, timestamp, email, name, action, details | Log / log |
 | Telemetry Event | timestamp, source, type, name, data (JSON), userId, sessionId | TelemetryEvent / telemetry_event |
 | AI Insight | timestamp, category, severity, title, body, data (JSON), status, resolvedAt | AiInsight / ai_insight |
 
@@ -358,7 +314,7 @@ From Phase 3 onward, locations are database-driven (not hardcoded):
 - **Small, tested increments**: Build one feature, test it live, push, move on
 - **Git is the safety net**: Every change committed with clear messages. Easy to revert.
 - **Feedback-driven**: Real users give feedback via the in-app button → prioritise based on that
-- **Keep DESIGN.md current**: After every major push, update this document with new features, file changes, data model additions, and any architectural decisions made. This is how context transfers between sessions.
+- **Keep DESIGN.md current**: when a module's capabilities change meaningfully, update that module's paragraph in Section 3 (and the data model table if the schema changed). Describe the current system — don't append a dated changelog entry; git history is the changelog.
 
 ### Recommended Workflow Evolution
 

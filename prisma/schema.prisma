@@ -26,9 +26,9 @@ model Batch {
   generated         Boolean  @default(false)
   // Unified-batch model: per-(loc,storage) inventory entries + in-flight
   // shipments. The legacy cols (stock/storage/location/inTransit/parentId
-  // + v1 recipe fields) and the parent self-FK will be dropped at deploy
-  // time via the manual psql step in prisma/migrations/DEPLOY.md (Step 5),
-  // immediately after data-migrate populates these JSON columns.
+  // + v1 recipe fields) and the parent self-FK are removed by the manual
+  // drop-cols psql step in prisma/migrations/DEPLOY.md, applied right after
+  // data-migrate populates these JSON columns.
   inventory         Json     @default("[]")
   shipments         Json     @default("[]")
   recipe            Recipe?  @relation("BatchRecipe", fields: [recipeId], references: [id])

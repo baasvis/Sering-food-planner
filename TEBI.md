@@ -679,8 +679,10 @@ seconds). `iat`/`exp` are ~24h apart for fresh tokens.
 
 ### Schema changes
 
-`prisma/schema.prisma` → `npm run db:push` (no migration history).
-Bump the unique-index columns carefully: `ProductRevenue` keys on
+`prisma/schema.prisma` → create a migration with `npx prisma migrate dev`
+(the project uses Prisma migration history — see `prisma/migrations/` and
+the CLAUDE.md "Don't" rules; there is no `db:push` script). Bump the
+unique-index columns carefully: `ProductRevenue` keys on
 `(date, location, meal, productName)`, and changing this breaks
 existing upserts.
 
@@ -739,15 +741,17 @@ post-login body excerpt on failure.
 ### "Pre-commit hook hangs / fails on unrelated tests."
 
 Likely jest scanning `.claude/worktrees/` (stale worktree code). The
-fix is in `package.json`:
+guard is the `roots` setting in `package.json`'s `jest` config, which
+scopes test discovery to the `test/` directory only:
 
 ```json
 "jest": {
-  "testPathIgnorePatterns": ["/node_modules/", "/.claude/"]
+  "roots": ["<rootDir>/test"],
+  "testMatch": ["**/*.test.ts"]
 }
 ```
 
-Don't remove it.
+Don't widen `roots` back to the repo root.
 
 ### "Token expired mid-backfill."
 
