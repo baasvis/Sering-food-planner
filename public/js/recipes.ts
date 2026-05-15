@@ -5,7 +5,7 @@ import { rebuildPlanner, typeBadge, typeBadgeClass, TYPES, chipClass } from './c
 import { showModal, closeModal, esc } from './modal';
 import { doLogout } from './auth';
 import { openRecipeEditor, openRecipeDetail } from './recipe-editor';
-import type { DishType } from '@shared/types';
+import type { DishType, Batch } from '@shared/types';
 import { registerRenderer } from './navigate';
 
 // ── RECIPE INDEX ──────────────────────────────────────────
@@ -243,39 +243,31 @@ export function addDishFromRecipe(_recipeId: any) { toastError(V1_DEPRECATED_MSG
 export function addDishFromV2Recipe(recipeId: string) {
   const r = S.recipes.find(x => x.id === recipeId);
   if (!r) return;
-  // Snapshot ingredients into JSON for order system compatibility
-  const snapshotIngredients = r.ingredients.map(ing => ({
-    name: ing.ingredientName || ing.flexLabel || 'Unknown',
-    amount: ing.rawAmount,
-    unit: ing.unit,
-    source: '',
-    cost: 0,
-  }));
   const allAllergens = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
-  const newDish = {
+  // Unified-batch shape. The legacy-field version (stock/location/inTransit/
+  // recipeSheetId/...) shipped on the "+ Menu" button and failed every save —
+  // validateBatch rejects a batch with no inventory[]. The `: Batch`
+  // annotation makes the compiler catch a regression; see
+  // test/batch-construction.test.ts for the CI guard.
+  const newDish: Batch = {
     id: newId(),
     name: r.name,
-    type: r.type || 'Soup',
-    stock: 0,
+    type: (r.type || 'Soup') as DishType,
     serving: r.servingSize || 280,
-    storage: 'Gastro' as const,
-    location: 'west' as const,
-    inTransit: false,
-    recipeSheetId: null,
-    recipeVolume: r.recipeVolume || null,
-    recipeIngredients: snapshotIngredients,
+    inventory: [],
+    shipments: [],
     allergens: allAllergens,
-    extraAllergens: [] as string[],
+    extraAllergens: [],
     orderFor: false,
-    parentId: null,
     cookDate: null,
     note: '',
-    services: [] as never[],
+    services: [],
     createdAt: new Date().toISOString(),
     recipeId: r.id,
     actualIngredients: null,
     cookNotes: '',
     stockDeducted: false,
+    generated: false,
   };
   S.batches.push(newDish);
   rebuildPlanner();

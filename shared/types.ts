@@ -239,10 +239,13 @@ export interface LocationStock {
   [location: string]: number;
 }
 
-// ── Ingredient storage locations: location → area name ──
+// ── Ingredient storage locations: location → storage assignment ──
 
 export interface StorageLocationMap {
-  [location: string]: string;
+  // The structured object (a storage category + a specific spot) is the
+  // current shape; a bare string is the legacy pre-categorization form,
+  // still possible on un-migrated rows.
+  [location: string]: string | { category?: string; location?: string };
 }
 
 export interface Ingredient {

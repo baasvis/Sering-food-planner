@@ -8,7 +8,7 @@ import { typeBadge, TYPES, getTotalStock } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
-import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType } from '@shared/types';
+import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType, Batch } from '@shared/types';
 import { toGrams } from '@shared/units';
 import { renderChatPanel, resetChat, type AIRecipeStateClient } from './recipe-ai-chat';
 
@@ -180,7 +180,7 @@ export function reToggleAiMode() {
   if (!S.user?.isDirector) return;
   aiMode = !aiMode;
   renderEditor();
-  trackEvent('ai_recipe_chat_toggle', { on: aiMode });
+  trackEvent('ai_recipe_chat_toggle', '', { on: aiMode });
 }
 
 // ── State exchange with the AI chat panel ──
@@ -1278,7 +1278,7 @@ function renderBatchRecipe() {
   }
 }
 
-function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock: number }): string {
+function buildBatchRecipeHTML(br: BatchRecipeState, batch: Batch): string {
   // Ingredient rows
   const activeIngs = br.ingredients.filter(i => !i.removed);
   const removedIngs = br.ingredients.map((ing, i) => ({ ...ing, _idx: i })).filter(i => i.removed);

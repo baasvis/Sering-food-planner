@@ -164,7 +164,7 @@ export function buildFlowDistribution(timeEvents: any) {
 
   const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   // Collect raw counts: loc → meal → dow → { bucket: count }
-  const raw = {};
+  const raw: Record<string, Record<string, Record<string, Record<string, number>>>> = {};
 
   for (const ev of timeEvents) {
     // Filter to service window
@@ -207,10 +207,10 @@ export function averageLayers(layers: any) {
   for (const loc of ['west', 'centraal']) {
     for (const meal of AGG_MEALS) {
       // Collect all dates and their values from each layer
-      const dateValues = {}; // date → [val1, val2, ...]
+      const dateValues: Record<string, number[]> = {}; // date → [val1, val2, ...]
       for (const layer of layers) {
         if (!layer[loc] || !layer[loc][meal]) continue;
-        for (const [date, count] of Object.entries(layer[loc][meal])) {
+        for (const [date, count] of Object.entries(layer[loc][meal] as Record<string, number>)) {
           if (!dateValues[date]) dateValues[date] = [];
           dateValues[date].push(count);
         }

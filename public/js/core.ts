@@ -2,6 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DAYS } from './state';
+import type { InventoryDone } from './state';
 import type { Batch, Service, Catering, CateringDish, Location, Meal, DishType, StorageType, BatchRatings, InventoryEntry } from '@shared/types';
 import { scheduleSave, apiPost, toast } from './utils';
 import { showModal, closeModal, esc } from './modal';
@@ -146,7 +147,7 @@ export function isServicePast(svc: Service): boolean {
   const mins = now.getHours() * 60 + now.getMinutes();
   const lk: Location = svc.loc === 'west' ? 'west' : 'centraal';
   const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
-  const inv = S.inventoryDone[lk] || {};
+  const inv: Partial<InventoryDone> = S.inventoryDone[lk] || {};
   if (svc.meal === 'lunch') {
     const deadline = 13 * 60 + 45;     // 13:45
     const urgentFrom = deadline - 60;   // 12:45

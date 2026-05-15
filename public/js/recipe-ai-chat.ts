@@ -206,7 +206,7 @@ async function sendMessage(text: string): Promise<void> {
     const msg = e instanceof Error ? e.message : 'Unknown error';
     if (msg !== 'AbortError' && !(e instanceof Error && e.name === 'AbortError')) {
       messages.push({ role: 'assistant', content: `⚠️ ${msg}` });
-      trackEvent('ai_recipe_chat_error', { error: msg });
+      trackEvent('ai_recipe_chat_error', '', { error: msg });
     }
     status = 'error';
   } finally {

@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, RecipeFull, Ingredient, StorageConfig } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, RecipeFull, Ingredient, StorageConfig } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
@@ -88,7 +88,7 @@ export function normalizeGuests(): void {
   for (const loc of ['west', 'centraal']) {
     if (!S.guests[loc]) S.guests[loc] = {};
     for (const day of GUEST_DAYS) {
-      const d = S.guests[loc][day] || {};
+      const d: Partial<GuestDay> = S.guests[loc][day] || {};
       S.guests[loc][day] = {
         lunch: typeof d.lunch === 'number' ? d.lunch : 0,
         dinner: typeof d.dinner === 'number' ? d.dinner : 0,
