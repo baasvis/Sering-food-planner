@@ -32,7 +32,8 @@ Create `.env` in the repo root. The file is gitignored.
 | `GOOGLE_CLIENT_ID` | Production only | Google OAuth client ID. Without it, the server runs in **dev mode** — anyone can log in via the "Dev mode login" button on the login screen. |
 | `ALLOWED_EMAILS` | Recommended | Comma-separated emails permitted to log in. Empty in dev/staging means anyone with a Google account can log in (with a console warning). Empty in `AUTH_MODE=production` returns 503 to deny access. |
 | `AUTH_MODE` | **Set on production deploys** | `dev` (default) or `production`. When `production`: server.ts refuses to boot if `GOOGLE_CLIENT_ID` or `ALLOWED_EMAILS` is empty, and `routes/auth.ts` disables the dev-mode bypass. Decoupled from `NODE_ENV` so local `npm run preview` (which sets `NODE_ENV=production` to serve `dist/client`) keeps using dev login. **Set `AUTH_MODE=production` in the Railway env** to enable the boot guard there. |
-| `ANTHROPIC_API_KEY` | Optional | Enables the AI insights cron (data-quality checks summarised by Claude). |
+| `ANTHROPIC_API_KEY` | Optional | Enables the AI insights cron (data-quality checks summarised by Claude) and the director-only AI recipe assistant. |
+| `DIRECTOR_EMAILS` | Optional | Comma-separated emails that get director-only features (the AI recipe assistant). Defaults to Daan's email if unset; set explicitly in production. |
 | `AI_ANALYSIS_CRON` | Optional | Default `0 7 * * *` (daily 07:00). Standard cron syntax. |
 | `AI_ANALYSIS_MODEL` | Optional | Default `claude-sonnet-4-6`. |
 | `TEBI_EMAIL` / `TEBI_PASSWORD` | Optional | Credentials for ledger 1 (Sering West, default ledger ID 723192). |
@@ -47,6 +48,7 @@ Create `.env` in the repo root. The file is gitignored.
 | `HANOS_CLIENT_SECRET` | Optional | Hanos OAuth client secret. |
 | `COVERAGE_API_KEY` | Optional | Bearer token for `GET /api/coverage/snapshot`. The weekly e2e coverage agent (`.github/workflows/weekly-coverage.yml`) uses this; the endpoint returns 503 if unset. |
 | `GOOGLE_CREDENTIALS` | Optional | Service account JSON for legacy Google Sheets recipe import (`lib/recipe-sheets.ts`). Not required for normal app use. |
+| `MAINTENANCE_MODE` | Optional | Set to `1` to put the app in read-only mode — writes return 503, reads/SSE keep working. Used during deploy windows; see `prisma/migrations/DEPLOY.md`. |
 
 A minimum-viable `.env` for local dev:
 
@@ -131,7 +133,7 @@ npm start
 npm test
 ```
 
-Runs Jest with `@swc/jest` against `DATABASE_URL_TEST`. The setup at `test/setup-env.ts` will refuse to start if you accidentally point it at a production host. Currently ~118 tests across `api.test.ts`, `location-state.test.ts`, `stock-location.test.ts`, `redact-secrets.test.ts`.
+Runs Jest with `@swc/jest` against `DATABASE_URL_TEST`. The setup at `test/setup-env.ts` will refuse to start if you accidentally point it at a production host. The suite spans 13 files in `test/` (unit + API tests).
 
 ### End-to-end tests (Playwright)
 
@@ -143,7 +145,7 @@ npm run test:all        # both Jest and Playwright in one go
 
 Specs live in `e2e/`. The config in `playwright.config.ts` boots `npm run preview` on port 3000 against `DATABASE_URL_TEST`, then drives a headless browser through the dev-mode-login + location-chooser flow before running each spec.
 
-The e2e suite is run weekly in CI by `.github/workflows/weekly-coverage.yml`, which then files PRs for any `trackEvent()` features that aren't covered.
+The e2e suite runs in CI on every PR to main (`.github/workflows/pr-tests.yml`) and again weekly via `.github/workflows/weekly-coverage.yml`, which then files PRs for any `trackEvent()` features that aren't covered.
 
 ### Typecheck
 
@@ -167,7 +169,7 @@ Runs `tsc --noEmit` on the backend.
 - **Tests refuse to run** — the guard in `test/setup-env.ts` blocks known production hosts. Set `DATABASE_URL_TEST` to a scratch or staging URL.
 - **`npm install` postinstall fails on Windows cmd** — `PLAYWRIGHT_BROWSERS_PATH=0` doesn't work as an inline prefix in cmd.exe. Use PowerShell, Git Bash, or `npm install --ignore-scripts && npx prisma generate` and skip the Playwright download until needed.
 - **Login fails / always redirects to login** — confirm `GOOGLE_CLIENT_ID` matches the OAuth client used by the frontend. Without it, the dev-mode bypass button should appear.
-- **"I keep getting logged off"** — until session persistence ships, every Railway redeploy wipes in-memory sessions. The cookie is still valid for 7 days but the server has forgotten the session. This is tracked as a planned fix; see the audit plan.
+- **"I keep getting logged off"** — sessions now persist in the Postgres `sessions` table, so a Railway redeploy no longer wipes them. Sessions still expire 7 days after login. If you're logged off sooner than that, check the `sessions` table and the cookie's `maxAge`.
 - **Tebi sync silently does nothing** — check `GET /api/finance/sync-status` for `lastSyncError`. After a deploy, status auto-hydrates from telemetry, so a stale failure is preserved instead of looking like a fresh empty state.
 
 ---
@@ -183,7 +185,7 @@ See `CLAUDE.md` "Project Structure" for the full file map. Quick orientation:
 - **Migration history**: `prisma/migrations/`
 - **One-shot scripts**: `scripts/` (read the file headers before running anything)
 - **End-to-end tests**: `e2e/*.spec.ts` (Playwright). `playwright.config.ts` at the repo root.
-- **CI workflows**: `.github/workflows/` — `test.yml` (typecheck + Jest on push/PR), `weekly-coverage.yml` (weekly e2e + agent), `sync-staging.yml` (manual prod→staging copy).
+- **CI workflows**: `.github/workflows/` — `pr-tests.yml` (typecheck + Jest + Playwright e2e on PRs to main and pushes to main), `weekly-coverage.yml` (weekly e2e + coverage agent), `sync-staging.yml` (manual prod→staging copy).
 
 ---
 
