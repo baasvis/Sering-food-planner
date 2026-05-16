@@ -9,7 +9,6 @@ import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
 import { checkSession, initGoogleSignIn } from './auth';
 import { closeModal } from './modal';
 import { rerenderCurrentView } from './navigate';
-import { cancelAssignMode } from './planner';
 
 // Re-export modal functions so existing imports from init.ts keep working
 export { showModal, closeModal, esc } from './modal';
@@ -89,8 +88,6 @@ export function buildNav() {
 // ── GLOBAL KEY HANDLERS ──────────────────────────────────
 document.addEventListener('keydown', function(e: KeyboardEvent) {
   if (e.key === 'Escape') {
-    // Cancel assign mode if active
-    if (S.assigningBatchId) { cancelAssignMode(); return; }
     // Close modal if open
     const modal = document.querySelector('.modal-bg');
     if (modal) closeModal();

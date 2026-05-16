@@ -16,7 +16,7 @@ import { S } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './utils';
 import {
   rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName,
-  isServicePast, calcRequired, getGuests, getTotalStock, getStockAt,
+  isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, getGuests, getTotalStock, getStockAt,
   getServeableStockAt, getServeableTotalStock,
   consolidateInventory,
 } from './core';
@@ -154,12 +154,12 @@ export function findOrphanPlaceholders(batches: Batch[]): Batch[] {
 }
 
 /**
- * Spent batches: total stock = 0, no pending shipments, all services in
- * the past. These are real cooked batches whose food has been served —
- * dead historical records cluttering the planner. Auto-retire makes the
- * cleanup self-healing: even if SSE resurrects them, the next run wipes
- * them. The pending-shipment guard prevents retirement of a batch whose
- * stock has been packed but not yet arrived (the food is still coming).
+ * Spent batches: total stock = 0, no pending shipments, and every service
+ * dated strictly before today (isServiceDatePast — a date-only check, so a
+ * batch still scheduled for today is never auto-retired, even right after
+ * inventory has been marked done). Auto-retire keeps the planner clear of
+ * dead past records; the pending-shipment guard protects food that's been
+ * packed but is still in transit.
  */
 export function findSpentBatches(batches: Batch[]): Batch[] {
   return batches.filter(b =>
@@ -167,7 +167,7 @@ export function findSpentBatches(batches: Batch[]): Batch[] {
     && getTotalStock(b) === 0
     && (b.shipments || []).every(s => s.arrived)
     && b.services && b.services.length > 0
-    && b.services.every(s => isServicePast(s))
+    && b.services.every(s => isServiceDatePast(s))
   );
 }
 
@@ -299,10 +299,19 @@ function cookDateToIso(ddmmyyyy: string | null | undefined): string | null {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// Pure (two ISO date strings → integer day diff) — memoized module-wide. Fix
+// My Menu's scored loop re-derives the same handful of date pairs tens of
+// thousands of times; the key space is tiny (window dates × cook dates).
+const _diffDaysCache = new Map<string, number>();
 function diffDaysIso(aIso: string, bIso: string): number {
+  const k = aIso + '|' + bIso;
+  const hit = _diffDaysCache.get(k);
+  if (hit !== undefined) return hit;
   const a = new Date(aIso + 'T12:00:00').getTime();
   const b = new Date(bIso + 'T12:00:00').getTime();
-  return Math.round((b - a) / 86400000);
+  const v = Math.round((b - a) / 86400000);
+  _diffDaysCache.set(k, v);
+  return v;
 }
 
 /**
@@ -946,31 +955,46 @@ function _fixMyMenuBody(): void {
   for (const b of newPlaceholders) S.batches.push(b);
   rebuildPlanner();
 
-  // calcReqLive ensures the per-batch peer-share cache reflects every
-  // speculative service add inside the scored algorithm. rebuildPlanner
-  // refreshes _batchAllocations, so the post-push read sees the new peer
-  // count and divides demand correctly.
-  const calcReqLive = (b: Batch): number => {
-    rebuildPlanner();
-    return calcRequired(b);
+  // Per-run getGuests memo: the scored algorithm queries the same ~56
+  // (loc,date,meal) slots tens of thousands of times — once per candidate,
+  // even though the value is batch-independent — and getGuests does ~6 Date
+  // constructions per call. Collapsing that to one compute per slot is the
+  // bulk of the speed-up. The cache lives only for this synchronous run, so a
+  // guest edit elsewhere can't make it stale.
+  const _guestCache = new Map<string, number>();
+  const memoGuests = (loc: Location, date: string, meal: Meal): number => {
+    const k = `${loc}|${date}|${meal}`;
+    let v = _guestCache.get(k);
+    if (v === undefined) { v = getGuests(loc, date, meal); _guestCache.set(k, v); }
+    return v;
   };
+
+  // calcRequiredLive derives one batch's peer-share demand directly from live
+  // S.batches state — identical to rebuildPlanner()+calcRequired(b) but without
+  // the global O(batches × services) rebuild. The scored algorithm calls this
+  // once per candidate inside tight nested loops; a per-candidate rebuildPlanner
+  // froze the browser for seconds. It reads b.services live, so the speculative
+  // `services.push(...) / pop()` capacity check in scoredHardConstraintsOk stays
+  // correct. The phase-boundary rebuildPlanner() calls below keep the global
+  // _batchAllocations cache fresh for allocatePotCaps / collectWarnings / render.
+  const calcReqLive = (b: Batch): number => calcRequiredLive(b, memoGuests);
 
   let potCaps = allocatePotCaps(
     S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type)),
     S.kitchenEquipment, calcRequired,
   );
 
-  const phaseB0 = forcedAssignmentPrePass(S.batches, planWindow, calcReqLive, getGuests, potCaps);
+  const phaseB0 = forcedAssignmentPrePass(S.batches, planWindow, calcReqLive, memoGuests, potCaps);
   rebuildPlanner();
   potCaps = allocatePotCaps(
     S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type)),
     S.kitchenEquipment, calcRequired,
   );
 
-  const phaseB = scoredGreedyAssignment(S.batches, planWindow, calcReqLive, getGuests, potCaps);
+  const phaseB = scoredGreedyAssignment(S.batches, planWindow, calcReqLive, memoGuests, potCaps);
   rebuildPlanner();
 
-  const phaseC = runFallbackLadder(S.batches, planWindow, calcReqLive, getGuests);
+  const phaseC = runFallbackLadder(S.batches, planWindow, calcReqLive, memoGuests);
   rebuildPlanner();
 
   // Final pot allocation for warning generation.
@@ -981,7 +1005,7 @@ function _fixMyMenuBody(): void {
 
   const warnings = collectWarnings(
     S.batches, planWindow, S.caterings || [], calcRequired,
-    finalPotCaps, S.kitchenEquipment, getGuests,
+    finalPotCaps, S.kitchenEquipment, memoGuests,
   );
 
   for (const a of phaseC.abandoned) {

@@ -7,7 +7,7 @@ import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { trackEvent } from './telemetry';
 import { addDishFromRecipe } from './recipes';
 import { openPostCookRecording, openBatchRecipe } from './recipe-editor';
-import { batchDragStart, batchDragEnd, startAssignMode, openReplaceBatch } from './planner';
+import { batchDragStart, batchDragEnd, openReplaceBatch } from './planner';
 import type { Batch, CateringDish, DishType, Location, StorageType, Service, InventoryEntry, Shipment } from '@shared/types';
 import { locName } from '@shared/location';
 
@@ -240,7 +240,7 @@ export function renderDishGroups(dishes: Batch[]) {
 // consumers update. Just maps each batch to renderBatchTile.
 //
 // @deprecated Use `dishes.map(d => renderBatchTile(d)).join('')` directly.
-export function renderFamilyGrouped(dishes: Batch[], tileOpts?: BatchTileOptions | boolean): string {
+export function renderFamilyGrouped(dishes: Batch[], tileOpts?: BatchTileOptions): string {
   return dishes.map(d => renderBatchTile(d, tileOpts)).join('');
 }
 
@@ -308,7 +308,6 @@ export function toggleBatchExpand(id: string) {
 }
 
 export interface BatchTileOptions {
-  showAssign?: boolean;
   showActions?: boolean;
   showRecipe?: boolean;
   compact?: boolean;
@@ -325,19 +324,14 @@ export function showNoteInput(id: string) {
   if (b) { b.note = ''; rerenderCurrentView(); }
 }
 
-export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTileOptions) {
-  const opts: BatchTileOptions = typeof showAssignOrOpts === 'boolean'
-    ? { showAssign: showAssignOrOpts }
-    : (showAssignOrOpts || {});
+export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
   const showActions = opts.showActions !== false;
   const showRecipe = opts.showRecipe !== false;
 
   const { str, cls } = diffStr(d);
   const totalStock = getTotalStock(d);
   const isExpanded = !opts.compact && S.expandedBatches.has(d.id);
-  const isSel = S.selected.has(d.id);
   const isStale = isDishStale(d);
-  const isAssigning = S.assigningBatchId === d.id;
   // Color-code by where most stock currently lives (logisticsRowClass picks
   // the dominant loc, falling back to first pending shipment, falling back
   // to West).
@@ -352,8 +346,6 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
   const allFrozen = inv.length > 0 && inv.every(e => e.qty === 0 || e.storage === 'Frozen');
   const frozenCls = allFrozen ? ' frozen-row' : '';
   const staleCls = (hasStaleEntry || isStale) ? ' stale-row' : '';
-  const selCls = isSel ? ' selected' : '';
-  const assignCls = isAssigning ? ' assigning' : '';
   const expandCls = isExpanded ? ' expanded' : '';
 
   // "Too big" badge: this batch's projected demand exceeds the biggest pot
@@ -368,17 +360,17 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
 
   // Compact row — show the inventory badges (one per (loc, storage) entry +
   // one per pending shipment) instead of the legacy single-loc badge.
-  let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${selCls}${assignCls}${expandCls}" data-testid="batch-tile" data-id="${d.id}" draggable="true" ondragstart="batchDragStart(event,'${d.id}')" ondragend="batchDragEnd(event)">
+  let html = `<div class="batch-tile ${locCls}${transitCls}${frozenCls}${staleCls}${expandCls}" data-testid="batch-tile" data-id="${d.id}" draggable="true" ondragstart="batchDragStart(event,'${d.id}')" ondragend="batchDragEnd(event)">
     <div class="batch-tile-compact" onclick="toggleBatchExpand('${d.id}')">
-      <div class="sel-box${isSel ? ' checked' : ''}" onclick="event.stopPropagation();toggleSelect('${d.id}')"></div>
       <span class="batch-type-dot batch-type-${(d.type||'Soup').toLowerCase().replace(/ /g,'-')}"></span>
-      <span class="batch-tile-name">${esc(d.name)}</span>
+      ${isExpanded
+        ? `<input class="batch-tile-name batch-name-edit" size="${Math.min(Math.max((d.name||'').length, 6), 30)}" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />`
+        : `<span class="batch-tile-name">${esc(d.name)}</span>`}
       <span class="batch-status ${isBatchCooked(d) ? ((hasStaleEntry || isStale) ? 'status-stale' : 'status-cooked') : 'status-tocook'}">${isBatchCooked(d) ? ((hasStaleEntry || isStale) ? 'Stale' : 'Cooked') : 'To cook'}</span>
       <span class="batch-tile-cook">${batchCookLabel(d)}</span>
-      <span class="batch-tile-stock ${cls}" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L <small>${str}</small></span>
+      <span class="batch-tile-stock ${cls}" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L <small>${str}</small></span>
       ${tooBigBadge}
       <span class="batch-tile-logistics" style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;">${renderInventoryBadges(d)}</span>
-      ${opts.showAssign && !S.assigningBatchId ? `<button class="batch-assign-btn" onclick="event.stopPropagation();startAssignMode('${d.id}')">Assign</button>` : ''}
       <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
     </div>`;
 
@@ -472,23 +464,10 @@ export function renderBatchTile(d: Batch, showAssignOrOpts?: boolean | BatchTile
       : `<div class="bx-row bx-note bx-note-empty"><button class="bx-add-note" onclick="event.stopPropagation();showNoteInput('${d.id}')">+ Add note</button></div>`;
 
     html += `<div class="batch-expanded">
-      <div class="bx-header">
-        <div class="bx-row bx-name">
-          <input class="bx-name-input" value="${esc(d.name)}" onchange="inlineEdit('${d.id}','name',this.value)" onclick="event.stopPropagation();this.select()" />
-        </div>
-        ${recipeHtml}
-      </div>
+      ${recipeHtml}
       <div class="bx-columns">
         <div class="bx-section bx-col-main">
           <div class="bx-section-title">Stock & services</div>
-          <div class="bx-row bx-stock">
-            <span class="bx-stock-input" style="font-size:18px;font-weight:600;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}</span>
-            <span class="bx-stock-unit">L total</span>
-            <span class="bx-diff ${cls}">${str}</span>
-            <span style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;margin-left:8px;">${renderInventoryBadges(d)}</span>
-            <button class="btn btn-sm" style="margin-left:auto;" onclick="event.stopPropagation();openSendModal('${d.id}')" title="Send stock to another location">Send</button>
-            <button class="btn btn-sm" onclick="event.stopPropagation();openTransferModal('${d.id}')" title="Move stock between storage types (e.g. freeze)">Transfer / Freeze</button>
-          </div>
           ${servicesHtml}
           ${cateringLines.length ? `<div class="bx-catering-lines">${cateringLines.map(l => `<div class="bx-svc-line">${l}</div>`).join('')}</div>` : ''}
         </div>

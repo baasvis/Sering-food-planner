@@ -47,8 +47,13 @@ test.describe('Batch cooked transition', () => {
     const tile = page.locator('[data-testid="batch-tile"]').filter({ hasText: batchName });
     await expect(tile).toBeVisible();
 
+    // The tile's name renders as an <input> once expanded, so a hasText filter
+    // stops matching it — pin to the stable data-id for post-expand steps.
+    const batchId = await tile.getAttribute('data-id');
+    const tileById = page.locator(`[data-testid="batch-tile"][data-id="${batchId}"]`);
+
     // ── Step 3: expand the tile so the cook controls render ────────────────
-    await tile.locator('.batch-tile-compact').click();
+    await tileById.locator('.batch-tile-compact').click();
 
     // ── Step 4: pick "Today" from the cook-day dropdown ────────────────────
     // Selecting an option triggers onchange → setCookDay → re-renders the
@@ -57,7 +62,7 @@ test.describe('Batch cooked transition', () => {
     // The option's label is e.g. "Today (Saturday)" but its value is
     // dateToStr(today). selectOption needs a string, not a regex — look up
     // the value from the matching option.
-    const cookSelect = tile.locator('[data-testid="cook-select"]');
+    const cookSelect = tileById.locator('[data-testid="cook-select"]');
     const todayValue = await cookSelect
       .locator('option')
       .filter({ hasText: /^Today/ })
@@ -67,7 +72,7 @@ test.describe('Batch cooked transition', () => {
     await cookSelect.selectOption(todayValue!);
 
     // ── Step 5: click the mark-as-cooked button ────────────────────────────
-    await tile.locator('[data-testid="cook-today-btn"]').click();
+    await tileById.locator('[data-testid="cook-today-btn"]').click();
 
     // confirmCooked() schedules a save (1.5s debounce) → POST /api/data/patch.
     await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });

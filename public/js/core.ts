@@ -4,11 +4,18 @@
 import { S, DAYS } from './state';
 import type { InventoryDone } from './state';
 import type { Batch, Service, Catering, CateringDish, Location, Meal, DishType, StorageType, BatchRatings, InventoryEntry } from '@shared/types';
-import { scheduleSave, apiPost, toast } from './utils';
+import { scheduleSave, apiPost } from './utils';
+import { pushUndo } from './undo';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { renderFamilyGrouped } from './dishes';
 import { locName } from '@shared/location';
+
+// Callback to refresh an open inventory modal — set by main.ts to avoid a
+// core → planner circular import. Used after an undo restores an archived
+// batch so the modal the cook is looking at reflects the restored state.
+let _refreshInventoryModal: (() => void) | null = null;
+export function setRefreshInventoryModal(fn: () => void): void { _refreshInventoryModal = fn; }
 
 export function isBatchCooked(d: Batch): boolean {
   // A batch is "cooked" if it has any inventory or any in-flight shipment.
@@ -113,9 +120,22 @@ export function isStaleEntry(entry: InventoryEntry): boolean {
   return daysOld > limit;
 }
 
-// Amsterdam time helper (shared — also used by planner.js inventory)
+// Amsterdam time helper (shared — also used by planner.js inventory).
+// The toLocaleString timezone conversion is ~10µs; isServicePast calls this on
+// hot paths (Fix My Menu evaluates it hundreds of thousands of times per run).
+// Memoize the conversion with a 1s TTL — 1s-stale wall-clock is immaterial for
+// the minute-granularity deadline checks isServicePast performs — while still
+// returning a fresh Date each call so no caller can corrupt the cache.
+let _amsNowCache: { at: number; ms: number } | null = null;
 export function getAmsterdamNow(): Date {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+  const now = Date.now();
+  if (!_amsNowCache || now - _amsNowCache.at >= 1000) {
+    _amsNowCache = {
+      at: now,
+      ms: new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' })).getTime(),
+    };
+  }
+  return new Date(_amsNowCache.ms);
 }
 
 // Convert a date string ("2026-03-23") to a day name ("Mon", "Tue", etc.)
@@ -159,6 +179,18 @@ export function isServicePast(svc: Service): boolean {
     return mins >= deadline || (inv.dinner === todayStr && mins >= urgentFrom);
   }
   return false;
+}
+
+/** Date-only "past" check: true only when the service's calendar date is
+ *  strictly before today. Unlike isServicePast it ignores the time-of-day and
+ *  the inventory-done acceleration — used where a service dated today must
+ *  never count as already-served (e.g. Fix-my-menu auto-retirement). */
+export function isServiceDatePast(svc: Service): boolean {
+  const now = getAmsterdamNow();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const svcDate = new Date(svc.date + 'T12:00:00');
+  const svcDay = new Date(svcDate.getFullYear(), svcDate.getMonth(), svcDate.getDate());
+  return svcDay < today;
 }
 
 export function rebuildPlanner(): void {
@@ -307,6 +339,23 @@ export function calcRequiredAtService(dish: Batch, svc: Service): number {
   return lookupBatchAllocation(dish, svc) ?? 0;
 }
 
+/** Catering demand in liters for a dish — guest count split across the
+ *  catering's same-type peer dishes. Catering routes to the specific dishId
+ *  (no family-wide reallocation). Shared by calcRequired (cache-backed) and
+ *  calcRequiredLive (uncached) so the catering half of the two functions
+ *  cannot drift apart. */
+function cateringDemand(dish: Batch): number {
+  let total = 0;
+  (S.caterings || []).forEach((c: Catering) => {
+    const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
+      total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000);
+    }
+  });
+  return total;
+}
+
 export function calcRequired(dish: Batch): number {
   let total = 0;
   (dish.services || []).forEach((svc: Service) => {
@@ -318,15 +367,42 @@ export function calcRequired(dish: Batch): number {
     // invoking a stale even-split fallback.
     total += lookupBatchAllocation(dish, svc) ?? 0;
   });
-  // Add catering requirements (split by same-type peers — catering still
-  // routes to the specific dishId, no family-wide reallocation).
-  (S.caterings || []).forEach((c: Catering) => {
-    const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
-    if (cd) {
-      const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
-      total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000);
+  total += cateringDemand(dish);
+  return Math.round(total * 10) / 10;
+}
+
+/** Like calcRequired, but derives each service's peer-share demand directly
+ *  from live S.batches state instead of reading the _batchAllocations cache.
+ *  Returns a value identical to `rebuildPlanner(); calcRequired(dish)` — same
+ *  peer count, same per-service 0.1 L rounding (mirrors recordAllocation),
+ *  same catering term — but WITHOUT the global O(batches × services) rebuild.
+ *
+ *  Fix My Menu's scored algorithm evaluates one candidate batch at a time
+ *  inside tight nested loops; calling rebuildPlanner() per candidate froze the
+ *  browser for seconds. This reads dish.services live, so it stays correct
+ *  under the algorithm's speculative `services.push(...) / pop()` pattern. */
+export function calcRequiredLive(
+  dish: Batch,
+  getGuestsFn: (loc: Location, date: string, meal: Meal) => number = getGuests,
+): number {
+  let total = 0;
+  (dish.services || []).forEach((svc: Service) => {
+    if (isServicePast(svc)) return;
+    // Peer count = distinct same-type batches serving this slot — the same
+    // set recomputeBatchAllocations counts via S.planner[k].filter(type).
+    // dish itself is included (it has svc), matching the cached path.
+    let peerCount = 0;
+    for (const p of S.batches) {
+      if (p.type !== dish.type) continue;
+      if ((p.services || []).some((s: Service) => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal)) {
+        peerCount++;
+      }
     }
+    const guests = getGuestsFn(svc.loc, svc.date, svc.meal);
+    const liters = (guests / Math.max(peerCount, 1)) * ((dish.serving || 280) / 1000);
+    total += Math.round(liters * 10) / 10; // mirror recordAllocation's 0.1 L rounding
   });
+  total += cateringDemand(dish);
   return Math.round(total * 10) / 10;
 }
 
@@ -495,9 +571,19 @@ export function confirmArchiveWholeBatch(id: string): void {
 
 function _showRatingDialog(d: Batch, locScope: Location | undefined): void {
   const titleSuffix = locScope ? ` at ${locName(locScope)}` : '';
-  const explainer = locScope
-    ? `This will zero out the inventory at ${locName(locScope)} only. Other locations and any in-flight shipments stay untouched. Optionally rate the dish first:`
-    : 'This will remove the batch from the menu planner. Optionally rate it first:';
+  // Be honest about what "Served" will actually do. archiveDish falls through
+  // to a full archive (the whole batch is removed) when no stock remains
+  // anywhere else and nothing is in transit.
+  let explainer: string;
+  if (locScope) {
+    const stockElsewhere = (d.inventory || []).some(e => e.loc !== locScope && (e.qty || 0) > 0);
+    const inTransit = (d.shipments || []).some(s => !s.arrived && (s.qty || 0) > 0);
+    explainer = (!stockElsewhere && !inTransit)
+      ? 'This is the last stock of this batch — the whole batch will be removed from the planner. You can undo it for a few seconds. Optionally rate the dish first:'
+      : `This zeroes the stock at ${locName(locScope)} only; the batch stays in the planner because it still has stock elsewhere. You can undo it for a few seconds. Optionally rate the dish first:`;
+  } else {
+    explainer = 'This will remove the batch from the menu planner. You can undo it for a few seconds. Optionally rate it first:';
+  }
   const argSuffix = locScope ? `,'${locScope}'` : '';
   showModal(`<h3>Mark "${esc(d.name)}" as served${titleSuffix}</h3>
     <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">${explainer}</p>
@@ -536,6 +622,9 @@ export function archiveDish(id: string, withRating: boolean, locScope?: Location
   const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
 
+  // Snapshot the batch before any mutation so "Served" can be undone.
+  const before: Batch = structuredClone(d);
+
   // Loc-scoped path (called from Inventory modal): zero out THIS loc's entries
   // and only fully archive when nothing remains anywhere. Other locs + pending
   // shipments are preserved (audit BL1 fix: cook at West marking lunch served
@@ -555,7 +644,7 @@ export function archiveDish(id: string, withRating: boolean, locScope?: Location
       .reduce((s, sh) => s + (sh.qty || 0), 0);
 
     if (totalRemaining > 0 || pendingShipQty > 0) {
-      // Batch lives on. Surface the remaining breakdown so cook can spot-check.
+      // Batch lives on. Surface the remaining breakdown in the undo toast.
       const remainingPieces: string[] = [];
       const byLoc = new Map<string, number>();
       for (const e of (d.inventory || [])) {
@@ -571,45 +660,71 @@ export function archiveDish(id: string, withRating: boolean, locScope?: Location
       }
       pendingRatings = { skill:0, speed:0, banger:0 };
       closeModal();
-      scheduleSave();
       rerenderCurrentView();
       const action = zeroedAny ? `Served at ${locName(locScope)}` : `No stock to serve at ${locName(locScope)}`;
-      toast(`${action} — batch still has ${remainingPieces.join(' · ')}`);
+      pushUndo({
+        label: `${action} — batch still has ${remainingPieces.join(' · ')}`,
+        restore: () => {
+          const i = S.batches.findIndex((x: Batch) => x.id === id);
+          if (i >= 0) S.batches[i] = before;
+          else S.batches.push(before);
+          rebuildPlanner();
+          rerenderCurrentView();
+          if (_refreshInventoryModal) _refreshInventoryModal();
+        },
+        commit: () => { scheduleSave(); },
+      });
       return;
     }
     // Nothing left anywhere — fall through to full archive.
   }
 
+  // Full archive — the whole batch leaves the planner.
   const rating = withRating ? { ...pendingRatings } : null;
   if (!S.archive) S.archive = [];
-  S.archive.push({
+  const archiveEntry = {
     id: d.id,
     name: d.name,
     type: d.type,
     cookedDate: d.cookDate || null,
     archivedDate: dateToStr(getToday()),
     rating,
-  });
-  if (rating && d.recipeId) {
-    const recipe = (S.recipes || []).find(r => r.id === d.recipeId);
-    if (recipe) {
-      const n = recipe.timesServed || 0;
-      const newN = n + 1;
-      recipe.avgSkill = ((recipe.avgSkill || 0) * n + (rating.skill || 0)) / newN;
-      recipe.avgSpeed = ((recipe.avgSpeed || 0) * n + (rating.speed || 0)) / newN;
-      recipe.avgBanger = ((recipe.avgBanger || 0) * n + (rating.banger || 0)) / newN;
-      recipe.timesServed = newN;
-      apiPost(`/api/recipes/${recipe.id}`, { avgSkill: recipe.avgSkill, avgSpeed: recipe.avgSpeed, avgBanger: recipe.avgBanger, timesServed: recipe.timesServed }, 'PATCH')
-        .catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
-    }
-  }
+  };
+  S.archive.push(archiveEntry);
   S.batches = S.batches.filter((x: Batch) => x.id !== id);
   pendingRatings = { skill:0, speed:0, banger:0 };
   closeModal();
   rebuildPlanner();
   rerenderCurrentView();
-  scheduleSave();
-  toast(esc(d.name) + ' archived');
+  pushUndo({
+    label: esc(d.name) + ' archived',
+    restore: () => {
+      S.batches.push(before);
+      const ai = S.archive ? S.archive.indexOf(archiveEntry) : -1;
+      if (ai >= 0) S.archive!.splice(ai, 1);
+      rebuildPlanner();
+      rerenderCurrentView();
+      if (_refreshInventoryModal) _refreshInventoryModal();
+    },
+    commit: () => {
+      // Recipe-rating update is deferred to commit so an undo leaves the
+      // recipe's averages untouched.
+      if (rating && d.recipeId) {
+        const recipe = (S.recipes || []).find(r => r.id === d.recipeId);
+        if (recipe) {
+          const n = recipe.timesServed || 0;
+          const newN = n + 1;
+          recipe.avgSkill = ((recipe.avgSkill || 0) * n + (rating.skill || 0)) / newN;
+          recipe.avgSpeed = ((recipe.avgSpeed || 0) * n + (rating.speed || 0)) / newN;
+          recipe.avgBanger = ((recipe.avgBanger || 0) * n + (rating.banger || 0)) / newN;
+          recipe.timesServed = newN;
+          apiPost(`/api/recipes/${recipe.id}`, { avgSkill: recipe.avgSkill, avgSpeed: recipe.avgSpeed, avgBanger: recipe.avgBanger, timesServed: recipe.timesServed }, 'PATCH')
+            .catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
+        }
+      }
+      scheduleSave();
+    },
+  });
 }
 export function typeBadge(t: DishType | string): string {
   if (t === 'Dessert') return `<span class="badge b-dessert">Dessert</span>`;
