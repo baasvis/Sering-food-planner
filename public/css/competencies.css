@@ -90,3 +90,16 @@
 .comp-who:first-child{border-top:none;}
 .comp-who-name{font-weight:600;color:var(--text);}
 .comp-who-date{color:var(--text3);font-size:12px;white-space:nowrap;}
+
+/* ── Admin ── */
+.comp-admin-list{list-style:none;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;}
+.comp-admin-person,.comp-admin-event{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:9px 14px;background:var(--bg);font-size:13px;border-top:1px solid var(--border);}
+.comp-admin-person:first-child,.comp-admin-event:first-child{border-top:none;}
+.comp-admin-name{font-weight:600;color:var(--text);flex:1;min-width:120px;}
+.comp-admin-event-text{color:var(--text2);flex:1;min-width:160px;}
+.comp-admin-actions{display:flex;gap:6px;flex-shrink:0;}
+.comp-admin-inactive .comp-admin-name{color:var(--text3);font-weight:500;}
+.comp-sync-result{margin-top:10px;font-size:13px;color:var(--text2);}
+.comp-sync-flagged{margin-top:6px;color:var(--amber);}
+.comp-sync-flagged ul{margin:4px 0 0;padding-left:18px;}
+.comp-sync-flagged li{margin:2px 0;}

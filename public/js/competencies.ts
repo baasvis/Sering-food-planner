@@ -31,10 +31,14 @@ let cEvents: CEvent[] = [];
 let cStationFilter = 'all';
 let cLoaded = false;
 
-// Which view is showing: the grid (home) or a detail drill-down.
-let cView: 'grid' | 'person' | 'chunk' = 'grid';
+// Which view is showing: the grid (home), a detail drill-down, or admin.
+let cView: 'grid' | 'person' | 'chunk' | 'admin' = 'grid';
 let cPersonId = '';
 let cChunkId = '';
+let cIsStaffLead = false;
+let cLastSync: { synced: string[]; flagged: { name: string; reason: string }[] } | null = null;
+let renamePersonId = '';
+let pendingDeleteEventId = '';
 
 // Log modal: the cell tap pre-fills learner + chunk; the teacher is picked
 // inside the modal. Held at module scope so submitCompLog can read it.
@@ -75,6 +79,9 @@ function recencyClass(iso: string | null): string {
 
 function personById(id: string): CPerson | undefined { return cPeople.find(p => p.id === id); }
 function chunkById(id: string): CChunk | undefined { return cChunks.find(c => c.id === id); }
+// People still on the roster — the grid, pickers and chunk roster use these;
+// the admin view manages the full list (active + deactivated).
+function activePeople(): CPerson[] { return cPeople.filter(p => p.active); }
 
 // Most recent date `chunkId` was taught to `learnerId`, or null. `date` is
 // zero-padded ISO (YYYY-MM-DD) — the only write path is an <input type="date">
@@ -100,6 +107,7 @@ export async function renderCompetencies(): Promise<void> {
     cChunks = data.chunks || [];
     cPeople = data.people || [];
     cEvents = data.events || [];
+    cIsStaffLead = !!data.isStaffLead;
     cLoaded = true;
   } catch (e: unknown) {
     el.innerHTML = `<div class="comp-error">Could not load the training grid: ${esc(e instanceof Error ? e.message : 'Unknown error')}</div>`;
@@ -114,7 +122,8 @@ function paintComp(): void {
   el.innerHTML =
     cView === 'person' ? buildPersonHtml(cPersonId)
       : cView === 'chunk' ? buildChunkHtml(cChunkId)
-        : buildCompHtml();
+        : cView === 'admin' ? buildAdminHtml()
+          : buildCompHtml();
 }
 
 function buildCompHtml(): string {
@@ -137,6 +146,7 @@ function buildCompHtml(): string {
       <div class="comp-header-actions">
         ${filterHtml}
         <button class="btn" onclick="openCompAddPerson()" data-testid="comp-add-person">+ Add a name</button>
+        ${cIsStaffLead ? '<button class="btn" onclick="openCompAdmin()" data-testid="comp-admin-btn">Admin</button>' : ''}
       </div>
     </div>
     <p class="comp-hint">Tap a cell to log a teaching. Green means taught recently; a blank cell means not yet.</p>
@@ -149,13 +159,14 @@ function buildGridHtml(visibleChunks: CChunk[]): string {
   if (cChunks.length === 0) {
     return '<div class="comp-empty">No chunks in the library yet.</div>';
   }
-  if (cPeople.length === 0) {
+  const people = activePeople();
+  if (people.length === 0) {
     return '<div class="comp-empty">No staff added yet. Tap <strong>+ Add a name</strong> to add the first person, then tap a grid cell to log a teaching.</div>';
   }
   const head = visibleChunks.map(c =>
     `<th class="comp-chunkhead" data-testid="comp-chunkhead" data-chunk="${esc(c.id)}" title="${esc(c.name)} — ${esc(c.station)}" onclick="openCompChunk(this.dataset.chunk)">${esc(c.name)}</th>`
   ).join('');
-  const rows = cPeople.map(p => {
+  const rows = people.map(p => {
     const cells = visibleChunks.map(c => {
       const last = lastTaught(p.id, c.id);
       const cls = recencyClass(last);
@@ -313,7 +324,7 @@ function buildChunkHtml(chunkId: string): string {
       </div>
       <div class="comp-empty">That chunk is no longer in the library.</div>`;
   }
-  const roster = cPeople.map(p => ({ person: p, last: lastTaught(p.id, chunkId) }));
+  const roster = activePeople().map(p => ({ person: p, last: lastTaught(p.id, chunkId) }));
   const had = roster.filter(r => r.last)
     .sort((a, b) => ((a.last as string) < (b.last as string) ? 1 : -1));
   const notHad = roster.filter(r => !r.last);
@@ -367,7 +378,7 @@ export function openCompLogModal(learnerId: string, chunkId: string): void {
   logChunkId = chunkId;
   logTeacherId = '';
   const last = lastTaught(learnerId, chunkId);
-  const teacherBtns = cPeople.map(p =>
+  const teacherBtns = activePeople().map(p =>
     `<button type="button" class="comp-pick-btn" data-teacher="${esc(p.id)}" data-testid="comp-teacher-btn" onclick="selectCompTeacher(this.dataset.teacher)">${esc(p.name)}</button>`
   ).join('');
   showModal(`
@@ -463,6 +474,173 @@ export async function submitCompAddPerson(): Promise<void> {
     await renderCompetencies();
   } catch (e: unknown) {
     toast('Could not add: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+// ── Admin (staff-leads only) ──
+
+export function openCompAdmin(): void {
+  cView = 'admin';
+  paintComp();
+}
+
+// The report from the last "Sync from Notion" run, shown under the button.
+function syncResultHtml(): string {
+  if (!cLastSync) return '';
+  const { synced, flagged } = cLastSync;
+  const flaggedHtml = flagged.length
+    ? `<div class="comp-sync-flagged"><strong>Held back (${flagged.length}) — fix in Notion and sync again:</strong>`
+      + `<ul>${flagged.map(f => `<li>${esc(f.name)} — ${esc(f.reason)}</li>`).join('')}</ul></div>`
+    : '';
+  return `<div class="comp-sync-result">
+    <p>Synced ${synced.length} chunk${synced.length === 1 ? '' : 's'} from Notion.</p>
+    ${flaggedHtml}
+  </div>`;
+}
+
+// The admin view: sync the chunk library from Notion, manage the people
+// roster, and correct teaching events. Staff-lead only — the Admin button
+// that reaches here is hidden for everyone else (and the endpoints 403).
+function buildAdminHtml(): string {
+  const people = cPeople.slice().sort((a, b) => a.name.localeCompare(b.name));
+  const peopleRows = people.map(p =>
+    `<li class="comp-admin-person${p.active ? '' : ' comp-admin-inactive'}">
+      <span class="comp-admin-name">${esc(p.name)}${p.active ? '' : ' (deactivated)'}</span>
+      <span class="comp-admin-actions">
+        <button class="btn" data-person="${esc(p.id)}" onclick="compRenamePerson(this.dataset.person)">Rename</button>
+        <button class="btn" data-person="${esc(p.id)}" onclick="compTogglePersonActive(this.dataset.person)">${p.active ? 'Deactivate' : 'Reactivate'}</button>
+      </span>
+    </li>`
+  ).join('');
+
+  const eventRows = cEvents.slice(0, 50).map(e => {
+    const teacher = personById(e.teacherId);
+    const learner = personById(e.learnerId);
+    const chunk = chunkById(e.chunkId);
+    return `<li class="comp-admin-event">
+      <span class="comp-admin-event-text">${esc(teacher ? teacher.name : '?')} &rarr; ${esc(learner ? learner.name : '?')} &middot; ${esc(chunk ? chunk.name : '?')} &middot; ${esc(fmtDate(e.date))}</span>
+      <button class="btn btn-danger" data-event="${esc(e.id)}" onclick="compDeleteEvent(this.dataset.event)">Delete</button>
+    </li>`;
+  }).join('');
+
+  return `
+    <div class="comp-detail-head">
+      <button class="btn" onclick="compBackToGrid()">&larr; Grid</button>
+      <h2>Admin</h2>
+    </div>
+    <div class="comp-person-block">
+      <h3>Chunk library</h3>
+      <p class="comp-hint">Chunks are written and edited in Notion. Sync pulls the latest version in — it never deletes.</p>
+      <button class="btn btn-purple" onclick="compSyncNotion()" data-testid="comp-sync-btn">Sync from Notion</button>
+      ${syncResultHtml()}
+    </div>
+    <div class="comp-person-block">
+      <h3>People</h3>
+      ${people.length
+        ? `<ul class="comp-admin-list">${peopleRows}</ul>`
+        : '<p class="comp-person-empty">No people yet.</p>'}
+    </div>
+    <div class="comp-person-block">
+      <h3>Recent teaching events</h3>
+      <p class="comp-hint">Delete an event logged by mistake.</p>
+      ${cEvents.length
+        ? `<ul class="comp-admin-list">${eventRows}</ul>`
+        : '<p class="comp-person-empty">No teaching events logged yet.</p>'}
+    </div>
+  `;
+}
+
+export async function compSyncNotion(): Promise<void> {
+  toast('Syncing from Notion…');
+  try {
+    const report = await apiPost('/api/competencies/sync-chunks', {});
+    cLastSync = { synced: report.synced || [], flagged: report.flagged || [] };
+    toast(`Synced ${cLastSync.synced.length} chunk${cLastSync.synced.length === 1 ? '' : 's'}`);
+    await renderCompetencies();
+  } catch (e: unknown) {
+    toast('Sync failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+export function compRenamePerson(personId: string): void {
+  const person = personById(personId);
+  if (!person) { toast('That person is no longer in the list'); return; }
+  renamePersonId = personId;
+  showModal(`
+    <div data-testid="comp-rename-modal">
+      <h3>Rename</h3>
+      <div class="fr">
+        <label for="comp-rename-input">Name</label>
+        <input type="text" id="comp-rename-input" value="${esc(person.name)}" autocomplete="off">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-purple" onclick="submitCompRename()">Save</button>
+      </div>
+    </div>
+  `);
+  setTimeout(() => {
+    const i = document.getElementById('comp-rename-input') as HTMLInputElement | null;
+    if (i) { i.focus(); i.select(); }
+  }, 50);
+}
+
+export async function submitCompRename(): Promise<void> {
+  const input = document.getElementById('comp-rename-input') as HTMLInputElement | null;
+  const name = input ? input.value.trim() : '';
+  if (!name) { toast('Enter a name'); return; }
+  try {
+    await apiPost('/api/competencies/people/' + renamePersonId, { name }, 'PATCH');
+    closeModal();
+    toast('Renamed');
+    await renderCompetencies();
+  } catch (e: unknown) {
+    toast('Could not rename: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+export async function compTogglePersonActive(personId: string): Promise<void> {
+  const person = personById(personId);
+  if (!person) { toast('That person is no longer in the list'); return; }
+  try {
+    await apiPost('/api/competencies/people/' + personId, { active: !person.active }, 'PATCH');
+    toast(person.active ? `${person.name} deactivated` : `${person.name} reactivated`);
+    await renderCompetencies();
+  } catch (e: unknown) {
+    toast('Could not update: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+export function compDeleteEvent(eventId: string): void {
+  const ev = cEvents.find(e => e.id === eventId);
+  if (!ev) { toast('That event is no longer in the ledger'); return; }
+  pendingDeleteEventId = eventId;
+  const teacher = personById(ev.teacherId);
+  const learner = personById(ev.learnerId);
+  const chunk = chunkById(ev.chunkId);
+  showModal(`
+    <div data-testid="comp-delete-event-modal">
+      <h3>Delete this teaching event?</h3>
+      <p class="comp-log-subject">${esc(teacher ? teacher.name : '?')} &rarr; ${esc(learner ? learner.name : '?')} &middot; <strong>${esc(chunk ? chunk.name : '?')}</strong> &middot; ${esc(fmtDate(ev.date))}</p>
+      <div class="modal-note">This removes the event from the ledger and the grid. It cannot be undone.</div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-danger" onclick="confirmCompDeleteEvent()">Delete</button>
+      </div>
+    </div>
+  `);
+}
+
+export async function confirmCompDeleteEvent(): Promise<void> {
+  if (!pendingDeleteEventId) { closeModal(); return; }
+  try {
+    await apiPost('/api/competencies/events/' + pendingDeleteEventId, {}, 'DELETE');
+    pendingDeleteEventId = '';
+    closeModal();
+    toast('Event deleted');
+    await renderCompetencies();
+  } catch (e: unknown) {
+    toast('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 

@@ -27,7 +27,7 @@ import { initTelemetry, trackScreenView, trackEvent, trackError } from './teleme
 import { executeUndo, flushUndo } from './undo';
 import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave, fixMenuGoto, fixMenuAction } from './menu-fixer';
 import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals } from './transport-card';
-import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk } from './competencies';
+import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -112,7 +112,7 @@ Object.assign(window, {
   setTransportMode, confirmTransportPlan, confirmCentraalArrivals,
 
   // competencies
-  renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk,
+  renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent,
 });
 
 // ═══════════════════════════════════════════════════════════════════
