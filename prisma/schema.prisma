@@ -363,6 +363,7 @@ model Chunk {
   id            String   @id
   name          String
   station       String
+  locations     String[] // location tags — Sering Centraal / Sering West / TestTafel
   type          String // "practical" | "sit-down"
   goal          String   @default("")
   prerequisites String[] // chunk ids

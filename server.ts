@@ -144,6 +144,24 @@ app.listen(PORT, () => {
     });
     console.log('  Finance sync scheduled:', schedule);
   }).catch(() => { console.log('  node-cron not available, skipping finance sync'); });
+
+  // Daily Notion competency-chunk sync — Notion is the source of truth for the
+  // chunk library; pull the latest in (upsert is idempotent).
+  if (CONFIG.NOTION_TOKEN && CONFIG.NOTION_CHUNKS_DATA_SOURCE_ID) {
+    import('node-cron').then(cron => {
+      const schedule = process.env.COMPETENCY_SYNC_CRON || '0 5 * * *';
+      cron.schedule(schedule, async () => {
+        try {
+          const { syncChunksFromNotion } = await import('./lib/notion-sync');
+          const r = await syncChunksFromNotion();
+          console.log(`Notion chunk sync: ${r.synced.length} synced, ${r.flagged.length} flagged`);
+        } catch (e: unknown) {
+          console.error('Notion chunk sync failed:', errMsg(e));
+        }
+      });
+      console.log('  Notion chunk sync scheduled:', schedule);
+    }).catch(() => {});
+  }
 });
 
 // Graceful shutdown — flush the telemetry buffer before disconnecting so

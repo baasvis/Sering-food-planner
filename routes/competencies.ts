@@ -14,6 +14,8 @@ import express, { Request, Response } from 'express';
 import { asyncHandler } from '../lib/config';
 import { prisma, dbAppendLog, withWriteLock } from '../lib/db';
 import { addBackendEvent } from './telemetry';
+import { isStaffLeadEmail } from './auth';
+import { syncChunksFromNotion } from '../lib/notion-sync';
 
 const router = express.Router();
 
@@ -64,6 +66,25 @@ router.post('/people', asyncHandler(async (req: Request, res: Response) => {
   }));
   dbAppendLog(user.email, user.name, 'competency-person', `added "${person.name}"`);
   res.json(person);
+}));
+
+// POST /api/competencies/sync-chunks — pull the chunk library from Notion.
+// Staff-lead gated: a content-management action.
+router.post('/sync-chunks', asyncHandler(async (req: Request, res: Response) => {
+  if (!isStaffLeadEmail(req.user?.email)) {
+    return res.status(403).json({ error: 'Staff-lead access required' });
+  }
+  const report = await syncChunksFromNotion();
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'competency-sync',
+    report.ok
+      ? `synced ${report.synced.length}, flagged ${report.flagged.length}`
+      : `failed: ${report.error}`);
+  if (!report.ok) {
+    const notConfigured = !!report.error && report.error.includes('not configured');
+    return res.status(notConfigured ? 503 : 502).json(report);
+  }
+  res.json(report);
 }));
 
 export default router;

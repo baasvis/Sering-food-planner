@@ -102,7 +102,7 @@ export async function renderCompetencies(): Promise<void> {
     cEvents = data.events || [];
     cLoaded = true;
   } catch (e: unknown) {
-    el.innerHTML = `<div class="comp-error">Could not load competencies: ${esc(e instanceof Error ? e.message : 'Unknown error')}</div>`;
+    el.innerHTML = `<div class="comp-error">Could not load the training grid: ${esc(e instanceof Error ? e.message : 'Unknown error')}</div>`;
     return;
   }
   paintComp();
@@ -133,7 +133,7 @@ function buildCompHtml(): string {
 
   return `
     <div class="comp-header">
-      <h2>Competencies</h2>
+      <h2>Training</h2>
       <div class="comp-header-actions">
         ${filterHtml}
         <button class="btn" onclick="openCompAddPerson()" data-testid="comp-add-person">+ Add a name</button>

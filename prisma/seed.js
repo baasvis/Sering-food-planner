@@ -58,20 +58,8 @@ async function main() {
   }
 
   // ── Competencies module ──
-  // Chunks: import the chunk library on a fresh DB. People: launch empty
-  // (names are added in-app); the JSON file is a placeholder for a future
-  // pre-seeded name list.
-  const chunkCount = await prisma.chunk.count();
-  if (chunkCount === 0) {
-    const chunks = require('../seeds/competency-chunks.js');
-    if (chunks.length > 0) {
-      await prisma.chunk.createMany({ data: chunks });
-      console.log(`Seeded ${chunks.length} competency chunk(s)`);
-    }
-  } else {
-    console.log(`Chunks already exist (${chunkCount} rows) — skipping seed`);
-  }
-
+  // Chunks are not seeded — they sync from Notion (see lib/notion-sync.ts).
+  // People launch empty; the JSON file is a placeholder for a future name list.
   const peopleSeed = path.join(__dirname, '..', 'seeds', 'competency-people.json');
   if (fs.existsSync(peopleSeed)) {
     const peopleCount = await prisma.person.count();
