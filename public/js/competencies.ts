@@ -11,6 +11,7 @@ import { apiGet, apiPost, toast, todayIso, newId } from './utils';
 import { showModal, closeModal, esc } from './modal';
 import { registerRenderer } from './navigate';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { splitGuideSections } from './chunk-guide';
 
 interface CChunk {
@@ -36,7 +37,11 @@ let cView: 'grid' | 'person' | 'chunk' | 'admin' = 'grid';
 let cPersonId = '';
 let cChunkId = '';
 let cIsStaffLead = false;
-let cLastSync: { synced: string[]; flagged: { name: string; reason: string }[] } | null = null;
+let cLastSync: {
+  synced: string[];
+  warned: { name: string; warnings: string[] }[];
+  flagged: { name: string; reason: string }[];
+} | null = null;
 let renamePersonId = '';
 let pendingDeleteEventId = '';
 
@@ -94,6 +99,18 @@ function lastTaught(learnerId: string, chunkId: string): string | null {
     }
   }
   return best;
+}
+
+// A chunk's deeperLink comes from a Notion URL property — only render it as a
+// link if it is a real http(s) URL, so a javascript: scheme can't be clicked.
+function safeHttpUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Render ──
@@ -294,9 +311,11 @@ export function openCompChunk(chunkId: string): void {
 }
 
 // marked runs synchronously with default options; the union return type is
-// over-broad. Chunk guides are staff-authored and git-seeded (trusted).
+// over-broad. Chunk guides sync in from Notion (externally-editable content),
+// so the rendered HTML is sanitised with DOMPurify before it reaches
+// innerHTML — marked itself passes raw HTML straight through.
 function mdToHtml(md: string): string {
-  return marked.parse(md) as string;
+  return DOMPurify.sanitize(marked.parse(md) as string);
 }
 
 // The teaching guide: an always-open intro, then each `## ` section as a
@@ -335,8 +354,9 @@ function buildChunkHtml(chunkId: string): string {
   const requiredHtml = chunk.requiredFor.length
     ? `<div class="comp-chunk-meta"><span class="comp-chunk-meta-label">Required for</span>${chunk.requiredFor.map(r => `<span class="comp-tag">${esc(r)}</span>`).join('')}</div>`
     : '';
-  const linkHtml = chunk.deeperLink
-    ? `<p class="comp-chunk-link"><a href="${esc(chunk.deeperLink)}" target="_blank" rel="noopener noreferrer">Deeper documentation &rarr;</a></p>`
+  const safeLink = safeHttpUrl(chunk.deeperLink);
+  const linkHtml = safeLink
+    ? `<p class="comp-chunk-link"><a href="${esc(safeLink)}" target="_blank" rel="noopener noreferrer">Deeper documentation &rarr;</a></p>`
     : '';
 
   return `
@@ -392,7 +412,7 @@ export function openCompLogModal(learnerId: string, chunkId: string): void {
       </div>
       <div class="fr">
         <label for="comp-log-date">Date</label>
-        <input type="date" id="comp-log-date" value="${todayIso()}">
+        <input type="date" id="comp-log-date" value="${todayIso()}" max="${todayIso()}">
       </div>
       <div class="fr">
         <label for="comp-log-note">Note (optional)</label>
@@ -487,14 +507,19 @@ export function openCompAdmin(): void {
 // The report from the last "Sync from Notion" run, shown under the button.
 function syncResultHtml(): string {
   if (!cLastSync) return '';
-  const { synced, flagged } = cLastSync;
+  const { synced, warned, flagged } = cLastSync;
+  const total = synced.length + warned.length;
+  const warnedHtml = warned.length
+    ? `<div class="comp-sync-warned"><strong>Imported, but some content was skipped (${warned.length}):</strong>`
+      + `<ul>${warned.map(w => `<li>${esc(w.name)} — ${esc(w.warnings.join('; '))}</li>`).join('')}</ul></div>`
+    : '';
   const flaggedHtml = flagged.length
     ? `<div class="comp-sync-flagged"><strong>Held back (${flagged.length}) — fix in Notion and sync again:</strong>`
       + `<ul>${flagged.map(f => `<li>${esc(f.name)} — ${esc(f.reason)}</li>`).join('')}</ul></div>`
     : '';
   return `<div class="comp-sync-result">
-    <p>Synced ${synced.length} chunk${synced.length === 1 ? '' : 's'} from Notion.</p>
-    ${flaggedHtml}
+    <p>Synced ${total} chunk${total === 1 ? '' : 's'} from Notion.</p>
+    ${warnedHtml}${flaggedHtml}
   </div>`;
 }
 
@@ -554,8 +579,13 @@ export async function compSyncNotion(): Promise<void> {
   toast('Syncing from Notion…');
   try {
     const report = await apiPost('/api/competencies/sync-chunks', {});
-    cLastSync = { synced: report.synced || [], flagged: report.flagged || [] };
-    toast(`Synced ${cLastSync.synced.length} chunk${cLastSync.synced.length === 1 ? '' : 's'}`);
+    cLastSync = {
+      synced: report.synced || [],
+      warned: report.warned || [],
+      flagged: report.flagged || [],
+    };
+    const total = cLastSync.synced.length + cLastSync.warned.length;
+    toast(`Synced ${total} chunk${total === 1 ? '' : 's'}`);
     await renderCompetencies();
   } catch (e: unknown) {
     toast('Sync failed: ' + (e instanceof Error ? e.message : 'Unknown error'));

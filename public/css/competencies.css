@@ -100,6 +100,7 @@
 .comp-admin-actions{display:flex;gap:6px;flex-shrink:0;}
 .comp-admin-inactive .comp-admin-name{color:var(--text3);font-weight:500;}
 .comp-sync-result{margin-top:10px;font-size:13px;color:var(--text2);}
+.comp-sync-warned{margin-top:6px;color:var(--text2);}
 .comp-sync-flagged{margin-top:6px;color:var(--amber);}
-.comp-sync-flagged ul{margin:4px 0 0;padding-left:18px;}
-.comp-sync-flagged li{margin:2px 0;}
+.comp-sync-warned ul,.comp-sync-flagged ul{margin:4px 0 0;padding-left:18px;}
+.comp-sync-warned li,.comp-sync-flagged li{margin:2px 0;}

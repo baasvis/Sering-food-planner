@@ -363,11 +363,11 @@ model Chunk {
   id            String   @id
   name          String
   station       String
-  locations     String[] // location tags — Sering Centraal / Sering West / TestTafel
+  locations     String[] @default([]) // location tags — Sering Centraal / Sering West / TestTafel
   type          String // "practical" | "sit-down"
   goal          String   @default("")
-  prerequisites String[] // chunk ids
-  requiredFor   String[] @map("required_for") // free-text labels
+  prerequisites String[] @default([]) // chunk ids
+  requiredFor   String[] @default([]) @map("required_for") // free-text labels
   deeperLink    String?  @map("deeper_link")
   teachingGuide String   @default("") @map("teaching_guide") // markdown
   sortOrder     Int      @default(0) @map("sort_order")

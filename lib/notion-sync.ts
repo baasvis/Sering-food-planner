@@ -14,8 +14,9 @@ import { blocksToGuideMarkdown, NotionBlock, RichSpan } from './notion-markdown'
 
 export interface SyncReport {
   ok: boolean;
-  synced: string[];
-  flagged: { name: string; reason: string }[];
+  synced: string[];                                // chunk names — clean import
+  warned: { name: string; warnings: string[] }[];  // imported, but some blocks were skipped
+  flagged: { name: string; reason: string }[];     // not imported
   error?: string;
 }
 
@@ -51,6 +52,12 @@ function pNumber(p: unknown): number {
 }
 function pUrl(p: unknown): string | null {
   return (p as { url?: string | null } | undefined)?.url || null;
+}
+// A Notion relation property → the related page IDs. Chunk.id IS the Notion
+// page ID, so a Prerequisites relation maps straight onto chunk ids.
+function pRelation(p: unknown): string[] {
+  const r = (p as { relation?: { id?: string }[] } | undefined)?.relation;
+  return Array.isArray(r) ? r.map(x => x.id || '').filter(Boolean) : [];
 }
 
 interface NotionPage { id: string; properties: Record<string, unknown>; }
@@ -103,7 +110,7 @@ function chunkFields(props: Record<string, unknown>, teachingGuide: string) {
     type: pSelect(props['Type']) || 'practical',
     goal: pRichText(props['Goal']),
     requiredFor: pMultiSelect(props['Required for']),
-    prerequisites: [] as string[],
+    prerequisites: pRelation(props['Prerequisites']),
     deeperLink: pUrl(props['Deeper link']),
     teachingGuide,
     sortOrder: pNumber(props['Sort order']),
@@ -113,7 +120,7 @@ function chunkFields(props: Record<string, unknown>, teachingGuide: string) {
 export async function syncChunksFromNotion(): Promise<SyncReport> {
   if (!notionConfigured()) {
     return {
-      ok: false, synced: [], flagged: [],
+      ok: false, synced: [], warned: [], flagged: [],
       error: 'Notion is not configured — set NOTION_TOKEN and NOTION_CHUNKS_DATA_SOURCE_ID.',
     };
   }
@@ -122,11 +129,11 @@ export async function syncChunksFromNotion(): Promise<SyncReport> {
   try {
     pages = await queryAllPages();
   } catch (e: unknown) {
-    return { ok: false, synced: [], flagged: [], error: errMsg(e) };
+    return { ok: false, synced: [], warned: [], flagged: [], error: errMsg(e) };
   }
 
   const flagged: { name: string; reason: string }[] = [];
-  const ready: { id: string; label: string; fields: ReturnType<typeof chunkFields> }[] = [];
+  const ready: { id: string; name: string; warnings: string[]; fields: ReturnType<typeof chunkFields> }[] = [];
 
   // Phase 1 — fetch + convert. Slow + network-bound, so no write lock here.
   for (const page of pages) {
@@ -138,10 +145,8 @@ export async function syncChunksFromNotion(): Promise<SyncReport> {
         flagged.push({ name, reason: 'no sections — the teaching guide needs at least one toggle' });
         continue;
       }
-      const n = warnings.length;
       ready.push({
-        id: page.id,
-        label: n ? `${name} (${n} warning${n > 1 ? 's' : ''})` : name,
+        id: page.id, name, warnings,
         fields: chunkFields(page.properties, markdown),
       });
     } catch (e: unknown) {
@@ -149,8 +154,11 @@ export async function syncChunksFromNotion(): Promise<SyncReport> {
     }
   }
 
-  // Phase 2 — upsert. The write lock is held only for the DB writes.
+  // Phase 2 — upsert. The write lock is held only for the DB writes. A chunk
+  // that converted with warnings (an unknown block was skipped) still imports
+  // — it lands in `warned`, not `synced`, so the sync report surfaces it.
   const synced: string[] = [];
+  const warned: { name: string; warnings: string[] }[] = [];
   try {
     await withWriteLock(async () => {
       for (const c of ready) {
@@ -159,11 +167,12 @@ export async function syncChunksFromNotion(): Promise<SyncReport> {
           create: { id: c.id, ...c.fields },
           update: c.fields,
         });
-        synced.push(c.label);
+        if (c.warnings.length) warned.push({ name: c.name, warnings: c.warnings });
+        else synced.push(c.name);
       }
     });
   } catch (e: unknown) {
-    return { ok: false, synced, flagged, error: errMsg(e) };
+    return { ok: false, synced, warned, flagged, error: errMsg(e) };
   }
-  return { ok: true, synced, flagged };
+  return { ok: true, synced, warned, flagged };
 }

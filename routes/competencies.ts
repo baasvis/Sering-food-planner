@@ -119,7 +119,7 @@ router.post('/sync-chunks', asyncHandler(async (req: Request, res: Response) => 
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'competency-sync',
     report.ok
-      ? `synced ${report.synced.length}, flagged ${report.flagged.length}`
+      ? `synced ${report.synced.length}, warned ${report.warned.length}, flagged ${report.flagged.length}`
       : `failed: ${report.error}`);
   if (!report.ok) {
     const notConfigured = !!report.error && report.error.includes('not configured');
