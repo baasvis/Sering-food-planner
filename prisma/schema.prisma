@@ -340,3 +340,61 @@ model AiInsight {
   @@index([category])
   @@map("ai_insight")
 }
+
+// ── Competencies module ──
+// Peer-teaching tracker. A TeachingEvent is the atomic record: a teacher
+// taught a learner one Chunk on a date. Competence is derived from this
+// history — there is deliberately no "is competent" flag.
+
+model Person {
+  id        String   @id
+  name      String
+  location  String   @default("centraal")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  teachingsGiven    TeachingEvent[] @relation("teacher")
+  teachingsReceived TeachingEvent[] @relation("learner")
+
+  @@map("people")
+}
+
+model Chunk {
+  id            String   @id
+  name          String
+  station       String
+  type          String // "practical" | "sit-down"
+  goal          String   @default("")
+  prerequisites String[] // chunk ids
+  requiredFor   String[] @map("required_for") // free-text labels
+  deeperLink    String?  @map("deeper_link")
+  teachingGuide String   @default("") @map("teaching_guide") // markdown
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  teachingEvents TeachingEvent[]
+
+  @@map("chunks")
+}
+
+model TeachingEvent {
+  id             String   @id
+  chunkId        String   @map("chunk_id")
+  teacherId      String   @map("teacher_id")
+  learnerId      String   @map("learner_id")
+  date           String // ISO YYYY-MM-DD
+  notes          String   @default("")
+  createdAt      DateTime @default(now()) @map("created_at")
+  createdByEmail String   @map("created_by_email")
+  createdByName  String   @map("created_by_name")
+
+  chunk   Chunk  @relation(fields: [chunkId], references: [id])
+  teacher Person @relation("teacher", fields: [teacherId], references: [id])
+  learner Person @relation("learner", fields: [learnerId], references: [id])
+
+  @@index([chunkId])
+  @@index([teacherId])
+  @@index([learnerId])
+  @@map("teaching_events")
+}
