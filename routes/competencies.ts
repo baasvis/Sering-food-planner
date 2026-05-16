@@ -50,8 +50,9 @@ router.post('/events', asyncHandler(async (req: Request, res: Response) => {
   res.json(event);
 }));
 
-// POST /api/competencies/people — add a staff name. Open by design: this is
-// the kiosk "+ add a name" control, trust-by-default like logging an event.
+// POST /api/competencies/people — add a staff name. Not staff-lead-gated:
+// this is the kiosk "+ add a name" control, open to any signed-in user,
+// like logging an event.
 router.post('/people', asyncHandler(async (req: Request, res: Response) => {
   const { id, name, location } = req.body;
   if (!id || !name || !String(name).trim()) {

@@ -69,7 +69,9 @@ function recencyClass(iso: string | null): string {
 function personById(id: string): CPerson | undefined { return cPeople.find(p => p.id === id); }
 function chunkById(id: string): CChunk | undefined { return cChunks.find(c => c.id === id); }
 
-// Most recent date `chunkId` was taught to `learnerId`, or null.
+// Most recent date `chunkId` was taught to `learnerId`, or null. `date` is
+// zero-padded ISO (YYYY-MM-DD) — the only write path is an <input type="date">
+// — so the string comparison below sorts chronologically.
 function lastTaught(learnerId: string, chunkId: string): string | null {
   let best: string | null = null;
   for (const e of cEvents) {
@@ -147,7 +149,7 @@ function buildGridHtml(visibleChunks: CChunk[]): string {
       const last = lastTaught(p.id, c.id);
       const cls = recencyClass(last);
       const label = last ? esc(fmtDate(last)) : '&mdash;';
-      return `<td class="comp-cell ${cls}" data-testid="comp-cell" title="${esc(p.name)} — ${esc(c.name)}" onclick="openCompLogModal('${p.id}','${c.id}')">${label}</td>`;
+      return `<td class="comp-cell ${cls}" data-testid="comp-cell" data-learner="${esc(p.id)}" data-chunk="${esc(c.id)}" title="${esc(p.name)} — ${esc(c.name)}" onclick="openCompLogModal(this.dataset.learner, this.dataset.chunk)">${label}</td>`;
     }).join('');
     return `<tr><th class="comp-rowhead">${esc(p.name)}</th>${cells}</tr>`;
   }).join('');
@@ -196,7 +198,7 @@ export function openCompLogModal(learnerId: string, chunkId: string): void {
   logTeacherId = '';
   const last = lastTaught(learnerId, chunkId);
   const teacherBtns = cPeople.map(p =>
-    `<button type="button" class="comp-pick-btn" data-teacher="${p.id}" data-testid="comp-teacher-btn" onclick="selectCompTeacher('${p.id}')">${esc(p.name)}</button>`
+    `<button type="button" class="comp-pick-btn" data-teacher="${esc(p.id)}" data-testid="comp-teacher-btn" onclick="selectCompTeacher(this.dataset.teacher)">${esc(p.name)}</button>`
   ).join('');
   showModal(`
     <div data-testid="comp-log-modal">
