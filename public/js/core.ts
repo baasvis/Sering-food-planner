@@ -113,9 +113,22 @@ export function isStaleEntry(entry: InventoryEntry): boolean {
   return daysOld > limit;
 }
 
-// Amsterdam time helper (shared — also used by planner.js inventory)
+// Amsterdam time helper (shared — also used by planner.js inventory).
+// The toLocaleString timezone conversion is ~10µs; isServicePast calls this on
+// hot paths (Fix My Menu evaluates it hundreds of thousands of times per run).
+// Memoize the conversion with a 1s TTL — 1s-stale wall-clock is immaterial for
+// the minute-granularity deadline checks isServicePast performs — while still
+// returning a fresh Date each call so no caller can corrupt the cache.
+let _amsNowCache: { at: number; ms: number } | null = null;
 export function getAmsterdamNow(): Date {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+  const now = Date.now();
+  if (!_amsNowCache || now - _amsNowCache.at >= 1000) {
+    _amsNowCache = {
+      at: now,
+      ms: new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' })).getTime(),
+    };
+  }
+  return new Date(_amsNowCache.ms);
 }
 
 // Convert a date string ("2026-03-23") to a day name ("Mon", "Tue", etc.)
@@ -307,6 +320,23 @@ export function calcRequiredAtService(dish: Batch, svc: Service): number {
   return lookupBatchAllocation(dish, svc) ?? 0;
 }
 
+/** Catering demand in liters for a dish — guest count split across the
+ *  catering's same-type peer dishes. Catering routes to the specific dishId
+ *  (no family-wide reallocation). Shared by calcRequired (cache-backed) and
+ *  calcRequiredLive (uncached) so the catering half of the two functions
+ *  cannot drift apart. */
+function cateringDemand(dish: Batch): number {
+  let total = 0;
+  (S.caterings || []).forEach((c: Catering) => {
+    const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
+    if (cd) {
+      const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
+      total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000);
+    }
+  });
+  return total;
+}
+
 export function calcRequired(dish: Batch): number {
   let total = 0;
   (dish.services || []).forEach((svc: Service) => {
@@ -318,15 +348,42 @@ export function calcRequired(dish: Batch): number {
     // invoking a stale even-split fallback.
     total += lookupBatchAllocation(dish, svc) ?? 0;
   });
-  // Add catering requirements (split by same-type peers — catering still
-  // routes to the specific dishId, no family-wide reallocation).
-  (S.caterings || []).forEach((c: Catering) => {
-    const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
-    if (cd) {
-      const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
-      total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000);
+  total += cateringDemand(dish);
+  return Math.round(total * 10) / 10;
+}
+
+/** Like calcRequired, but derives each service's peer-share demand directly
+ *  from live S.batches state instead of reading the _batchAllocations cache.
+ *  Returns a value identical to `rebuildPlanner(); calcRequired(dish)` — same
+ *  peer count, same per-service 0.1 L rounding (mirrors recordAllocation),
+ *  same catering term — but WITHOUT the global O(batches × services) rebuild.
+ *
+ *  Fix My Menu's scored algorithm evaluates one candidate batch at a time
+ *  inside tight nested loops; calling rebuildPlanner() per candidate froze the
+ *  browser for seconds. This reads dish.services live, so it stays correct
+ *  under the algorithm's speculative `services.push(...) / pop()` pattern. */
+export function calcRequiredLive(
+  dish: Batch,
+  getGuestsFn: (loc: Location, date: string, meal: Meal) => number = getGuests,
+): number {
+  let total = 0;
+  (dish.services || []).forEach((svc: Service) => {
+    if (isServicePast(svc)) return;
+    // Peer count = distinct same-type batches serving this slot — the same
+    // set recomputeBatchAllocations counts via S.planner[k].filter(type).
+    // dish itself is included (it has svc), matching the cached path.
+    let peerCount = 0;
+    for (const p of S.batches) {
+      if (p.type !== dish.type) continue;
+      if ((p.services || []).some((s: Service) => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal)) {
+        peerCount++;
+      }
     }
+    const guests = getGuestsFn(svc.loc, svc.date, svc.meal);
+    const liters = (guests / Math.max(peerCount, 1)) * ((dish.serving || 280) / 1000);
+    total += Math.round(liters * 10) / 10; // mirror recordAllocation's 0.1 L rounding
   });
+  total += cateringDemand(dish);
   return Math.round(total * 10) / 10;
 }
 
