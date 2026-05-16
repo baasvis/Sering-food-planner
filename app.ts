@@ -158,6 +158,7 @@ import financeRouter from './routes/finance';
 import eventsRouter from './routes/events';
 import healthRouter from './routes/health';
 import competenciesRouter from './routes/competencies';
+import suppliesRouter from './routes/supplies';
 
 app.use('/api/data',              dataRouter);
 app.use('/api/batches',           batchesRouter);
@@ -171,6 +172,7 @@ app.use('/api/finance',           financeRouter);
 app.use('/api/events',            eventsRouter);
 app.use('/api/health',            healthRouter);
 app.use('/api/competencies',      competenciesRouter);
+app.use('/api/supplies',          suppliesRouter);
 
 import adminRouter from './routes/admin';
 app.use('/api/admin',             adminRouter);

@@ -56,6 +56,7 @@ model Catering {
   guestCount     Int     @default(0) @map("guest_count")
   deliveryMode   String  @default("pickup") @map("delivery_mode")
   dishes         Json    @default("[]")
+  toppings       Json    @default("[]")
   logisticsNotes String  @default("") @map("logistics_notes")
   createdAt      String  @map("created_at")
 
@@ -252,6 +253,12 @@ model Recipe {
   servingTemp    String                @default("") @map("serving_temp")
   servingSize    Int                   @default(280) @map("serving_size")
   recipeVolume   Float?                @map("recipe_volume")
+  // Yield mode: 'volume' (soups/mains — scaled by liters, the default when
+  // null) or 'count' (toppings & bread — scaled by discrete outputCount of
+  // outputUnit, e.g. "makes 10 loaves").
+  yieldType      String?               @map("yield_type")
+  outputCount    Float?                @map("output_count")
+  outputUnit     String?               @map("output_unit")
   autoAllergens  String[]              @map("auto_allergens")
   extraAllergens String[]              @map("extra_allergens")
   costPerServing Float?                @map("cost_per_serving")
@@ -272,9 +279,45 @@ model Recipe {
   batches        Batch[]               @relation("BatchRecipe")
   ingredients    RecipeIngredientRow[]
   photo          RecipePhoto?
+  supplies       Supply[]              @relation("SupplyRecipe")
 
   @@index([type])
   @@map("recipes")
+}
+
+// Supply: toppings, breads, ferments, pickles, sauces. Standard supplies have a
+// per-guest ratio + replenishment; one-offs drip-feed across services until
+// depleted, then auto-archive. preservationMethod is a tag for a future
+// PreservationProject feature (Lacto ferment / Sugar preservation / etc.) — see
+// the planning doc; out of scope for this PR.
+model Supply {
+  id                 String   @id
+  name               String
+  kind               String   // 'standard' | 'oneoff'
+  unit               String   // 'g' | 'pieces' | 'jars' | 'ml' | ...
+  recipeId           String?  @map("recipe_id")
+  recipe             Recipe?  @relation("SupplyRecipe", fields: [recipeId], references: [id])
+
+  // standard-only fields (null for oneoff)
+  guestsPerUnit      Float?   @map("guests_per_unit")  // guests served by one unit (e.g. 10 = 1 box per 10 guests)
+  prepHorizonDays    Int?     @map("prep_horizon_days")
+  prepMode           String?  @map("prep_mode")  // 'centralized' | 'per-location'
+
+  // oneoff-only fields (null for standard)
+  oneoffLocation     String?  @map("oneoff_location")  // 'west' | 'centraal'
+  unitsPerService    Float?   @map("units_per_service")
+  oneoffStartDate    String?  @map("oneoff_start_date")  // ISO 'YYYY-MM-DD'
+
+  stock              Json     @default("{}")  // { west: { amount, lastMakeDate }, centraal: { amount, lastMakeDate } }
+  costPerUnit        Float?   @map("cost_per_unit")  // € per unit; drives price-per-guest = costPerUnit / guestsPerUnit
+  preservationMethod String?  @map("preservation_method")
+  archived           Boolean  @default(false)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@index([archived])
+  @@index([kind])
+  @@map("supplies")
 }
 
 model RecipeIngredientRow {

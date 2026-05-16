@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { PrismaClient, Prisma } from '@prisma/client';
-import type { Batch, GuestsData, Catering, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient, Ingredient, InventoryEntry, Shipment } from '../shared/types';
+import type { Batch, GuestsData, Catering, CateringTopping, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient, Ingredient, InventoryEntry, Shipment, Supply, SupplyKind, SupplyPrepMode, SupplyStock } from '../shared/types';
 import { toGrams } from '../shared/units';
 import { flexPricePer100g } from '../shared/recipe-cost';
 
@@ -14,7 +14,13 @@ type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transa
 
 // ── Validation ──
 
+// Batch types — the soup/main/dessert chips on the planner. Toppings & bread
+// are deliberately NOT here: they are Supplies, not day-assigned batches.
 const VALID_TYPES = ['Soup', 'Main course', 'Dessert'];
+// Recipe types — a superset. The recipe library also categorises Topping &
+// Bread recipes (which feed Supplies, not the planner). Keeping these out of
+// VALID_TYPES means a topping recipe can never be created as a planner batch.
+const VALID_RECIPE_TYPES = [...VALID_TYPES, 'Topping', 'Bread'];
 const VALID_STORAGE = ['Gastro', 'Frozen', 'Vac-packed'];
 const VALID_LOCATIONS = ['west', 'centraal'];
 const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -134,6 +140,16 @@ export function validateCatering(c: Catering, prefix = ''): string | null {
     if (typeof d.type !== 'string') return `${p}dish has invalid type`;
   }
   if (typeof c.logisticsNotes !== 'string' || c.logisticsNotes.length > 5000) return `${p}invalid logisticsNotes`;
+  if (c.toppings !== undefined) {
+    if (!Array.isArray(c.toppings)) return `${p}toppings must be an array`;
+    if (c.toppings.length > 100) return `${p}too many toppings (max 100)`;
+    for (let i = 0; i < c.toppings.length; i++) {
+      const t = c.toppings[i];
+      if (!t || typeof t !== 'object') return `${p}topping ${i}: invalid`;
+      if (typeof t.supplyId !== 'string' || !VALID_ID_PATTERN.test(t.supplyId)) return `${p}topping ${i}: invalid supplyId`;
+      if (typeof t.amount !== 'number' || !Number.isFinite(t.amount) || t.amount < 0 || t.amount > 1_000_000) return `${p}topping ${i}: invalid amount`;
+    }
+  }
   return null;
 }
 
@@ -370,6 +386,7 @@ function toCateringRow(c: Catering) {
     guestCount: c.guestCount || 0,
     deliveryMode: c.deliveryMode || 'pickup',
     dishes: (c.dishes || []) as unknown as Prisma.InputJsonValue,
+    toppings: (c.toppings || []) as unknown as Prisma.InputJsonValue,
     logisticsNotes: c.logisticsNotes || '',
     createdAt: c.createdAt || new Date().toISOString(),
   };
@@ -419,13 +436,14 @@ export async function dbReadAll(): Promise<DataResponse> {
   // install. Throw instead, asyncHandler routes to the global 500 handler,
   // and the frontend's apiGet shows the persistent error banner via
   // showDataError (public/js/utils.ts).
-  const [batchRows, guestRows, cateringRows, transportRows, recipeV2Rows] = await Promise.all([
+  const [batchRows, guestRows, cateringRows, transportRows, recipeV2Rows, supplyRows] = await Promise.all([
     prisma.batch.findMany(),
     prisma.guest.findMany(),
     // Legacy recipeIndex table kept in DB as backup but no longer served to frontend
     prisma.catering.findMany(),
     prisma.transportItem.findMany(),
     prisma.recipe.findMany({ include: { ingredients: { orderBy: { sortOrder: 'asc' } } } }),
+    prisma.supply.findMany({ orderBy: [{ archived: 'asc' }, { name: 'asc' }] }),
   ]);
 
   const batches: Batch[] = batchRows.map(b => mapBatchRow(b));
@@ -445,6 +463,7 @@ export async function dbReadAll(): Promise<DataResponse> {
     guestCount: c.guestCount,
     deliveryMode: c.deliveryMode,
     dishes: (c.dishes ?? []) as unknown as Catering['dishes'],
+    toppings: ((c as { toppings?: unknown }).toppings ?? []) as unknown as CateringTopping[],
     logisticsNotes: c.logisticsNotes,
   }));
 
@@ -455,7 +474,56 @@ export async function dbReadAll(): Promise<DataResponse> {
   // has usable display data (otherwise batch recipe editor shows "Unknown").
   await denormalizeRecipeIngredients(recipes);
 
-  return { batches, guests, recipes, caterings, transportItems };
+  const supplies: Supply[] = supplyRows.map(toSupply);
+
+  return { batches, guests, recipes, caterings, transportItems, supplies };
+}
+
+function normalizeSupplyStock(raw: Prisma.JsonValue): SupplyStock {
+  const out: SupplyStock = {
+    west: { amount: 0, lastMakeDate: null },
+    centraal: { amount: 0, lastMakeDate: null },
+  };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const r = raw as Record<string, unknown>;
+  for (const loc of ['west', 'centraal']) {
+    const e = r[loc];
+    if (e && typeof e === 'object' && !Array.isArray(e)) {
+      const entry = e as Record<string, unknown>;
+      const amount = typeof entry.amount === 'number' ? entry.amount : Number(entry.amount) || 0;
+      const lastMakeDate = typeof entry.lastMakeDate === 'string' ? entry.lastMakeDate : null;
+      out[loc] = { amount: Math.max(0, amount), lastMakeDate };
+    }
+  }
+  return out;
+}
+
+export function toSupply(row: {
+  id: string; name: string; kind: string; unit: string; recipeId: string | null;
+  guestsPerUnit: number | null; prepHorizonDays: number | null; prepMode: string | null;
+  oneoffLocation: string | null; unitsPerService: number | null; oneoffStartDate: string | null;
+  stock: Prisma.JsonValue; costPerUnit: number | null; preservationMethod: string | null; archived: boolean;
+  createdAt: Date; updatedAt: Date;
+}): Supply {
+  return {
+    id: row.id,
+    name: row.name,
+    kind: row.kind as SupplyKind,
+    unit: row.unit,
+    recipeId: row.recipeId,
+    guestsPerUnit: row.guestsPerUnit,
+    prepHorizonDays: row.prepHorizonDays,
+    prepMode: row.prepMode as SupplyPrepMode | null,
+    oneoffLocation: row.oneoffLocation as Supply['oneoffLocation'],
+    unitsPerService: row.unitsPerService,
+    oneoffStartDate: row.oneoffStartDate,
+    stock: normalizeSupplyStock(row.stock),
+    costPerUnit: row.costPerUnit,
+    preservationMethod: row.preservationMethod,
+    archived: row.archived,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
 }
 
 export async function dbWriteAll(batches: Batch[], guests: GuestsData, caterings: Catering[], transportItems: TransportItem[]): Promise<void> {
@@ -621,6 +689,9 @@ export function toRecipeFull(r: NonNullable<RecipeWithIngredients>): RecipeFull 
     servingTemp: r.servingTemp,
     servingSize: r.servingSize,
     recipeVolume: r.recipeVolume,
+    yieldType: (r.yieldType === 'count' ? 'count' : 'volume'),
+    outputCount: r.outputCount,
+    outputUnit: r.outputUnit,
     autoAllergens: r.autoAllergens,
     extraAllergens: r.extraAllergens,
     costPerServing: r.costPerServing,
@@ -717,7 +788,8 @@ export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> 
       .map(i => i.ingredientId!),
   ));
 
-  if (linkedIds.length === 0 || !recipe.recipeVolume) {
+  const isCount = recipe.yieldType === 'count' && !!recipe.outputCount && recipe.outputCount > 0;
+  if (linkedIds.length === 0 || (!isCount && !recipe.recipeVolume)) {
     // Nothing to hydrate beyond what's already on the row
     return;
   }
@@ -744,8 +816,11 @@ export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> 
     ing.costPer100 = dbIng.pricePer100 || 0;
   }
 
-  // Compute cost and nutrition from the same map
-  const baseServings = (recipe.recipeVolume * 1000) / recipe.servingSize;
+  // Compute cost and nutrition from the same map. Count recipes (toppings &
+  // bread) divide by outputCount → cost/nutrition per output unit.
+  const baseServings = isCount
+    ? recipe.outputCount!
+    : (recipe.recipeVolume! * 1000) / recipe.servingSize;
   if (baseServings <= 0) return;
 
   let totalCost = 0;
@@ -800,14 +875,22 @@ export async function hydrateRecipeForDetail(recipe: RecipeFull): Promise<void> 
   }
 }
 
-/** Compute cost per serving from ingredient prices and amounts */
+/**
+ * Compute cost per yield-unit from ingredient prices and amounts.
+ * - Volume recipes (default): cost per `servingSize`-ml serving.
+ * - Count recipes (toppings & bread): cost per output unit — total ÷ outputCount.
+ */
 export async function calcRecipeCost(
   ingredients: Array<{ ingredientId: string | null; rawAmount: number; unit: string; isFlexible: boolean; flexLabel?: string | null }>,
   servingSize: number,
   recipeVolume: number | null,
+  yieldType?: string | null,
+  outputCount?: number | null,
 ): Promise<number | null> {
+  const isCount = yieldType === 'count' && !!outputCount && outputCount > 0;
   const linkedIds = ingredients.filter(i => i.ingredientId && !i.isFlexible).map(i => i.ingredientId!);
-  if (linkedIds.length === 0 || !recipeVolume) return null;
+  if (linkedIds.length === 0) return null;
+  if (!isCount && !recipeVolume) return null;
 
   const dbIngredients = await prisma.ingredient.findMany({
     where: { id: { in: linkedIds } },
@@ -815,7 +898,7 @@ export async function calcRecipeCost(
   });
   const priceMap = new Map(dbIngredients.map(i => [i.id, i.pricePer100 || 0]));
 
-  const baseServings = (recipeVolume * 1000) / servingSize;
+  const baseServings = isCount ? outputCount! : (recipeVolume! * 1000) / servingSize;
   if (baseServings <= 0) return null;
 
   let totalCost = 0;
@@ -901,15 +984,27 @@ export function validateRecipe(r: {
   type?: string;
   servingSize?: number;
   recipeVolume?: number | null;
+  yieldType?: unknown;
+  outputCount?: unknown;
+  outputUnit?: unknown;
   ingredients?: Array<{ id?: unknown; rawAmount?: unknown; cookedAmount?: unknown; unit?: unknown; ingredientId?: unknown; isFlexible?: unknown }>;
   extraAllergens?: unknown;
   prepSteps?: Array<{ step?: unknown; text?: unknown }>;
 }): string | null {
   if (r.id !== undefined && r.id !== null && (typeof r.id !== 'string' || !VALID_ID_PATTERN.test(r.id))) return 'invalid id';
   if (!r.name || typeof r.name !== 'string' || r.name.length > 200) return 'invalid name';
-  if (r.type && !VALID_TYPES.includes(r.type)) return `invalid type "${r.type}"`;
+  if (r.type && !VALID_RECIPE_TYPES.includes(r.type)) return `invalid type "${r.type}"`;
   if (r.servingSize !== undefined && (typeof r.servingSize !== 'number' || r.servingSize < 1 || r.servingSize > 9999)) return 'invalid servingSize';
   if (r.recipeVolume !== undefined && r.recipeVolume !== null && (typeof r.recipeVolume !== 'number' || r.recipeVolume < 0 || r.recipeVolume > 9999)) return 'invalid recipeVolume';
+  if (r.yieldType !== undefined && r.yieldType !== null && r.yieldType !== 'volume' && r.yieldType !== 'count') return 'invalid yieldType';
+  if (r.outputCount !== undefined && r.outputCount !== null && (typeof r.outputCount !== 'number' || r.outputCount <= 0 || r.outputCount > 100000)) return 'invalid outputCount';
+  if (r.outputUnit !== undefined && r.outputUnit !== null && (typeof r.outputUnit !== 'string' || r.outputUnit.length > 50)) return 'invalid outputUnit';
+  // Count-mode recipes must carry a usable yield — outputCount drives both the
+  // count-aware cost engine and the editor's scaling.
+  if (r.yieldType === 'count') {
+    if (typeof r.outputCount !== 'number' || r.outputCount <= 0) return 'count recipes require a positive outputCount';
+    if (typeof r.outputUnit !== 'string' || r.outputUnit.trim().length === 0) return 'count recipes require an outputUnit';
+  }
   if (r.extraAllergens !== undefined) {
     if (!Array.isArray(r.extraAllergens)) return 'extraAllergens must be an array';
     if (r.extraAllergens.length > 50) return 'too many extraAllergens';
@@ -956,7 +1051,7 @@ export async function recalcRecipeCostsForIngredient(ingredientId: string): Prom
 
   let updated = 0;
   for (const r of recipes) {
-    const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume);
+    const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume, r.yieldType, r.outputCount);
     if (cost !== r.costPerServing) {
       await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
       updated++;
@@ -997,9 +1092,10 @@ export async function recalcAllRecipeCosts(): Promise<number> {
   let updated = 0;
   for (const r of recipes) {
     const linkedRows = r.ingredients.filter(i => i.ingredientId && !i.isFlexible);
+    const isCount = r.yieldType === 'count' && !!r.outputCount && r.outputCount > 0;
     let newCost: number | null = null;
-    if (linkedRows.length > 0 && r.recipeVolume) {
-      const baseServings = (r.recipeVolume * 1000) / r.servingSize;
+    if (linkedRows.length > 0 && (isCount || r.recipeVolume)) {
+      const baseServings = isCount ? r.outputCount! : (r.recipeVolume! * 1000) / r.servingSize;
       if (baseServings > 0) {
         let totalCost = 0;
         for (const ing of r.ingredients) {

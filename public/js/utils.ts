@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, RecipeFull, Ingredient, StorageConfig } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
@@ -256,6 +256,7 @@ export async function loadData(): Promise<void> {
     if (data.batches) S.batches = data.batches;
     if (data.caterings) S.caterings = data.caterings;
     if (data.transportItems) S.transportItems = data.transportItems;
+    if (data.supplies) S.supplies = data.supplies;
     takeSnapshot();
     rebuildPlanner();
     // Cold loaders (ingredient DB, storage config, kitchen equipment, guest
@@ -606,6 +607,8 @@ interface RemotePatchMessage {
   deletedRecipes?: string[];
   ingredients?: Ingredient[];
   deletedIngredients?: string[];
+  supplies?: Supply[];
+  deletedSupplies?: string[];
   // Full-replace resources
   storageConfig?: StorageConfig;
   kitchenEquipment?: KitchenEquipment;
@@ -648,6 +651,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           transportItems, deletedTransportItems,
           recipes, deletedRecipes,
           ingredients, deletedIngredients,
+          supplies, deletedSupplies,
           storageConfig, kitchenEquipment,
           prepChecklist, inventoryCompletion,
           guestsNextWeeks,
@@ -724,6 +728,15 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     S.ingredientDb = [...ingMap.values()];
     invalidateCategoryCache();
     window.dispatchEvent(new CustomEvent('ingredientDbReady'));
+    changed = true;
+  }
+
+  // Merge supplies (item-delta by id) — toppings/bread CRUD + prep/stock events
+  if ((supplies && supplies.length) || (deletedSupplies && deletedSupplies.length)) {
+    const supplyMap = new Map((S.supplies || []).map((s: Supply) => [s.id, s]));
+    if (deletedSupplies) deletedSupplies.forEach((id: string) => supplyMap.delete(id));
+    if (supplies) supplies.forEach((s: Supply) => supplyMap.set(s.id, s));
+    S.supplies = [...supplyMap.values()];
     changed = true;
   }
 

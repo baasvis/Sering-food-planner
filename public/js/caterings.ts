@@ -243,11 +243,66 @@ export function openEditCatering(id: any) {
       <div id="ct-dish-list">${renderCateringDishList(c)}</div>
       <button class="btn btn-sm" style="margin-top:6px;" onclick="openAddCateringDish('${id}')">+ Add batch</button>
     </div>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+      <label style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:6px;display:block;">Toppings &amp; bread</label>
+      <div id="ct-topping-list">${renderCateringToppingList(c)}</div>
+      <div style="display:flex;gap:6px;margin-top:6px;align-items:center;">
+        <select id="ct-topping-pick" style="flex:1;font-size:12px;padding:4px;">${cateringToppingOptions(c)}</select>
+        <input type="number" min="0" step="1" id="ct-topping-amount" placeholder="amount" style="width:90px;font-size:12px;padding:4px;" />
+        <button class="btn btn-sm" onclick="addCateringTopping('${id}')">+ Add</button>
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-danger btn-sm" onclick="deleteCatering('${id}')">Delete</button>
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" onclick="saveEditCatering('${id}')">Save</button>
     </div>`);
+}
+
+export function renderCateringToppingList(c: any): string {
+  const toppings = (c?.toppings || []) as Array<{ supplyId: string; amount: number }>;
+  if (!toppings.length) return '<div style="font-size:12px;color:var(--text3);">No toppings yet</div>';
+  return toppings.map((t, i) => {
+    const sup = (S.supplies || []).find(s => s.id === t.supplyId);
+    // Dangling ref — the supply was deleted/archived after being added here.
+    // Flag it clearly so the cook removes it; demand calc silently skips it.
+    const nameCell = sup
+      ? `<span style="flex:1;">${esc(sup.name)}</span><span style="color:var(--text2);">${t.amount} ${esc(sup.unit)}</span>`
+      : `<span style="flex:1;color:var(--red);">&#9888; Deleted topping &mdash; remove this row</span><span style="color:var(--text3);">${t.amount}</span>`;
+    return `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:13px;">
+      ${nameCell}
+      <button class="btn btn-sm btn-danger" onclick="removeCateringTopping('${c.id}',${i})">&times;</button>
+    </div>`;
+  }).join('');
+}
+
+export function cateringToppingOptions(c: any): string {
+  const used = new Set(((c?.toppings || []) as Array<{ supplyId: string }>).map(t => t.supplyId));
+  const opts = (S.supplies || []).filter(s => !s.archived && !used.has(s.id));
+  if (opts.length === 0) return '<option value="">— no toppings or bread available —</option>';
+  return '<option value="">— pick an item —</option>' +
+    opts.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.unit)})</option>`).join('');
+}
+
+export function addCateringTopping(cateringId: any): void {
+  const c = S.caterings.find(x => x.id === cateringId);
+  if (!c) return;
+  const supplyId = (document.getElementById('ct-topping-pick') as HTMLSelectElement).value;
+  const amount = parseFloat((document.getElementById('ct-topping-amount') as HTMLInputElement).value);
+  if (!supplyId) { alert('Pick an item'); return; }
+  if (!Number.isFinite(amount) || amount <= 0) { alert('Enter a positive amount'); return; }
+  if (!c.toppings) c.toppings = [];
+  c.toppings.push({ supplyId, amount });
+  scheduleSave();
+  openEditCatering(cateringId);
+}
+
+export function removeCateringTopping(cateringId: any, index: any): void {
+  const c = S.caterings.find(x => x.id === cateringId);
+  if (!c || !c.toppings) return;
+  c.toppings.splice(index, 1);
+  scheduleSave();
+  openEditCatering(cateringId);
 }
 
 export function renderCateringDishList(c: any) {

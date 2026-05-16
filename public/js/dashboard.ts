@@ -1,4 +1,4 @@
-import type { Batch, Location, Meal, DishType } from '@shared/types';
+import type { Batch, Location, Meal, DishType, Supply } from '@shared/types';
 import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS } from './state';
 
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
@@ -19,6 +19,7 @@ import { getStorageConfigForLoc } from './state';
 import { locName } from '@shared/location';
 import { renderTransportCard, renderCentraalArrivalBlock } from './transport-card';
 import { openBatchRecipe } from './recipe-editor';
+import { computeSupplyDemand, supplyPricePerGuest } from '@shared/supply-demand';
 
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
@@ -924,6 +925,68 @@ function _startFreshnessTick() {
 
 // ── MAIN CONTENT RENDER ──────────────────────────────────────
 
+// Compact "Supplies" card on the dashboard. Shows non-archived supplies with
+// per-location stock vs forward demand at the current dashboard location;
+// flags deficits so the user can spot under-stocked toppings/bread/ferments
+// at a glance. Active one-offs at this location are shown with their drip-feed
+// amount instead of a deficit bar.
+function renderSuppliesCard(loc: Location, todayStr: string): string {
+  const supplies = (S.supplies || []).filter(s => !s.archived);
+  if (supplies.length === 0) {
+    return ''; // hide entirely until at least one supply exists
+  }
+  const rows = supplies.map(s => {
+    const stockHere = s.stock?.[loc]?.amount ?? 0;
+    const lastMake = s.stock?.[loc]?.lastMakeDate;
+    if (s.kind === 'standard') {
+      const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+      const need = loc === 'west' ? demand.west : demand.centraal;
+      // Centralized supplies only prep at West; show West demand at both locations
+      // so cooks can see "we need 5kg aioli" regardless of which dashboard they're on
+      const showNeed = s.prepMode === 'centralized' ? demand.west : need;
+      const deficit = Math.max(0, Math.round(showNeed - stockHere));
+      const color = deficit > 0 ? 'var(--red)' : 'var(--text2)';
+      return `<div class="dash-supply-row" style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);">
+        <span>${esc(s.name)}${s.prepMode === 'centralized' && loc !== 'west' ? ' <span style="font-size:10px;color:var(--text3);">(from West)</span>' : ''}</span>
+        <span style="font-size:12px;color:${color};">
+          ${stockHere} / ${Math.round(showNeed)} ${esc(s.unit)}
+          ${deficit > 0 ? ` <strong>−${deficit}</strong>` : ''}
+          ${lastMake ? `<span style="font-size:10px;color:var(--text3);"> · ${lastMake}</span>` : ''}
+        </span>
+      </div>`;
+    }
+    // one-off
+    if (s.oneoffLocation !== loc) return '';
+    return `<div class="dash-supply-row" style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);">
+      <span>${esc(s.name)} <span style="font-size:10px;color:var(--text3);">(one-off)</span></span>
+      <span style="font-size:12px;color:var(--text2);">${stockHere} ${esc(s.unit)} left · ${s.unitsPerService}/service</span>
+    </div>`;
+  }).filter(Boolean).join('');
+  if (!rows) return '';
+  // Per-cover cost: sum of price-per-guest across standard supplies that have
+  // a cost set. Shows what toppings & bread add to each guest's food cost.
+  let costPerGuest = 0;
+  let costedCount = 0;
+  for (const s of supplies) {
+    const ppg = supplyPricePerGuest(s);
+    if (ppg != null) { costPerGuest += ppg; costedCount++; }
+  }
+  const costFooter = costedCount > 0
+    ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border);font-size:12px;color:var(--text2);display:flex;justify-content:space-between;">
+        <span>Toppings &amp; bread per guest</span>
+        <strong>&euro;${costPerGuest.toFixed(2)}</strong>
+      </div>`
+    : '';
+  return `<div class="dash-card">
+    <div class="dash-card-title">
+      <span class="dash-card-icon">🥬</span> Toppings &amp; bread
+      <button class="btn btn-sm" style="margin-left:auto;" onclick="showScreen('supplies')">Manage</button>
+    </div>
+    <div style="margin-top:6px;">${rows}</div>
+    ${costFooter}
+  </div>`;
+}
+
 export function renderDashboardContent() {
   _startFreshnessTick();
   const el = document.getElementById('dash-content');
@@ -1059,6 +1122,7 @@ export function renderDashboardContent() {
               })()
           }
         </div>
+        ${renderSuppliesCard(loc, todayStr)}
         ${renderTransportCard()}
       </div>
 
@@ -1120,6 +1184,27 @@ export function renderDashboardContent() {
 
 // ── Prep checklist render (partial) ──────────────────────────
 
+/** Standard supplies whose stock at `loc` is below forward demand — surfaced
+ *  as "Make X of Y" tasks in the prep checklist. Centralized supplies are
+ *  prepped at West only, so they appear on the West checklist regardless of
+ *  which location the dashboard is showing. */
+interface SupplyPrepTask { supply: Supply; make: number; have: number; need: number; }
+function computeSupplyPrepTasks(loc: Location, todayStr: string): SupplyPrepTask[] {
+  const tasks: SupplyPrepTask[] = [];
+  for (const s of (S.supplies || [])) {
+    if (s.archived || s.kind !== 'standard') continue;
+    if (s.prepMode === 'centralized' && loc !== 'west') continue;
+    const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+    const need = s.prepMode === 'centralized'
+      ? demand.west
+      : (loc === 'centraal' ? demand.centraal : demand.west);
+    const have = s.stock?.[loc]?.amount ?? 0;
+    const make = need - have;
+    if (make > 0.0001) tasks.push({ supply: s, make, have, need });
+  }
+  return tasks;
+}
+
 export function renderPrepChecklist() {
   const el = document.getElementById('dash-prep-list');
   if (!el) return;
@@ -1139,8 +1224,9 @@ export function renderPrepChecklist() {
   const prepToday = vegToday.map(i => ({ ...i, dayTag: 'today', key: `today-${i.name.toLowerCase().trim()}` }));
   const prepTomorrow = vegTomorrow.map(i => ({ ...i, dayTag: 'tomorrow', key: `tomorrow-${i.name.toLowerCase().trim()}` }));
   const checkedSet = S.prepChecklist[loc] || new Set();
+  const supplyTasks = computeSupplyPrepTasks(loc, todayStr);
 
-  if (prepToday.length === 0 && prepTomorrow.length === 0) {
+  if (prepToday.length === 0 && prepTomorrow.length === 0 && supplyTasks.length === 0) {
     el.innerHTML = `<div class="dash-empty">No fresh ingredients to prep 🎉</div>`;
     return;
   }
@@ -1175,6 +1261,23 @@ export function renderPrepChecklist() {
       <span class="dash-prep-group-count">${doneCt}/${tomorrowItems.length}</span>
     </div>`;
     html += tomorrowItems.map(renderItem).join('');
+  }
+  // Toppings & bread to make — standard supplies under their forward demand.
+  if (supplyTasks.length > 0) {
+    html += `<div class="dash-prep-group-hdr"${(todayItems.length || tomorrowItems.length) ? ' style="margin-top:8px;"' : ''}>
+      🥬 Toppings &amp; bread to make
+      <span class="dash-prep-group-count">${supplyTasks.length}</span>
+    </div>`;
+    html += supplyTasks.map(t => {
+      const make = Math.ceil(t.make);
+      const unit = esc(t.supply.unit);
+      return `
+      <div class="dash-prep-item dash-prep-supply">
+        <span class="dash-prep-name">Make ${esc(t.supply.name)}</span>
+        <span class="dash-prep-amt">~${make} ${unit} <span style="color:var(--text3);">(have ${Math.round(t.have)})</span></span>
+        <button class="btn btn-sm" onclick="suppliesOpenLogPrep('${esc(t.supply.id)}',${make},'${loc}')">Log prep</button>
+      </div>`;
+    }).join('');
   }
   el.innerHTML = html;
 }

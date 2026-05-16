@@ -1,6 +1,7 @@
-import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, Meal, Service, StorageType } from '@shared/types';
+import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, Meal, Service, StorageType, Supply } from '@shared/types';
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
-import { newId, scheduleSave, toast, toastError, apiPost } from './utils';
+import { newId, scheduleSave, toast, toastError, apiPost, todayIso } from './utils';
+import { computeSupplyDemand } from '@shared/supply-demand';
 import { rebuildPlanner, isBatchCooked, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
@@ -1199,8 +1200,14 @@ let _invMode: 'loc-scoped' | 'power' = 'loc-scoped';
 // refresh the open modal so its embedded row indices never go stale.
 let _lastInventoryLoc = 'west';
 
+// Pending supply (toppings & bread) counts entered during the inventory pass.
+// supplyId → counted amount at the modal's location. Flushed to
+// POST /api/supplies/:id/stock on "Finish inventory"; cleared on open/cancel.
+const _supplyInvEdits = new Map<string, number>();
+
 export function openInventory(loc: string) {
   _invMode = 'loc-scoped';
+  _supplyInvEdits.clear();
   renderInventoryModal(loc);
 }
 
@@ -1299,10 +1306,60 @@ export function refreshInventoryModalIfOpen(): void {
   }
 }
 
+/** Non-archived supplies counted during a `loc` inventory pass: standard
+ *  supplies appear at every location; one-offs only at their own location. */
+function suppliesForInventory(loc: string): Supply[] {
+  return (S.supplies || []).filter(s => {
+    if (s.archived) return false;
+    if (s.kind === 'oneoff') return s.oneoffLocation === loc;
+    return true;
+  });
+}
+
+/** "Toppings & bread" section of the Do-inventory modal — counted in the same
+ *  pass as cooked batches. Each row pre-fills with the last known stock at
+ *  `loc`; edits land in _supplyInvEdits and flush on "Finish inventory". */
+function renderSuppliesInvSection(loc: string): string {
+  const supplies = suppliesForInventory(loc);
+  if (supplies.length === 0) return '';
+  const todayStr = todayIso();
+  let html = `<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--green);padding:12px 0 4px;border-bottom:2px solid var(--green);margin-top:8px;">Toppings &amp; bread</div>`;
+  for (const s of supplies) {
+    const current = s.stock?.[loc]?.amount ?? 0;
+    const pending = _supplyInvEdits.get(s.id);
+    const shown = pending !== undefined ? pending : current;
+    let hint = '';
+    if (s.kind === 'standard') {
+      const d = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+      const need = s.prepMode === 'centralized' ? d.west : (loc === 'centraal' ? d.centraal : d.west);
+      if (need > 0) hint = `<span style="font-size:11px;color:var(--text2);">need ~${Math.ceil(need)}</span>`;
+    }
+    html += `<div class="inv-row" data-supply="${esc(s.id)}">
+      <div class="inv-name">
+        <span style="font-weight:500;">${esc(s.name)}</span>
+        <span class="badge" style="font-size:10px;">${esc(s.unit)}</span>
+        ${hint}
+      </div>
+      <div class="inv-controls">
+        <label style="font-size:11px;color:var(--text2);">Count here</label>
+        <input type="number" class="inv-stock-input" value="${shown}" step="0.5" min="0" onchange="updateSupplyInvCount('${esc(s.id)}',this.value)" />
+      </div>
+    </div>`;
+  }
+  return html;
+}
+
+/** Record a supply count from the inventory pass (pending until "Finish"). */
+export function updateSupplyInvCount(supplyId: string, valueStr: string): void {
+  const n = parseFloat(valueStr);
+  if (Number.isFinite(n) && n >= 0) _supplyInvEdits.set(supplyId, n);
+}
+
 function renderLocScopedInventory(loc: string, locLabel: string, modeToggle: string) {
   const rows = buildLocScopedRows(loc as Location);
+  const suppliesSection = renderSuppliesInvSection(loc);
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && !suppliesSection) {
     showModal(`<h3>Inventory — ${locLabel}${modeToggle}</h3>
       <div class="empty" style="margin:20px 0;">No cooked stock at ${locLabel}.</div>
       <div class="modal-actions">
@@ -1367,6 +1424,8 @@ function renderLocScopedInventory(loc: string, locLabel: string, modeToggle: str
       html += renderRow(r);
     });
   }
+
+  html += suppliesSection;
 
   html += `</div>`;
   html += `<div class="modal-actions">
@@ -1613,6 +1672,27 @@ export function finishInventory(loc: string) {
     S.inventoryCompletions[loc as Location][st.window] = new Date().toISOString();
   }
   S._inventoryLoc = null;
+
+  // Flush toppings & bread counts entered during this inventory pass.
+  // Supplies persist via their own endpoint, not the batch /patch flow.
+  if (_supplyInvEdits.size > 0) {
+    const edits = [..._supplyInvEdits.entries()];
+    _supplyInvEdits.clear();
+    for (const [supplyId, amount] of edits) {
+      apiPost(`/api/supplies/${encodeURIComponent(supplyId)}/stock`, { location: loc, amount })
+        .then((updated: Supply) => {
+          if (!updated || !updated.id) return;
+          const i = (S.supplies || []).findIndex(x => x.id === supplyId);
+          if (i >= 0) S.supplies[i] = updated;
+          rerenderCurrentView();
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : 'Unknown error';
+          console.warn('Could not save supply stock:', msg);
+        });
+    }
+  }
+
   closeModal();
   rebuildPlanner();
   rerenderCurrentView();

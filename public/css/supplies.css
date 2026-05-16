@@ -1,0 +1,43 @@
+/* ── SUPPLIES SCREEN ──────────────────────────────────────────────────────
+   Toppings, breads, ferments, pickles, sauces. Standard supplies are sized by
+   guests-served-per-unit + horizon; one-offs drip-feed unitsPerService until
+   depleted. See plan + public/js/supplies.ts. */
+
+#screen-supplies .supplies-table th {
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 4px;
+}
+
+#screen-supplies .supplies-table td {
+  padding: 8px 4px;
+  vertical-align: top;
+}
+
+#screen-supplies .supplies-table tr:hover {
+  background: var(--bg2);
+}
+
+#screen-supplies .empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--text3);
+  font-size: 14px;
+}
+
+#screen-supplies .screen-header h2 {
+  font-size: 20px;
+}
+
+/* Inline help text under a supply-form field (modal) */
+.sup-help {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text3);
+  margin-top: 4px;
+}
+.sup-help strong {
+  color: var(--text2);
+}
