@@ -16,7 +16,7 @@ import { S } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './utils';
 import {
   rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName,
-  isServicePast, calcRequired, calcRequiredLive, getGuests, getTotalStock, getStockAt,
+  isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, getGuests, getTotalStock, getStockAt,
   getServeableStockAt, getServeableTotalStock,
   consolidateInventory,
 } from './core';
@@ -154,12 +154,12 @@ export function findOrphanPlaceholders(batches: Batch[]): Batch[] {
 }
 
 /**
- * Spent batches: total stock = 0, no pending shipments, all services in
- * the past. These are real cooked batches whose food has been served —
- * dead historical records cluttering the planner. Auto-retire makes the
- * cleanup self-healing: even if SSE resurrects them, the next run wipes
- * them. The pending-shipment guard prevents retirement of a batch whose
- * stock has been packed but not yet arrived (the food is still coming).
+ * Spent batches: total stock = 0, no pending shipments, and every service
+ * dated strictly before today (isServiceDatePast — a date-only check, so a
+ * batch still scheduled for today is never auto-retired, even right after
+ * inventory has been marked done). Auto-retire keeps the planner clear of
+ * dead past records; the pending-shipment guard protects food that's been
+ * packed but is still in transit.
  */
 export function findSpentBatches(batches: Batch[]): Batch[] {
   return batches.filter(b =>
@@ -167,7 +167,7 @@ export function findSpentBatches(batches: Batch[]): Batch[] {
     && getTotalStock(b) === 0
     && (b.shipments || []).every(s => s.arrived)
     && b.services && b.services.length > 0
-    && b.services.every(s => isServicePast(s))
+    && b.services.every(s => isServiceDatePast(s))
   );
 }
 

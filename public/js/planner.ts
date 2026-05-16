@@ -1195,6 +1195,9 @@ export function getInventoryButton(loc: string) {
 // in place.
 
 let _invMode: 'loc-scoped' | 'power' = 'loc-scoped';
+// Loc the inventory modal was last rendered for — lets a live-sync patch
+// refresh the open modal so its embedded row indices never go stale.
+let _lastInventoryLoc = 'west';
 
 export function openInventory(loc: string) {
   _invMode = 'loc-scoped';
@@ -1269,8 +1272,9 @@ function buildLocScopedRows(loc: Location): LocScopedRow[] {
 }
 
 function renderInventoryModal(loc: string) {
+  _lastInventoryLoc = loc;
   const locLabel = locName(loc);
-  const modeToggle = `<span class="modal-mode-toggle" style="display:inline-flex;gap:4px;margin-left:12px;font-size:12px;">
+  const modeToggle = `<span class="modal-mode-toggle inv-modal-marker" style="display:inline-flex;gap:4px;margin-left:12px;font-size:12px;">
     <button class="btn btn-sm${_invMode === 'loc-scoped' ? ' btn-primary' : ''}" onclick="setInvMode('${loc}','loc-scoped')" title="Show only stock physically at ${locLabel}">${locLabel} only</button>
     <button class="btn btn-sm${_invMode === 'power' ? ' btn-primary' : ''}" onclick="setInvMode('${loc}','power')" title="Show full inventory across all locations">All inventory</button>
   </span>`;
@@ -1279,6 +1283,19 @@ function renderInventoryModal(loc: string) {
     renderLocScopedInventory(loc, locLabel, modeToggle);
   } else {
     renderPowerInventory(loc, locLabel, modeToggle);
+  }
+}
+
+/** Re-render the Do-inventory modal if it is the modal currently on screen.
+ *  Called after a live-sync patch so the modal's embedded row indices are
+ *  rebuilt from fresh state instead of pointing at stale array positions. */
+export function refreshInventoryModalIfOpen(): void {
+  const root = document.getElementById('modal-root');
+  // .inv-modal-marker sits on the mode-toggle, present in every inventory-modal
+  // state (loc-scoped / power, populated / empty) — so an empty modal refreshes
+  // too. Don't use .inv-list: it's absent from the empty state.
+  if (root && root.querySelector('.inv-modal-marker')) {
+    renderInventoryModal(_lastInventoryLoc);
   }
 }
 
@@ -1434,6 +1451,11 @@ export function updateLocScopedQty(id: string, loc: string, storage: string, idx
     renderInventoryModal(loc);
     return;
   }
+  if (Math.round(newTotal * 10) / 10 === 0) {
+    toastError('To mark a batch as finished, use the "Served" button — you can\'t set the count to 0 here.');
+    renderInventoryModal(loc);
+    return;
+  }
   const idxs = idxCsv.split(',').map(s => parseInt(s, 10)).filter(n => !isNaN(n));
   if (idxs.length === 0) return;
   const inv = d.inventory || [];
@@ -1513,6 +1535,11 @@ export function updatePowerEntryQty(id: string, idx: number, valueStr: string, l
   const v = parseFloat(valueStr);
   if (isNaN(v) || v < 0) {
     toastError('Enter a non-negative number');
+    renderInventoryModal(loc);
+    return;
+  }
+  if (Math.round(v * 10) / 10 === 0) {
+    toastError('To mark a batch as finished, use the "Served" button — you can\'t set the count to 0 here.');
     renderInventoryModal(loc);
     return;
   }
