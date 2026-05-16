@@ -10,6 +10,7 @@ const NAV_SCREENS = [
   'planner',
   'recipe-index',
   'orders',
+  'competencies',
   'finance',
   'feedback-admin',
 ] as const;
