@@ -29,6 +29,10 @@ let cEvents: CEvent[] = [];
 let cStationFilter = 'all';
 let cLoaded = false;
 
+// Which view is showing: the grid (home) or a per-person detail drill-down.
+let cView: 'grid' | 'person' = 'grid';
+let cPersonId = '';
+
 // Log modal: the cell tap pre-fills learner + chunk; the teacher is picked
 // inside the modal. Held at module scope so submitCompLog can read it.
 let logLearnerId = '';
@@ -103,7 +107,8 @@ export async function renderCompetencies(): Promise<void> {
 
 function paintComp(): void {
   const el = document.getElementById('screen-competencies');
-  if (el) el.innerHTML = buildCompHtml();
+  if (!el) return;
+  el.innerHTML = cView === 'person' ? buildPersonHtml(cPersonId) : buildCompHtml();
 }
 
 function buildCompHtml(): string {
@@ -151,7 +156,7 @@ function buildGridHtml(visibleChunks: CChunk[]): string {
       const label = last ? esc(fmtDate(last)) : '&mdash;';
       return `<td class="comp-cell ${cls}" data-testid="comp-cell" data-learner="${esc(p.id)}" data-chunk="${esc(c.id)}" title="${esc(p.name)} — ${esc(c.name)}" onclick="openCompLogModal(this.dataset.learner, this.dataset.chunk)">${label}</td>`;
     }).join('');
-    return `<tr><th class="comp-rowhead">${esc(p.name)}</th>${cells}</tr>`;
+    return `<tr><th class="comp-rowhead" data-person="${esc(p.id)}" title="See ${esc(p.name)}'s history" onclick="openCompPerson(this.dataset.person)">${esc(p.name)}</th>${cells}</tr>`;
   }).join('');
   return `
     <div class="comp-grid-wrap">
@@ -185,6 +190,81 @@ function buildLedgerHtml(): string {
 export function setCompStationFilter(value: string): void {
   cStationFilter = value;
   paintComp();
+}
+
+// ── Per-person detail (row-header tap) ──
+
+export function openCompPerson(personId: string): void {
+  cView = 'person';
+  cPersonId = personId;
+  paintComp();
+}
+
+export function compBackToGrid(): void {
+  cView = 'grid';
+  cPersonId = '';
+  paintComp();
+}
+
+// "What chunks has this person had?" — their teaching history grouped by
+// station, plus the chunks they have not had yet (the per-person gap,
+// computed against the chunk library by station).
+function buildPersonHtml(personId: string): string {
+  const person = personById(personId);
+  if (!person) {
+    return `
+      <div class="comp-detail-head">
+        <button class="btn" onclick="compBackToGrid()">&larr; Grid</button>
+      </div>
+      <div class="comp-empty">That person is no longer in the list.</div>`;
+  }
+  // Their teaching events, newest first (date is zero-padded ISO).
+  const myEvents = cEvents
+    .filter(e => e.learnerId === personId)
+    .slice()
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  const hadChunkIds = new Set(myEvents.map(e => e.chunkId));
+  const stations = Array.from(new Set(cChunks.map(c => c.station)));
+
+  const taught = stations.map(station => {
+    const evs = myEvents.filter(e => {
+      const ch = chunkById(e.chunkId);
+      return !!ch && ch.station === station;
+    });
+    if (evs.length === 0) return '';
+    const rows = evs.map(e => {
+      const ch = chunkById(e.chunkId);
+      const teacher = personById(e.teacherId);
+      return `<li class="comp-person-event">
+        <span class="comp-person-chunk">${esc(ch ? ch.name : '?')}</span>
+        <span class="comp-person-by">taught by ${esc(teacher ? teacher.name : '?')}</span>
+        <span class="comp-person-date">${esc(fmtDate(e.date))}</span>
+      </li>`;
+    }).join('');
+    return `<div class="comp-person-station"><h4>${esc(station)}</h4><ul class="comp-person-list">${rows}</ul></div>`;
+  }).join('');
+
+  const gaps = stations.map(station => {
+    const missing = cChunks.filter(c => c.station === station && !hadChunkIds.has(c.id));
+    if (missing.length === 0) return '';
+    const items = missing.map(c => `<li class="comp-person-gap">${esc(c.name)}</li>`).join('');
+    return `<div class="comp-person-station"><h4>${esc(station)}</h4><ul class="comp-person-list">${items}</ul></div>`;
+  }).join('');
+
+  return `
+    <div class="comp-detail-head">
+      <button class="btn" onclick="compBackToGrid()">&larr; Grid</button>
+      <h2>${esc(person.name)}</h2>
+    </div>
+    <div class="comp-person-block">
+      <h3>Taught</h3>
+      ${taught || '<p class="comp-person-empty">No teaching logged yet.</p>'}
+    </div>
+    <div class="comp-person-block">
+      <h3>Not yet</h3>
+      ${gaps || '<p class="comp-person-empty">Has been taught every chunk in the library.</p>'}
+    </div>
+  `;
 }
 
 // ── Log a teaching (cell tap) ──
