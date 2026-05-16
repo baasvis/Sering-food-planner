@@ -23,6 +23,12 @@ export function setOnBatchesChanged(fn: () => void) { _onBatchesChanged = fn; }
 let _flushUndo: (() => void) | null = null;
 export function setFlushUndo(fn: () => void) { _flushUndo = fn; }
 
+// Callback fired after a remote SSE patch is applied — refreshes an open
+// inventory modal so its embedded row indices don't go stale. Registered by
+// main.ts to avoid a utils → planner circular import.
+let _onRemotePatchApplied: (() => void) | null = null;
+export function setOnRemotePatchApplied(fn: () => void) { _onRemotePatchApplied = fn; }
+
 // Callback to load the full (rich) ingredient shape (avoids circular import with ingredient-db.ts).
 // Used by the bulk-reload path: when the user has the rich shape loaded, we
 // must re-fetch with the rich shape so priceHistory/nutrition/pricePer100g
@@ -175,12 +181,32 @@ export async function doSave(): Promise<void> {
   if (saveState === 'saving') return;
   const patch = computePatch();
   if (patchIsEmpty(patch)) { setSaveState('saved'); return; }
+  // Snapshot exactly what is being sent — BEFORE the await — so an edit typed
+  // while this save is in flight stays dirty and is sent on the next save.
+  // (The old code ran takeSnapshot() AFTER the await, rebuilding the snapshot
+  // from live state and silently absorbing mid-save edits.)
+  const sentBatches = (patch.batches || []).map(b => [b.id, JSON.stringify(b)] as const);
+  const sentDeletedBatches = [...(patch.deletedBatches || [])];
+  const sentGuests = patch.guests ? JSON.stringify(patch.guests) : null;
+  const sentCaterings = (patch.caterings || []).map(c => [c.id, JSON.stringify(c)] as const);
+  const sentDeletedCaterings = [...(patch.deletedCaterings || [])];
+  const sentTransport = (patch.transportItems || []).map(t => [t.id, JSON.stringify(t)] as const);
+  const sentDeletedTransport = [...(patch.deletedTransportItems || [])];
   setSaveState('saving');
   try {
     const result = await apiPost('/api/data/patch', patch);
-    takeSnapshot();
-    setSaveState('saved', 'Saved');
+    // Apply ONLY what was sent to the save snapshot — never the live state.
+    for (const [id, json] of sentBatches) _lastSaved.batches.set(id, json);
+    for (const id of sentDeletedBatches) _lastSaved.batches.delete(id);
+    if (sentGuests !== null) _lastSaved.guests = sentGuests;
+    for (const [id, json] of sentCaterings) _lastSaved.caterings.set(id, json);
+    for (const id of sentDeletedCaterings) _lastSaved.caterings.delete(id);
+    for (const [id, json] of sentTransport) _lastSaved.transportItems.set(id, json);
+    for (const id of sentDeletedTransport) _lastSaved.transportItems.delete(id);
     retryCount = 0;
+    // If an edit landed during the in-flight save, computePatch() now still
+    // sees it — keep the indicator honest instead of flashing "Saved".
+    setSaveState(patchIsEmpty(computePatch()) ? 'saved' : 'unsaved');
     if (result && result.concurrent) {
       const c = result.concurrent;
       toast(`${c.recentUser} saved ${c.agoSeconds < 60 ? c.agoSeconds + 's' : Math.round(c.agoSeconds/60) + 'min'} ago — consider reloading`);
@@ -782,6 +808,8 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
       || guestsNextWeeks);
     if (needsPlanner) rebuildPlanner();
     rerenderCurrentView();
+    // Rebuild an open inventory modal so its embedded row indices stay valid.
+    if (_onRemotePatchApplied) _onRemotePatchApplied();
     toast(`${user || 'Someone'} made changes — updated live`);
   }
 }
