@@ -10,6 +10,8 @@
 import { apiGet, apiPost, toast, todayIso, newId } from './utils';
 import { showModal, closeModal, esc } from './modal';
 import { registerRenderer } from './navigate';
+import { marked } from 'marked';
+import { splitGuideSections } from './chunk-guide';
 
 interface CChunk {
   id: string; name: string; station: string; type: string;
@@ -29,9 +31,10 @@ let cEvents: CEvent[] = [];
 let cStationFilter = 'all';
 let cLoaded = false;
 
-// Which view is showing: the grid (home) or a per-person detail drill-down.
-let cView: 'grid' | 'person' = 'grid';
+// Which view is showing: the grid (home) or a detail drill-down.
+let cView: 'grid' | 'person' | 'chunk' = 'grid';
 let cPersonId = '';
+let cChunkId = '';
 
 // Log modal: the cell tap pre-fills learner + chunk; the teacher is picked
 // inside the modal. Held at module scope so submitCompLog can read it.
@@ -108,7 +111,10 @@ export async function renderCompetencies(): Promise<void> {
 function paintComp(): void {
   const el = document.getElementById('screen-competencies');
   if (!el) return;
-  el.innerHTML = cView === 'person' ? buildPersonHtml(cPersonId) : buildCompHtml();
+  el.innerHTML =
+    cView === 'person' ? buildPersonHtml(cPersonId)
+      : cView === 'chunk' ? buildChunkHtml(cChunkId)
+        : buildCompHtml();
 }
 
 function buildCompHtml(): string {
@@ -147,7 +153,7 @@ function buildGridHtml(visibleChunks: CChunk[]): string {
     return '<div class="comp-empty">No staff added yet. Tap <strong>+ Add a name</strong> to add the first person, then tap a grid cell to log a teaching.</div>';
   }
   const head = visibleChunks.map(c =>
-    `<th class="comp-chunkhead" title="${esc(c.station)}">${esc(c.name)}</th>`
+    `<th class="comp-chunkhead" data-testid="comp-chunkhead" data-chunk="${esc(c.id)}" title="${esc(c.name)} — ${esc(c.station)}" onclick="openCompChunk(this.dataset.chunk)">${esc(c.name)}</th>`
   ).join('');
   const rows = cPeople.map(p => {
     const cells = visibleChunks.map(c => {
@@ -203,6 +209,7 @@ export function openCompPerson(personId: string): void {
 export function compBackToGrid(): void {
   cView = 'grid';
   cPersonId = '';
+  cChunkId = '';
   paintComp();
 }
 
@@ -263,6 +270,89 @@ function buildPersonHtml(personId: string): string {
     <div class="comp-person-block">
       <h3>Not yet</h3>
       ${gaps || '<p class="comp-person-empty">Has been taught every chunk in the library.</p>'}
+    </div>
+  `;
+}
+
+// ── Per-chunk detail (column-header tap) ──
+
+export function openCompChunk(chunkId: string): void {
+  cView = 'chunk';
+  cChunkId = chunkId;
+  paintComp();
+}
+
+// marked runs synchronously with default options; the union return type is
+// over-broad. Chunk guides are staff-authored and git-seeded (trusted).
+function mdToHtml(md: string): string {
+  return marked.parse(md) as string;
+}
+
+// The teaching guide: an always-open intro, then each `## ` section as a
+// collapsed <details>. Collapsed, the section headlines are the 30-minute
+// teaching checklist; tap one to open its prose.
+function renderTeachingGuide(md: string): string {
+  const { intro, sections } = splitGuideSections(md);
+  const introHtml = intro ? `<div class="comp-guide-intro">${mdToHtml(intro)}</div>` : '';
+  const sectionsHtml = sections.map(s =>
+    `<details class="comp-guide-section" data-testid="comp-guide-section">`
+    + `<summary>${esc(s.heading)}</summary>`
+    + `<div class="comp-guide-body">${mdToHtml(s.body)}</div>`
+    + `</details>`
+  ).join('');
+  return `<div class="comp-guide">${introHtml}${sectionsHtml}</div>`;
+}
+
+// "Who has had this chunk?" — the teaching guide, plus who's had it / who hasn't.
+function buildChunkHtml(chunkId: string): string {
+  const chunk = chunkById(chunkId);
+  if (!chunk) {
+    return `
+      <div class="comp-detail-head">
+        <button class="btn" onclick="compBackToGrid()">&larr; Grid</button>
+      </div>
+      <div class="comp-empty">That chunk is no longer in the library.</div>`;
+  }
+  const roster = cPeople.map(p => ({ person: p, last: lastTaught(p.id, chunkId) }));
+  const had = roster.filter(r => r.last)
+    .sort((a, b) => ((a.last as string) < (b.last as string) ? 1 : -1));
+  const notHad = roster.filter(r => !r.last);
+
+  const prereqHtml = chunk.prerequisites.length
+    ? `<div class="comp-chunk-meta"><span class="comp-chunk-meta-label">Prerequisites</span>${chunk.prerequisites.map(id => { const pc = chunkById(id); return `<span class="comp-tag">${esc(pc ? pc.name : id)}</span>`; }).join('')}</div>`
+    : '';
+  const requiredHtml = chunk.requiredFor.length
+    ? `<div class="comp-chunk-meta"><span class="comp-chunk-meta-label">Required for</span>${chunk.requiredFor.map(r => `<span class="comp-tag">${esc(r)}</span>`).join('')}</div>`
+    : '';
+  const linkHtml = chunk.deeperLink
+    ? `<p class="comp-chunk-link"><a href="${esc(chunk.deeperLink)}" target="_blank" rel="noopener noreferrer">Deeper documentation &rarr;</a></p>`
+    : '';
+
+  return `
+    <div class="comp-detail-head">
+      <button class="btn" onclick="compBackToGrid()">&larr; Grid</button>
+      <h2>${esc(chunk.name)}</h2>
+    </div>
+    <div data-testid="comp-chunk-detail">
+      <div class="comp-chunk-sub">${esc(chunk.station)} &middot; ${esc(chunk.type)}</div>
+      ${chunk.goal ? `<p class="comp-chunk-goal">${esc(chunk.goal)}</p>` : ''}
+      ${prereqHtml}${requiredHtml}${linkHtml}
+      <div class="comp-person-block">
+        <h3>Teaching guide</h3>
+        ${chunk.teachingGuide ? renderTeachingGuide(chunk.teachingGuide) : '<p class="comp-person-empty">No teaching guide written yet.</p>'}
+      </div>
+      <div class="comp-person-block">
+        <h3>Who's had it</h3>
+        ${had.length
+          ? `<ul class="comp-person-list">${had.map(r => `<li class="comp-who"><span class="comp-who-name">${esc(r.person.name)}</span><span class="comp-who-date">${esc(fmtDate(r.last as string))}</span></li>`).join('')}</ul>`
+          : '<p class="comp-person-empty">No one has been taught this yet.</p>'}
+      </div>
+      <div class="comp-person-block">
+        <h3>Not yet</h3>
+        ${notHad.length
+          ? `<ul class="comp-person-list">${notHad.map(r => `<li class="comp-person-gap">${esc(r.person.name)}</li>`).join('')}</ul>`
+          : '<p class="comp-person-empty">Everyone has had this chunk.</p>'}
+      </div>
     </div>
   `;
 }
