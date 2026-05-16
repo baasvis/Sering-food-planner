@@ -56,6 +56,23 @@ async function main() {
   } else {
     console.log(`Guests already exist (${count} rows) — skipping seed`);
   }
+
+  // ── Competencies module ──
+  // Chunks are not seeded — they sync from Notion (see lib/notion-sync.ts).
+  // People launch empty; the JSON file is a placeholder for a future name list.
+  const peopleSeed = path.join(__dirname, '..', 'seeds', 'competency-people.json');
+  if (fs.existsSync(peopleSeed)) {
+    const peopleCount = await prisma.person.count();
+    if (peopleCount === 0) {
+      const people = JSON.parse(fs.readFileSync(peopleSeed, 'utf8'));
+      if (people.length > 0) {
+        await prisma.person.createMany({ data: people });
+        console.log(`Seeded ${people.length} competency people`);
+      }
+    } else {
+      console.log(`People already exist (${peopleCount} rows) — skipping seed`);
+    }
+  }
 }
 
 main()

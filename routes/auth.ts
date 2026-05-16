@@ -35,6 +35,13 @@ export function isDirectorEmail(email: string | null | undefined): boolean {
   return CONFIG.DIRECTOR_EMAILS.includes(email.toLowerCase());
 }
 
+/** Whether the given email is on the staff-lead allowlist — gates the
+ *  Competencies admin actions (chunk sync, event corrections, people). */
+export function isStaffLeadEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return CONFIG.STAFF_LEAD_EMAILS.includes(email.toLowerCase());
+}
+
 function withDirector(user: AppUser): AppUser {
   return { ...user, isDirector: isDirectorEmail(user.email) };
 }
