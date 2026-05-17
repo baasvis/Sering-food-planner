@@ -125,7 +125,12 @@ router.post('/guest-history', asyncHandler(async (req: Request, res: Response) =
       }
     }
 
-    await tx.guestHistory.deleteMany();
+    // The Sering Hub writes 'testtafel' GuestHistory rows to this shared
+    // table. This CSV-upload path owns only 'west'/'centraal' — scope the
+    // wipe to those so an upload can't destroy Hub-written testtafel data
+    // (Hub plan §1.14). The rebuild loop above only emits west/centraal
+    // rows, so the scoped delete + createMany stay consistent.
+    await tx.guestHistory.deleteMany({ where: { location: { in: ['west', 'centraal'] } } });
     if (histData.length > 0) {
       await tx.guestHistory.createMany({ data: histData });
     }
