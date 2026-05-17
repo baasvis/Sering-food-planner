@@ -30,6 +30,11 @@ function batchStockLocLabel(b: Batch): string {
  *  full screen re-render that toggleBatchExpand (tile foldout) triggers. */
 let cateringDishQuery = '';
 
+/** Last-known scroll offsets of the two panes — module-level so they survive
+ *  the full #planner-content rebuild that rerenderCurrentView() performs. */
+let cateringListScrollTop = 0;
+let cateringDishScrollTop = 0;
+
 export function renderCaterings() {
   const el = document.getElementById('planner-content');
   if (!el) return;
@@ -49,6 +54,21 @@ export function renderCaterings() {
   </div>`;
 
   renderCateringList();
+
+  // Restore pane scroll across the full rebuild. rerenderCurrentView() (a dish-
+  // tile foldout toggle, an SSE patch, a live-sync reconnect) goes through
+  // renderWeekPlan(), which recreates #planner-content — so the old DOM is gone
+  // before this runs. The offsets are kept in module state by these listeners.
+  const newLeft = el.querySelector('.catering-pane-left') as HTMLElement | null;
+  if (newLeft) {
+    newLeft.scrollTop = cateringListScrollTop;
+    newLeft.addEventListener('scroll', () => { cateringListScrollTop = newLeft.scrollTop; });
+  }
+  const newDish = el.querySelector('#catering-dish-results') as HTMLElement | null;
+  if (newDish) {
+    newDish.scrollTop = cateringDishScrollTop;
+    newDish.addEventListener('scroll', () => { cateringDishScrollTop = newDish.scrollTop; });
+  }
 
   // While a dish tile is dragged, flag every catering card as a drop target.
   // The tiles drag via the planner's batchDragStart (it only highlights planner
@@ -75,11 +95,17 @@ export function renderCateringList() {
     return;
   }
 
-  // Sort by date (earliest first, undated last)
+  // Sort by date (earliest first, undated last), then a deterministic tiebreak
+  // (createdAt, then id) so same-date caterings keep a fixed order even when
+  // loadData() reassigns S.caterings to the DB read order — prisma's
+  // catering.findMany() has no stable orderBy, so that order shifts on upsert.
   const sorted = [...caterings].sort((a: Catering, b: Catering) => {
     const da = a.date ? strToDate(a.date) : new Date(9999, 0);
     const db = b.date ? strToDate(b.date) : new Date(9999, 0);
-    return da.getTime() - db.getTime();
+    if (da.getTime() !== db.getTime()) return da.getTime() - db.getTime();
+    const ca = a.createdAt || '', cb = b.createdAt || '';
+    if (ca !== cb) return ca < cb ? -1 : 1;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
   el.innerHTML = sorted.map(c => {

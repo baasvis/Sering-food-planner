@@ -465,6 +465,7 @@ export async function dbReadAll(): Promise<DataResponse> {
     dishes: (c.dishes ?? []) as unknown as Catering['dishes'],
     toppings: ((c as { toppings?: unknown }).toppings ?? []) as unknown as CateringTopping[],
     logisticsNotes: c.logisticsNotes,
+    createdAt: c.createdAt,
   }));
 
   const transportItems: TransportItem[] = transportRows.map(t => ({ id: t.id, text: t.text }));
