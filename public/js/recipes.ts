@@ -147,7 +147,9 @@ export function updateRecipeResults() {
         <td style="text-align:center;">—</td>
         <td style="white-space:nowrap;">
           <button class="btn btn-sm" onclick="openRecipeEditor('${esc(r.id)}')">Edit</button>
-          <button class="btn btn-sm" onclick="addDishFromV2Recipe('${esc(r.id)}')">+ Menu</button>
+          ${r.type === 'Topping' || r.type === 'Bread'
+            ? ''
+            : `<button class="btn btn-sm" onclick="addDishFromV2Recipe('${esc(r.id)}')">+ Menu</button>`}
           <button class="btn btn-sm btn-danger" onclick="deleteV2Recipe('${esc(r.id)}')">✕</button>
         </td>
       </tr>`;
@@ -212,6 +214,12 @@ export function addDishFromRecipe(_recipeId: any) { toastError(V1_DEPRECATED_MSG
 export function addDishFromV2Recipe(recipeId: string) {
   const r = S.recipes.find(x => x.id === recipeId);
   if (!r) return;
+  // Topping & Bread recipes feed Supplies, not the planner. Guard here too —
+  // validateBatch would reject the type, but a clear toast beats a 400.
+  if (r.type === 'Topping' || r.type === 'Bread') {
+    toastError(`"${r.name}" is a ${r.type} recipe — link it to a Toppings & bread item instead.`);
+    return;
+  }
   const allAllergens = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
   // Unified-batch shape. The legacy-field version (stock/location/inTransit/
   // recipeSheetId/...) shipped on the "+ Menu" button and failed every save —

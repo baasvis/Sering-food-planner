@@ -30,6 +30,13 @@ export interface CateringDish {
   type: DishType;
 }
 
+// ── Catering topping reference (links to a Supply row by id) ──
+
+export interface CateringTopping {
+  supplyId: string;
+  amount: number;
+}
+
 // ── Storage config (per-location) ──
 
 export interface StorageArea {
@@ -128,6 +135,7 @@ export interface Catering {
   guestCount: number;
   deliveryMode: string;
   dishes: CateringDish[];
+  toppings?: CateringTopping[];
   logisticsNotes: string;
   createdAt?: string;
 }
@@ -187,6 +195,8 @@ export interface NutritionInfo {
   completeness: number; // fraction of ingredients with nutrition data (0-1)
 }
 
+export type RecipeYieldType = 'volume' | 'count';
+
 export interface RecipeFull {
   id: string;
   name: string;
@@ -196,6 +206,12 @@ export interface RecipeFull {
   servingTemp: string;
   servingSize: number;
   recipeVolume: number | null;
+  /** Yield mode. 'volume' (default) scales by liters/servingSize; 'count'
+   *  scales by outputCount of outputUnit ("makes 10 loaves"). Undefined on
+   *  pre-yield-mode rows — treat as 'volume'. */
+  yieldType?: RecipeYieldType;
+  outputCount?: number | null;
+  outputUnit?: string | null;
   autoAllergens: string[];
   extraAllergens: string[];
   costPerServing: number | null;
@@ -274,6 +290,47 @@ export interface Ingredient {
   priceHistory?: Array<{ month: string; price: number }>;
 }
 
+// ── Supplies (toppings, breads, ferments, pickles, sauces) ──
+
+export type SupplyKind = 'standard' | 'oneoff';
+export type SupplyPrepMode = 'centralized' | 'per-location';
+
+export interface SupplyLocationStock {
+  amount: number;
+  lastMakeDate: string | null; // ISO 'YYYY-MM-DD'
+}
+
+export interface SupplyStock {
+  [location: string]: SupplyLocationStock;
+}
+
+export interface Supply {
+  id: string;
+  name: string;
+  kind: SupplyKind;
+  unit: string;
+  recipeId: string | null;
+  // standard-only fields (null for oneoff)
+  /** How many guests one unit serves, e.g. 10 = "1 box per 10 guests".
+   *  Units needed for a service = guestCount / guestsPerUnit. */
+  guestsPerUnit: number | null;
+  prepHorizonDays: number | null;
+  prepMode: SupplyPrepMode | null;
+  // oneoff-only fields (null for standard)
+  oneoffLocation: Location | null;
+  unitsPerService: number | null;
+  oneoffStartDate: string | null;
+  // shared
+  stock: SupplyStock;
+  /** € per unit (box/loaf/bottle). Manually entered, optionally auto-suggested
+   *  from a linked recipe. price-per-guest = costPerUnit / guestsPerUnit. */
+  costPerUnit: number | null;
+  preservationMethod: string | null;
+  archived: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface AppUser {
   email: string;
   name: string;
@@ -300,6 +357,7 @@ export interface DataResponse {
   recipes: RecipeFull[];
   caterings: Catering[];
   transportItems: TransportItem[];
+  supplies: Supply[];
 }
 
 export interface PatchRequest {

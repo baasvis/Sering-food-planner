@@ -12,6 +12,7 @@
     "postinstall": "prisma generate && cross-env PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install --with-deps chromium",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "node prisma/seed.js",
+    "db:seed:toppings": "node scripts/seed-toppings-recipes.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

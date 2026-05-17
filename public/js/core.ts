@@ -726,13 +726,19 @@ export function archiveDish(id: string, withRating: boolean, locScope?: Location
     },
   });
 }
+// Maps a recipe/batch type string to its badge CSS modifier. Topping & Bread
+// are recipe-only categories (see VALID_RECIPE_TYPES in lib/db.ts).
+function typeBadgeModifier(t: DishType | string): string {
+  if (t === 'Dessert') return 'b-dessert';
+  if (t === 'Topping') return 'b-topping';
+  if (t === 'Bread') return 'b-bread';
+  return t === 'Soup' ? 'b-soup' : 'b-main';
+}
 export function typeBadge(t: DishType | string): string {
-  if (t === 'Dessert') return `<span class="badge b-dessert">Dessert</span>`;
-  return `<span class="badge ${t === 'Soup' ? 'b-soup' : 'b-main'}">${t}</span>`;
+  return `<span class="badge ${typeBadgeModifier(t)}">${t}</span>`;
 }
 export function typeBadgeClass(t: DishType | string): string {
-  if (t === 'Dessert') return 'badge b-dessert';
-  return 'badge ' + (t === 'Soup' ? 'b-soup' : 'b-main');
+  return 'badge ' + typeBadgeModifier(t);
 }
 export const TYPES: DishType[] = ['Soup','Main course','Dessert'];
 export function cycleType(id: string): void {

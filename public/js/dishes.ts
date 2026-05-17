@@ -1122,7 +1122,10 @@ export function openNewDish() {
 export function searchNewDishModal() {
   const searchQuery = (document.getElementById('new-dish-search') as HTMLInputElement | null)?.value || '';
   const q = searchQuery.trim().toLowerCase();
+  // Topping & Bread recipes feed Supplies, not the planner — exclude them
+  // from the "+ New batch" recipe picker.
   const recipes = (S.recipes || [])
+    .filter(r => r.type !== 'Topping' && r.type !== 'Bread')
     .filter(r => !q || r.name.toLowerCase().includes(q))
     .sort((a, b) => a.name.localeCompare(b.name));
 

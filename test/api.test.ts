@@ -14,6 +14,8 @@ afterAll(async () => {
   await prisma.batch.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.ingredient.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.standardInventory.deleteMany({ where: { id: { startsWith: T } } });
+  await prisma.supply.deleteMany({ where: { id: { startsWith: T } } });
+  await prisma.catering.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.feedback.deleteMany({ where: { user: 'test-runner' } });
   await prisma.guestHistory.deleteMany({ where: { date: { startsWith: '2099-' } } });
   await prisma.guestsNextWeeks.deleteMany({ where: { mondayKey: { startsWith: '2099-' } } });
