@@ -409,8 +409,8 @@ function modeToggle(): string {
   const lean = _mode === 'lean' ? 'active' : '';
   const bulk = _mode === 'bulk' ? 'active' : '';
   return `<div class="tcard-mode-toggle" role="group" aria-label="Pack mode">
-    <button class="tcard-mode-btn ${lean}" data-mode="lean" onclick="setTransportMode('lean')" title="Just enough for the next 3 Centraal service slots">Lean</button>
-    <button class="tcard-mode-btn ${bulk}" data-mode="bulk" onclick="setTransportMode('bulk')" title="Pack the next 7 days of Centraal demand at once for any dish you're already shipping">Bulk-by-dish</button>
+    <button class="tcard-mode-btn ${lean}" data-mode="lean" data-testid="transport-mode-lean" onclick="setTransportMode('lean')" title="Just enough for the next 3 Centraal service slots">Lean</button>
+    <button class="tcard-mode-btn ${bulk}" data-mode="bulk" data-testid="transport-mode-bulk" onclick="setTransportMode('bulk')" title="Pack the next 7 days of Centraal demand at once for any dish you're already shipping">Bulk-by-dish</button>
   </div>`;
 }
 
@@ -475,7 +475,7 @@ export function renderTransportCard(): string {
          <button class="btn btn-primary tcard-confirm" onclick="confirmTransportPlan()">Pack and send</button>
        </div>`;
 
-  return `<div class="dash-card tcard ${lit}">
+  return `<div class="dash-card tcard ${lit}" data-testid="transport-card">
     <div class="dash-card-title">
       <span class="dash-card-icon">🚚</span> Pack for Centraal — tomorrow
       ${modeToggle()}
