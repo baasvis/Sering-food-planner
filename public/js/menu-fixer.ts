@@ -534,8 +534,8 @@ function scoreCandidate(
 
   if (slot.loc === 'centraal') score += SCORE.CENTRAAL_SLOT_PRIORITY;
 
-  // totalStock = anything in inventory (including frozen) — used for the
-  // "is this a placeholder?" check downstream.
+  // totalStock = anything in inventory or in-flight shipments (including
+  // frozen) — used for the "is this a placeholder?" check downstream.
   // serveableStock = non-frozen — used for the "has cooked food ready
   // for service" bonus. A frozen-only batch shouldn't get the
   // COOKED_WITH_STOCK reward; the cook hasn't thawed it yet.
