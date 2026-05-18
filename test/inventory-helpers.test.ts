@@ -117,6 +117,48 @@ describe('getTotalStock', () => {
     });
     expect(getTotalStock(b)).toBe(5);
   });
+
+  it('counts pending (non-arrived) shipments toward the total', () => {
+    // Food in transit has left the source inventory entry but not yet merged
+    // into the destination's — it lives only in shipments[]. The batch total
+    // must stay conserved while the food is on the truck.
+    const b = makeBatch({
+      inventory: [entry({ qty: 30 })],
+      shipments: [shipment({ qty: 20, arrived: false })],
+    });
+    expect(getTotalStock(b)).toBe(50);
+  });
+
+  it('excludes arrived shipments — those qtys are already in inventory', () => {
+    // On arrival the qty is merged into destination inventory; counting the
+    // arrived shipment too would double-count.
+    const b = makeBatch({
+      inventory: [entry({ loc: 'centraal', qty: 20 })],
+      shipments: [shipment({ qty: 20, arrived: true, arrivedAt: '2026-05-01T13:00:00.000Z' })],
+    });
+    expect(getTotalStock(b)).toBe(20);
+  });
+
+  it('sums settled inventory and pending shipments together', () => {
+    const b = makeBatch({
+      inventory: [
+        entry({ loc: 'west', qty: 15 }),
+        entry({ loc: 'centraal', qty: 10 }),
+      ],
+      shipments: [
+        shipment({ qty: 8, arrived: false }),
+        shipment({ qty: 12, arrived: true, arrivedAt: '2026-05-01T13:00:00.000Z' }),
+      ],
+    });
+    // 15 + 10 settled + 8 pending; the 12 arrived shipment is excluded.
+    expect(getTotalStock(b)).toBe(33);
+  });
+
+  it('treats a missing shipments array as empty (defensive for legacy rows)', () => {
+    const b = makeBatch({ inventory: [entry({ qty: 25 })] });
+    (b as unknown as { shipments: null }).shipments = null;
+    expect(getTotalStock(b)).toBe(25);
+  });
 });
 
 // ── getStockAt ────────────────────────────────────────────────────────────
@@ -224,6 +266,32 @@ describe('getServeableTotalStock', () => {
     });
     expect(getServeableTotalStock(b)).toBe(0);
     expect(getTotalStock(b)).toBe(45);
+  });
+
+  it('includes non-arrived non-Frozen shipments', () => {
+    const b = makeBatch({
+      inventory: [entry({ storage: 'Gastro', qty: 20 })],
+      shipments: [shipment({ storage: 'Gastro', qty: 15, arrived: false })],
+    });
+    expect(getServeableTotalStock(b)).toBe(35);
+  });
+
+  it('excludes non-arrived Frozen shipments (Frozen is not serveable)', () => {
+    const b = makeBatch({
+      inventory: [entry({ storage: 'Gastro', qty: 20 })],
+      shipments: [shipment({ storage: 'Frozen', qty: 15, arrived: false })],
+    });
+    expect(getServeableTotalStock(b)).toBe(20);
+    // getTotalStock still sees the in-transit frozen qty.
+    expect(getTotalStock(b)).toBe(35);
+  });
+
+  it('excludes arrived shipments — already merged into inventory', () => {
+    const b = makeBatch({
+      inventory: [entry({ loc: 'centraal', storage: 'Gastro', qty: 15 })],
+      shipments: [shipment({ storage: 'Gastro', qty: 15, arrived: true, arrivedAt: '2026-05-01T13:00:00.000Z' })],
+    });
+    expect(getServeableTotalStock(b)).toBe(15);
   });
 });
 

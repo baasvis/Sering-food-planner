@@ -645,12 +645,14 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
     const batch = await prisma.batch.findUnique({ where: { id: batchId } });
     if (batch && recipe.recipeVolume && recipe.servingSize) {
       const recipeLiters = recipe.recipeVolume;
-      // Total inventory across all entries — unified-batch model means
-      // there's no scalar `stock` field; the batch holds inventory across
-      // (loc, storage) pairs. For print-scaling we just want total liters
-      // in the pot, so we sum across every entry regardless of location.
+      // Total liters in this batch — unified-batch model means there's no
+      // scalar `stock` field; the batch holds inventory across (loc, storage)
+      // pairs plus in-flight shipments. For print-scaling we want every liter
+      // the batch owns, so we sum settled inventory + pending shipments.
       const inv = Array.isArray(batch.inventory) ? (batch.inventory as Array<{ qty: number }>) : [];
-      const totalStock = inv.reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0);
+      const ship = Array.isArray(batch.shipments) ? (batch.shipments as Array<{ qty: number; arrived: boolean }>) : [];
+      const totalStock = inv.reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0)
+        + ship.filter(s => !s.arrived).reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0);
       const batchLiters = totalStock > 0 ? totalStock : recipeLiters;
       if (recipeLiters > 0 && batchLiters > 0) {
         scaleFactor = batchLiters / recipeLiters;

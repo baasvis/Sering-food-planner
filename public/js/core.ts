@@ -30,9 +30,19 @@ export function isBatchCooked(d: Batch): boolean {
 // Read the new b.inventory[] and b.shipments[] shape. Each batch is its own
 // canonical pool; same-recipe duplicates across batches stay separate
 // (audit S7).
+//
+// Batch-TOTAL helpers (getTotalStock, getServeableTotalStock) count settled
+// inventory PLUS in-flight shipments (arrived:false) — food on a truck is
+// still the batch's food, so a transfer keeps the total conserved.
+// Per-LOCATION helpers (getStockAt, getServeableStockAt) count settled
+// inventory only; use getPendingFromShipments for stock incoming to a loc.
 
 export function getTotalStock(b: Batch): number {
-  return (b.inventory || []).reduce((s, e) => s + (e.qty || 0), 0);
+  const settled = (b.inventory || []).reduce((s, e) => s + (e.qty || 0), 0);
+  const inTransit = (b.shipments || [])
+    .filter(s => !s.arrived)
+    .reduce((s, sh) => s + (sh.qty || 0), 0);
+  return settled + inTransit;
 }
 
 export function getStockAt(b: Batch, loc: Location, storage?: StorageType): number {
@@ -52,13 +62,18 @@ export function getServeableStockAt(b: Batch, loc: Location): number {
     .reduce((s, e) => s + (e.qty || 0), 0);
 }
 
-/** Total stock across all locations that's directly available to serve.
+/** Total serveable stock (non-Frozen — Frozen needs thawing first) across all
+ *  locations, including in-flight shipments.
  *  Pair with getServeableStockAt when the allocator needs to know whether
  *  a batch has any thawed coverage at all. */
 export function getServeableTotalStock(b: Batch): number {
-  return (b.inventory || [])
+  const settled = (b.inventory || [])
     .filter(e => e.storage !== 'Frozen')
     .reduce((s, e) => s + (e.qty || 0), 0);
+  const inTransit = (b.shipments || [])
+    .filter(s => !s.arrived && s.storage !== 'Frozen')
+    .reduce((s, sh) => s + (sh.qty || 0), 0);
+  return settled + inTransit;
 }
 
 export function getPendingFromShipments(b: Batch, loc: Location): number {
