@@ -31,6 +31,7 @@ jest.mock('../public/js/navigate', () => ({
   getScreenFromHash: jest.fn(() => 'dashboard'),
   showScreen: jest.fn(),
   setOnScreenChange: jest.fn(),
+  setBackgroundRefresh: jest.fn(),
 }));
 
 import { S } from '../public/js/state';

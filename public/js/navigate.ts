@@ -22,6 +22,16 @@ export function setOnScreenChange(fn: ScreenChangeHook): void {
   _onScreenChange = fn;
 }
 
+// Optional hook run after rerenderCurrentView() re-renders a NON-dashboard
+// screen. dashboard.ts registers it so the dashboard's passive cards (e.g.
+// "Pack for Centraal") stay in sync with edits made elsewhere instead of going
+// stale until the next navigation or 60s timer tick.
+type BackgroundRefreshHook = () => void;
+let _backgroundRefresh: BackgroundRefreshHook | null = null;
+export function setBackgroundRefresh(fn: BackgroundRefreshHook): void {
+  _backgroundRefresh = fn;
+}
+
 export function registerRenderer(screen: string, fn: RenderFn) {
   renderers[screen] = fn;
 }
@@ -37,6 +47,13 @@ export function setCurrentScreen(screen: string) {
 export function rerenderCurrentView() {
   const fn = renderers[_currentScreen];
   if (fn) fn();
+  // Every data-driven re-render (local edits, undo, incoming live-sync
+  // patches) flows through here, so it's the single choke point for keeping a
+  // backgrounded dashboard's passive cards fresh without waiting for the user
+  // to navigate back to it.
+  if (_currentScreen !== 'dashboard' && _backgroundRefresh) {
+    _backgroundRefresh();
+  }
 }
 
 /** Resolve a screen id from the URL hash, falling back to dashboard for

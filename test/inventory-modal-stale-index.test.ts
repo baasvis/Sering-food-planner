@@ -33,6 +33,7 @@ jest.mock('../public/js/navigate', () => ({
   getScreenFromHash: jest.fn(() => 'planner'),
   showScreen: jest.fn(),
   setOnScreenChange: jest.fn(),
+  setBackgroundRefresh: jest.fn(),
 }));
 
 import { S } from '../public/js/state';

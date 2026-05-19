@@ -8,7 +8,7 @@ import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePas
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
 import { esc } from './modal';
-import { registerRenderer, setOnScreenChange, showScreen, getScreenFromHash } from './navigate';
+import { registerRenderer, setOnScreenChange, setBackgroundRefresh, showScreen, getScreenFromHash } from './navigate';
 // Stocktake helpers used by the dashboard chip — kept distinct from the
 // individual screen render fns (those self-register via navigate.ts now).
 import { startStocktake, renderStocktakeAreaPicker, enterStocktakeArea, renderStocktakeArea, saveStocktakeArea, exitStocktake, getIngredientsForArea } from './orders';
@@ -1287,7 +1287,20 @@ export function navTo(screen: string, subTab: string) {
   showScreen(screen);
 }
 
+/** Re-render the dashboard's content in place if it has been mounted at least
+ *  once this session. Safe to call while the dashboard is NOT the visible
+ *  screen — registered as the background-refresh hook so "Pack for Centraal"
+ *  and the other cards stay in sync with edits made on other screens. No-op
+ *  before the first dashboard visit (#dash-content doesn't exist yet). */
+export function refreshDashboardIfMounted(): void {
+  if (document.getElementById('dash-content')) {
+    renderDashboardContent();
+  }
+}
+
 // Self-register so navigate.ts can dispatch without importing every screen.
 // Other screens self-register from their own files; this one stays here
 // because dashboard.ts owns its render fn.
 registerRenderer('dashboard', renderDashboard);
+// Keep the dashboard's passive cards live when the user edits on other screens.
+setBackgroundRefresh(refreshDashboardIfMounted);

@@ -32,6 +32,7 @@ Object.defineProperty(global, 'localStorage', {
 import type { Batch, DishType, InventoryEntry, Shipment, Location, StorageType } from '../shared/types';
 import {
   computeTransportPlan,
+  computePendingUncookedRows,
   nextCentraalSlots,
   dishIdentity,
   getReadiness,
@@ -593,5 +594,95 @@ describe('countPendingUncookedForCentraal', () => {
       services: [{ loc: 'centraal', date: future, meal: 'dinner' }],
     });
     expect(countPendingUncookedForCentraal([a, b])).toBe(2);
+  });
+});
+
+// ── computePendingUncookedRows (show uncooked dishes on the card) ─────────
+
+describe('computePendingUncookedRows', () => {
+  test('empty input → no rows', () => {
+    rebuildPlannerFromBatches([]);
+    expect(computePendingUncookedRows([])).toEqual([]);
+  });
+
+  test('a cooked West batch is NOT listed as uncooked', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(30, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    expect(computePendingUncookedRows([b])).toEqual([]);
+  });
+
+  test('an uncooked batch scheduled for a horizon Centraal service is listed with its demand', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato', cookDate: null,
+      inventory: [], shipments: [],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    const rows = computePendingUncookedRows([b]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].batchId).toBe(b.id);
+    expect(rows[0].totalDemand).toBeGreaterThan(0);
+  });
+
+  test('an uncooked batch with only West services is not listed', () => {
+    const b = makeBatch({
+      type: 'Soup', cookDate: null, inventory: [], shipments: [],
+      services: [{ loc: 'west', date: '2026-05-04', meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    expect(computePendingUncookedRows([b])).toEqual([]);
+  });
+
+  test('a batch mid-flight (pending shipment counts as cooked) is not listed as uncooked', () => {
+    const b = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026',
+      inventory: [], shipments: [ship(20, 'centraal', 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    expect(computePendingUncookedRows([b])).toEqual([]);
+  });
+
+  test('cooked and uncooked dishes in the same horizon are reported separately', () => {
+    const cooked = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(30, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'lunch' }],
+    });
+    const raw = makeBatch({
+      type: 'Main course', name: 'Stew', cookDate: null,
+      inventory: [], shipments: [],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'dinner' }],
+    });
+    rebuildPlannerFromBatches([cooked, raw]);
+    expect(computeTransportPlan('lean', [cooked, raw]).map(r => r.batchId)).toEqual([cooked.id]);
+    expect(computePendingUncookedRows([cooked, raw]).map(r => r.batchId)).toEqual([raw.id]);
+  });
+
+  test('a dish already shown as packable is not also listed as uncooked', () => {
+    // Two batches of one recipe on the same Centraal slot: one cooked (with
+    // West stock), one not. The cooked one is a packable row; the uncooked one
+    // must be suppressed so the card doesn't show "Tomato" in both sections.
+    const cooked = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(30, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'lunch' }],
+    });
+    const raw = makeBatch({
+      type: 'Soup', name: 'Tomato', cookDate: null,
+      inventory: [], shipments: [],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([cooked, raw]);
+    const plan = computeTransportPlan('lean', [cooked, raw]);
+    expect(plan.map(r => r.batchId)).toEqual([cooked.id]);
+    // Without the packable rows it would surface (separate batch, uncooked)...
+    expect(computePendingUncookedRows([cooked, raw]).map(r => r.batchId)).toEqual([raw.id]);
+    // ...but passing the packable plan suppresses it — same dish identity.
+    expect(computePendingUncookedRows([cooked, raw], plan)).toEqual([]);
   });
 });
