@@ -17,7 +17,7 @@ import { S } from './state';
 import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner, getStockAt, getServeableStockAt, getPendingFromShipments } from './core';
 import { esc } from './modal';
 import { trackEvent } from './telemetry';
-import { rerenderCurrentView } from './navigate';
+import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { toast, toastError, apiPost } from './utils';
 
 export type TransportMode = 'lean' | 'bulk';
@@ -40,6 +40,18 @@ export interface TransportRow {
   /** True if any of `services` is beyond the 3-slot lean horizon (only set in
    *  bulk mode). Lets the UI mark consolidation rows distinctly. */
   future: boolean;
+}
+
+/** A dish scheduled for a Centraal service in the next-3-slot horizon that is
+ *  NOT cooked yet. Surfaced on the card (greyed, not packable) so a dish added
+ *  or moved on delivery day is visible instead of silently missing. */
+export interface PendingUncookedRow {
+  batchId: string;
+  name: string;
+  type: DishType;
+  /** Liters this dish will need at Centraal once cooked. */
+  totalDemand: number;
+  services: Array<{ date: string; meal: string }>;
 }
 
 export interface ReadinessState {
@@ -342,6 +354,48 @@ export function countPendingUncookedForCentraal(batches: Batch[]): number {
   return count;
 }
 
+/** Rows for batches scheduled for a Centraal service in the next 3 slots that
+ *  are NOT cooked yet. They can't be packed (no stock exists), but listing
+ *  them means a dish added or moved on delivery day shows on the card instead
+ *  of silently missing from it.
+ *
+ *  Like computeTransportPlan this reads the family-allocation cache, so
+ *  callers must have run rebuildPlanner() first (renderTransportCard does). */
+export function computePendingUncookedRows(batches: Batch[]): PendingUncookedRow[] {
+  const horizonSlots = nextCentraalSlots(batches, 3);
+  if (horizonSlots.length === 0) return [];
+  const horizonKeys = new Set(horizonSlots.map(s => s.key));
+
+  const rows: PendingUncookedRow[] = [];
+  for (const b of batches) {
+    if (isBatchCooked(b)) continue;
+    let demand = 0;
+    const svcs: Array<{ date: string; meal: string }> = [];
+    for (const svc of b.services || []) {
+      if (svc.loc !== 'centraal') continue;
+      const k = `${svc.loc}-${svc.date}-${svc.meal}`;
+      if (!horizonKeys.has(k)) continue;
+      const liters = calcRequiredAtService(b, svc);
+      if (liters <= 0) continue;
+      demand += liters;
+      svcs.push({ date: svc.date, meal: svc.meal });
+    }
+    if (demand > 0) {
+      rows.push({
+        batchId: b.id,
+        name: b.name,
+        type: b.type,
+        totalDemand: round1(demand),
+        services: svcs.sort(compareSlots),
+      });
+    }
+  }
+
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  rows.sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
+  return rows;
+}
+
 // ── Readiness banner ─────────────────────────────────────────────────────
 
 /** Compute the "ritual ready" state: today's inventory finished, today's cook
@@ -435,6 +489,24 @@ function rowHtml(row: TransportRow): string {
   </div>`;
 }
 
+/** Like rowHtml but for a not-yet-cooked dish: greyed, no send qty and no
+ *  destination subtraction — it shows the liters the dish WILL need once
+ *  cooked, not a packable amount. */
+function uncookedRowHtml(row: PendingUncookedRow): string {
+  const svcText = row.services
+    .map(s => `${s.meal === 'lunch' ? '☀️' : '🌙'} ${formatShortDate(s.date)}`)
+    .join(' · ');
+  return `<div class="tcard-row tcard-row-uncooked" data-batch-id="${esc(row.batchId)}">
+    <div class="tcard-row-main">
+      <span class="tcard-row-name">${esc(row.name)}</span>
+      <span class="tcard-row-svc">${esc(svcText)}</span>
+    </div>
+    <div class="tcard-row-qty">
+      <span class="tcard-row-willneed">${row.totalDemand} L</span>
+    </div>
+  </div>`;
+}
+
 function formatShortDate(iso: string): string {
   const d = new Date(iso + 'T12:00:00');
   const today = getToday();
@@ -457,23 +529,37 @@ export function renderTransportCard(): string {
   rebuildPlanner();
 
   const rows = computeTransportPlan(_mode, S.batches);
+  const uncookedRows = computePendingUncookedRows(S.batches);
   const totalSendQty = round1(rows.reduce((s, r) => s + r.sendQty, 0));
   const readiness = getReadiness(S.batches, S.inventoryCompletions);
   const lit = readiness.allReady && rows.length > 0 ? 'tcard-lit' : '';
 
-  trackEvent('transport_card_shown', _mode, { rowCount: rows.length, totalVolume: totalSendQty });
+  // Only count this as "shown" when the dashboard is the visible screen —
+  // renderTransportCard also runs during background refreshes (see
+  // setBackgroundRefresh), where the card isn't actually on screen.
+  if (getCurrentScreen() === 'dashboard') {
+    trackEvent('transport_card_shown', _mode, { rowCount: rows.length, totalVolume: totalSendQty });
+  }
 
-  const pending = rows.length === 0 ? countPendingUncookedForCentraal(S.batches) : 0;
-  const emptyMsg = pending > 0
-    ? `${pending} dish${pending === 1 ? '' : 'es'} scheduled for Centraal — finish cooking first, then come back.`
-    : `Nothing scheduled to leave for Centraal in the next 3 services.`;
-  const body = rows.length === 0
-    ? `<div class="tcard-empty">${esc(emptyMsg)}</div>`
+  // Cooked, packable rows + total + the "Pack and send" action.
+  const packSection = rows.length === 0
+    ? ''
     : `<div class="tcard-rows">${rows.map(rowHtml).join('')}</div>
        <div class="tcard-footer">
          <div class="tcard-total"><span class="tcard-total-label">Total to pack</span> <span class="tcard-total-qty">${totalSendQty} L</span></div>
          <button class="btn btn-primary tcard-confirm" onclick="confirmTransportPlan()">Pack and send</button>
        </div>`;
+
+  // Dishes scheduled for Centraal but not cooked yet — greyed, not packable.
+  // Shown so a dish added or changed on delivery day is visible on the card.
+  const uncookedSection = uncookedRows.length === 0
+    ? ''
+    : `<div class="tcard-uncooked-hdr">Not cooked yet — can't pack until cooked</div>
+       <div class="tcard-rows">${uncookedRows.map(uncookedRowHtml).join('')}</div>`;
+
+  const body = (rows.length === 0 && uncookedRows.length === 0)
+    ? `<div class="tcard-empty">Nothing scheduled to leave for Centraal in the next 3 services.</div>`
+    : packSection + uncookedSection;
 
   return `<div class="dash-card tcard ${lit}">
     <div class="dash-card-title">
@@ -530,6 +616,12 @@ export async function confirmTransportPlan(): Promise<void> {
     const cappedNote = cappedCount > 0 ? ` (${cappedCount} capped to available)` : '';
     toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for Centraal${cappedNote}`);
   }
+  // Refresh the card so the just-shipped rows drop off immediately. Without
+  // this it keeps showing the old plan (and its "Pack and send" button) until
+  // the next 60s tick — long enough to accidentally submit the same pack
+  // twice. Mirrors confirmCentraalArrivals, which already does this.
+  rebuildPlanner();
+  rerenderCurrentView();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
