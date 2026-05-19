@@ -331,8 +331,10 @@ function round1(n: number): number {
 
 /** Count batches that *would* be in the lean plan if they were cooked —
  *  i.e. they have a Centraal service in the next-3-slot horizon and
- *  `isBatchCooked` is currently false. Used to differentiate the empty-state
- *  message: "nothing scheduled" vs "scheduled but not yet cooked".
+ *  `isBatchCooked` is currently false.
+ *
+ *  Superseded for the card UI by computePendingUncookedRows (which lists the
+ *  dishes themselves); retained for its unit tests / potential reuse.
  *
  *  Unified-batch model: a "would be cooked at West" batch is any uncooked
  *  batch with a Centraal-direction service in the lean horizon. We don't
@@ -357,18 +359,34 @@ export function countPendingUncookedForCentraal(batches: Batch[]): number {
 /** Rows for batches scheduled for a Centraal service in the next 3 slots that
  *  are NOT cooked yet. They can't be packed (no stock exists), but listing
  *  them means a dish added or moved on delivery day shows on the card instead
- *  of silently missing from it.
+ *  of silently missing from it. `packedRows` is the cooked transport plan — a
+ *  dish already listed there is dropped here so it isn't shown in both
+ *  sections (e.g. two batches of one recipe, one cooked and one not).
  *
  *  Like computeTransportPlan this reads the family-allocation cache, so
  *  callers must have run rebuildPlanner() first (renderTransportCard does). */
-export function computePendingUncookedRows(batches: Batch[]): PendingUncookedRow[] {
+export function computePendingUncookedRows(
+  batches: Batch[],
+  packedRows: TransportRow[] = [],
+): PendingUncookedRow[] {
   const horizonSlots = nextCentraalSlots(batches, 3);
   if (horizonSlots.length === 0) return [];
   const horizonKeys = new Set(horizonSlots.map(s => s.key));
 
+  // A dish already shown in the packable section is on the card — don't also
+  // list it here. This section exists to surface dishes that would OTHERWISE
+  // be missing, so a dish with a cooked, packable batch doesn't belong.
+  const batchById = new Map<string, Batch>(batches.map((b): [string, Batch] => [b.id, b]));
+  const packedIdentities = new Set<string>();
+  for (const r of packedRows) {
+    const pb = batchById.get(r.batchId);
+    if (pb) packedIdentities.add(dishIdentity(pb));
+  }
+
   const rows: PendingUncookedRow[] = [];
   for (const b of batches) {
     if (isBatchCooked(b)) continue;
+    if (packedIdentities.has(dishIdentity(b))) continue;
     let demand = 0;
     const svcs: Array<{ date: string; meal: string }> = [];
     for (const svc of b.services || []) {
@@ -529,7 +547,7 @@ export function renderTransportCard(): string {
   rebuildPlanner();
 
   const rows = computeTransportPlan(_mode, S.batches);
-  const uncookedRows = computePendingUncookedRows(S.batches);
+  const uncookedRows = computePendingUncookedRows(S.batches, rows);
   const totalSendQty = round1(rows.reduce((s, r) => s + r.sendQty, 0));
   const readiness = getReadiness(S.batches, S.inventoryCompletions);
   const lit = readiness.allReady && rows.length > 0 ? 'tcard-lit' : '';

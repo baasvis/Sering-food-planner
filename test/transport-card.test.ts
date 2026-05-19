@@ -662,4 +662,27 @@ describe('computePendingUncookedRows', () => {
     expect(computeTransportPlan('lean', [cooked, raw]).map(r => r.batchId)).toEqual([cooked.id]);
     expect(computePendingUncookedRows([cooked, raw]).map(r => r.batchId)).toEqual([raw.id]);
   });
+
+  test('a dish already shown as packable is not also listed as uncooked', () => {
+    // Two batches of one recipe on the same Centraal slot: one cooked (with
+    // West stock), one not. The cooked one is a packable row; the uncooked one
+    // must be suppressed so the card doesn't show "Tomato" in both sections.
+    const cooked = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(30, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'lunch' }],
+    });
+    const raw = makeBatch({
+      type: 'Soup', name: 'Tomato', cookDate: null,
+      inventory: [], shipments: [],
+      services: [{ loc: 'centraal', date: '2026-05-04', meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([cooked, raw]);
+    const plan = computeTransportPlan('lean', [cooked, raw]);
+    expect(plan.map(r => r.batchId)).toEqual([cooked.id]);
+    // Without the packable rows it would surface (separate batch, uncooked)...
+    expect(computePendingUncookedRows([cooked, raw]).map(r => r.batchId)).toEqual([raw.id]);
+    // ...but passing the packable plan suppresses it — same dish identity.
+    expect(computePendingUncookedRows([cooked, raw], plan)).toEqual([]);
+  });
 });
