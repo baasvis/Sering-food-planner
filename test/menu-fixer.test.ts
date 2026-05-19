@@ -39,6 +39,7 @@ import {
   alreadyInSlot,
   findOrphanPlaceholders,
   findSpentBatches,
+  findStalePlaceholders,
   generateMissingPlaceholders,
   snapshotBatches,
   stripFutureServices,
@@ -283,6 +284,76 @@ describe('findSpentBatches (auto-retire — PR #58 rule)', () => {
   });
 });
 
+// ─── findStalePlaceholders ─────────────────────────────────────────────────
+
+describe('findStalePlaceholders (auto-retire dead placeholders)', () => {
+  const TODAY = '2026-05-05';
+
+  test('retires a generated placeholder for a cook day that has already passed', () => {
+    const stale = makeBatch({
+      type: 'Main course', cookDate: '02/05/2026', name: 'Sat main',
+      generated: true, inventory: [],
+    });
+    expect(findStalePlaceholders([stale], TODAY).map(b => b.id)).toEqual([stale.id]);
+  });
+
+  test('retires a stale generated placeholder even when it has a recipe but no service', () => {
+    // The case that slips through findOrphanPlaceholders (a recipe disqualifies
+    // it) AND findSpentBatches (no services disqualifies it).
+    const stale = makeBatch({
+      type: 'Soup', cookDate: '02/05/2026', name: 'Stale w/ recipe',
+      generated: true, recipeId: 'r-1', inventory: [],
+    });
+    expect(findStalePlaceholders([stale], TODAY).map(b => b.id)).toEqual([stale.id]);
+  });
+
+  test('does NOT retire a placeholder whose cook day is today or in the future', () => {
+    const today = makeBatch({
+      type: 'Soup', cookDate: '05/05/2026', name: 'Today', generated: true, inventory: [],
+    });
+    const future = makeBatch({
+      type: 'Soup', cookDate: '07/05/2026', name: 'Future', generated: true, inventory: [],
+    });
+    expect(findStalePlaceholders([today, future], TODAY)).toHaveLength(0);
+  });
+
+  test('does NOT retire a past placeholder that has leftover stock (real food)', () => {
+    const cooked = makeBatch({
+      type: 'Soup', cookDate: '02/05/2026', name: 'Cooked', generated: true,
+      inventory: [inv(40, 'west', 'Gastro', '02/05/2026')],
+    });
+    expect(findStalePlaceholders([cooked], TODAY)).toHaveLength(0);
+  });
+
+  test('does NOT retire a past placeholder with a pending shipment (food in transit)', () => {
+    const inFlight = makeBatch({
+      type: 'Soup', cookDate: '02/05/2026', name: 'In flight', generated: true,
+      inventory: [],
+      shipments: [{
+        id: 'sh-1', fromLoc: 'west', toLoc: 'centraal', storage: 'Gastro',
+        qty: 5, sentAt: '2026-05-02T08:00:00Z', arrived: false, cookDate: '02/05/2026',
+      }],
+    });
+    expect(findStalePlaceholders([inFlight], TODAY)).toHaveLength(0);
+  });
+
+  test('does NOT retire a cook-created (non-generated) batch', () => {
+    const cookCreated = makeBatch({
+      type: 'Soup', cookDate: '02/05/2026', name: 'Cook batch',
+      generated: false, inventory: [],
+    });
+    expect(findStalePlaceholders([cookCreated], TODAY)).toHaveLength(0);
+  });
+
+  test('does NOT retire a Dessert (only Soup + Main course are auto-managed)', () => {
+    const dessert = makeBatch({
+      type: 'Dessert', cookDate: '02/05/2026', name: 'Dessert',
+      generated: true, inventory: [],
+    });
+    expect(findStalePlaceholders([dessert], TODAY)).toHaveLength(0);
+  });
+});
+
 // ─── generateMissingPlaceholders ────────────────────────────────────────────
 
 describe('generateMissingPlaceholders', () => {
@@ -458,6 +529,32 @@ describe('scoredGreedyAssignment', () => {
     });
     scoredGreedyAssignment([old], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
     expect(old.services.length).toBe(0);
+  });
+
+  test('0-stock placeholder with a past cookDate is not recycled into a future slot', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+    ]);
+    // Leftover placeholder from a previous run: its cook day (Sun 03/05) has
+    // already passed and nothing was cooked. Only 2 days before the window —
+    // well inside the 5-day freshness cutoff, so the staleness rule alone
+    // would NOT catch it. An empty placeholder for a dead cook day must not
+    // be recycled into a future slot.
+    const stalePlaceholder = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Stale placeholder',
+      generated: true, inventory: [],
+    });
+    // A legitimate placeholder for the window day itself.
+    const freshPlaceholder = makeBatch({
+      type: 'Soup', cookDate: '05/05/2026', name: 'Fresh placeholder',
+      generated: true, inventory: [],
+    });
+    scoredGreedyAssignment(
+      [stalePlaceholder, freshPlaceholder], window,
+      fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS,
+    );
+    expect(stalePlaceholder.services.length).toBe(0);
+    expect(freshPlaceholder.services.length).toBeGreaterThan(0);
   });
 
   test('0-guest slot is skipped', () => {
