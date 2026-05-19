@@ -4,7 +4,7 @@ import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS } from './state';
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
 type DashBatch = Batch & { starch?: string | null };
 import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId, formatRelativeTime } from './utils';
-import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass, getTotalStock, getStockAt, getPendingFromShipments } from './core';
+import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass, getStockAt, getPendingFromShipments } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
 import { esc } from './modal';
@@ -317,13 +317,13 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
 
   if (ctx.liters !== undefined) {
     html += `<span class="dash-chip-liters">${ctx.liters} L</span>`;
-  } else if (ctx.showStock && getTotalStock(dish) > 0) {
+  } else if (ctx.showStock && getStockAt(dish, loc) > 0) {
     // toFixed(1) prevents float-precision dribble like 76.40000000000002 L
     // (which happens after a cancel-shipment merges qty back into an entry
     // whose original cookDate matched — the addition is exact-ish but the
-    // IEEE754 representation isn't, and getTotalStock just sums entries
+    // IEEE754 representation isn't, and getStockAt just sums entries
     // without rounding).
-    html += `<span class="dash-chip-liters">${getTotalStock(dish).toFixed(1)} L</span>`;
+    html += `<span class="dash-chip-liters">${getStockAt(dish, loc).toFixed(1)} L</span>`;
   }
 
   html += `<span class="dash-chip-arrow">${expanded ? '▾' : '›'}</span>
@@ -360,7 +360,7 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
     const cooked = isBatchCooked(dish);
     html += `<div class="dash-chip-detail-row">
       <span class="dash-chip-detail-label">Stock</span>
-      <span>${getTotalStock(dish).toFixed(1)} L ${cooked ? '<span class="dash-chip-badge-ok">cooked</span>' : '<span class="dash-chip-badge-warn">uncooked</span>'}</span>
+      <span>${getStockAt(dish, loc).toFixed(1)} L ${cooked ? '<span class="dash-chip-badge-ok">cooked</span>' : '<span class="dash-chip-badge-warn">uncooked</span>'}</span>
     </div>`;
     if (dish.cookDate) {
       html += `<div class="dash-chip-detail-row">
