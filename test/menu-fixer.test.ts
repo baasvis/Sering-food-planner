@@ -30,7 +30,7 @@
 // test/setup-dom-stubs.ts in the jest setupFiles list — that runs before
 // module imports here.
 
-import type { Batch, DishType, InventoryEntry, Location, Meal, Service, StorageType, KitchenEquipment } from '../shared/types';
+import type { Batch, Catering, CateringDish, DishType, InventoryEntry, Location, Meal, Service, StorageType, KitchenEquipment } from '../shared/types';
 import {
   allocatePotCaps,
   buildPlanningWindow,
@@ -40,6 +40,7 @@ import {
   findOrphanPlaceholders,
   findSpentBatches,
   findStalePlaceholders,
+  dropRetiredDishesFromCaterings,
   generateMissingPlaceholders,
   snapshotBatches,
   stripFutureServices,
@@ -351,6 +352,46 @@ describe('findStalePlaceholders (auto-retire dead placeholders)', () => {
       generated: true, inventory: [],
     });
     expect(findStalePlaceholders([dessert], TODAY)).toHaveLength(0);
+  });
+});
+
+// ─── dropRetiredDishesFromCaterings ────────────────────────────────────────
+
+describe('dropRetiredDishesFromCaterings', () => {
+  function catering(id: string, name: string, dishes: CateringDish[]): Catering {
+    return { id, name, date: null, guestCount: 50, deliveryMode: 'pickup', dishes, logisticsNotes: '' };
+  }
+  function dish(dishId: string, name: string, type: DishType = 'Soup'): CateringDish {
+    return { dishId, name, type };
+  }
+
+  test('removes retired dish refs and reports which caterings lost what', () => {
+    const c = catering('c-1', 'Protest march', [
+      dish('orphan-1', 'Mon soup 04/05'),
+      dish('real-1', 'Tomato soup'),
+    ]);
+    const dropped = dropRetiredDishesFromCaterings([c], new Set(['orphan-1']));
+    expect(c.dishes.map(d => d.dishId)).toEqual(['real-1']);
+    expect(dropped).toEqual([
+      { cateringId: 'c-1', cateringName: 'Protest march', dishName: 'Mon soup 04/05' },
+    ]);
+  });
+
+  test('leaves caterings untouched when none reference a retired batch', () => {
+    const c = catering('c-1', 'Event', [dish('real-1', 'Tomato soup')]);
+    const dropped = dropRetiredDishesFromCaterings([c], new Set(['orphan-1']));
+    expect(c.dishes.map(d => d.dishId)).toEqual(['real-1']);
+    expect(dropped).toEqual([]);
+  });
+
+  test('handles multiple caterings and multiple retired dishes', () => {
+    const c1 = catering('c-1', 'A', [dish('orphan-1', 'P1'), dish('orphan-2', 'P2')]);
+    const c2 = catering('c-2', 'B', [dish('orphan-1', 'P1'), dish('real-1', 'R')]);
+    const dropped = dropRetiredDishesFromCaterings([c1, c2], new Set(['orphan-1', 'orphan-2']));
+    expect(c1.dishes).toEqual([]);
+    expect(c2.dishes.map(d => d.dishId)).toEqual(['real-1']);
+    expect(dropped).toHaveLength(3);
+    expect(dropped.filter(d => d.cateringId === 'c-1')).toHaveLength(2);
   });
 });
 

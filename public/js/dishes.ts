@@ -1718,11 +1718,28 @@ export function deleteDish(id: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   const deletedBatch = structuredClone(d);
+  // Capture catering dish lists that reference this batch so an undo can
+  // restore them — cleanCateringRefs() below drops the dangling pointers.
+  const savedCateringDishes: { id: string; dishes: CateringDish[] }[] = [];
+  for (const c of S.caterings) {
+    if (c.dishes?.some(cd => cd.dishId === id)) {
+      savedCateringDishes.push({ id: c.id, dishes: structuredClone(c.dishes) });
+    }
+  }
   S.batches = S.batches.filter(x => x.id !== id);
+  cleanCateringRefs(id, null);
   closeModal(); rebuildPlanner(); rerenderCurrentView();
   pushUndo({
     label: 'Batch deleted',
-    restore: () => { S.batches.push(deletedBatch); rebuildPlanner(); rerenderCurrentView(); },
+    restore: () => {
+      S.batches.push(deletedBatch);
+      for (const snap of savedCateringDishes) {
+        const c = S.caterings.find(x => x.id === snap.id);
+        if (c) c.dishes = snap.dishes;
+      }
+      rebuildPlanner();
+      rerenderCurrentView();
+    },
     commit: () => { scheduleSave(); },
   });
 }

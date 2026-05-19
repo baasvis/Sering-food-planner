@@ -723,7 +723,19 @@ export function archiveDish(id: string, withRating: boolean, locScope?: Location
     rating,
   };
   S.archive.push(archiveEntry);
+  // Capture + drop catering refs to the archived batch so the catering's
+  // demand doesn't dangle on a dead id. Inlined rather than calling
+  // cleanCateringRefs (dishes.ts) — that import would be circular.
+  const savedCateringDishes: { id: string; dishes: CateringDish[] }[] = [];
+  for (const c of (S.caterings || [])) {
+    if (c.dishes?.some((cd: CateringDish) => cd.dishId === id)) {
+      savedCateringDishes.push({ id: c.id, dishes: structuredClone(c.dishes) });
+    }
+  }
   S.batches = S.batches.filter((x: Batch) => x.id !== id);
+  for (const c of (S.caterings || [])) {
+    if (c.dishes) c.dishes = c.dishes.filter((cd: CateringDish) => cd.dishId !== id);
+  }
   pendingRatings = { skill:0, speed:0, banger:0 };
   closeModal();
   rebuildPlanner();
@@ -732,6 +744,10 @@ export function archiveDish(id: string, withRating: boolean, locScope?: Location
     label: esc(d.name) + ' archived',
     restore: () => {
       S.batches.push(before);
+      for (const snap of savedCateringDishes) {
+        const c = (S.caterings || []).find(x => x.id === snap.id);
+        if (c) c.dishes = snap.dishes;
+      }
       const ai = S.archive ? S.archive.indexOf(archiveEntry) : -1;
       if (ai >= 0) S.archive!.splice(ai, 1);
       rebuildPlanner();

@@ -11,7 +11,7 @@
 // same-recipe peers are intentional (audit S7) and counted as distinct
 // menu options for peer-share math.
 
-import type { Batch, DishType, Location, Meal, KitchenEquipment } from '@shared/types';
+import type { Batch, DishType, Location, Meal, KitchenEquipment, Catering } from '@shared/types';
 import { S } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './utils';
 import {
@@ -192,6 +192,32 @@ export function findStalePlaceholders(batches: Batch[], todayIso: string): Batch
     if (!cookIso) return false;
     return cookIso < todayIso;
   });
+}
+
+/**
+ * Drop catering dish references that point at a now-retired batch. Mutates
+ * each catering's `dishes` in place (same as the delete branch of
+ * `cleanCateringRefs` in dishes.ts) and returns the (catering, dish) pairs
+ * that were removed so the caller can warn about them. Without this, a
+ * catering left holding a retired placeholder's id silently stops counting
+ * toward any real dish's required quantity — the demand vanishes onto a
+ * dead id that no live batch matches.
+ */
+export function dropRetiredDishesFromCaterings(
+  caterings: Catering[],
+  retiredIds: Set<string>,
+): { cateringId: string; cateringName: string; dishName: string }[] {
+  const dropped: { cateringId: string; cateringName: string; dishName: string }[] = [];
+  for (const c of caterings) {
+    if (!c.dishes || c.dishes.length === 0) continue;
+    for (const d of c.dishes) {
+      if (retiredIds.has(d.dishId)) {
+        dropped.push({ cateringId: c.id, cateringName: c.name, dishName: d.name });
+      }
+    }
+    c.dishes = c.dishes.filter(d => !retiredIds.has(d.dishId));
+  }
+  return dropped;
 }
 
 // ── Placeholder generation ──────────────────────────────────────────────────
@@ -959,12 +985,19 @@ function setFixMyMenuLoading(loading: boolean): void {
 function _fixMyMenuBody(): void {
   stripFutureServices(S.batches);
 
+  // Caterings that lost a placeholder dish to orphan cleanup — collected here
+  // and surfaced as warnings after collectWarnings() so the drop isn't silent.
+  let droppedFromCaterings: { cateringId: string; cateringName: string; dishName: string }[] = [];
+
   const orphans = findOrphanPlaceholders(S.batches);
   if (orphans.length > 0) {
     const orphanIds = new Set(orphans.map(b => b.id));
     S.batches = S.batches.filter(b => !orphanIds.has(b.id));
     if (!S.deletedBatches) S.deletedBatches = [];
     for (const id of orphanIds) S.deletedBatches.push(id);
+    // A retired placeholder may still be pinned to a catering — drop those
+    // dangling refs so the catering's demand doesn't vanish onto a dead id.
+    droppedFromCaterings = dropRetiredDishesFromCaterings(S.caterings || [], orphanIds);
   }
 
   // Retire "spent" batches (total stock=0, no pending shipments, all services
@@ -1064,6 +1097,13 @@ function _fixMyMenuBody(): void {
       anchor: { kind: 'batch', batchId: eb.id },
     });
   }
+  for (const dropped of droppedFromCaterings) {
+    warnings.push({
+      category: 'catering-dish-retired',
+      message: `Catering "${dropped.cateringName}" lost placeholder "${dropped.dishName}" — Fix My Menu retired the unused placeholder. Pick a real dish for that catering.`,
+      anchor: { kind: 'catering', cateringId: dropped.cateringId },
+    });
+  }
 
   markFixMyMenuRun();
   rerenderCurrentView();
@@ -1112,6 +1152,7 @@ export type WarningCategory =
   | 'over-pot-cap'
   | 'burner-overload'
   | 'catering-no-dishes'
+  | 'catering-dish-retired'
   | 'undeliverable-centraal'
   | 'centraal-batch-at-west';
 
@@ -1382,6 +1423,7 @@ const CATEGORY_ORDER: WarningCategory[] = [
   'burner-overload',         // can cook in shifts (less urgent)
   'stale-with-stock',        // decision needed (use or freeze)
   'catering-no-dishes',      // admin
+  'catering-dish-retired',   // admin — placeholder cleaned up, catering needs a real dish
 ];
 
 function categoryHeader(c: WarningCategory): { title: string; hint: string } {
@@ -1394,6 +1436,7 @@ function categoryHeader(c: WarningCategory): { title: string; hint: string } {
     case 'burner-overload':        return { title: '🔥 Not enough gas burners', hint: 'You\'ll need to cook in shifts that day.' };
     case 'stale-with-stock':       return { title: '⏰ Old food still around', hint: 'Either use it today or freeze it before it spoils.' };
     case 'catering-no-dishes':     return { title: '📝 Caterings without dishes', hint: 'Pick what they\'re getting from the menu.' };
+    case 'catering-dish-retired':  return { title: '🍲 Catering lost a placeholder', hint: 'A placeholder this catering used was cleaned up — pick a real dish.' };
   }
 }
 
