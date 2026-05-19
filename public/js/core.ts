@@ -76,6 +76,23 @@ export function getServeableTotalStock(b: Batch): number {
   return settled + inTransit;
 }
 
+/** True only when the batch's *remaining* stock is entirely Frozen: it has at
+ *  least one Frozen entry with qty > 0 and no non-Frozen entry with qty > 0.
+ *  A batch with no live stock at all — empty inventory, or only depleted /
+ *  0-qty marker entries such as an emergency placeholder's location pin — is
+ *  NOT frozen; it belongs in the To-cook group. Display bucketing only (the
+ *  planner pool + dishes screens). Distinct from menu-fixer's `isOnlyFrozen`,
+ *  which keys on storage type alone for auto-rotation exclusion. */
+export function isBatchAllFrozen(b: Batch): boolean {
+  let hasFrozenStock = false;
+  for (const e of (b.inventory || [])) {
+    if ((e.qty || 0) <= 0) continue;
+    if (e.storage === 'Frozen') hasFrozenStock = true;
+    else return false;
+  }
+  return hasFrozenStock;
+}
+
 export function getPendingFromShipments(b: Batch, loc: Location): number {
   return (b.shipments || [])
     .filter(s => !s.arrived && s.toLoc === loc)

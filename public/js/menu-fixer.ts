@@ -171,6 +171,29 @@ export function findSpentBatches(batches: Batch[]): Batch[] {
   );
 }
 
+/**
+ * Stale generated placeholders: a Fix-My-Menu placeholder whose cook day is
+ * already in the past but that never produced any stock — a dead cook plan.
+ * Like findSpentBatches but keyed on a past cookDate rather than past
+ * services, so it also catches placeholders that were never assigned a
+ * service (or that got a recipe but no service) — those slip through both
+ * findOrphanPlaceholders (a recipe disqualifies them) and findSpentBatches
+ * (no services disqualifies them). Only `generated` placeholders are
+ * returned; cook-created batches are never auto-removed. The pending-shipment
+ * guard protects food that's been packed but is still in transit.
+ */
+export function findStalePlaceholders(batches: Batch[], todayIso: string): Batch[] {
+  return batches.filter(b => {
+    if (b.generated !== true) return false;
+    if (!TYPES_TO_PLAN.includes(b.type)) return false;
+    if (getTotalStock(b) > 0) return false;
+    if (!(b.shipments || []).every(s => s.arrived)) return false;
+    const cookIso = cookDateToIso(b.cookDate);
+    if (!cookIso) return false;
+    return cookIso < todayIso;
+  });
+}
+
 // ── Placeholder generation ──────────────────────────────────────────────────
 
 interface PlaceholderInput {
@@ -469,14 +492,17 @@ interface AbandonedSlot {
  *   - Staleness uses batch.cookDate + FRESH_LIMIT_DAYS as 5-day hard
  *     cutoff. Within 5 days, scoreCandidate applies a graduated penalty.
  *   - Capacity check: getTotalStock(b) >= calcReqLive(b) for cooked
- *     batches. Empty-inventory placeholders pass automatically — capacity
- *     is whatever the cook decides at confirm-cooked time.
+ *     batches. Empty-inventory placeholders pass on capacity (the cook
+ *     decides at confirm-cooked time) — but only if their cook day is today
+ *     or later. A placeholder for a cook day that has already passed is a
+ *     dead plan and must not be recycled into a future slot.
  */
 function scoredHardConstraintsOk(
   c: CandidatePlace,
   allBatches: Batch[],
   calcReq: (b: Batch) => number,
   getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+  todayIso: string,
 ): boolean {
   const { batch, slot, day, type } = c;
   if (batch.type !== type) return false;
@@ -493,7 +519,10 @@ function scoredHardConstraintsOk(
   const serveableStock = getServeableTotalStock(batch);
   // 5-day hard cutoff for cooked stock.
   if (totalStock > 0 && diffDaysIso(cookIso, day.isoDate) >= FRESH_LIMIT_DAYS) return false;
-  if (totalStock <= 0) return true;  // placeholder — capacity is whatever the cook decides
+  // Empty placeholder: capacity is whatever the cook decides at confirm time,
+  // but only eligible if its cook day hasn't already passed (no retroactive
+  // cooking — a stale empty placeholder must not be slotted into the future).
+  if (totalStock <= 0) return cookIso >= todayIso;
   // Capacity check: tentatively add the service and verify the batch's
   // total demand still fits its SERVEABLE stock (Daan smoke 2026-05-12:
   // frozen qty should stay frozen until explicitly assigned; the auto
@@ -642,6 +671,7 @@ export function forcedAssignmentPrePass(
   getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
   potCaps: Map<string, number>,
 ): { committed: number } {
+  const todayIso = window[0]?.isoDate ?? '';
   let committed = 0;
   let changed = true;
   let safetyMax = 200;
@@ -657,7 +687,7 @@ export function forcedAssignmentPrePass(
           const eligible: CandidatePlace[] = [];
           for (const batch of allBatches) {
             const c: CandidatePlace = { batch, slot, day, type };
-            if (scoredHardConstraintsOk(c, allBatches, calcReq, getGuestsFn)) {
+            if (scoredHardConstraintsOk(c, allBatches, calcReq, getGuestsFn, todayIso)) {
               eligible.push(c);
               if (eligible.length > 1) break;
             }
@@ -688,6 +718,7 @@ export function scoredGreedyAssignment(
   getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
   potCaps: Map<string, number>,
 ): { committed: number } {
+  const todayIso = window[0]?.isoDate ?? '';
   let committed = 0;
   let safetyMax = 500;
   while (safetyMax-- > 0) {
@@ -703,7 +734,7 @@ export function scoredGreedyAssignment(
           if (filled >= SLOTS_PER_TYPE) continue;
           for (const batch of allBatches) {
             const c: CandidatePlace = { batch, slot, day, type };
-            if (!scoredHardConstraintsOk(c, allBatches, calcReq, getGuestsFn)) continue;
+            if (!scoredHardConstraintsOk(c, allBatches, calcReq, getGuestsFn, todayIso)) continue;
             const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn);
             if (score <= 0) continue;
             if (best === null
@@ -736,6 +767,7 @@ export function runFallbackLadder(
   calcReq: (b: Batch) => number,
   getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
 ): { teamsFormed: number; emergenciesCreated: number; abandoned: AbandonedSlot[]; emergencyBatches: Batch[] } {
+  const todayIso = window[0]?.isoDate ?? '';
   let teamsFormed = 0;
   let emergenciesCreated = 0;
   const abandoned: AbandonedSlot[] = [];
@@ -751,7 +783,7 @@ export function runFallbackLadder(
         while (filled < SLOTS_PER_TYPE && safety-- > 0) {
           const startFilled = filled;
           const team = findCombinationTeam(
-            allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq,
+            allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq, todayIso,
           );
           if (team.length > 0) {
             for (const b of team) b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
@@ -797,6 +829,7 @@ function findCombinationTeam(
   guests: number,
   existingPeers: number,
   calcReq: (b: Batch) => number,
+  todayIso: string,
 ): Batch[] {
   const eligible = allBatches.filter(b => {
     if (b.type !== type) return false;
@@ -804,10 +837,12 @@ function findCombinationTeam(
     if (isOnlyFrozen(b)) return false;
     if (alreadyInSlot(b, loc, isoDate, meal)) return false;
     if (!isServableBy(b.cookDate, isoDate, meal, loc, primaryLoc(b))) return false;
+    const cookIso = cookDateToIso(b.cookDate);
+    if (!cookIso) return false;
     if (getTotalStock(b) > 0) {
-      const cookIso = cookDateToIso(b.cookDate);
-      if (!cookIso) return false;
       if (diffDaysIso(cookIso, isoDate) >= FRESH_LIMIT_DAYS) return false;
+    } else if (cookIso < todayIso) {
+      return false;  // empty placeholder for a cook day that has already passed
     }
     return true;
   });
@@ -932,19 +967,23 @@ function _fixMyMenuBody(): void {
     for (const id of orphanIds) S.deletedBatches.push(id);
   }
 
-  // Retire "spent" batches: total stock=0, no pending shipments, all
-  // services in past. Self-healing — even if SSE resurrects them, the
-  // next run wipes them. Catering refs to spent batches are also cleaned
-  // so we don't leave dangling pointers.
-  const spent = findSpentBatches(S.batches);
-  if (spent.length > 0) {
-    const spentIds = new Set(spent.map(b => b.id));
-    S.batches = S.batches.filter(b => !spentIds.has(b.id));
+  // Retire "spent" batches (total stock=0, no pending shipments, all services
+  // in the past) and "stale" generated placeholders (a Fix-My-Menu placeholder
+  // for a cook day that has already passed with nothing cooked). Self-healing —
+  // even if SSE resurrects them, the next run wipes them. Catering refs to
+  // retired batches are also cleaned so we don't leave dangling pointers.
+  const todayIso = dateToIso(getToday());
+  const retireIds = new Set([
+    ...findSpentBatches(S.batches),
+    ...findStalePlaceholders(S.batches, todayIso),
+  ].map(b => b.id));
+  if (retireIds.size > 0) {
+    S.batches = S.batches.filter(b => !retireIds.has(b.id));
     if (!S.deletedBatches) S.deletedBatches = [];
-    for (const id of spentIds) S.deletedBatches.push(id);
+    for (const id of retireIds) S.deletedBatches.push(id);
     for (const c of (S.caterings || [])) {
       if (c.dishes && c.dishes.length > 0) {
-        c.dishes = c.dishes.filter(d => !spentIds.has(d.dishId));
+        c.dishes = c.dishes.filter(d => !retireIds.has(d.dishId));
       }
     }
   }
@@ -1034,7 +1073,7 @@ function _fixMyMenuBody(): void {
     cleaned: orphans.length,
     created: newPlaceholders.length + phaseC.emergenciesCreated,
     assigned: phaseB0.committed + phaseB.committed,
-    retired: spent.length,
+    retired: retireIds.size,
     placeholderNames: [...newPlaceholders.map(p => p.name), ...phaseC.emergencyBatches.map(p => p.name)],
     teamsFormed: phaseC.teamsFormed,
     warnings,
@@ -1362,7 +1401,7 @@ function showResultsModal(report: ResultsReport): void {
   _lastReport = report;
   const { cleaned, created, assigned, retired, placeholderNames, teamsFormed, warnings } = report;
   const summary: string[] = [];
-  if (retired > 0) summary.push(`<div>🗑 Retired ${retired} spent batch${retired === 1 ? '' : 'es'} (food served, all services in the past)</div>`);
+  if (retired > 0) summary.push(`<div>🗑 Retired ${retired} old batch${retired === 1 ? '' : 'es'} (food used up, or a placeholder for a cook day that already passed)</div>`);
   if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
   if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
   if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);

@@ -1,7 +1,7 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet, todayIso } from './utils';
 import { pushUndo } from './undo';
-import { rebuildPlanner, isBatchCooked, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
+import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { trackEvent } from './telemetry';
@@ -194,19 +194,12 @@ export function logisticsRowClass(d: Batch) {
 }
 
 export function renderDishGroups(dishes: Batch[]) {
-  // Frozen now means "any inventory entry uses Frozen storage" since a single
-  // batch can hold multiple entries. A batch with both Gastro and Frozen
-  // entries counts as cooked (Gastro is the primary working stock); we only
-  // pull batches into the Frozen section when ALL their stock is Frozen.
-  const allFrozen = (b: Batch) => {
-    const inv = b.inventory || [];
-    const totalQty = inv.reduce((s, e) => s + (e.qty || 0), 0);
-    if (totalQty <= 0) return false;
-    return inv.every(e => e.qty === 0 || e.storage === 'Frozen');
-  };
-  const toCook = dishes.filter(d => !isBatchCooked(d) && !allFrozen(d));
-  const cooked = dishes.filter(d => isBatchCooked(d) && !allFrozen(d));
-  const frozen = dishes.filter(d => allFrozen(d));
+  // A batch counts as Frozen here only when ALL its remaining stock is Frozen
+  // (a batch with both Gastro and Frozen stock counts as cooked — Gastro is
+  // the primary working stock). See isBatchAllFrozen in core.ts.
+  const toCook = dishes.filter(d => !isBatchCooked(d) && !isBatchAllFrozen(d));
+  const cooked = dishes.filter(d => isBatchCooked(d) && !isBatchAllFrozen(d));
+  const frozen = dishes.filter(d => isBatchAllFrozen(d));
 
   let html = '';
 
@@ -252,7 +245,7 @@ export function renderBatchTileOverview(d: Batch) {
   // Stale = ANY non-Frozen inventory entry past its shelf life. Surfaces the
   // worst-case so the cook investigates via Edit modal Power view.
   const hasStaleEntry = (d.inventory || []).some(e => e.qty > 0 && e.storage !== 'Frozen' && isStaleEntry(e));
-  const allFrozen = (d.inventory || []).length > 0 && (d.inventory || []).every(e => e.qty === 0 || e.storage === 'Frozen');
+  const allFrozen = isBatchAllFrozen(d);
   const allAg = [...(d.allergens || []), ...(d.extraAllergens || [])];
   const svcLbls = (d.services || []).map(s => {
     const ml = s.meal === 'lunch' ? 'L' : 'D';
@@ -341,9 +334,8 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
   const transitCls = hasPendingShipment ? ' in-transit' : '';
   // Stale = ANY non-Frozen entry past shelf life.
   const hasStaleEntry = (d.inventory || []).some(e => e.qty > 0 && e.storage !== 'Frozen' && isStaleEntry(e));
-  // Frozen = ALL stock at Frozen storage (matches renderDishGroups).
-  const inv = d.inventory || [];
-  const allFrozen = inv.length > 0 && inv.every(e => e.qty === 0 || e.storage === 'Frozen');
+  // Frozen = ALL remaining stock at Frozen storage (see isBatchAllFrozen).
+  const allFrozen = isBatchAllFrozen(d);
   const frozenCls = allFrozen ? ' frozen-row' : '';
   const staleCls = (hasStaleEntry || isStale) ? ' stale-row' : '';
   const expandCls = isExpanded ? ' expanded' : '';

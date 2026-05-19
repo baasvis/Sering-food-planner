@@ -2,7 +2,7 @@ import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, M
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, todayIso } from './utils';
 import { computeSupplyDemand } from '@shared/supply-demand';
-import { rebuildPlanner, isBatchCooked, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry } from './core';
+import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, cleanCateringRefs } from './dishes';
@@ -183,14 +183,6 @@ export function renderLocationPlan(loc: string) {
   document.getElementById('planner-content').innerHTML = html;
 }
 
-// Unified-batch: "all frozen" means every non-empty inventory entry is
-// Frozen. Single legacy `b.storage === 'Frozen'` check no longer fits.
-function isAllFrozen(b: Batch): boolean {
-  const inv = b.inventory || [];
-  if (inv.length === 0) return false;
-  return inv.every(e => e.qty === 0 || e.storage === 'Frozen');
-}
-
 // ── BATCH POOL (per-type, below each calendar) ─────────
 //
 // A batch shows up in a location's pool when it's either physically here
@@ -231,9 +223,9 @@ export function renderTypeBatchPool(loc: string, typeKey: string, typeLabel: str
   </button>`;
 
   if (isOpen) {
-    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && !isAllFrozen(d)));
-    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && !isAllFrozen(d)));
-    const frozen = poolBatches.filter(d => isAllFrozen(d));
+    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && !isBatchAllFrozen(d)));
+    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && !isBatchAllFrozen(d)));
+    const frozen = poolBatches.filter(d => isBatchAllFrozen(d));
 
     const renderGroup = (batches: Batch[]) => {
       return `<div class="batch-tile-grid">${batches.map(b => renderBatchTile(b)).join('')}</div>`;
@@ -273,9 +265,9 @@ export function renderShowAllBatches(loc: string) {
   </button>`;
 
   if (S.showAllBatches) {
-    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && !isAllFrozen(d)));
-    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && !isAllFrozen(d)));
-    const frozen = poolBatches.filter(d => isAllFrozen(d));
+    const toCook = sortByCookDate(poolBatches.filter(d => !isBatchCooked(d) && !isBatchAllFrozen(d)));
+    const cooked = sortByCookDate(poolBatches.filter(d => isBatchCooked(d) && !isBatchAllFrozen(d)));
+    const frozen = poolBatches.filter(d => isBatchAllFrozen(d));
 
     const renderGroup = (batches: Batch[]) => {
       return `<div class="batch-tile-grid">${batches.map(b => renderBatchTile(b)).join('')}</div>`;

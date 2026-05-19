@@ -20,6 +20,7 @@ import {
   getServeableStockAt,
   getServeableTotalStock,
   getPendingFromShipments,
+  isBatchAllFrozen,
   consolidateInventory,
   addInventory,
   removeInventory,
@@ -506,5 +507,61 @@ describe('isStaleEntry', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+// ── isBatchAllFrozen ──────────────────────────────────────────────────────
+//
+// Display-only frozen bucketing for the planner pool + dishes screens. "All
+// frozen" means the batch's *remaining* stock is entirely Frozen. A batch with
+// no live stock — empty inventory, or only 0-qty marker entries such as an
+// emergency placeholder's location pin — is NOT frozen; it belongs in To-cook.
+
+describe('isBatchAllFrozen', () => {
+  it('is false for an emergency-placeholder shape (single 0-qty Gastro entry)', () => {
+    // createEmergencyPlaceholder pins the cook loc with a {Gastro, qty:0}
+    // entry — that marker must NOT make the placeholder read as frozen.
+    const b = makeBatch({ inventory: [entry({ storage: 'Gastro', qty: 0 })] });
+    expect(isBatchAllFrozen(b)).toBe(false);
+  });
+
+  it('is false for empty inventory', () => {
+    expect(isBatchAllFrozen(makeBatch({ inventory: [] }))).toBe(false);
+  });
+
+  it('is true when all live stock is Frozen', () => {
+    const b = makeBatch({ inventory: [entry({ storage: 'Frozen', qty: 50 })] });
+    expect(isBatchAllFrozen(b)).toBe(true);
+  });
+
+  it('is false when the batch has live Gastro stock', () => {
+    const b = makeBatch({ inventory: [entry({ storage: 'Gastro', qty: 80 })] });
+    expect(isBatchAllFrozen(b)).toBe(false);
+  });
+
+  it('ignores depleted 0-qty non-Frozen entries — still reads as all-frozen', () => {
+    const b = makeBatch({
+      inventory: [
+        entry({ storage: 'Gastro', qty: 0, cookDate: '01/05/2026' }),
+        entry({ storage: 'Frozen', qty: 50, cookDate: '03/05/2026' }),
+      ],
+    });
+    expect(isBatchAllFrozen(b)).toBe(true);
+  });
+
+  it('is false when live Gastro stock sits alongside Frozen stock', () => {
+    const b = makeBatch({
+      inventory: [
+        entry({ storage: 'Gastro', qty: 30, cookDate: '01/05/2026' }),
+        entry({ storage: 'Frozen', qty: 50, cookDate: '03/05/2026' }),
+      ],
+    });
+    expect(isBatchAllFrozen(b)).toBe(false);
+  });
+
+  it('treats a missing inventory array as not-frozen (defensive)', () => {
+    const b = makeBatch();
+    (b as unknown as { inventory: null }).inventory = null;
+    expect(isBatchAllFrozen(b)).toBe(false);
   });
 });
