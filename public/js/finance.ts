@@ -8,6 +8,26 @@ import { registerRenderer } from './navigate';
 // FINANCE — Revenue overview from Tebi POS
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Wire shapes returned by the finance endpoints (routes/finance.ts). S.financeData
+// and S.financeProducts are typed Record<string, unknown>[] in AppState, so we
+// narrow the rows to these local interfaces at the point of use.
+interface FinanceRow {
+  date: string;
+  location: string;
+  grossRevenue: number;
+  netRevenue: number;
+  sales: number;
+  covers: number;
+}
+
+interface FinanceProductRow {
+  productName: string;
+  productCategory: string;
+  quantity: number;
+  grossRevenue: number;
+  netRevenue: number;
+}
+
 export function getFinanceMonday(offset: any) {
   const d = new Date();
   const day = d.getDay();
@@ -166,8 +186,9 @@ export async function renderFinance() {
   }
 
   // Group data by date and location
-  const byDateLoc = {};
-  (S.financeData || []).forEach(row => {
+  const financeRows = (S.financeData || []) as unknown as FinanceRow[];
+  const byDateLoc: Record<string, FinanceRow> = {};
+  financeRows.forEach(row => {
     const key = `${row.date}|${row.location}`;
     byDateLoc[key] = row;
   });
@@ -179,7 +200,7 @@ export async function renderFinance() {
   const monthStart = new Date(monday.getFullYear(), monday.getMonth(), 1);
   const monthEnd = new Date(monday.getFullYear(), monday.getMonth() + 1, 0);
   let monthGross = 0, monthNet = 0, monthSales = 0, monthCovers = 0;
-  (S.financeData || []).forEach(row => {
+  financeRows.forEach(row => {
     if (row.location !== 'all') return;
     if (row.date >= fmtDate(monthStart) && row.date <= fmtDate(monthEnd)) {
       monthGross += row.grossRevenue || 0;
@@ -316,11 +337,15 @@ export async function renderFinance() {
 
 // ── Product Breakdown ────────────────────────────────────────────────────────
 
+// Aggregated row shapes built locally from FinanceProductRow rows.
+interface CategoryAgg { category: string; gross: number; net: number; qty: number }
+interface ProductAgg { name: string; category: string; gross: number; net: number; qty: number }
+
 export function renderProductBreakdown() {
-  const products = S.financeProducts || [];
+  const products = (S.financeProducts || []) as unknown as FinanceProductRow[];
 
   // Aggregate by category for the bar chart
-  const catMap = {};
+  const catMap: Record<string, CategoryAgg> = {};
   let totalGross = 0;
   for (const row of products) {
     const cat = row.productCategory || 'Other';
@@ -330,11 +355,11 @@ export function renderProductBreakdown() {
     catMap[cat].qty += row.quantity || 0;
     totalGross += row.grossRevenue || 0;
   }
-  const categories = Object.values(catMap).sort((a: any, b: any) => b.gross - a.gross);
+  const categories = Object.values(catMap).sort((a, b) => b.gross - a.gross);
   const maxCatGross = categories.length > 0 ? categories[0].gross : 1;
 
   // Aggregate by product for the table (merge across dates)
-  const prodMap = {};
+  const prodMap: Record<string, ProductAgg> = {};
   for (const row of products) {
     const key = row.productName;
     if (!prodMap[key]) {
@@ -344,7 +369,7 @@ export function renderProductBreakdown() {
     prodMap[key].net += row.netRevenue || 0;
     prodMap[key].qty += row.quantity || 0;
   }
-  const productList = Object.values(prodMap).sort((a: any, b: any) => b.gross - a.gross);
+  const productList = Object.values(prodMap).sort((a, b) => b.gross - a.gross);
 
   // Category bar colors (cycle through a palette)
   const catColors = ['#5b6abf', '#4CAF50', '#FF9800', '#E91E63', '#00BCD4', '#9C27B0', '#FF5722', '#607D8B', '#795548', '#8BC34A'];

@@ -69,7 +69,7 @@ export function selectFeedbackType(key: any) {
 
 export async function submitFeedback(screen: any) {
   trackEvent('feedback_submit');
-  const text = document.getElementById('feedback-text')?.value?.trim();
+  const text = (document.getElementById('feedback-text') as HTMLTextAreaElement | null)?.value?.trim();
   if (!text) { alert('Please write something before submitting'); return; }
 
   const feedback = {

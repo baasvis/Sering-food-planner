@@ -5,7 +5,7 @@ import { rebuildPlanner, typeBadge, typeBadgeClass, TYPES, chipClass } from './c
 import { showModal, closeModal, esc } from './modal';
 import { doLogout } from './auth';
 import { openRecipeEditor, openRecipeDetail } from './recipe-editor';
-import type { DishType } from '@shared/types';
+import type { DishType, Batch } from '@shared/types';
 import { registerRenderer } from './navigate';
 
 // ── RECIPE INDEX ──────────────────────────────────────────
@@ -55,8 +55,6 @@ export function renderRecipeIndex() {
   <div class="btn-row" style="margin-bottom:12px;">
     <button class="btn btn-primary" data-testid="recipe-create-btn" onclick="openRecipeEditor()">+ Create recipe</button>
     ${isDirector ? '<button class="btn btn-primary" data-testid="recipe-ai-btn" onclick="openRecipeEditor(undefined, { aiMode: true })" title="Draft a recipe with AI" style="background:var(--purple,#7c3aed);border-color:var(--purple,#7c3aed);">✨ AI helper</button>' : ''}
-    <button class="btn" onclick="recalcAllCosts()" title="Recalculate all recipe costs from current ingredient prices">Recalculate costs</button>
-    <button class="btn" onclick="importCookedAmounts()" title="Re-import cooked amounts from Google Sheets for all recipes">Import cooked amounts</button>
     <span style="font-size:12px;color:var(--text2);margin-left:8px;">${v2Count} recipe${v2Count !== 1 ? 's' : ''}</span>
   </div>
   <input class="ri-search" id="ri-search-input" placeholder="Search recipes..." value="${esc(riSearch)}" oninput="updateRiSearch(this)" />
@@ -149,7 +147,9 @@ export function updateRecipeResults() {
         <td style="text-align:center;">—</td>
         <td style="white-space:nowrap;">
           <button class="btn btn-sm" onclick="openRecipeEditor('${esc(r.id)}')">Edit</button>
-          <button class="btn btn-sm" onclick="addDishFromV2Recipe('${esc(r.id)}')">+ Menu</button>
+          ${r.type === 'Topping' || r.type === 'Bread'
+            ? ''
+            : `<button class="btn btn-sm" onclick="addDishFromV2Recipe('${esc(r.id)}')">+ Menu</button>`}
           <button class="btn btn-sm btn-danger" onclick="deleteV2Recipe('${esc(r.id)}')">✕</button>
         </td>
       </tr>`;
@@ -206,35 +206,6 @@ export function openEditRecipe(_id: any) { toastError(V1_DEPRECATED_MSG); }
 export function saveEditRecipe(_id: any) { toastError(V1_DEPRECATED_MSG); }
 export function deleteRecipeIndex(_id: any) { toastError(V1_DEPRECATED_MSG); }
 
-// Add a dish to the menu planner from a recipe in the index
-export async function importCookedAmounts() {
-  try {
-    toast('Importing cooked amounts from Google Sheets... this may take a while');
-    const result = await apiPost('/api/recipes/import-cooked-amounts', {}) as { updated: number; skipped: number; failed: number; total: number };
-    // Refresh the recipe list from server
-    const freshRecipes = await apiGet('/api/recipes') as typeof S.recipes;
-    S.recipes = freshRecipes;
-    updateRecipeResults();
-    toast(`Cooked amounts imported: ${result.updated} updated, ${result.failed} failed, ${result.skipped} skipped out of ${result.total}`);
-  } catch (e: unknown) {
-    toastError('Could not import cooked amounts: ' + (e instanceof Error ? e.message : 'Unknown error'));
-  }
-}
-
-export async function recalcAllCosts() {
-  try {
-    toast('Recalculating all recipe costs...');
-    const updated = await apiPost('/api/recipes/recalculate-costs', {}) as { updated: number };
-    // Refresh the recipe list from server
-    const freshRecipes = await apiGet('/api/recipes') as typeof S.recipes;
-    S.recipes = freshRecipes;
-    updateRecipeResults();
-    toast(`Costs recalculated (${updated.updated} updated)`);
-  } catch (e: unknown) {
-    toastError('Could not recalculate costs: ' + (e instanceof Error ? e.message : 'Unknown error'));
-  }
-}
-
 // addDishFromRecipe was the v1-index path. Replaced with a deprecated stub —
 // addDishFromV2Recipe (below) is the supported path now.
 export function addDishFromRecipe(_recipeId: any) { toastError(V1_DEPRECATED_MSG); }
@@ -243,39 +214,37 @@ export function addDishFromRecipe(_recipeId: any) { toastError(V1_DEPRECATED_MSG
 export function addDishFromV2Recipe(recipeId: string) {
   const r = S.recipes.find(x => x.id === recipeId);
   if (!r) return;
-  // Snapshot ingredients into JSON for order system compatibility
-  const snapshotIngredients = r.ingredients.map(ing => ({
-    name: ing.ingredientName || ing.flexLabel || 'Unknown',
-    amount: ing.rawAmount,
-    unit: ing.unit,
-    source: '',
-    cost: 0,
-  }));
+  // Topping & Bread recipes feed Supplies, not the planner. Guard here too —
+  // validateBatch would reject the type, but a clear toast beats a 400.
+  if (r.type === 'Topping' || r.type === 'Bread') {
+    toastError(`"${r.name}" is a ${r.type} recipe — link it to a Toppings & bread item instead.`);
+    return;
+  }
   const allAllergens = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
-  const newDish = {
+  // Unified-batch shape. The legacy-field version (stock/location/inTransit/
+  // recipeSheetId/...) shipped on the "+ Menu" button and failed every save —
+  // validateBatch rejects a batch with no inventory[]. The `: Batch`
+  // annotation makes the compiler catch a regression; see
+  // test/batch-construction.test.ts for the CI guard.
+  const newDish: Batch = {
     id: newId(),
     name: r.name,
-    type: r.type || 'Soup',
-    stock: 0,
+    type: (r.type || 'Soup') as DishType,
     serving: r.servingSize || 280,
-    storage: 'Gastro' as const,
-    location: 'west' as const,
-    inTransit: false,
-    recipeSheetId: null,
-    recipeVolume: r.recipeVolume || null,
-    recipeIngredients: snapshotIngredients,
+    inventory: [],
+    shipments: [],
     allergens: allAllergens,
-    extraAllergens: [] as string[],
+    extraAllergens: [],
     orderFor: false,
-    parentId: null,
     cookDate: null,
     note: '',
-    services: [] as never[],
+    services: [],
     createdAt: new Date().toISOString(),
     recipeId: r.id,
     actualIngredients: null,
     cookNotes: '',
     stockDeducted: false,
+    generated: false,
   };
   S.batches.push(newDish);
   rebuildPlanner();

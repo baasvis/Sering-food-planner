@@ -115,6 +115,37 @@ import authRouter, { requireAuth } from './routes/auth';
 app.use('/api/auth', authRouter);
 app.use('/api', requireAuth);
 
+// ── Maintenance mode ──
+//
+// Set MAINTENANCE_MODE=1 in Railway env to switch the app into read-only mode
+// during a planned deploy window. GETs and SSE keep flowing so cooks see
+// current state; every write (POST/PATCH/PUT/DELETE) gets a friendly 503 so
+// nothing can mutate the DB while a migration is running.
+//
+// Health, login, telemetry, and coverage are mounted ABOVE requireAuth and
+// are untouched by this gate — Railway healthchecks keep passing, the dev
+// login path keeps working for the cook running the smoke test, and the
+// frontend can still emit telemetry about the maintenance toast itself.
+//
+// Frontend behavior: scheduleSave() retries 5xx with exponential backoff, so
+// once MAINTENANCE_MODE is turned off the queued saves drain automatically.
+// Cooks see a "Save failed: maintenance" toast briefly during the window.
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  const flag = process.env.MAINTENANCE_MODE;
+  if (!flag || flag === '0' || flag === 'false' || flag === '') {
+    next();
+    return;
+  }
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    next();
+    return;
+  }
+  res.status(503).json({
+    error: 'maintenance',
+    message: 'Planner is upgrading. Please refresh in a few minutes.',
+  });
+});
+
 import dataRouter from './routes/data';
 import batchesRouter from './routes/batches';
 import recipesRouter from './routes/recipes';
@@ -126,6 +157,8 @@ import hanosRouter from './routes/hanos';
 import financeRouter from './routes/finance';
 import eventsRouter from './routes/events';
 import healthRouter from './routes/health';
+import competenciesRouter from './routes/competencies';
+import suppliesRouter from './routes/supplies';
 
 app.use('/api/data',              dataRouter);
 app.use('/api/batches',           batchesRouter);
@@ -138,6 +171,8 @@ app.use('/api/hanos',             hanosRouter);
 app.use('/api/finance',           financeRouter);
 app.use('/api/events',            eventsRouter);
 app.use('/api/health',            healthRouter);
+app.use('/api/competencies',      competenciesRouter);
+app.use('/api/supplies',          suppliesRouter);
 
 import adminRouter from './routes/admin';
 app.use('/api/admin',             adminRouter);

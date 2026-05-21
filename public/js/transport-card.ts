@@ -3,8 +3,10 @@
 //
 // Lives on the West dashboard only. Surfaces what should leave Sering West for
 // Sering Centraal in the next 3 Centraal service slots, after subtracting
-// stock that's already at Centraal. "Pack and send" runs the existing
-// transport-split flow (doSplit(true, 'centraal', true)) per row.
+// stock that's already at Centraal. "Pack and send" calls
+// POST /api/batches/:id/ship per row — backend handles pack-accumulation
+// (same toLoc + storage + cookDate folds into an existing pending shipment)
+// so the frontend doesn't need to dedupe.
 //
 // Pure logic (computeTransportPlan, readiness helpers) is exported separately
 // from the DOM render/confirm so the same code can be unit-tested without a
@@ -12,12 +14,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Batch, Service, Location, DishType } from '@shared/types';
 import { S } from './state';
-import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner } from './core';
+import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner, getStockAt, getServeableStockAt, getPendingFromShipments } from './core';
 import { esc } from './modal';
 import { trackEvent } from './telemetry';
-import { rerenderCurrentView } from './navigate';
-import { doSplit } from './dishes';
-import { toast } from './utils';
+import { rerenderCurrentView, getCurrentScreen } from './navigate';
+import { toast, toastError, apiPost } from './utils';
 
 export type TransportMode = 'lean' | 'bulk';
 
@@ -39,6 +40,18 @@ export interface TransportRow {
   /** True if any of `services` is beyond the 3-slot lean horizon (only set in
    *  bulk mode). Lets the UI mark consolidation rows distinctly. */
   future: boolean;
+}
+
+/** A dish scheduled for a Centraal service in the next-3-slot horizon that is
+ *  NOT cooked yet. Surfaced on the card (greyed, not packable) so a dish added
+ *  or moved on delivery day is visible instead of silently missing. */
+export interface PendingUncookedRow {
+  batchId: string;
+  name: string;
+  type: DishType;
+  /** Liters this dish will need at Centraal once cooked. */
+  totalDemand: number;
+  services: Array<{ date: string; meal: string }>;
 }
 
 export interface ReadinessState {
@@ -186,11 +199,13 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
   const acc = new Map<string, Accum>(); // key = batch.id
   const includedBatchIds = new Set<string>();
 
-  // Lean pass — populate rows for any West batch that has a Centraal service
-  // within the 3-slot horizon.
+  // Lean pass — populate rows for any batch with stock at West that has a
+  // Centraal service within the 3-slot horizon. Unified-batch model: a
+  // batch is a "West batch" iff it has any qty at loc=west; there's no
+  // single `b.location` anymore. inTransit is replaced by per-shipment
+  // pending, and Pack-for-Centraal only cares about settled West stock.
   for (const b of batches) {
-    if (b.location !== 'west') continue;
-    if (b.inTransit) continue;
+    if (getStockAt(b, 'west') <= 0) continue;
     if (!isBatchCooked(b)) continue;
     let demand = 0;
     const svcs: Array<{ date: string; meal: string }> = [];
@@ -209,16 +224,15 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
     }
   }
 
-  // Bulk pass — for every dish identity already in `acc`, find ALL West
-  // batches of that same identity (cooked, not in-transit) and fold their
-  // bulk-horizon Centraal demand in.
+  // Bulk pass — for every dish identity already in `acc`, find ALL batches
+  // with West stock of that same identity and fold their bulk-horizon
+  // Centraal demand in.
   if (mode === 'bulk') {
     const includedIdentities = new Set<string>();
     for (const a of acc.values()) includedIdentities.add(dishIdentity(a.batch));
 
     for (const b of batches) {
-      if (b.location !== 'west') continue;
-      if (b.inTransit) continue;
+      if (getStockAt(b, 'west') <= 0) continue;
       if (!isBatchCooked(b)) continue;
       if (!includedIdentities.has(dishIdentity(b))) continue;
 
@@ -256,19 +270,26 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
     }
   }
 
-  // Step 2: build rows with destination-stock subtraction.
+  // Step 2: build rows with destination-stock subtraction. Per audit S12 the
+  // cross-batch dedup-by-recipe-identity stays — two different West batches
+  // of the same dish should both subtract from the same Centraal stock pile.
   const destStockByIdentity = new Map<string, number>();
   for (const b of batches) {
-    if (b.location !== 'centraal') continue;
-    if (b.inTransit) continue;
     if (!isBatchCooked(b)) continue;
+    // Settled = stock already at Centraal that's directly servable. Frozen
+    // at Centraal doesn't count (it has to thaw before it can serve, so
+    // it shouldn't reduce what we pack today). In-flight pending shipments
+    // to Centraal also reduce what to pack — covered by an earlier fix.
+    const settled = getServeableStockAt(b, 'centraal');
+    const inFlight = getPendingFromShipments(b, 'centraal');
+    if (settled + inFlight <= 0) continue;
     const key = dishIdentity(b);
-    destStockByIdentity.set(key, (destStockByIdentity.get(key) || 0) + (b.stock || 0));
+    destStockByIdentity.set(key, (destStockByIdentity.get(key) || 0) + settled + inFlight);
   }
 
   const rows: TransportRow[] = [];
   // Track destination stock that's already been consumed by an earlier row of
-  // the same identity, so two West splits of the same dish don't both think
+  // the same identity, so two West batches of the same dish don't both think
   // they have access to the full Centraal pile.
   const destStockUsedByIdentity = new Map<string, number>();
 
@@ -279,7 +300,10 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
     const alreadyUsed = destStockUsedByIdentity.get(identity) || 0;
     const destStockAvailable = Math.max(0, destStockTotal - alreadyUsed);
     const netDemand = Math.max(0, totalDemand - destStockAvailable);
-    const sendQty = Math.min(netDemand, a.batch.stock || 0);
+    // Cap sendQty at the batch's available West stock (was b.stock; now
+    // getStockAt(b, 'west')). Backend's /ship endpoint also caps and surfaces
+    // a warning, so this is a hint not a hard limit.
+    const sendQty = Math.min(netDemand, getStockAt(a.batch, 'west'));
     if (sendQty <= 0) continue;
     const consumedThisRow = Math.min(destStockAvailable, totalDemand);
     destStockUsedByIdentity.set(identity, alreadyUsed + consumedThisRow);
@@ -305,19 +329,23 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-/** Count West batches that *would* be in the lean plan if they were cooked —
- *  i.e. they have a Centraal service in the next-3-slot horizon, are not
- *  in-transit, but `isBatchCooked` is currently false. Used to differentiate
- *  the empty-state message: "nothing scheduled" vs "scheduled but not yet
- *  cooked". */
+/** Count batches that *would* be in the lean plan if they were cooked —
+ *  i.e. they have a Centraal service in the next-3-slot horizon and
+ *  `isBatchCooked` is currently false.
+ *
+ *  Superseded for the card UI by computePendingUncookedRows (which lists the
+ *  dishes themselves); retained for its unit tests / potential reuse.
+ *
+ *  Unified-batch model: a "would be cooked at West" batch is any uncooked
+ *  batch with a Centraal-direction service in the lean horizon. We don't
+ *  filter by location because uncooked batches have no inventory yet —
+ *  cookLoc is decided at confirmCooked time. */
 export function countPendingUncookedForCentraal(batches: Batch[]): number {
   const horizonSlots = nextCentraalSlots(batches, 3);
   if (horizonSlots.length === 0) return 0;
   const horizonKeys = new Set(horizonSlots.map(s => s.key));
   let count = 0;
   for (const b of batches) {
-    if (b.location !== 'west') continue;
-    if (b.inTransit) continue;
     if (isBatchCooked(b)) continue;
     const hasInHorizon = (b.services || []).some(svc => {
       if (svc.loc !== 'centraal') return false;
@@ -326,6 +354,64 @@ export function countPendingUncookedForCentraal(batches: Batch[]): number {
     if (hasInHorizon) count++;
   }
   return count;
+}
+
+/** Rows for batches scheduled for a Centraal service in the next 3 slots that
+ *  are NOT cooked yet. They can't be packed (no stock exists), but listing
+ *  them means a dish added or moved on delivery day shows on the card instead
+ *  of silently missing from it. `packedRows` is the cooked transport plan — a
+ *  dish already listed there is dropped here so it isn't shown in both
+ *  sections (e.g. two batches of one recipe, one cooked and one not).
+ *
+ *  Like computeTransportPlan this reads the family-allocation cache, so
+ *  callers must have run rebuildPlanner() first (renderTransportCard does). */
+export function computePendingUncookedRows(
+  batches: Batch[],
+  packedRows: TransportRow[] = [],
+): PendingUncookedRow[] {
+  const horizonSlots = nextCentraalSlots(batches, 3);
+  if (horizonSlots.length === 0) return [];
+  const horizonKeys = new Set(horizonSlots.map(s => s.key));
+
+  // A dish already shown in the packable section is on the card — don't also
+  // list it here. This section exists to surface dishes that would OTHERWISE
+  // be missing, so a dish with a cooked, packable batch doesn't belong.
+  const batchById = new Map<string, Batch>(batches.map((b): [string, Batch] => [b.id, b]));
+  const packedIdentities = new Set<string>();
+  for (const r of packedRows) {
+    const pb = batchById.get(r.batchId);
+    if (pb) packedIdentities.add(dishIdentity(pb));
+  }
+
+  const rows: PendingUncookedRow[] = [];
+  for (const b of batches) {
+    if (isBatchCooked(b)) continue;
+    if (packedIdentities.has(dishIdentity(b))) continue;
+    let demand = 0;
+    const svcs: Array<{ date: string; meal: string }> = [];
+    for (const svc of b.services || []) {
+      if (svc.loc !== 'centraal') continue;
+      const k = `${svc.loc}-${svc.date}-${svc.meal}`;
+      if (!horizonKeys.has(k)) continue;
+      const liters = calcRequiredAtService(b, svc);
+      if (liters <= 0) continue;
+      demand += liters;
+      svcs.push({ date: svc.date, meal: svc.meal });
+    }
+    if (demand > 0) {
+      rows.push({
+        batchId: b.id,
+        name: b.name,
+        type: b.type,
+        totalDemand: round1(demand),
+        services: svcs.sort(compareSlots),
+      });
+    }
+  }
+
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  rows.sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
+  return rows;
 }
 
 // ── Readiness banner ─────────────────────────────────────────────────────
@@ -421,6 +507,24 @@ function rowHtml(row: TransportRow): string {
   </div>`;
 }
 
+/** Like rowHtml but for a not-yet-cooked dish: greyed, no send qty and no
+ *  destination subtraction — it shows the liters the dish WILL need once
+ *  cooked, not a packable amount. */
+function uncookedRowHtml(row: PendingUncookedRow): string {
+  const svcText = row.services
+    .map(s => `${s.meal === 'lunch' ? '☀️' : '🌙'} ${formatShortDate(s.date)}`)
+    .join(' · ');
+  return `<div class="tcard-row tcard-row-uncooked" data-batch-id="${esc(row.batchId)}">
+    <div class="tcard-row-main">
+      <span class="tcard-row-name">${esc(row.name)}</span>
+      <span class="tcard-row-svc">${esc(svcText)}</span>
+    </div>
+    <div class="tcard-row-qty">
+      <span class="tcard-row-willneed">${row.totalDemand} L</span>
+    </div>
+  </div>`;
+}
+
 function formatShortDate(iso: string): string {
   const d = new Date(iso + 'T12:00:00');
   const today = getToday();
@@ -443,23 +547,37 @@ export function renderTransportCard(): string {
   rebuildPlanner();
 
   const rows = computeTransportPlan(_mode, S.batches);
+  const uncookedRows = computePendingUncookedRows(S.batches, rows);
   const totalSendQty = round1(rows.reduce((s, r) => s + r.sendQty, 0));
   const readiness = getReadiness(S.batches, S.inventoryCompletions);
   const lit = readiness.allReady && rows.length > 0 ? 'tcard-lit' : '';
 
-  trackEvent('transport_card_shown', _mode, { rowCount: rows.length, totalVolume: totalSendQty });
+  // Only count this as "shown" when the dashboard is the visible screen —
+  // renderTransportCard also runs during background refreshes (see
+  // setBackgroundRefresh), where the card isn't actually on screen.
+  if (getCurrentScreen() === 'dashboard') {
+    trackEvent('transport_card_shown', _mode, { rowCount: rows.length, totalVolume: totalSendQty });
+  }
 
-  const pending = rows.length === 0 ? countPendingUncookedForCentraal(S.batches) : 0;
-  const emptyMsg = pending > 0
-    ? `${pending} dish${pending === 1 ? '' : 'es'} scheduled for Centraal — finish cooking first, then come back.`
-    : `Nothing scheduled to leave for Centraal in the next 3 services.`;
-  const body = rows.length === 0
-    ? `<div class="tcard-empty">${esc(emptyMsg)}</div>`
+  // Cooked, packable rows + total + the "Pack and send" action.
+  const packSection = rows.length === 0
+    ? ''
     : `<div class="tcard-rows">${rows.map(rowHtml).join('')}</div>
        <div class="tcard-footer">
          <div class="tcard-total"><span class="tcard-total-label">Total to pack</span> <span class="tcard-total-qty">${totalSendQty} L</span></div>
          <button class="btn btn-primary tcard-confirm" onclick="confirmTransportPlan()">Pack and send</button>
        </div>`;
+
+  // Dishes scheduled for Centraal but not cooked yet — greyed, not packable.
+  // Shown so a dish added or changed on delivery day is visible on the card.
+  const uncookedSection = uncookedRows.length === 0
+    ? ''
+    : `<div class="tcard-uncooked-hdr">Not cooked yet — can't pack until cooked</div>
+       <div class="tcard-rows">${uncookedRows.map(uncookedRowHtml).join('')}</div>`;
+
+  const body = (rows.length === 0 && uncookedRows.length === 0)
+    ? `<div class="tcard-empty">Nothing scheduled to leave for Centraal in the next 3 services.</div>`
+    : packSection + uncookedSection;
 
   return `<div class="dash-card tcard ${lit}">
     <div class="dash-card-title">
@@ -473,12 +591,14 @@ export function renderTransportCard(): string {
 
 // ── Confirm action ───────────────────────────────────────────────────────
 
-/** Iterate the current plan rows and call doSplit per batch. The existing
- *  doSplit() already handles per-batch capacity capping, in-transit flagging,
- *  service moves, and scheduleSave. We pre-set S.selected to a single batch
- *  per call so doSplit operates on exactly that one batch (it iterates
- *  S.selected internally). */
-export function confirmTransportPlan(): void {
+/** Iterate the current plan rows and call POST /api/batches/:id/ship per
+ *  batch. Backend handles auto-cap, pack-accumulate (same toLoc+storage+
+ *  cookDate folds into an existing pending shipment), and broadcasts the
+ *  updated batch via SSE. We update S.batches[idx] from each response (the
+ *  sender doesn't get its own SSE patch — see lead's clarification A).
+ *
+ *  Errors on individual rows don't abort the loop. */
+export async function confirmTransportPlan(): Promise<void> {
   if (S.currentLoc !== 'west') return;
   rebuildPlanner();
   const rows = computeTransportPlan(_mode, S.batches);
@@ -489,23 +609,121 @@ export function confirmTransportPlan(): void {
   const totalSendQty = round1(rows.reduce((s, r) => s + r.sendQty, 0));
   trackEvent('transport_card_confirmed', _mode, { rowCount: rows.length, totalVolume: totalSendQty });
 
-  // Stash the user's previous selection so we don't clobber an unrelated
-  // multi-select in the planner.
-  const prevSelection = new Set(S.selected);
   let okCount = 0;
+  let cappedCount = 0;
   for (const row of rows) {
-    S.selected = new Set([row.batchId]);
     try {
-      doSplit(true, 'centraal', true);
+      const res = await apiPost(`/api/batches/${row.batchId}/ship`, {
+        toLoc: 'centraal',
+        qty: row.sendQty,
+        storage: 'Gastro',
+      });
+      if (res && res.batch) {
+        const idx = S.batches.findIndex(b => b.id === row.batchId);
+        if (idx >= 0) S.batches[idx] = res.batch;
+      }
+      if (res && res.warning) cappedCount++;
       okCount++;
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown error';
       // Don't break the whole loop on a single failure — log and move on.
-      console.error('transport-card: doSplit failed', message);
+      console.error('transport-card: /ship failed for batch', row.batchId, message);
     }
   }
-  S.selected = prevSelection;
   if (okCount > 0) {
-    toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for Centraal`);
+    const cappedNote = cappedCount > 0 ? ` (${cappedCount} capped to available)` : '';
+    toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for Centraal${cappedNote}`);
   }
+  // Refresh the card so the just-shipped rows drop off immediately. Without
+  // this it keeps showing the old plan (and its "Pack and send" button) until
+  // the next 60s tick — long enough to accidentally submit the same pack
+  // twice. Mirrors confirmCentraalArrivals, which already does this.
+  rebuildPlanner();
+  rerenderCurrentView();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Centraal arrival block — "Did the transport arrive?"
+//
+// Lives on the Sering Centraal dashboard only, directly under the meal toggle.
+// Surfaces every pending (not-yet-arrived) shipment bound for Centraal; one tap
+// confirms them all, calling POST /api/batches/:id/shipments/:sid/arrived per
+// shipment (the same endpoint the Transport tab's per-row button uses), which
+// merges each shipment's qty into Centraal inventory.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PendingArrivalRef {
+  batchId: string;
+  shipmentId: string;
+}
+
+/** All not-yet-arrived shipments heading to Centraal, plus a liter total. */
+export function pendingCentraalArrivals(batches: Batch[]): { refs: PendingArrivalRef[]; liters: number } {
+  const refs: PendingArrivalRef[] = [];
+  let liters = 0;
+  for (const b of batches) {
+    for (const s of (b.shipments || [])) {
+      if (s.arrived || s.toLoc !== 'centraal') continue;
+      refs.push({ batchId: b.id, shipmentId: s.id });
+      liters += s.qty || 0;
+    }
+  }
+  return { refs, liters: round1(liters) };
+}
+
+/** Inner HTML for the red arrival block. Empty string unless the current loc
+ *  is Centraal AND something is actually in transit — a permanent red block
+ *  with nothing to confirm would just be noise. */
+export function renderCentraalArrivalBlock(): string {
+  if (S.currentLoc !== 'centraal') return '';
+  const { refs, liters } = pendingCentraalArrivals(S.batches);
+  if (refs.length === 0) return '';
+  const n = refs.length;
+  return `<div class="dash-arrival-block" role="button" tabindex="0"
+      onclick="confirmCentraalArrivals()"
+      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();confirmCentraalArrivals();}">
+    <span class="dash-arrival-icon">🚚</span>
+    <div class="dash-arrival-text">
+      <div class="dash-arrival-title">Did the transport arrive today?</div>
+      <div class="dash-arrival-sub">${n} batch${n === 1 ? '' : 'es'} (${liters} L) on the way from Sering West — tap to confirm it's here.</div>
+    </div>
+  </div>`;
+}
+
+/** Mark every pending Centraal-bound shipment arrived in one go. Mirrors
+ *  confirmTransportPlan: per-shipment POST, local state updated from each
+ *  response, an individual failure doesn't abort the loop. */
+export async function confirmCentraalArrivals(): Promise<void> {
+  const { refs } = pendingCentraalArrivals(S.batches);
+  if (refs.length === 0) {
+    toast('Nothing in transit');
+    return;
+  }
+  trackEvent('centraal_arrivals_confirmed', '', { count: refs.length });
+  let okCount = 0;
+  for (const ref of refs) {
+    try {
+      const res = await apiPost(`/api/batches/${ref.batchId}/shipments/${ref.shipmentId}/arrived`, {});
+      if (res && res.batch) {
+        const idx = S.batches.findIndex(b => b.id === ref.batchId);
+        if (idx >= 0) S.batches[idx] = res.batch;
+      }
+      okCount++;
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      console.error('confirmCentraalArrivals: /arrived failed for shipment', ref.shipmentId, message);
+    }
+  }
+  const failed = refs.length - okCount;
+  if (okCount > 0 && failed > 0) {
+    // Partial failure: the block re-renders and the unconfirmed shipments stay,
+    // so the cook can tap again — but tell them, don't show a plain success.
+    toastError(`${okCount} confirmed, ${failed} couldn't be — tap again to retry the rest.`);
+  } else if (okCount > 0) {
+    toast(`${okCount} shipment${okCount > 1 ? 's' : ''} arrived at Sering Centraal`);
+  } else {
+    toastError('Could not confirm arrivals — try the Transport tab');
+  }
+  rebuildPlanner();
+  rerenderCurrentView();
 }

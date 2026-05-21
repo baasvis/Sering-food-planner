@@ -4,12 +4,13 @@
 
 import { S, ALLERGENS, INGREDIENT_CATEGORIES } from './state';
 import { apiGet, apiPost, toast, toastError, loadIngredientDb } from './utils';
-import { typeBadge, TYPES } from './core';
+import { typeBadge, TYPES, getTotalStock, calcRequired, rebuildPlanner, getToday, dateToStr } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { trackEvent } from './telemetry';
-import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType } from '@shared/types';
+import type { RecipeFull, RecipeIngredientFull, PrepStep, Ingredient, NutritionInfo, DishType, Batch, InventoryEntry, Location } from '@shared/types';
 import { toGrams } from '@shared/units';
+import { flexPricePer100g } from '@shared/recipe-cost';
 import { renderChatPanel, resetChat, type AIRecipeStateClient } from './recipe-ai-chat';
 
 // ── Editor state ──
@@ -36,6 +37,11 @@ interface EditorState {
   seasonality: string;
   servingTemp: string;
   servingSize: number;
+  // Yield mode — 'count' for toppings & bread (scaled by outputCount of
+  // outputUnit, e.g. "makes 10 loaves"), 'volume' for everything else.
+  yieldType: 'volume' | 'count';
+  outputCount: number;
+  outputUnit: string;
   ingredients: EditorIngredient[];
   prepSteps: PrepStep[];
   coolingMethod: string;
@@ -93,7 +99,15 @@ function calcEditorCostData(): { totalCost: number; hasPrice: number; totalNonFl
   let totalNonFlex = 0;
   ed.ingredients.forEach(ing => {
     if (!ing.isFlexible) totalNonFlex++;
-    if (ing.ingredientId && !ing.isFlexible) {
+    if (ing.isFlexible) {
+      // Flexible ("open amount") slots have no pinned product — estimate the
+      // cost from the flex price (see @shared/recipe-cost). Left out of the
+      // "X/Y priced" coverage stat, which tracks DB-linked ingredients only.
+      const grams = toGrams(ing.rawAmount, ing.unit);
+      if (grams > 0) totalCost += (grams / 100) * flexPricePer100g(ing.flexLabel);
+      return;
+    }
+    if (ing.ingredientId) {
       const dbIng = S.ingredientDb.find(i => i.id === ing.ingredientId);
       if (dbIng && dbIng.pricePer100 > 0) {
         const grams = toGrams(ing.rawAmount, ing.unit);
@@ -102,7 +116,11 @@ function calcEditorCostData(): { totalCost: number; hasPrice: number; totalNonFl
       }
     }
   });
-  const servings = volume > 0 && ed.servingSize > 0 ? Math.round((volume * 1000) / ed.servingSize) : null;
+  // Count recipes (toppings & bread) are costed per output unit, not per
+  // volume serving.
+  const servings = (ed.yieldType === 'count' && ed.outputCount > 0)
+    ? ed.outputCount
+    : (volume > 0 && ed.servingSize > 0 ? Math.round((volume * 1000) / ed.servingSize) : null);
   const perServing = servings && servings > 0 ? totalCost / servings : null;
   return { totalCost, hasPrice, totalNonFlex, perServing, servings, volume };
 }
@@ -132,15 +150,18 @@ function renderPriceBar(): string {
   if (!ed) return '';
   const { totalCost, hasPrice, totalNonFlex, perServing, servings, volume } = calcEditorCostData();
   const priceClass = perServing !== null ? (perServing > 1.0 ? 're-price-high' : perServing > 0.6 ? 're-price-mid' : 're-price-low') : '';
+  const isCount = ed.yieldType === 'count';
+  const unitLabel = isCount ? (ed.outputUnit || 'unit') : 'portion';
   return `<div class="re-price-bar" id="re-price-bar">
     <div class="re-price-main">
-      <span class="re-price-label">Price per portion</span>
+      <span class="re-price-label">Price per ${esc(unitLabel)}</span>
       <span class="re-price-value ${priceClass}">${perServing !== null ? '€' + perServing.toFixed(2) : '—'}</span>
     </div>
     <div class="re-price-details">
       <span>Total: €${totalCost.toFixed(2)}</span>
-      <span>Volume: ${volume > 0 ? volume.toFixed(1) + 'L' : '—'}</span>
-      <span>Servings: ${servings ?? '—'}</span>
+      ${isCount
+        ? `<span>Makes: ${servings ?? '—'} ${esc(ed.outputUnit || 'units')}</span>`
+        : `<span>Volume: ${volume > 0 ? volume.toFixed(1) + 'L' : '—'}</span><span>Servings: ${servings ?? '—'}</span>`}
       <span class="re-price-coverage">${hasPrice}/${totalNonFlex} priced</span>
     </div>
   </div>`;
@@ -169,6 +190,7 @@ export function openRecipeEditor(recipeId?: string, opts?: { aiMode?: boolean })
       recipeId: null,
       name: '', type: 'Soup', structure: '', seasonality: '', servingTemp: '',
       servingSize: 280,
+      yieldType: 'volume', outputCount: 10, outputUnit: 'pieces',
       ingredients: [], prepSteps: [], coolingMethod: '', storageMethod: '',
       extraAllergens: [], photoFile: null, hasPhoto: false, isComplete: false,
     };
@@ -180,7 +202,7 @@ export function reToggleAiMode() {
   if (!S.user?.isDirector) return;
   aiMode = !aiMode;
   renderEditor();
-  trackEvent('ai_recipe_chat_toggle', { on: aiMode });
+  trackEvent('ai_recipe_chat_toggle', '', { on: aiMode });
 }
 
 // ── State exchange with the AI chat panel ──
@@ -295,6 +317,9 @@ async function loadRecipeForEdit(id: string) {
       recipeId: r.id,
       name: r.name, type: r.type, structure: r.structure, seasonality: r.seasonality,
       servingTemp: r.servingTemp, servingSize: r.servingSize,
+      yieldType: r.yieldType === 'count' ? 'count' : 'volume',
+      outputCount: r.outputCount ?? 10,
+      outputUnit: r.outputUnit ?? 'pieces',
       ingredients: (r.ingredients || []).map(ing => ({
         id: ing.id,
         ingredientId: ing.ingredientId,
@@ -393,14 +418,25 @@ function renderBasicsSection(): string {
         <div class="re-basics-field">
           <label>Type *</label>
           <select class="re-inline-select" id="re-type" onchange="reUpdateField('type',this.value)">
-            ${['Soup', 'Main course', 'Dessert'].map(t => `<option${ed!.type === t ? ' selected' : ''}>${t}</option>`).join('')}
+            ${['Soup', 'Main course', 'Dessert', 'Topping', 'Bread'].map(t => `<option${ed!.type === t ? ' selected' : ''}>${t}</option>`).join('')}
           </select>
         </div>
+        ${ed.yieldType === 'count' ? `
+        <div class="re-basics-field">
+          <label>Makes *</label>
+          <div style="display:flex;gap:6px;">
+            <input type="number" class="re-inline-input re-inline-num" id="re-outputcount" value="${ed.outputCount}" min="1" step="1" style="max-width:70px;" onchange="reUpdateField('outputCount',+this.value)" />
+            <input type="text" class="re-inline-input" id="re-outputunit" value="${esc(ed.outputUnit)}" placeholder="loaves" onchange="reUpdateField('outputUnit',this.value)" />
+          </div>
+        </div>
+        ` : `
         <div class="re-basics-field">
           <label>Serving (ml) *</label>
           <input type="number" class="re-inline-input re-inline-num" id="re-serving" value="${ed.servingSize}" min="1" onchange="reUpdateField('servingSize',+this.value)" />
         </div>
+        `}
       </div>
+      ${ed.yieldType === 'count' ? `<div class="re-basics-row"><div class="re-basics-field" style="flex:1;"><div class="sup-help">This is a count-scaled recipe — ingredient amounts below are for the whole batch of ${ed.outputCount} ${esc(ed.outputUnit)}. Toppings &amp; bread use this instead of per-portion volume.</div></div></div>` : ''}
       <div class="re-basics-row">
         <div class="re-basics-field">
           <label>Structure</label>
@@ -462,7 +498,15 @@ function calcIngredientPortionCosts(): number[] {
   if (!ed) return [];
   const { servings } = calcEditorCostData();
   return ed.ingredients.map(ing => {
-    if (ing.ingredientId && !ing.isFlexible) {
+    if (ing.isFlexible) {
+      const grams = toGrams(ing.rawAmount, ing.unit);
+      if (grams > 0) {
+        const total = (grams / 100) * flexPricePer100g(ing.flexLabel);
+        return servings && servings > 0 ? total / servings : total;
+      }
+      return 0;
+    }
+    if (ing.ingredientId) {
       const dbIng = S.ingredientDb.find(i => i.id === ing.ingredientId);
       if (dbIng && dbIng.pricePer100 > 0) {
         const grams = toGrams(ing.rawAmount, ing.unit);
@@ -679,8 +723,8 @@ function calcAutoAllergens(): string[] {
 
 // ── Field update handlers ──
 
-type EditorTextField = 'name' | 'type' | 'structure' | 'seasonality' | 'servingTemp' | 'coolingMethod' | 'storageMethod';
-type EditorNumField = 'servingSize';
+type EditorTextField = 'name' | 'type' | 'structure' | 'seasonality' | 'servingTemp' | 'coolingMethod' | 'storageMethod' | 'outputUnit';
+type EditorNumField = 'servingSize' | 'outputCount';
 type EditorField = EditorTextField | EditorNumField;
 
 export function reUpdateField(field: EditorField, value: string | number | null) {
@@ -688,6 +732,17 @@ export function reUpdateField(field: EditorField, value: string | number | null)
   if (field === 'servingSize') {
     ed.servingSize = Number(value) || 0;
     refreshPriceBar();
+  } else if (field === 'outputCount') {
+    ed.outputCount = Number(value) || 0;
+  } else if (field === 'type') {
+    const newType = String(value ?? '');
+    const prevYield = ed.yieldType;
+    ed.type = newType;
+    // Topping & Bread are count-scaled ("makes 10 loaves"); everything else
+    // is volume-scaled. Re-render when the mode flips so the basics form
+    // swaps the Serving-ml field for the Makes count+unit pair.
+    ed.yieldType = (newType === 'Topping' || newType === 'Bread') ? 'count' : 'volume';
+    if (ed.yieldType !== prevYield) renderEditor();
   } else {
     ed[field] = String(value ?? '');
   }
@@ -882,7 +937,12 @@ export async function reSaveRecipe(markComplete: boolean) {
   trackEvent('recipe_save', markComplete ? 'complete' : 'draft');
   if (!ed) return;
   if (!ed.name.trim()) { toastError('Recipe name is required'); return; }
-  if (ed.servingSize <= 0) { toastError('Serving size must be positive'); return; }
+  if (ed.yieldType === 'count') {
+    if (!ed.outputCount || ed.outputCount <= 0) { toastError('"Makes" count must be positive'); return; }
+    if (!ed.outputUnit.trim()) { toastError('"Makes" unit is required (e.g. loaves, containers)'); return; }
+  } else if (ed.servingSize <= 0) {
+    toastError('Serving size must be positive'); return;
+  }
 
   const recipeVolume = calcRecipeVolume();
 
@@ -894,6 +954,9 @@ export async function reSaveRecipe(markComplete: boolean) {
     servingTemp: ed.servingTemp,
     servingSize: ed.servingSize,
     recipeVolume: recipeVolume > 0 ? recipeVolume : null,
+    yieldType: ed.yieldType,
+    outputCount: ed.yieldType === 'count' ? ed.outputCount : null,
+    outputUnit: ed.yieldType === 'count' ? ed.outputUnit.trim() : null,
     prepSteps: ed.prepSteps.filter(ps => ps.text.trim()),
     coolingMethod: ed.coolingMethod,
     storageMethod: ed.storageMethod,
@@ -972,6 +1035,11 @@ function _renderDetailContent() {
   if (!r) return;
   const scale = _detailScale;
 
+  // Count-scaled recipes (toppings & bread) scale by output count, not liters.
+  const isCount = r.yieldType === 'count' && !!r.outputCount && r.outputCount > 0;
+  const outUnit = r.outputUnit || 'units';
+  const scaledCount = isCount ? Math.round(r.outputCount! * scale) : null;
+
   const allAllergens = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
   const baseServings = r.recipeVolume && r.servingSize ? Math.round((r.recipeVolume * 1000) / r.servingSize) : null;
   const scaledLiters = r.recipeVolume ? r.recipeVolume * scale : null;
@@ -981,7 +1049,7 @@ function _renderDetailContent() {
   if (r.nutrition) {
     const n = r.nutrition;
     nutritionHtml = `<div class="re-nutrition">
-      <strong>Nutrition per serving</strong>
+      <strong>Nutrition per ${isCount ? esc(outUnit) : 'serving'}</strong>
       ${n.completeness < 1 ? `<span style="font-size:11px;color:var(--amber);margin-left:8px;">(${Math.round(n.completeness * 100)}% of ingredients have data)</span>` : ''}
       <table class="re-nutrition-table">
         <tr><td>Energy</td><td>${Math.round(n.energyKcal)} kcal / ${Math.round(n.energyKj)} kJ</td></tr>
@@ -997,7 +1065,19 @@ function _renderDetailContent() {
   }
 
   const canScale = r.recipeVolume != null && r.recipeVolume > 0 && r.ingredients.length > 0;
-  const scaleRowHtml = canScale ? `
+  let scaleRowHtml = '';
+  if (isCount && r.ingredients.length > 0) {
+    scaleRowHtml = `
+    <div class="br-scale-row" style="margin-bottom:12px;">
+      <label>Make:</label>
+      <input type="number" class="re-inline-input re-inline-num" value="${scaledCount}" min="1" step="1"
+        onchange="detailUpdateCount(+this.value)" style="width:70px;" />
+      <span>${esc(outUnit)}</span>
+      <span class="br-scale-info">(recipe makes ${r.outputCount} ${esc(outUnit)}${scale !== 1 ? `, scale: ${scale.toFixed(2)}x` : ''})</span>
+      ${scale !== 1 ? `<button class="btn btn-sm" onclick="detailResetScale()" style="margin-left:4px;font-size:11px;">Reset</button>` : ''}
+    </div>`;
+  } else if (canScale) {
+    scaleRowHtml = `
     <div class="br-scale-row" style="margin-bottom:12px;">
       <label>Volume:</label>
       <input type="number" class="re-inline-input re-inline-num" value="${scaledLiters!.toFixed(1)}" min="0.1" step="0.5"
@@ -1011,7 +1091,8 @@ function _renderDetailContent() {
       ` : ''}
       <span class="br-scale-info">(recipe: ${r.recipeVolume!.toFixed(1)}L${scale !== 1 ? `, scale: ${scale.toFixed(1)}x` : ''})</span>
       ${scale !== 1 ? `<button class="btn btn-sm" onclick="detailResetScale()" style="margin-left:4px;font-size:11px;">Reset</button>` : ''}
-    </div>` : '';
+    </div>`;
+  }
 
   const content = `
     <div style="width:600px;max-width:90vw;">
@@ -1023,8 +1104,10 @@ function _renderDetailContent() {
             ${typeBadge((r.type || 'Soup') as DishType)}
             ${r.structure ? `<span class="badge" style="background:var(--bg2);color:var(--text2);">${esc(r.structure)}</span>` : ''}
             ${r.seasonality ? `<span class="badge" style="background:var(--bg2);color:var(--text2);">${esc(r.seasonality)}</span>` : ''}
-            ${scaledServings ? `<span class="badge" style="background:var(--blue-bg);color:var(--blue);">${scaledServings} servings</span>` : ''}
-            ${r.costPerServing != null ? `<span class="badge" style="background:var(--green-bg);color:var(--green);">&euro;${r.costPerServing.toFixed(2)}/serving</span>` : ''}
+            ${isCount
+              ? `<span class="badge" style="background:var(--blue-bg);color:var(--blue);">makes ${scaledCount} ${esc(outUnit)}</span>`
+              : scaledServings ? `<span class="badge" style="background:var(--blue-bg);color:var(--blue);">${scaledServings} servings</span>` : ''}
+            ${r.costPerServing != null ? `<span class="badge" style="background:var(--green-bg);color:var(--green);">&euro;${r.costPerServing.toFixed(2)}/${isCount ? esc(outUnit) : 'serving'}</span>` : ''}
             ${r.isComplete ? '<span class="badge" style="background:var(--green-bg);color:var(--green);">Complete</span>' : '<span class="badge" style="background:var(--amber-bg);color:var(--amber);">In progress</span>'}
           </div>
           <div>${allAllergens.map(a => `<span class="allergen-pill">${esc(a)}</span>`).join(' ') || '<span style="color:var(--text2);font-size:12px;">No allergens</span>'}</div>
@@ -1120,6 +1203,14 @@ export function detailUpdatePortions(portions: number) {
   _renderDetailContent();
 }
 
+/** Count-mode scaling: rescale a topping/bread recipe to make `newCount` of
+ *  its outputUnit (e.g. 25 loaves from a base recipe of 10). */
+export function detailUpdateCount(newCount: number) {
+  if (!_detailRecipe || newCount <= 0 || !_detailRecipe.outputCount || _detailRecipe.outputCount <= 0) return;
+  _detailScale = newCount / _detailRecipe.outputCount;
+  _renderDetailContent();
+}
+
 export function detailResetScale() {
   _detailScale = 1;
   _renderDetailContent();
@@ -1173,6 +1264,12 @@ interface BatchRecipeState {
   cookNotes: string;
   deductStock: boolean;
   isFullscreen: boolean;
+  /** True when opened from the dashboard "What to Cook" checkbox — Save also
+   *  marks the (still-uncooked) batch cooked. */
+  confirmCook: boolean;
+  /** Kitchen the confirm-cook stock lands at (picked before the editor opens).
+   *  null when not in confirm-cook mode. */
+  cookLoc: Location | null;
   targetLiters: number;
   recipeVolume: number;
   servingSize: number;
@@ -1181,14 +1278,27 @@ interface BatchRecipeState {
 let _brState: BatchRecipeState | null = null;
 
 /** Open batch recipe editor — used for pre-cook flex resolution AND post-cook recording */
-export function openBatchRecipe(batchId: string) {
+export function openBatchRecipe(batchId: string, opts?: { confirmCook?: boolean; cookLoc?: Location }) {
   const batch = S.batches.find(b => b.id === batchId);
   if (!batch || !batch.recipeId) return;
   const recipe = S.recipes.find(r => r.id === batch.recipeId);
   if (!recipe) return;
 
+  // Confirm-cook mode: opened from the dashboard "What to Cook" checkbox. The
+  // batch is still uncooked, so size the editor to the full amount that needs
+  // cooking (calcRequired across all the batch's services) rather than the
+  // recipe's base volume — saving will mark the batch cooked at that amount.
+  // cookLoc is the kitchen picked in the chooser before this opened.
+  const confirmCook = !!opts?.confirmCook;
+  const cookLoc: Location | null = opts?.cookLoc ?? null;
   const recipeVolume = recipe.recipeVolume || 0;
-  const batchLiters = (batch.stock || 0) > 0 ? batch.stock : recipeVolume;
+  const batchTotal = getTotalStock(batch);
+  let batchLiters = batchTotal > 0 ? batchTotal : recipeVolume;
+  if (confirmCook && batchTotal === 0) {
+    rebuildPlanner();
+    const required = calcRequired(batch);
+    if (required > 0) batchLiters = required;
+  }
   let scaleFactor = 1;
   if (recipeVolume > 0) {
     scaleFactor = batchLiters / recipeVolume;
@@ -1206,6 +1316,8 @@ export function openBatchRecipe(batchId: string) {
     cookNotes: batch.cookNotes || '',
     deductStock: false,
     isFullscreen: false,
+    confirmCook,
+    cookLoc,
     targetLiters: batchLiters,
     recipeVolume,
     servingSize: recipe.servingSize || 280,
@@ -1277,7 +1389,7 @@ function renderBatchRecipe() {
   }
 }
 
-function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock: number }): string {
+function buildBatchRecipeHTML(br: BatchRecipeState, batch: Batch): string {
   // Ingredient rows
   const activeIngs = br.ingredients.filter(i => !i.removed);
   const removedIngs = br.ingredients.map((ing, i) => ({ ...ing, _idx: i })).filter(i => i.removed);
@@ -1374,7 +1486,7 @@ function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock
     <div class="br-header">
       <div class="br-header-title">
         <h3>${esc(batch.name)}</h3>
-        <span class="br-header-sub">Batch recipe &mdash; ${batch.stock}L</span>
+        <span class="br-header-sub">Batch recipe &mdash; ${getTotalStock(batch)}L</span>
       </div>
       <div class="br-header-actions">
         <button class="btn btn-sm" onclick="brToggleFullscreen()" title="${br.isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}">
@@ -1430,7 +1542,7 @@ function buildBatchRecipeHTML(br: BatchRecipeState, batch: { name: string; stock
 
       <div class="modal-actions">
         <button class="btn" onclick="brClose()">Cancel</button>
-        <button class="btn btn-primary" onclick="brSave()">Save</button>
+        <button class="btn btn-primary" onclick="brSave()">${br.confirmCook ? 'Confirm cooked' : 'Save'}</button>
       </div>
     </div>`;
 }
@@ -1579,22 +1691,59 @@ export async function brSave() {
     .filter(i => !i.removed && i.resolved && i.ingredientId)
     .map(i => ({ ingredientId: i.ingredientId!, name: i.name, amount: i.amount, unit: i.unit }));
 
+  // Confirm-cook mode (opened from the dashboard "What to Cook" checkbox):
+  // saving the batch recipe is the moment a still-uncooked batch becomes
+  // cooked. A batch counts as uncooked when it has no stock yet — it may
+  // already carry a *planned* cookDate, so cookDate alone isn't the signal.
+  // cookDate + the initial inventory entry ride along in the same PATCH so
+  // it's one atomic write.
+  const cookingNow = br.confirmCook && getTotalStock(batch) === 0;
+  const patch: Record<string, unknown> = {
+    actualIngredients,
+    cookNotes: br.cookNotes,
+    stockDeducted: br.deductStock,
+  };
+  let cookedInventory: InventoryEntry[] | null = null;
+  if (cookingNow) {
+    const qty = Math.round((br.targetLiters || 0) * 10) / 10;
+    if (qty <= 0) {
+      // No amount to cook → don't claim it's cooked (that would set cookDate
+      // but no stock, leaving a "cooked" batch with 0 L stuck in the cook list).
+      toastError('Set the amount cooked first — Volume can’t be 0.');
+      return;
+    }
+    const cookDate = dateToStr(getToday());
+    patch.cookDate = cookDate;
+    cookedInventory = [{ loc: br.cookLoc || S.currentLoc, storage: 'Gastro', qty, cookDate }];
+    patch.inventory = cookedInventory;
+  }
+
   try {
-    await apiPost(`/api/batches/${br.batchId}`, {
-      actualIngredients,
-      cookNotes: br.cookNotes,
-      stockDeducted: br.deductStock,
-    }, 'PATCH');
+    await apiPost(`/api/batches/${br.batchId}`, patch, 'PATCH');
 
     batch.actualIngredients = actualIngredients;
     batch.cookNotes = br.cookNotes;
     batch.stockDeducted = br.deductStock;
+    if (cookingNow) {
+      batch.cookDate = patch.cookDate as string;
+      if (cookedInventory) batch.inventory = cookedInventory;
+    }
 
     if (br.deductStock) {
       // /api/ingredients/stock/bulk SETS absolute stock per ingredient (it's
       // the stocktake endpoint), so we read current stock locally, subtract
       // the cooked amount, and send the new absolute value. (T18 fix.)
-      const stockUpdates = computeStockDeductionUpdates(actualIngredients, batch.location, S.ingredientDb);
+      //
+      // Cook location in the unified-batch model is `inventory[0].loc`
+      // (sticky from first confirmCooked per the plan's Primary location
+      // decision). Pre-cook batches with empty inventory default to 'west'
+      // — the deduct-stock path only fires AFTER the cook completes, so
+      // inventory[0] should always be populated at this point, but the
+      // fallback keeps the call safe even if invoked with a stale state.
+      const batchLoc = (batch.inventory && batch.inventory.length > 0)
+        ? batch.inventory[0].loc
+        : 'west';
+      const stockUpdates = computeStockDeductionUpdates(actualIngredients, batchLoc, S.ingredientDb);
       if (stockUpdates.length > 0) {
         try {
           await apiPost('/api/ingredients/stock/bulk', stockUpdates);
@@ -1616,7 +1765,7 @@ export async function brSave() {
     const overlay = document.getElementById('br-fullscreen');
     if (overlay) overlay.remove();
     closeModal();
-    toast('Batch recipe saved');
+    toast(cookingNow ? `${batch.name} marked as cooked` : 'Batch recipe saved');
     rerenderCurrentView();
   } catch (e: unknown) {
     toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error'));

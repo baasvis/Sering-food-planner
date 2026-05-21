@@ -30,6 +30,13 @@ export interface CateringDish {
   type: DishType;
 }
 
+// ── Catering topping reference (links to a Supply row by id) ──
+
+export interface CateringTopping {
+  supplyId: string;
+  amount: number;
+}
+
 // ── Storage config (per-location) ──
 
 export interface StorageArea {
@@ -51,35 +58,56 @@ export interface Service {
   meal: Meal;
 }
 
+// Bumped on every breaking Batch shape change. Frontend SSE handler will
+// force a reload when the server's BATCH_SCHEMA_VERSION doesn't match the
+// value embedded in the bundle (consumed in Checkpoint 2).
+export const BATCH_SCHEMA_VERSION = 2;
+
+// Settled stock physically present at a location, available to serve.
+// Multiple entries per (loc, storage) are allowed — e.g. two cookDates of
+// the same Gastro stock at West sit as two entries until consolidated.
+export interface InventoryEntry {
+  loc: Location;
+  storage: StorageType;
+  qty: number;          // liters
+  cookDate: string;     // DD/MM/YYYY — freshness origin (resets on freeze)
+}
+
+// In-flight stock between locations. Not yet at the destination's inventory.
+export interface Shipment {
+  id: string;
+  fromLoc: Location;
+  toLoc: Location;
+  storage: StorageType; // storage type during transit; default destination storage
+  qty: number;
+  sentAt: string;       // ISO timestamp
+  arrived: boolean;
+  arrivedAt?: string;   // ISO timestamp, present iff arrived
+  cookDate: string;     // carried from source InventoryEntry on /ship (DD/MM/YYYY)
+}
+
 export interface Batch {
   id: string;
   name: string;
   type: DishType;
-  stock: number;
+  recipeId: string | null;
   serving: number;
-  storage: StorageType;
-  location: Location;
-  inTransit: boolean;
+  cookDate: string | null;            // primary cook date (= initial inventory entry cookDate)
+  inventory: InventoryEntry[];        // settled stock, available to serve
+  shipments: Shipment[];              // in-flight stock (NOT yet at destination)
+  services: Service[];
   allergens: string[];
   extraAllergens: string[];
-  orderFor: boolean;
-  cookDate: string | null;
-  recipeSheetId: string | null;
-  recipeVolume: number | null;
-  recipeIngredients: RecipeIngredient[] | null;
-  parentId: string | null;
   note: string;
-  services: Service[];
-  createdAt: string;
-  // Recipe v2 fields
-  recipeId: string | null;
-  actualIngredients: ActualIngredient[] | null;
   cookNotes: string;
-  stockDeducted: boolean;
+  actualIngredients: ActualIngredient[] | null;
+  orderFor: boolean;
   // Fix My Menu: true only for placeholders the algorithm created and that are
   // safe to clean up automatically on the next run. Optional so existing
   // (pre-migration) deserialized rows are still valid Batch values.
   generated?: boolean;
+  stockDeducted: boolean;
+  createdAt: string;
 }
 
 export interface KitchenEquipment {
@@ -107,6 +135,7 @@ export interface Catering {
   guestCount: number;
   deliveryMode: string;
   dishes: CateringDish[];
+  toppings?: CateringTopping[];
   logisticsNotes: string;
   createdAt?: string;
 }
@@ -166,6 +195,8 @@ export interface NutritionInfo {
   completeness: number; // fraction of ingredients with nutrition data (0-1)
 }
 
+export type RecipeYieldType = 'volume' | 'count';
+
 export interface RecipeFull {
   id: string;
   name: string;
@@ -175,6 +206,12 @@ export interface RecipeFull {
   servingTemp: string;
   servingSize: number;
   recipeVolume: number | null;
+  /** Yield mode. 'volume' (default) scales by liters/servingSize; 'count'
+   *  scales by outputCount of outputUnit ("makes 10 loaves"). Undefined on
+   *  pre-yield-mode rows — treat as 'volume'. */
+  yieldType?: RecipeYieldType;
+  outputCount?: number | null;
+  outputUnit?: string | null;
   autoAllergens: string[];
   extraAllergens: string[];
   costPerServing: number | null;
@@ -218,10 +255,13 @@ export interface LocationStock {
   [location: string]: number;
 }
 
-// ── Ingredient storage locations: location → area name ──
+// ── Ingredient storage locations: location → storage assignment ──
 
 export interface StorageLocationMap {
-  [location: string]: string;
+  // The structured object (a storage category + a specific spot) is the
+  // current shape; a bare string is the legacy pre-categorization form,
+  // still possible on un-migrated rows.
+  [location: string]: string | { category?: string; location?: string };
 }
 
 export interface Ingredient {
@@ -250,6 +290,47 @@ export interface Ingredient {
   priceHistory?: Array<{ month: string; price: number }>;
 }
 
+// ── Supplies (toppings, breads, ferments, pickles, sauces) ──
+
+export type SupplyKind = 'standard' | 'oneoff';
+export type SupplyPrepMode = 'centralized' | 'per-location';
+
+export interface SupplyLocationStock {
+  amount: number;
+  lastMakeDate: string | null; // ISO 'YYYY-MM-DD'
+}
+
+export interface SupplyStock {
+  [location: string]: SupplyLocationStock;
+}
+
+export interface Supply {
+  id: string;
+  name: string;
+  kind: SupplyKind;
+  unit: string;
+  recipeId: string | null;
+  // standard-only fields (null for oneoff)
+  /** How many guests one unit serves, e.g. 10 = "1 box per 10 guests".
+   *  Units needed for a service = guestCount / guestsPerUnit. */
+  guestsPerUnit: number | null;
+  prepHorizonDays: number | null;
+  prepMode: SupplyPrepMode | null;
+  // oneoff-only fields (null for standard)
+  oneoffLocation: Location | null;
+  unitsPerService: number | null;
+  oneoffStartDate: string | null;
+  // shared
+  stock: SupplyStock;
+  /** € per unit (box/loaf/bottle). Manually entered, optionally auto-suggested
+   *  from a linked recipe. price-per-guest = costPerUnit / guestsPerUnit. */
+  costPerUnit: number | null;
+  preservationMethod: string | null;
+  archived: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface AppUser {
   email: string;
   name: string;
@@ -276,6 +357,7 @@ export interface DataResponse {
   recipes: RecipeFull[];
   caterings: Catering[];
   transportItems: TransportItem[];
+  supplies: Supply[];
 }
 
 export interface PatchRequest {

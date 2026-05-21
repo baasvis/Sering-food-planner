@@ -128,7 +128,7 @@ router.post('/recipes', asyncHandler(async (req: Request, res: Response) => {
   // Calculate auto-allergens and cost
   const ingredientIds = ingredients.filter(i => i.ingredientId).map(i => i.ingredientId!);
   const autoAllergens = await calcRecipeAllergens(ingredientIds);
-  const costPerServing = await calcRecipeCost(ingredients, body.servingSize || 280, body.recipeVolume || null);
+  const costPerServing = await calcRecipeCost(ingredients, body.servingSize || 280, body.recipeVolume || null, body.yieldType, body.outputCount);
 
   const recipe = await withWriteLock(async () => {
     return prisma.recipe.create({
@@ -141,6 +141,9 @@ router.post('/recipes', asyncHandler(async (req: Request, res: Response) => {
         servingTemp: body.servingTemp || '',
         servingSize: body.servingSize || 280,
         recipeVolume: body.recipeVolume || null,
+        yieldType: body.yieldType === 'count' ? 'count' : 'volume',
+        outputCount: body.outputCount ?? null,
+        outputUnit: body.outputUnit || null,
         autoAllergens,
         extraAllergens: body.extraAllergens || [],
         costPerServing,
@@ -191,7 +194,7 @@ router.post('/recipes/recalculate-costs', asyncHandler(async (req: Request, res:
     let count = 0;
     for (const r of recipes) {
       try {
-        const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume);
+        const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume, r.yieldType, r.outputCount);
         if (cost !== r.costPerServing) {
           await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
           count++;
@@ -394,7 +397,9 @@ router.patch('/recipes/:id', asyncHandler(async (req: Request, res: Response) =>
       const autoAllergens = await calcRecipeAllergens(ingredientIds);
       const servingSize = body.servingSize ?? existing.servingSize;
       const recipeVolume = body.recipeVolume !== undefined ? body.recipeVolume : existing.recipeVolume;
-      const costPerServing = await calcRecipeCost(currentIngs, servingSize, recipeVolume);
+      const yieldType = body.yieldType ?? existing.yieldType;
+      const outputCount = body.outputCount !== undefined ? body.outputCount : existing.outputCount;
+      const costPerServing = await calcRecipeCost(currentIngs, servingSize, recipeVolume, yieldType, outputCount);
 
       // Build update data (only provided fields)
       const updateData: Record<string, unknown> = {
@@ -403,7 +408,8 @@ router.patch('/recipes/:id', asyncHandler(async (req: Request, res: Response) =>
         updatedAt: now,
       };
       const allowedFields = ['name', 'type', 'structure', 'seasonality', 'servingTemp', 'servingSize',
-        'recipeVolume', 'extraAllergens', 'coolingMethod', 'storageMethod', 'isComplete', 'legacySheetId',
+        'recipeVolume', 'yieldType', 'outputCount', 'outputUnit', 'extraAllergens', 'coolingMethod',
+        'storageMethod', 'isComplete', 'legacySheetId',
         'avgSkill', 'avgSpeed', 'avgBanger', 'timesServed'] as const;
       for (const field of allowedFields) {
         if (body[field] !== undefined) updateData[field] = body[field];
@@ -639,7 +645,15 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
     const batch = await prisma.batch.findUnique({ where: { id: batchId } });
     if (batch && recipe.recipeVolume && recipe.servingSize) {
       const recipeLiters = recipe.recipeVolume;
-      const batchLiters = (batch.stock || 0) > 0 ? batch.stock : recipeLiters;
+      // Total liters in this batch — unified-batch model means there's no
+      // scalar `stock` field; the batch holds inventory across (loc, storage)
+      // pairs plus in-flight shipments. For print-scaling we want every liter
+      // the batch owns, so we sum settled inventory + pending shipments.
+      const inv = Array.isArray(batch.inventory) ? (batch.inventory as Array<{ qty: number }>) : [];
+      const ship = Array.isArray(batch.shipments) ? (batch.shipments as Array<{ qty: number; arrived: boolean }>) : [];
+      const totalStock = inv.reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0)
+        + ship.filter(s => !s.arrived).reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0);
+      const batchLiters = totalStock > 0 ? totalStock : recipeLiters;
       if (recipeLiters > 0 && batchLiters > 0) {
         scaleFactor = batchLiters / recipeLiters;
       }

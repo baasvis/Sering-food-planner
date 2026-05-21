@@ -91,11 +91,19 @@
   .b-soup{background:var(--green-bg);color:var(--green);}
   .b-main{background:var(--blue-bg);color:var(--blue);}
   .b-dessert{background:var(--purple-bg);color:var(--purple);}
+  /* Recipe-only categories (Topping & Bread feed Supplies, not the planner) */
+  .b-topping{background:var(--green-bg);color:var(--green);}
+  .b-bread{background:var(--amber-bg);color:var(--amber);}
   .b-gastro{background:var(--amber-bg);color:var(--amber);font-size:11px;font-weight:700;}
   .b-frozen{background:var(--blue-bg);color:var(--blue);font-size:11px;font-weight:700;}
   .b-vacpack{background:var(--purple-bg);color:var(--purple);font-size:11px;font-weight:700;}
   .b-west{background:var(--amber-bg);color:var(--amber);font-size:11px;font-weight:700;padding:3px 9px;}
   .b-centraal{background:var(--green-bg);color:var(--green);font-size:11px;font-weight:700;padding:3px 9px;}
+  /* Frozen stock — blue signals "not available for direct service" at a glance.
+     Two shades so West vs Centraal stays distinguishable: light blue bg for
+     West-Frozen, inverted dark blue fill for Centraal-Frozen. */
+  .b-frozen-west{background:var(--blue-bg);color:var(--blue);font-size:11px;font-weight:700;padding:3px 9px;}
+  .b-frozen-centraal{background:var(--blue);color:#fff;font-size:11px;font-weight:700;padding:3px 9px;}
   .b-twc{background:var(--green-bg);color:var(--green);font-size:11px;font-weight:700;padding:3px 9px;}
   .b-tww{background:var(--amber-bg);color:var(--amber);font-size:11px;font-weight:700;padding:3px 9px;}
   .allergen-pill{font-size:10px;padding:2px 6px;border-radius:10px;background:var(--red-bg);color:var(--red);display:inline-block;margin:1px;}

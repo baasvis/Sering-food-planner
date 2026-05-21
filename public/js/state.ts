@@ -1,6 +1,6 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, Supply } from '@shared/types';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -76,6 +76,10 @@ export const NAV_SCREENS: NavScreen[] = [
     icon: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>' },
   { id: 'orders', topLabel: 'Orders', bottomLabel: 'Orders',
     icon: '<path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>' },
+  { id: 'competencies', topLabel: 'Training', bottomLabel: 'Training',
+    icon: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>' },
+  { id: 'supplies', topLabel: 'Toppings & bread', bottomLabel: 'Toppings',
+    icon: '<path d="M5 8h14l-1.4 11.2A2 2 0 0 1 15.6 21H8.4a2 2 0 0 1-2-1.8L5 8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>' },
   { id: 'finance', topLabel: 'Finance', bottomLabel: 'Finance',
     icon: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>' },
   { id: 'feedback-admin', topLabel: 'Feedback', bottomLabel: 'Feedback',
@@ -110,7 +114,7 @@ export interface AppState {
   currentLoc: Location;
   dashMeal: Meal;
   plannerSubTab: string;
-  filters: { loc: string; storage: string; inTransit: string };
+  filters: { loc: string; storage: string };
   selected: Set<string>;
   orderToggles: { batches: boolean; standard: boolean };
   caterings: Catering[];
@@ -122,10 +126,10 @@ export interface AppState {
   batches: Batch[];
   expandedBatches: Set<string>;
   expandedBreakdowns: Set<string>;
-  assigningBatchId: string | null;
   draggingBatchId: string | null;
   showAllBatches: boolean;
   recipes: RecipeFull[];
+  supplies: Supply[];
   ingredientDb: Ingredient[];
   /** True once the *full* ingredient payload has been fetched. The default
    *  /api/ingredients endpoint returns a slim shape (no priceHistory /
@@ -139,7 +143,6 @@ export interface AppState {
   dashVegModeTomorrow: string;
   prepChecklist: Record<string, Set<string>>;
   heatChecked: Set<string>;
-  cookChecked: Set<string>;
   customTodos: CustomTodo[];
   teamTodosOpen: boolean;
   guestHistory: Record<string, unknown> | null;
@@ -166,7 +169,7 @@ export let S: AppState = {
   currentLoc:'west',
   dashMeal:'lunch',
   plannerSubTab:'west',
-  filters:{loc:'all',storage:'all',inTransit:'all'},
+  filters:{loc:'all',storage:'all'},
   selected:new Set(),
   orderToggles:{batches:true,standard:false},
   caterings:[],
@@ -181,10 +184,10 @@ export let S: AppState = {
   batches:[],
   expandedBatches: new Set(),
   expandedBreakdowns: new Set(),
-  assigningBatchId: null,
   draggingBatchId: null,
   showAllBatches: false,
   recipes:[],
+  supplies:[],
   ingredientDb:[],
   ingredientDbFullyLoaded: false,
   planner:{},
@@ -193,7 +196,6 @@ export let S: AppState = {
   dashVegModeTomorrow:'combined',
   prepChecklist: {},
   heatChecked: new Set(),
-  cookChecked: new Set(),
   customTodos: [],
   teamTodosOpen: false,
   guestHistory:null,

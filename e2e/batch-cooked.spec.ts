@@ -5,8 +5,9 @@ const TEST_BATCH_PREFIX = 'e2e-test-cooked-';
 
 test.describe('Batch cooked transition', () => {
   test.afterEach(async ({ page }) => {
-    // Cooked batches have stock > 0 so DELETE /api/batches/:id refuses. Reset
-    // stock to 0 first, then delete.
+    // Cooked batches have non-empty inventory + possibly pending shipments,
+    // and DELETE /api/batches/:id refuses while either is non-zero. Drain
+    // both first, then delete.
     if (page.url().startsWith('http')) {
       await page.evaluate(async (prefix) => {
         const res = await fetch('/api/batches');
@@ -17,7 +18,7 @@ test.describe('Batch cooked transition', () => {
           await fetch(`/api/batches/${b.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ stock: 0 }),
+            body: JSON.stringify({ inventory: [], shipments: [] }),
           });
           await fetch(`/api/batches/${b.id}`, { method: 'DELETE' });
         }
@@ -33,11 +34,12 @@ test.describe('Batch cooked transition', () => {
     await expect(page.locator('.sub-tab[data-tab="overview"]')).toBeVisible();
 
     // ── Step 1: create the batch via the existing UI flow ──────────────────
+    // Unified-batch model: blank batches start with empty inventory[]; the
+    // "Mark cooked" flow we test below is what populates it.
     await page.getByRole('button', { name: /\+ New batch/ }).first().click();
     await page.locator('[data-testid="new-batch-blank-btn"]').click();
     const batchName = `${TEST_BATCH_PREFIX}${Date.now()}`;
     await page.fill('#nd-name', batchName);
-    await page.fill('#nd-stock', '0');
     await page.locator('[data-testid="new-batch-submit"]').click();
 
     // ── Step 2: switch to Overview to see the dish list ────────────────────
@@ -45,8 +47,13 @@ test.describe('Batch cooked transition', () => {
     const tile = page.locator('[data-testid="batch-tile"]').filter({ hasText: batchName });
     await expect(tile).toBeVisible();
 
+    // The tile's name renders as an <input> once expanded, so a hasText filter
+    // stops matching it — pin to the stable data-id for post-expand steps.
+    const batchId = await tile.getAttribute('data-id');
+    const tileById = page.locator(`[data-testid="batch-tile"][data-id="${batchId}"]`);
+
     // ── Step 3: expand the tile so the cook controls render ────────────────
-    await tile.locator('.batch-tile-compact').click();
+    await tileById.locator('.batch-tile-compact').click();
 
     // ── Step 4: pick "Today" from the cook-day dropdown ────────────────────
     // Selecting an option triggers onchange → setCookDay → re-renders the
@@ -55,7 +62,7 @@ test.describe('Batch cooked transition', () => {
     // The option's label is e.g. "Today (Saturday)" but its value is
     // dateToStr(today). selectOption needs a string, not a regex — look up
     // the value from the matching option.
-    const cookSelect = tile.locator('[data-testid="cook-select"]');
+    const cookSelect = tileById.locator('[data-testid="cook-select"]');
     const todayValue = await cookSelect
       .locator('option')
       .filter({ hasText: /^Today/ })
@@ -65,22 +72,37 @@ test.describe('Batch cooked transition', () => {
     await cookSelect.selectOption(todayValue!);
 
     // ── Step 5: click the mark-as-cooked button ────────────────────────────
-    await tile.locator('[data-testid="cook-today-btn"]').click();
+    await tileById.locator('[data-testid="cook-today-btn"]').click();
 
     // confirmCooked() schedules a save (1.5s debounce) → POST /api/data/patch.
     await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });
 
     // ── Step 6: verify the batch transitioned to cooked in the DB ──────────
-    const created = await page.evaluate(async (name) => {
+    // Unified-batch model: confirmCookedAt always sets cookDate=today. It
+    // only adds an inventory entry when calcRequired > 0 (i.e. the batch has
+    // services assigned). This test creates a blank batch with NO services
+    // and then marks-cooked, so the right signal of "cook fired" is that
+    // cookDate flipped from null to a date string. inventory[] stays []
+    // (legal — the cook fills it later via the Edit modal Power view).
+    //
+    // The earlier draft of this spec also asserted Array.isArray(inventory)
+    // but mapBatchRow guarantees that shape — the assertion was tautological
+    // noise that, when it failed, masked the real bug (a flaky page reload
+    // race, not a model regression).
+    interface BatchSummary {
+      id: string;
+      name: string;
+      cookDate: string | null;
+      inventory: Array<{ loc: string; storage: string; qty: number; cookDate: string }>;
+      shipments: Array<{ id: string; arrived: boolean }>;
+    }
+    const created = await page.evaluate(async (name): Promise<BatchSummary | undefined> => {
       const r = await fetch('/api/batches');
-      const all = await r.json() as Array<{ id: string; name: string; cookDate: string | null; stock: number }>;
+      const all = await r.json() as BatchSummary[];
       return all.find((b) => b.name === name);
     }, batchName);
     expect(created).toBeTruthy();
     expect(created!.cookDate).toBeTruthy();
-    // confirmCooked auto-fills stock from calcRequired when stock was 0.
-    // calcRequired returns 0 when there are no services assigned, which is
-    // our case — assert non-negative rather than > 0 to match real behavior.
-    expect(created!.stock).toBeGreaterThanOrEqual(0);
+    expect(created!.cookDate).toMatch(/^\d{2}\/\d{2}\/\d{4}$/); // DD/MM/YYYY
   });
 });

@@ -1,226 +1,173 @@
 // CORE LOGIC
 // ═══════════════════════════════════════════════════════════════════
 
-import { S, DAYS, MEALS, STORAGE } from './state';
-import type { Batch, Service, Catering, CateringDish, RecipeIngredient, Location, Meal, DishType, StorageType, BatchRatings } from '@shared/types';
-import { scheduleSave, apiPost, toast } from './utils';
+import { S, DAYS } from './state';
+import type { InventoryDone } from './state';
+import type { Batch, Service, Catering, CateringDish, Location, Meal, DishType, StorageType, BatchRatings, InventoryEntry } from '@shared/types';
+import { scheduleSave, apiPost } from './utils';
+import { pushUndo } from './undo';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
-import { renderBatchTile, renderFamilyGrouped } from './dishes';
+import { renderFamilyGrouped } from './dishes';
 import { locName } from '@shared/location';
 
+// Callback to refresh an open inventory modal — set by main.ts to avoid a
+// core → planner circular import. Used after an undo restores an archived
+// batch so the modal the cook is looking at reflects the restored state.
+let _refreshInventoryModal: (() => void) | null = null;
+export function setRefreshInventoryModal(fn: () => void): void { _refreshInventoryModal = fn; }
+
 export function isBatchCooked(d: Batch): boolean {
-  return (d.stock || 0) > 0;
+  // A batch is "cooked" if it has any inventory or any in-flight shipment.
+  // Pending shipments still count: the food was cooked + sent, just not yet
+  // arrived at destination — the batch lifecycle is past PLANNED.
+  return (d.inventory || []).some(e => (e.qty || 0) > 0)
+      || (d.shipments || []).some(s => !s.arrived && (s.qty || 0) > 0);
 }
 
-// ── Batch family (parent + splits) ─────────────────────────────────────────
+// ── Inventory helpers (unified-batch model) ────────────────────────────────
 //
-// When a cook splits a batch (Tomato Soup West → ships half to Centraal),
-// the ship-off becomes a new batch with `parentId` pointing to the original.
-// All members share the same recipe, and from a guest's menu point of view
-// they're a single option. Family helpers let the algorithm treat them as
-// one logical unit (count as 1 menu option, share stock for capacity checks)
-// while keeping per-physical-batch tracking for logistics.
+// Read the new b.inventory[] and b.shipments[] shape. Each batch is its own
+// canonical pool; same-recipe duplicates across batches stay separate
+// (audit S7).
 //
-// Splits are 1-level deep today — each child's parentId points directly to
-// the root. The helpers walk the chain anyway, so future deeper splits
-// would still work.
+// Batch-TOTAL helpers (getTotalStock, getServeableTotalStock) count settled
+// inventory PLUS in-flight shipments (arrived:false) — food on a truck is
+// still the batch's food, so a transfer keeps the total conserved.
+// Per-LOCATION helpers (getStockAt, getServeableStockAt) count settled
+// inventory only; use getPendingFromShipments for stock incoming to a loc.
 
-/** Returns the root batch id of `b`'s family (or `b.id` if `b` has no parent).
- *
- *  Cycle-safe: tracks visited ids and bails the moment a cycle is detected.
- *  Without that, two members of a hypothetical A→B→A cycle would return
- *  different "roots" depending on parity of the iteration, and family
- *  grouping/`alreadyInSlot` would silently fall apart. On cycle, returns the
- *  lexicographically smallest id touched so the choice is deterministic. */
-export function getRootId(b: Batch, allBatches: Batch[]): string {
-  const visited = new Set<string>();
-  let cur = b;
-  while (cur.parentId && !visited.has(cur.id)) {
-    visited.add(cur.id);
-    const parent = allBatches.find(x => x.id === cur.parentId);
-    if (!parent) break;
-    cur = parent;
+export function getTotalStock(b: Batch): number {
+  const settled = (b.inventory || []).reduce((s, e) => s + (e.qty || 0), 0);
+  const inTransit = (b.shipments || [])
+    .filter(s => !s.arrived)
+    .reduce((s, sh) => s + (sh.qty || 0), 0);
+  return settled + inTransit;
+}
+
+export function getStockAt(b: Batch, loc: Location, storage?: StorageType): number {
+  return (b.inventory || [])
+    .filter(e => e.loc === loc && (storage === undefined || e.storage === storage))
+    .reduce((s, e) => s + (e.qty || 0), 0);
+}
+
+/** Stock that's directly available to serve at `loc` — i.e. excludes Frozen.
+ *  Frozen stock has to be thawed (cook action) before it can serve, so the
+ *  auto-allocator (Fix My Menu, transport plan destination-coverage check)
+ *  treats it as reserved. Cooks can still ship/assign frozen manually; this
+ *  helper only governs what AUTOMATED logic counts as available. */
+export function getServeableStockAt(b: Batch, loc: Location): number {
+  return (b.inventory || [])
+    .filter(e => e.loc === loc && e.storage !== 'Frozen')
+    .reduce((s, e) => s + (e.qty || 0), 0);
+}
+
+/** Total serveable stock (non-Frozen — Frozen needs thawing first) across all
+ *  locations, including in-flight shipments.
+ *  Pair with getServeableStockAt when the allocator needs to know whether
+ *  a batch has any thawed coverage at all. */
+export function getServeableTotalStock(b: Batch): number {
+  const settled = (b.inventory || [])
+    .filter(e => e.storage !== 'Frozen')
+    .reduce((s, e) => s + (e.qty || 0), 0);
+  const inTransit = (b.shipments || [])
+    .filter(s => !s.arrived && s.storage !== 'Frozen')
+    .reduce((s, sh) => s + (sh.qty || 0), 0);
+  return settled + inTransit;
+}
+
+/** True only when the batch's *remaining* stock is entirely Frozen: it has at
+ *  least one Frozen entry with qty > 0 and no non-Frozen entry with qty > 0.
+ *  A batch with no live stock at all — empty inventory, or only depleted /
+ *  0-qty marker entries such as an emergency placeholder's location pin — is
+ *  NOT frozen; it belongs in the To-cook group. Display bucketing only (the
+ *  planner pool + dishes screens). Distinct from menu-fixer's `isOnlyFrozen`,
+ *  which keys on storage type alone for auto-rotation exclusion. */
+export function isBatchAllFrozen(b: Batch): boolean {
+  let hasFrozenStock = false;
+  for (const e of (b.inventory || [])) {
+    if ((e.qty || 0) <= 0) continue;
+    if (e.storage === 'Frozen') hasFrozenStock = true;
+    else return false;
   }
-  if (cur.parentId && visited.has(cur.id)) {
-    // Cycle detected — pick the smallest id from the loop for stability.
-    return [...visited, cur.id].sort()[0];
-  }
-  return cur.id;
+  return hasFrozenStock;
 }
 
-/** Returns all batches in `b`'s family (including `b` itself). */
-export function getFamilyMembers(b: Batch, allBatches: Batch[]): Batch[] {
-  const rootId = getRootId(b, allBatches);
-  return allBatches.filter(x => getRootId(x, allBatches) === rootId);
+export function getPendingFromShipments(b: Batch, loc: Location): number {
+  return (b.shipments || [])
+    .filter(s => !s.arrived && s.toLoc === loc)
+    .reduce((sum, s) => sum + (s.qty || 0), 0);
 }
 
-/** Sum of stock across the whole family. */
-export function getFamilyStock(b: Batch, allBatches: Batch[]): number {
-  return getFamilyMembers(b, allBatches).reduce((sum, x) => sum + (x.stock || 0), 0);
-}
-
-// ── Family consolidation ───────────────────────────────────────────────────
-//
-// When a cook ships portions of a recipe between locations multiple times
-// (or marks transit batches arrived one-by-one), the DB ends up with N
-// physical records of the SAME recipe at the SAME location. Example real
-// case from prod: Miso & ginger soup at Centraal as 3 separate splits of
-// 12.1L + 12.6L + 18L. From a kitchen perspective that's one 42.7L pot.
-//
-// Beyond the visual mess, leaving them as 3 records breaks demand math:
-//   - calcRequired counts peers per slot. With 3 Miso splits + Tomato at one
-//     slot, peers=4 → demand divided by 4 instead of by 2 (Miso family +
-//     Tomato family = 2 distinct menu options).
-//   - Pass 4 over-fills slots because the per-batch capacity check uses
-//     the inflated peer count.
-//
-// `consolidateFamilies` merges any group of batches that share:
-//   - same family root (parentId chain)
-//   - same physical location
-//   - same storage type (Frozen vs Gastro must NOT merge)
-//   - same inTransit flag (in-transit vs arrived must stay separate so a
-//     pending arrival doesn't get folded into stock that's actually here)
-// Stocks sum, services union (de-duped by slot key), oldest cookDate wins,
-// the parent (or smallest id) becomes the survivor. Removed batches go into
-// the deletedBatches list so the patch endpoint cleans them server-side.
-
-export interface ConsolidationResult {
-  /** The deduplicated batch list — caller should replace S.batches with this. */
-  kept: Batch[];
-  /** IDs that should be appended to S.deletedBatches and saved. */
-  removed: string[];
-  /** Diagnostic count of merges performed. */
-  mergedGroups: number;
-}
-
-export function consolidateFamilies(batches: Batch[]): ConsolidationResult {
-  const removed: string[] = [];
-  let mergedGroups = 0;
-
-  // Bucket by (familyRoot, location, storage, inTransit). Anything in the
-  // same bucket is a merge candidate.
-  const buckets = new Map<string, Batch[]>();
-  for (const b of batches) {
-    const root = getRootId(b, batches);
-    const key = `${root}|${b.location}|${b.storage}|${b.inTransit ? 't' : 'f'}`;
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key)!.push(b);
-  }
-
-  // Track survivors so we can rebuild the list at the end.
-  const survivorIds = new Set<string>();
-  const updatedById = new Map<string, Batch>();
-
-  for (const [, group] of buckets) {
-    if (group.length === 1) {
-      survivorIds.add(group[0].id);
-      continue;
-    }
-    mergedGroups++;
-    const primary = pickPrimary(group);
-    const others = group.filter(b => b.id !== primary.id);
-
-    // Sum stocks
-    primary.stock = round1(group.reduce((s, b) => s + (b.stock || 0), 0));
-
-    // Union services (de-duped by slot key); also pull in any "extras" the
-    // primary missed.
-    const seen = new Set<string>(
-      (primary.services || []).map(s => `${s.loc}|${s.date}|${s.meal}`),
+// Mirrors mergeIntoInventory in routes/batches.ts so server and client agree
+// on the (loc, storage, cookDate) merge key.
+export function consolidateInventory(b: Batch): void {
+  const out: InventoryEntry[] = [];
+  for (const entry of (b.inventory || [])) {
+    const idx = out.findIndex(e =>
+      e.loc === entry.loc && e.storage === entry.storage && e.cookDate === entry.cookDate,
     );
-    for (const o of others) {
-      for (const svc of o.services || []) {
-        const k = `${svc.loc}|${svc.date}|${svc.meal}`;
-        if (!seen.has(k)) {
-          primary.services.push(svc);
-          seen.add(k);
-        }
-      }
-    }
-
-    // Use the OLDEST cookDate (use up older food first — same heuristic the
-    // assigner uses).
-    const cookDates = group.map(b => b.cookDate).filter((d): d is string => !!d);
-    if (cookDates.length > 0) {
-      primary.cookDate = cookDates.sort((a, b) => {
-        // dd/mm/yyyy → yyyy-mm-dd for lexicographic compare
-        const aIso = a.split('/').reverse().join('-');
-        const bIso = b.split('/').reverse().join('-');
-        return aIso.localeCompare(bIso);
-      })[0];
-    }
-
-    // Merge notes (concat unique non-empty)
-    const notes = group.map(b => b.note?.trim()).filter((n): n is string => !!n);
-    if (notes.length > 0) primary.note = Array.from(new Set(notes)).join(' / ');
-
-    // Allergens — union of any extras from siblings
-    const allerg = new Set<string>(primary.allergens || []);
-    const xtra = new Set<string>(primary.extraAllergens || []);
-    for (const o of others) {
-      for (const a of o.allergens || []) allerg.add(a);
-      for (const a of o.extraAllergens || []) xtra.add(a);
-    }
-    primary.allergens = Array.from(allerg);
-    primary.extraAllergens = Array.from(xtra);
-
-    survivorIds.add(primary.id);
-    updatedById.set(primary.id, primary);
-    for (const o of others) removed.push(o.id);
+    if (idx >= 0) out[idx] = { ...out[idx], qty: out[idx].qty + entry.qty };
+    else out.push({ ...entry });
   }
-
-  // Re-fixup parentId references: if a batch's parentId pointed to one of
-  // the removed records, redirect it to that group's primary so the family
-  // chain stays intact.
-  const redirectMap = new Map<string, string>();
-  for (const [, group] of buckets) {
-    if (group.length < 2) continue;
-    const primary = pickPrimary(group);
-    for (const o of group) {
-      if (o.id !== primary.id) redirectMap.set(o.id, primary.id);
-    }
-  }
-  const kept = batches.filter(b => survivorIds.has(b.id));
-  for (const b of kept) {
-    if (b.parentId && redirectMap.has(b.parentId)) {
-      b.parentId = redirectMap.get(b.parentId)!;
-    }
-    // If parent points to self after redirect (i.e. survivor is now its own
-    // root), null the parentId.
-    if (b.parentId === b.id) b.parentId = null;
-  }
-
-  return { kept, removed, mergedGroups };
+  b.inventory = out;
 }
 
-function pickPrimary(group: Batch[]): Batch {
-  // Parent (no parentId) takes priority — most stable identity.
-  const parent = group.find(b => !b.parentId);
-  if (parent) return parent;
-  // Otherwise: oldest cookDate, tiebreak smallest id.
-  return [...group].sort((a, b) => {
-    const ad = a.cookDate ? a.cookDate.split('/').reverse().join('-') : '';
-    const bd = b.cookDate ? b.cookDate.split('/').reverse().join('-') : '';
-    if (ad !== bd) return ad < bd ? -1 : 1;
-    return a.id.localeCompare(b.id);
-  })[0];
+export function addInventory(b: Batch, entry: InventoryEntry): void {
+  if (!b.inventory) b.inventory = [];
+  b.inventory.push(entry);
+  consolidateInventory(b);
 }
 
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
+export function removeInventory(b: Batch, idx: number): void {
+  if (!b.inventory || idx < 0 || idx >= b.inventory.length) return;
+  b.inventory.splice(idx, 1);
 }
 
-export function locationBadge(d: Batch): string {
-  if (d.location === 'centraal') {
-    return `<span class="badge b-centraal">Sering Centraal</span>`;
-  }
-  return `<span class="badge b-west">Sering West</span>`;
+// Per-storage shelf life in days (locked decision: Gastro 3, Frozen 60,
+// Vac-packed 10). cookDate is freshness origin (resets on freeze per the
+// /transfer cookDate rules in routes/batches.ts).
+const SHELF_LIFE_DAYS: Record<StorageType, number> = {
+  'Gastro': 3,
+  'Frozen': 60,
+  'Vac-packed': 10,
+};
+
+export function isStaleEntry(entry: InventoryEntry): boolean {
+  const cooked = strToDate(entry.cookDate);
+  // TODO(checkpoint-5): emit a telemetry event for unparseable cookDate so
+  // we can spot DB drift. For now, treat as fresh — false-alarms erode
+  // trust; the cook visually inspects food anyway.
+  if (!cooked) return false;
+  const today = getToday();
+  // Calendar-day diff via UTC anchors. Naïve ms-division undercounts by one
+  // when the window straddles a DST spring-forward (one of the 24h slots is
+  // 23h, floor() rounds down). Anchoring both ends at midnight UTC sidesteps
+  // DST entirely — the local Y/M/D is the only thing that matters for shelf-
+  // life, and we never compare across actual zones.
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const cookedUtc = Date.UTC(cooked.getFullYear(), cooked.getMonth(), cooked.getDate());
+  const daysOld = Math.floor((todayUtc - cookedUtc) / 86_400_000);
+  const limit = SHELF_LIFE_DAYS[entry.storage] ?? 3;
+  return daysOld > limit;
 }
 
-// Amsterdam time helper (shared — also used by planner.js inventory)
+// Amsterdam time helper (shared — also used by planner.js inventory).
+// The toLocaleString timezone conversion is ~10µs; isServicePast calls this on
+// hot paths (Fix My Menu evaluates it hundreds of thousands of times per run).
+// Memoize the conversion with a 1s TTL — 1s-stale wall-clock is immaterial for
+// the minute-granularity deadline checks isServicePast performs — while still
+// returning a fresh Date each call so no caller can corrupt the cache.
+let _amsNowCache: { at: number; ms: number } | null = null;
 export function getAmsterdamNow(): Date {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+  const now = Date.now();
+  if (!_amsNowCache || now - _amsNowCache.at >= 1000) {
+    _amsNowCache = {
+      at: now,
+      ms: new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' })).getTime(),
+    };
+  }
+  return new Date(_amsNowCache.ms);
 }
 
 // Convert a date string ("2026-03-23") to a day name ("Mon", "Tue", etc.)
@@ -252,7 +199,7 @@ export function isServicePast(svc: Service): boolean {
   const mins = now.getHours() * 60 + now.getMinutes();
   const lk: Location = svc.loc === 'west' ? 'west' : 'centraal';
   const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
-  const inv = S.inventoryDone[lk] || {};
+  const inv: Partial<InventoryDone> = S.inventoryDone[lk] || {};
   if (svc.meal === 'lunch') {
     const deadline = 13 * 60 + 45;     // 13:45
     const urgentFrom = deadline - 60;   // 12:45
@@ -266,6 +213,18 @@ export function isServicePast(svc: Service): boolean {
   return false;
 }
 
+/** Date-only "past" check: true only when the service's calendar date is
+ *  strictly before today. Unlike isServicePast it ignores the time-of-day and
+ *  the inventory-done acceleration — used where a service dated today must
+ *  never count as already-served (e.g. Fix-my-menu auto-retirement). */
+export function isServiceDatePast(svc: Service): boolean {
+  const now = getAmsterdamNow();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const svcDate = new Date(svc.date + 'T12:00:00');
+  const svcDay = new Date(svcDate.getFullYear(), svcDate.getMonth(), svcDate.getDate());
+  return svcDay < today;
+}
+
 export function rebuildPlanner(): void {
   S.planner = {};
   S.batches.forEach((d: Batch) => {
@@ -275,157 +234,21 @@ export function rebuildPlanner(): void {
       if (!S.planner[k].find((x: Batch) => x.id === d.id)) S.planner[k].push(d);
     });
   });
-  // Recompute the greedy family allocation cache. calcRequired and friends
-  // read from this rather than computing per-call, so the math is stable
-  // and consistent across all UI/algorithm consumers within the same
-  // planner snapshot.
-  recomputeFamilyAllocations();
+  // Refresh per-batch peer-share demand cache read by
+  // calcRequired/calcRequiredAtService/calcRequiredBreakdown/calcTotalGuests.
+  recomputeBatchAllocations();
 }
 
-// ── Family demand allocator (greedy, chronological) ────────────────────────
+// ── Per-batch demand allocator (unified-batch model) ───────────────────────
 //
-// For each family, walk its services in chronological order. At each slot:
-//   1. Compute family share = guests / families_at_slot × serving / 1000
-//   2. Allocate to the family's same-location members first (drain their
-//      remaining stock smallest-first so tiny portions get exhausted before
-//      bigger ones).
-//   3. Spill the remainder to off-location members.
-//   4. If the family is still short on stock, the LAST member in the order
-//      absorbs the overflow (surfaces as a cooked-stockout warning).
-//
-// Daan's intuition: "use what's already at the slot's location first, then
-// bring more from elsewhere." With this allocator, a 20L Centraal split at
-// 3 Centraal slots gets fully drained on the first slot (taking 18.2L),
-// the next slots get 1.8L from the split + the rest from the West parent.
-// No more spreading thin or going negative on the small batch from share
-// math alone.
-//
-// The cache lives on S so it survives across calls within one planner
-// snapshot. rebuildPlanner refreshes it.
-
-interface FamilyAllocation {
-  /** batchId → slotKey → demand in liters allocated to this batch at this slot */
-  byBatch: Map<string, Map<string, number>>;
-  /** slotKey → families count (cached for convenience by callers that need it) */
-  familiesAtSlot: Map<string, number>;
-}
-
-let _familyAllocations: FamilyAllocation = { byBatch: new Map(), familiesAtSlot: new Map() };
+// Each batch is its own canonical pool with `inventory[]` spread across
+// locations. Demand math is pure peer-share: at each slot, divide guests by
+// the number of distinct same-type batches and multiply by serving size.
+// Cross-batch same-recipe duplicates intentionally count as separate peers
+// (audit S7). The cache lives in module scope and rebuilds with rebuildPlanner.
 
 function slotKey(svc: Service): string {
   return `${svc.loc}-${svc.date}-${svc.meal}`;
-}
-
-function compareSlots(a: { date: string; meal: string }, b: { date: string; meal: string }): number {
-  if (a.date !== b.date) return a.date < b.date ? -1 : 1;
-  // lunch < dinner
-  if (a.meal === b.meal) return 0;
-  return a.meal === 'lunch' ? -1 : 1;
-}
-
-export function recomputeFamilyAllocations(): void {
-  const byBatch = new Map<string, Map<string, number>>();
-  const familiesAtSlot = new Map<string, number>();
-
-  // Bucket batches by family root
-  const families = new Map<string, Batch[]>();
-  for (const b of S.batches) {
-    const root = getRootId(b, S.batches);
-    if (!families.has(root)) families.set(root, []);
-    families.get(root)!.push(b);
-  }
-
-  for (const members of families.values()) {
-    // Build the ordered list of (slot, members-here) tuples this family touches.
-    const slotMap = new Map<string, { svc: Service; members: Batch[] }>();
-    for (const m of members) {
-      for (const svc of m.services || []) {
-        if (isServicePast(svc)) continue;
-        const k = slotKey(svc);
-        if (!slotMap.has(k)) slotMap.set(k, { svc, members: [] });
-        slotMap.get(k)!.members.push(m);
-      }
-    }
-    const slotEntries = Array.from(slotMap.entries()).sort(([, a], [, b]) =>
-      compareSlots(a.svc, b.svc),
-    );
-
-    // Running stock per member — drained as we allocate slot by slot.
-    const remaining = new Map<string, number>();
-    for (const m of members) remaining.set(m.id, m.stock || 0);
-    const totalFamilyStock = members.reduce((s, m) => s + (m.stock || 0), 0);
-
-    for (const [k, { svc, members: atSlot }] of slotEntries) {
-      // How many menu options at the slot? Count unique family roots among
-      // the slot's batches of THIS dish's type.
-      const peers = (S.planner[k] || []).filter(p => p.type === atSlot[0].type);
-      const roots = new Set<string>();
-      for (const p of peers) roots.add(getRootId(p, S.batches));
-      const familiesHere = Math.max(roots.size, 1);
-      familiesAtSlot.set(k, familiesHere);
-
-      const g = getGuests(svc.loc, svc.date, svc.meal);
-      const serving = (atSlot[0].serving || 280) / 1000;
-      // Equal split: each family at slot gets the same share of demand.
-      // Guests pick options uniformly, so this matches the actual service
-      // experience. Lopsided (capacity-weighted) shares were tried and
-      // rejected — they create scenarios where one batch has 20L of
-      // demand and a sibling has 2L, the small batch runs out in 5
-      // minutes, and guests are left with no choice for the rest of
-      // service. Family-level overshoot from equal-split is handled
-      // upstream by the per-pass family capacity check (Pass 1/2/3) plus
-      // the cooked-stockout warning the cook sees.
-      const familyShare = g <= 0 ? 0 : (g / familiesHere) * serving;
-
-      // Greedy allocation order: same-location first (drain what's there),
-      // then off-location. Within each group, smallest remaining first so
-      // tiny portions get exhausted before bigger ones (matches Daan's
-      // intuition).
-      const sameLoc = atSlot.filter(m => m.location === svc.loc);
-      const offLoc = atSlot.filter(m => m.location !== svc.loc);
-      const sortByRemAsc = (arr: Batch[]) =>
-        [...arr].sort((a, b) => (remaining.get(a.id) || 0) - (remaining.get(b.id) || 0) || a.id.localeCompare(b.id));
-      const order = [...sortByRemAsc(sameLoc), ...sortByRemAsc(offLoc)];
-
-      // Edge case: family-share = 0 (no guests) → allocate 0 to all members.
-      if (familyShare <= 0) {
-        for (const m of order) recordAllocation(byBatch, m.id, k, 0);
-        continue;
-      }
-
-      // Edge case: all family stock is 0 (uncooked placeholders only). Fall
-      // back to even split so each placeholder still surfaces a "to be
-      // cooked" volume.
-      if (totalFamilyStock <= 0) {
-        const per = familyShare / order.length;
-        for (const m of order) recordAllocation(byBatch, m.id, k, per);
-        continue;
-      }
-
-      let need = familyShare;
-      for (let i = 0; i < order.length; i++) {
-        const m = order[i];
-        const rem = remaining.get(m.id) || 0;
-        const isLast = i === order.length - 1;
-        const take = isLast
-          ? need  // last member absorbs whatever's left, even if it overshoots
-          : Math.max(0, Math.min(need, rem));
-        recordAllocation(byBatch, m.id, k, take);
-        remaining.set(m.id, rem - take);
-        need -= take;
-        if (need <= 0.001) {
-          // Allocate 0 to remaining members in the order so they have an
-          // explicit entry (avoids "missing key" lookups).
-          for (let j = i + 1; j < order.length; j++) {
-            recordAllocation(byBatch, order[j].id, k, 0);
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  _familyAllocations = { byBatch, familiesAtSlot };
 }
 
 function recordAllocation(byBatch: Map<string, Map<string, number>>, batchId: string, key: string, amount: number): void {
@@ -434,12 +257,31 @@ function recordAllocation(byBatch: Map<string, Map<string, number>>, batchId: st
   inner.set(key, Math.round(amount * 10) / 10);
 }
 
-/** Read this batch's allocated demand at a slot (set by recomputeFamilyAllocations).
- *  Returns undefined if no cache entry exists (callers should fall back).
- *  An EXPLICIT 0 in the cache is meaningful — means "greedy decided this
- *  batch contributes nothing here" — and must not be confused with "no entry". */
-function lookupAllocation(batch: Batch, svc: Service): number | undefined {
-  const inner = _familyAllocations.byBatch.get(batch.id);
+let _batchAllocations: { byBatch: Map<string, Map<string, number>> } = { byBatch: new Map() };
+
+export function recomputeBatchAllocations(): void {
+  const byBatch = new Map<string, Map<string, number>>();
+
+  for (const b of S.batches) {
+    for (const svc of (b.services || [])) {
+      if (isServicePast(svc)) continue;
+      const k = slotKey(svc);
+      const peers = (S.planner[k] || []).filter(p => p.type === b.type);
+      const peerCount = Math.max(peers.length, 1);
+      const guests = getGuests(svc.loc, svc.date, svc.meal);
+      const serving = (b.serving || 280) / 1000;
+      const liters = (guests / peerCount) * serving;
+      recordAllocation(byBatch, b.id, k, liters);
+    }
+  }
+
+  _batchAllocations = { byBatch };
+}
+
+/** Read this batch's per-slot peer-share demand from the new cache.
+ *  Returns undefined if no cache entry — callers default to 0. */
+function lookupBatchAllocation(batch: Batch, svc: Service): number | undefined {
+  const inner = _batchAllocations.byBatch.get(batch.id);
   if (!inner) return undefined;
   return inner.get(slotKey(svc));
 }
@@ -515,7 +357,8 @@ export function getGuests(loc: string, dateStr: string, meal: Meal | string): nu
   return ((S.guests[lk] || {})[dn] || {} as any)[meal] || 0;
 }
 
-/** Per-service allocation in liters, read from the family allocator cache.
+/** Per-service allocation in liters, read from the per-batch peer-share
+ *  allocator cache (set by recomputeBatchAllocations).
  *  Single source of truth for "how many liters does this batch contribute
  *  to this slot" — used by calcRequired, calcRequiredBreakdown, the dish
  *  tile per-service line, and calcRequiredForLoc so all consumers agree.
@@ -525,22 +368,16 @@ export function getGuests(loc: string, dateStr: string, meal: Meal | string): nu
  *  contract as the calcRequired total). */
 export function calcRequiredAtService(dish: Batch, svc: Service): number {
   if (isServicePast(svc)) return 0;
-  return lookupAllocation(dish, svc) ?? 0;
+  return lookupBatchAllocation(dish, svc) ?? 0;
 }
 
-export function calcRequired(dish: Batch): number {
+/** Catering demand in liters for a dish — guest count split across the
+ *  catering's same-type peer dishes. Catering routes to the specific dishId
+ *  (no family-wide reallocation). Shared by calcRequired (cache-backed) and
+ *  calcRequiredLive (uncached) so the catering half of the two functions
+ *  cannot drift apart. */
+function cateringDemand(dish: Batch): number {
   let total = 0;
-  (dish.services || []).forEach((svc: Service) => {
-    if (isServicePast(svc)) return; // Skip served services — no longer pulling stock
-    // Per-slot demand comes from the family allocation cache (greedy, set by
-    // rebuildPlanner → recomputeFamilyAllocations). Callers must rebuild the
-    // planner before reading; missing entries default to 0 so a not-yet-
-    // assigned service contributes nothing instead of silently invoking a
-    // stale even-split fallback.
-    total += lookupAllocation(dish, svc) ?? 0;
-  });
-  // Add catering requirements (split by same-type peers — catering still
-  // routes to the specific dishId, no family-wide reallocation).
   (S.caterings || []).forEach((c: Catering) => {
     const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
     if (cd) {
@@ -548,6 +385,56 @@ export function calcRequired(dish: Batch): number {
       total += ((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000);
     }
   });
+  return total;
+}
+
+export function calcRequired(dish: Batch): number {
+  let total = 0;
+  (dish.services || []).forEach((svc: Service) => {
+    if (isServicePast(svc)) return; // Skip served services — no longer pulling stock
+    // Per-slot demand comes from the per-batch peer-share cache (set by
+    // rebuildPlanner → recomputeBatchAllocations). Callers must rebuild
+    // the planner before reading; missing entries default to 0 so a
+    // not-yet-assigned service contributes nothing instead of silently
+    // invoking a stale even-split fallback.
+    total += lookupBatchAllocation(dish, svc) ?? 0;
+  });
+  total += cateringDemand(dish);
+  return Math.round(total * 10) / 10;
+}
+
+/** Like calcRequired, but derives each service's peer-share demand directly
+ *  from live S.batches state instead of reading the _batchAllocations cache.
+ *  Returns a value identical to `rebuildPlanner(); calcRequired(dish)` — same
+ *  peer count, same per-service 0.1 L rounding (mirrors recordAllocation),
+ *  same catering term — but WITHOUT the global O(batches × services) rebuild.
+ *
+ *  Fix My Menu's scored algorithm evaluates one candidate batch at a time
+ *  inside tight nested loops; calling rebuildPlanner() per candidate froze the
+ *  browser for seconds. This reads dish.services live, so it stays correct
+ *  under the algorithm's speculative `services.push(...) / pop()` pattern. */
+export function calcRequiredLive(
+  dish: Batch,
+  getGuestsFn: (loc: Location, date: string, meal: Meal) => number = getGuests,
+): number {
+  let total = 0;
+  (dish.services || []).forEach((svc: Service) => {
+    if (isServicePast(svc)) return;
+    // Peer count = distinct same-type batches serving this slot — the same
+    // set recomputeBatchAllocations counts via S.planner[k].filter(type).
+    // dish itself is included (it has svc), matching the cached path.
+    let peerCount = 0;
+    for (const p of S.batches) {
+      if (p.type !== dish.type) continue;
+      if ((p.services || []).some((s: Service) => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal)) {
+        peerCount++;
+      }
+    }
+    const guests = getGuestsFn(svc.loc, svc.date, svc.meal);
+    const liters = (guests / Math.max(peerCount, 1)) * ((dish.serving || 280) / 1000);
+    total += Math.round(liters * 10) / 10; // mirror recordAllocation's 0.1 L rounding
+  });
+  total += cateringDemand(dish);
   return Math.round(total * 10) / 10;
 }
 
@@ -566,7 +453,7 @@ export function calcRequiredBreakdown(dish: Batch): string[] {
       lines.push(`\u2713 ${dayName} ${meal} ${loc} (served)`);
       return;
     }
-    const allocated = lookupAllocation(dish, svc) ?? 0;
+    const allocated = lookupBatchAllocation(dish, svc) ?? 0;
     const liters = Math.round(allocated * 10) / 10;
     if (liters > 0) {
       lines.push(`${liters}L \u2014 ${dayName} ${meal} ${loc}`);
@@ -589,7 +476,7 @@ export function calcTotalGuests(dish: Batch): number {
     if (isServicePast(svc)) return; // Skip served services
     // Convert the cached allocation (liters) back to guests by dividing by
     // serving size. Same source of truth as calcRequired.
-    const litersHere = lookupAllocation(dish, svc) ?? 0;
+    const litersHere = lookupBatchAllocation(dish, svc) ?? 0;
     const servingL = (dish.serving || 280) / 1000;
     if (servingL > 0) g += litersHere / servingL;
   });
@@ -604,43 +491,30 @@ export function calcTotalGuests(dish: Batch): number {
   return Math.round(g);
 }
 
-/** Check if a batch has recipe data (either legacy recipeIngredients or v2 recipeId) */
 export function batchHasRecipe(b: Batch): boolean {
-  return !!(b.recipeIngredients && b.recipeVolume) || !!b.recipeId;
+  return !!b.recipeId;
 }
 
 export function calcIngredientsFromRecipe(dish: Batch): Array<{ name: string; amount: number; unit: string; source: string }> {
-  // Try legacy denormalized ingredients first
-  let ingredients: Array<{ name: string; amount: number; unit: string; source: string }> = [];
-  let recipeVolume = dish.recipeVolume;
-  let serving = dish.serving || 280;
+  if (!dish.recipeId) return [];
+  const recipe = (S.recipes || []).find(r => r.id === dish.recipeId);
+  if (!recipe || !recipe.recipeVolume) return [];
+  const recipeVolume = recipe.recipeVolume;
+  const serving = recipe.servingSize || dish.serving || 280;
+  const ingredients = recipe.ingredients.map(ing => {
+    let name = ing.ingredientName || ing.flexLabel || '';
+    if (!name && ing.ingredientId) {
+      const dbIng = (S.ingredientDb || []).find(i => i.id === ing.ingredientId);
+      if (dbIng) name = dbIng.name;
+    }
+    return { name: name || '(unnamed)', amount: ing.rawAmount, unit: ing.unit || 'Grams', source: '' };
+  });
 
-  if (dish.recipeId) {
-    // Look up v2 recipe
-    const recipe = (S.recipes || []).find(r => r.id === dish.recipeId);
-    if (!recipe || !recipe.recipeVolume) return [];
-    recipeVolume = recipe.recipeVolume;
-    serving = recipe.servingSize || serving;
-    ingredients = recipe.ingredients.map(ing => {
-      let name = ing.ingredientName || ing.flexLabel || '';
-      if (!name && ing.ingredientId) {
-        const dbIng = (S.ingredientDb || []).find(i => i.id === ing.ingredientId);
-        if (dbIng) name = dbIng.name;
-      }
-      return { name: name || '(unnamed)', amount: ing.rawAmount, unit: ing.unit || 'Grams', source: '' };
-    });
-  } else if (dish.recipeIngredients && dish.recipeVolume) {
-    // Legacy denormalized ingredients (no recipeId)
-    ingredients = dish.recipeIngredients.map((ing: RecipeIngredient) => ({
-      name: ing.name, amount: ing.amount, unit: ing.unit || 'g', source: ing.source || '',
-    }));
-  }
-
-  if (ingredients.length === 0 || !recipeVolume) return [];
+  if (ingredients.length === 0) return [];
   const totalGuests = calcTotalGuests(dish);
   if (totalGuests === 0) return [];
-  // recipeVolume is in liters (e.g. 10.78), serving is in ml (e.g. 240)
-  // Convert recipe volume to ml to match serving size units
+  // recipeVolume is in liters (e.g. 10.78), serving is in ml (e.g. 240).
+  // Convert recipe volume to ml to match serving size units.
   const recipeVolumeMl = recipeVolume * 1000;
   const guestsPerRecipe = recipeVolumeMl / serving;
   const mult = totalGuests / guestsPerRecipe;
@@ -654,7 +528,7 @@ export function calcIngredientsFromRecipe(dish: Batch): Array<{ name: string; am
 
 export function diffStr(d: Batch): { diff: number; str: string; cls: string } {
   const req = calcRequired(d);
-  const diff = Math.round((d.stock - req) * 10) / 10;
+  const diff = Math.round((getTotalStock(d) - req) * 10) / 10;
   return { diff, str: (diff >= 0 ? '+' : '') + diff + 'L', cls: diff < 0 ? 'stock-miss' : diff < 5 ? 'stock-low' : 'stock-ok' };
 }
 
@@ -666,60 +540,85 @@ export function storageBadge(s: StorageType | string): string {
 export function storageBadgeClass(s: StorageType | string): string {
   return 'badge ' + (STORAGE_BADGE_MAP[s] || 'b-gastro');
 }
-export function cycleStorage(id: string): void {
-  const d = S.batches.find((x: Batch) => x.id === id);
-  if (!d) return;
-  const idx = STORAGE.indexOf(d.storage || 'Gastro');
-  d.storage = STORAGE[(idx + 1) % STORAGE.length];
-  scheduleSave();
-  rerenderCurrentView();
-}
-export function logisticsBadge(d: Batch): string {
-  const loc = d.location || 'west';
-  const label = loc === 'centraal' ? 'Sering Centraal' : 'Sering West';
-  if (d.inTransit) {
-    const cls = loc === 'centraal' ? 'b-twc' : 'b-tww';
-    return `<span class="badge ${cls}">&rarr; ${label}</span>`;
-  }
-  return `<span class="badge ${loc === 'centraal' ? 'b-centraal' : 'b-west'}">${label}</span>`;
-}
-export function logisticsBadgeClass(d: Batch): string {
-  const loc = d.location || 'west';
-  if (d.inTransit) return 'badge ' + (loc === 'centraal' ? 'b-twc' : 'b-tww');
-  return 'badge ' + (loc === 'centraal' ? 'b-centraal' : 'b-west');
-}
-export function logisticsShort(d: Batch): string {
-  const loc = d.location || 'west';
-  const label = loc === 'centraal' ? 'Sering Centraal' : 'Sering West';
-  if (d.inTransit) return '\u2192 ' + label;
-  return label;
-}
-export function cycleLocation(id: string): void {
-  const d = S.batches.find((x: Batch) => x.id === id);
-  if (!d) return;
-  if (d.location === 'west') d.location = 'centraal';
-  else d.location = 'west';
-  d.inTransit = false;
-  // The batch effectively "arrived" at a new location — fold it into any
-  // existing same-family same-loc record so cooks don't end up with
-  // duplicates of the same recipe at one place.
-  const consolidation = consolidateFamilies(S.batches);
-  if (consolidation.removed.length > 0) {
-    S.batches = consolidation.kept;
-    if (!S.deletedBatches) S.deletedBatches = [];
-    for (const id of consolidation.removed) S.deletedBatches.push(id);
-  }
-  rebuildPlanner();
-  scheduleSave();
-  rerenderCurrentView();
-}
-
 // ── SERVED / ARCHIVE ─────────────────────────────────────
+
+// Two entry paths into the served/archive flow:
+//   - openServedDialog(id) — from a batch tile. Treats the batch as a unit.
+//     If the batch has stock at multiple locations OR pending shipments,
+//     shows a cross-loc warning first so the cook knows what they're
+//     deleting (audit B-revision: prevents silent cross-loc data loss).
+//   - openServedDialogForLoc(id, loc) — from the Inventory modal at `loc`.
+//     Only consumes THIS loc's inventory; other locs / shipments untouched.
+//     Auto-promotes to a full archive only when total stock + shipments = 0.
+
 export function openServedDialog(id: string): void {
   const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
-  showModal(`<h3>Mark "${esc(d.name)}" as served</h3>
-    <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">This will remove it from the menu planner. Optionally rate it first:</p>
+
+  const inv = (d.inventory || []).filter(e => (e.qty || 0) > 0);
+  const distinctLocs = Array.from(new Set(inv.map(e => e.loc)));
+  const pendingShipments = (d.shipments || []).filter(s => !s.arrived);
+
+  if (distinctLocs.length > 1 || pendingShipments.length > 0) {
+    // Cross-loc / in-transit warning — archiving will delete ALL of it.
+    const locParts = distinctLocs.map(l => {
+      const lqty = inv.filter(e => e.loc === l).reduce((s, e) => s + (e.qty || 0), 0);
+      return `${lqty.toFixed(1)} L at ${locName(l)}`;
+    });
+    const transitParts = pendingShipments.map(s =>
+      `${(s.qty || 0).toFixed(1)} L in transit to ${locName(s.toLoc)}`
+    );
+    const summary = [...locParts, ...transitParts].join(' · ');
+    showModal(`<h3>⚠️ Archive whole batch?</h3>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">
+        "${esc(d.name)}" still has stock across multiple locations or in transit:<br>
+        <strong>${summary}</strong><br><br>
+        Archiving will delete <strong>all of it</strong> — every inventory entry and every pending shipment. If you only meant to mark this kitchen's share as served, open <em>Do Inventory</em> at this kitchen and use the Served button on the row instead.
+      </p>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmArchiveWholeBatch('${d.id}')">Yes, archive whole batch</button>
+      </div>`);
+    return;
+  }
+
+  // Single-loc or already-empty batch — straight to rating dialog.
+  _showRatingDialog(d, undefined);
+}
+
+/** Loc-scoped entry path — called from the Inventory modal where the cook's
+ *  loc context is unambiguous. NEVER shows the whole-batch warning. */
+export function openServedDialogForLoc(id: string, loc: Location): void {
+  const d = S.batches.find((x: Batch) => x.id === id);
+  if (!d) return;
+  _showRatingDialog(d, loc);
+}
+
+/** Confirms past the cross-loc warning into the full-archive rating flow. */
+export function confirmArchiveWholeBatch(id: string): void {
+  const d = S.batches.find((x: Batch) => x.id === id);
+  if (!d) return;
+  _showRatingDialog(d, undefined);
+}
+
+function _showRatingDialog(d: Batch, locScope: Location | undefined): void {
+  const titleSuffix = locScope ? ` at ${locName(locScope)}` : '';
+  // Be honest about what "Served" will actually do. archiveDish falls through
+  // to a full archive (the whole batch is removed) when no stock remains
+  // anywhere else and nothing is in transit.
+  let explainer: string;
+  if (locScope) {
+    const stockElsewhere = (d.inventory || []).some(e => e.loc !== locScope && (e.qty || 0) > 0);
+    const inTransit = (d.shipments || []).some(s => !s.arrived && (s.qty || 0) > 0);
+    explainer = (!stockElsewhere && !inTransit)
+      ? 'This is the last stock of this batch — the whole batch will be removed from the planner. You can undo it for a few seconds. Optionally rate the dish first:'
+      : `This zeroes the stock at ${locName(locScope)} only; the batch stays in the planner because it still has stock elsewhere. You can undo it for a few seconds. Optionally rate the dish first:`;
+  } else {
+    explainer = 'This will remove the batch from the menu planner. You can undo it for a few seconds. Optionally rate it first:';
+  }
+  const argSuffix = locScope ? `,'${locScope}'` : '';
+  showModal(`<h3>Mark "${esc(d.name)}" as served${titleSuffix}</h3>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">${explainer}</p>
     <div class="fr"><label>Skill required (1-5)</label>
       <div class="rating-row" id="rate-skill">${ratingButtons('skill',0)}</div>
     </div>
@@ -731,8 +630,8 @@ export function openServedDialog(id: string): void {
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn" onclick="archiveDish('${d.id}',false)">Skip rating</button>
-      <button class="btn btn-primary" onclick="archiveDish('${d.id}',true)">Save &amp; archive</button>
+      <button class="btn" onclick="archiveDish('${d.id}',false${argSuffix})">Skip rating</button>
+      <button class="btn btn-primary" onclick="archiveDish('${d.id}',true${argSuffix})">Save &amp; archive</button>
     </div>`);
 }
 
@@ -751,55 +650,143 @@ export function setRating(key: keyof BatchRatings, val: number): void {
   if (el) el.innerHTML = ratingButtons(key, val);
 }
 
-export function archiveDish(id: string, withRating: boolean): void {
+export function archiveDish(id: string, withRating: boolean, locScope?: Location): void {
   const d = S.batches.find((x: Batch) => x.id === id);
   if (!d) return;
+
+  // Snapshot the batch before any mutation so "Served" can be undone.
+  const before: Batch = structuredClone(d);
+
+  // Loc-scoped path (called from Inventory modal): zero out THIS loc's entries
+  // and only fully archive when nothing remains anywhere. Other locs + pending
+  // shipments are preserved (audit BL1 fix: cook at West marking lunch served
+  // must not delete Centraal's stock).
+  if (locScope) {
+    let zeroedAny = false;
+    for (const entry of (d.inventory || [])) {
+      if (entry.loc === locScope && (entry.qty || 0) > 0) {
+        entry.qty = 0;
+        zeroedAny = true;
+      }
+    }
+
+    const totalRemaining = (d.inventory || []).reduce((s, e) => s + (e.qty || 0), 0);
+    const pendingShipQty = (d.shipments || [])
+      .filter(s => !s.arrived)
+      .reduce((s, sh) => s + (sh.qty || 0), 0);
+
+    if (totalRemaining > 0 || pendingShipQty > 0) {
+      // Batch lives on. Surface the remaining breakdown in the undo toast.
+      const remainingPieces: string[] = [];
+      const byLoc = new Map<string, number>();
+      for (const e of (d.inventory || [])) {
+        if ((e.qty || 0) > 0) {
+          byLoc.set(e.loc, (byLoc.get(e.loc) || 0) + e.qty);
+        }
+      }
+      for (const [loc, q] of byLoc) {
+        remainingPieces.push(`${q.toFixed(1)} L at ${locName(loc as Location)}`);
+      }
+      if (pendingShipQty > 0) {
+        remainingPieces.push(`${pendingShipQty.toFixed(1)} L in transit`);
+      }
+      pendingRatings = { skill:0, speed:0, banger:0 };
+      closeModal();
+      rerenderCurrentView();
+      const action = zeroedAny ? `Served at ${locName(locScope)}` : `No stock to serve at ${locName(locScope)}`;
+      pushUndo({
+        label: `${action} — batch still has ${remainingPieces.join(' · ')}`,
+        restore: () => {
+          const i = S.batches.findIndex((x: Batch) => x.id === id);
+          if (i >= 0) S.batches[i] = before;
+          else S.batches.push(before);
+          rebuildPlanner();
+          rerenderCurrentView();
+          if (_refreshInventoryModal) _refreshInventoryModal();
+        },
+        commit: () => { scheduleSave(); },
+      });
+      return;
+    }
+    // Nothing left anywhere — fall through to full archive.
+  }
+
+  // Full archive — the whole batch leaves the planner.
   const rating = withRating ? { ...pendingRatings } : null;
-  // Store in archive (in state for now)
   if (!S.archive) S.archive = [];
-  S.archive.push({
+  const archiveEntry = {
     id: d.id,
     name: d.name,
-    recipeSheetId: d.recipeSheetId || null,
     type: d.type,
     cookedDate: d.cookDate || null,
     archivedDate: dateToStr(getToday()),
     rating,
-  });
-  // Update recipe ratings (v2 recipe or legacy recipe index)
-  if (rating && d.recipeId) {
-    const recipe = (S.recipes || []).find(r => r.id === d.recipeId);
-    if (recipe) {
-      const n = recipe.timesServed || 0;
-      const newN = n + 1;
-      recipe.avgSkill = ((recipe.avgSkill || 0) * n + (rating.skill || 0)) / newN;
-      recipe.avgSpeed = ((recipe.avgSpeed || 0) * n + (rating.speed || 0)) / newN;
-      recipe.avgBanger = ((recipe.avgBanger || 0) * n + (rating.banger || 0)) / newN;
-      recipe.timesServed = newN;
-      apiPost(`/api/recipes/${recipe.id}`, { avgSkill: recipe.avgSkill, avgSpeed: recipe.avgSpeed, avgBanger: recipe.avgBanger, timesServed: recipe.timesServed }, 'PATCH')
-        .catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
+  };
+  S.archive.push(archiveEntry);
+  // Capture + drop catering refs to the archived batch so the catering's
+  // demand doesn't dangle on a dead id. Inlined rather than calling
+  // cleanCateringRefs (dishes.ts) — that import would be circular.
+  const savedCateringDishes: { id: string; dishes: CateringDish[] }[] = [];
+  for (const c of (S.caterings || [])) {
+    if (c.dishes?.some((cd: CateringDish) => cd.dishId === id)) {
+      savedCateringDishes.push({ id: c.id, dishes: structuredClone(c.dishes) });
     }
   }
-  // Legacy v1: rating updates by recipeSheetId used to write to /api/recipe-index.
-  // The endpoint and S.recipeIndex were removed in S12 (the writes never came
-  // back to the frontend, so ratings on Sheet-only batches disappeared on
-  // every reload). v2 ratings above are the supported path.
-  // Remove from active dishes
   S.batches = S.batches.filter((x: Batch) => x.id !== id);
+  for (const c of (S.caterings || [])) {
+    if (c.dishes) c.dishes = c.dishes.filter((cd: CateringDish) => cd.dishId !== id);
+  }
   pendingRatings = { skill:0, speed:0, banger:0 };
   closeModal();
   rebuildPlanner();
   rerenderCurrentView();
-  scheduleSave();
-  toast(esc(d.name) + ' archived');
+  pushUndo({
+    label: esc(d.name) + ' archived',
+    restore: () => {
+      S.batches.push(before);
+      for (const snap of savedCateringDishes) {
+        const c = (S.caterings || []).find(x => x.id === snap.id);
+        if (c) c.dishes = snap.dishes;
+      }
+      const ai = S.archive ? S.archive.indexOf(archiveEntry) : -1;
+      if (ai >= 0) S.archive!.splice(ai, 1);
+      rebuildPlanner();
+      rerenderCurrentView();
+      if (_refreshInventoryModal) _refreshInventoryModal();
+    },
+    commit: () => {
+      // Recipe-rating update is deferred to commit so an undo leaves the
+      // recipe's averages untouched.
+      if (rating && d.recipeId) {
+        const recipe = (S.recipes || []).find(r => r.id === d.recipeId);
+        if (recipe) {
+          const n = recipe.timesServed || 0;
+          const newN = n + 1;
+          recipe.avgSkill = ((recipe.avgSkill || 0) * n + (rating.skill || 0)) / newN;
+          recipe.avgSpeed = ((recipe.avgSpeed || 0) * n + (rating.speed || 0)) / newN;
+          recipe.avgBanger = ((recipe.avgBanger || 0) * n + (rating.banger || 0)) / newN;
+          recipe.timesServed = newN;
+          apiPost(`/api/recipes/${recipe.id}`, { avgSkill: recipe.avgSkill, avgSpeed: recipe.avgSpeed, avgBanger: recipe.avgBanger, timesServed: recipe.timesServed }, 'PATCH')
+            .catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
+        }
+      }
+      scheduleSave();
+    },
+  });
+}
+// Maps a recipe/batch type string to its badge CSS modifier. Topping & Bread
+// are recipe-only categories (see VALID_RECIPE_TYPES in lib/db.ts).
+function typeBadgeModifier(t: DishType | string): string {
+  if (t === 'Dessert') return 'b-dessert';
+  if (t === 'Topping') return 'b-topping';
+  if (t === 'Bread') return 'b-bread';
+  return t === 'Soup' ? 'b-soup' : 'b-main';
 }
 export function typeBadge(t: DishType | string): string {
-  if (t === 'Dessert') return `<span class="badge b-dessert">Dessert</span>`;
-  return `<span class="badge ${t === 'Soup' ? 'b-soup' : 'b-main'}">${t}</span>`;
+  return `<span class="badge ${typeBadgeModifier(t)}">${t}</span>`;
 }
 export function typeBadgeClass(t: DishType | string): string {
-  if (t === 'Dessert') return 'badge b-dessert';
-  return 'badge ' + (t === 'Soup' ? 'b-soup' : 'b-main');
+  return 'badge ' + typeBadgeModifier(t);
 }
 export const TYPES: DishType[] = ['Soup','Main course','Dessert'];
 export function cycleType(id: string): void {
@@ -818,7 +805,7 @@ export function toggleOrder(id: string): void {
   rerenderCurrentView();
 }
 export function chipClass(d: Batch): string {
-  if (d.inTransit) return 'chip-tr';
+  if ((d.shipments || []).some(s => !s.arrived)) return 'chip-tr';
   if (d.type === 'Soup') return 'chip-soup';
   if (d.type === 'Dessert') return 'chip-dessert';
   return 'chip-main';

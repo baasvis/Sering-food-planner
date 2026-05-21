@@ -1,14 +1,14 @@
-import type { Batch, Location, Meal, DishType } from '@shared/types';
+import type { Batch, Location, Meal, DishType, Supply } from '@shared/types';
 import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS } from './state';
 
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
 type DashBatch = Batch & { starch?: string | null };
 import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId, formatRelativeTime } from './utils';
-import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, locationBadge, storageBadge, storageBadgeClass, logisticsBadge, logisticsBadgeClass, logisticsShort, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass } from './core';
+import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass, getStockAt, getPendingFromShipments } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
 import { esc } from './modal';
-import { registerRenderer, setOnScreenChange } from './navigate';
+import { registerRenderer, setOnScreenChange, setBackgroundRefresh, showScreen, getScreenFromHash } from './navigate';
 // Stocktake helpers used by the dashboard chip — kept distinct from the
 // individual screen render fns (those self-register via navigate.ts now).
 import { startStocktake, renderStocktakeAreaPicker, enterStocktakeArea, renderStocktakeArea, saveStocktakeArea, exitStocktake, getIngredientsForArea } from './orders';
@@ -17,15 +17,19 @@ import { trackScreenView } from './telemetry';
 import { showModal, closeModal } from './modal';
 import { getStorageConfigForLoc } from './state';
 import { locName } from '@shared/location';
-import { renderTransportCard } from './transport-card';
+import { renderTransportCard, renderCentraalArrivalBlock } from './transport-card';
+import { openBatchRecipe } from './recipe-editor';
+import { computeSupplyDemand, supplyPricePerGuest } from '@shared/supply-demand';
 
 // SCREENS
 // ═══════════════════════════════════════════════════════════════════
 // showScreen and getScreenFromHash now live in navigate.ts. Each screen
-// module self-registers via registerRenderer() at import time. Re-exported
-// here so consumers that already import { showScreen } from './dashboard'
-// don't break.
-export { showScreen, getScreenFromHash } from './navigate';
+// module self-registers via registerRenderer() at import time. Imported
+// above (not a bare `export ... from`) so the names are also in this
+// module's local scope — navTo() below calls showScreen() directly — and
+// re-exported here so consumers that already import { showScreen } from
+// './dashboard' don't break.
+export { showScreen, getScreenFromHash };
 
 // Wire telemetry into showScreen via the navigate.ts hook — keeps navigate.ts
 // free of any screen-specific imports while still preserving the original
@@ -127,8 +131,24 @@ export function isChoppableIngredient(name: string) {
 
 // ── HELPERS ──────────────────────────────────────────────────
 
+/**
+ * Whether `dish` is "at" `loc` for cook-planning purposes. In the unified-
+ * batch model "where is the batch" depends on intent:
+ *   - For uncooked batches (inventory empty): the cook location is
+ *     `inventory[0].loc` (sticky from first confirmCooked) — defaults to
+ *     'west' for never-cooked placeholders.
+ *   - For cooked batches with stock: the loc is wherever the stock sits.
+ *
+ * This helper handles both: a batch is at `loc` if its primary cook loc is
+ * `loc` OR it has any inventory at `loc`. Used by `getCookDateDishes` to
+ * find batches scheduled to cook at a kitchen on a given date.
+ */
+function batchPrimaryLoc(b: Batch): Location {
+  return (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west');
+}
+
 export function isDishAtLocation(dish: Batch, loc: Location) {
-  return dish.location === loc;
+  return batchPrimaryLoc(dish) === loc || getStockAt(dish, loc) > 0;
 }
 
 export function getCookDateDishes(loc: Location, date: Date) {
@@ -269,12 +289,14 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
   const typeColors: Record<string, string> = { 'Soup': 'green', 'Main course': 'blue', 'Dessert': 'purple' };
   const col = typeColors[dish.type] || 'gray';
 
-  // Compact row
+  // Compact row — clicking the row body always expands the chip; the checkbox
+  // (cook chips only) is a separate click target that fires the cook action.
   let html = `<div class="dash-chip ${expanded ? 'expanded' : ''} ${ctx.checked ? 'checked' : ''}">
-    <div class="dash-chip-row" onclick="${ctx.checkable && ctx.toggleFn ? ctx.toggleFn + "('" + esc(dish.id) + "')" : "toggleDashChipExpand('" + esc(dish.id) + "')"}">`;
+    <div class="dash-chip-row" onclick="toggleDashChipExpand('${esc(dish.id)}')">`;
 
   if (ctx.checkable) {
-    html += `<div class="dash-prep-check">${ctx.checked ? '✓' : ''}</div>`;
+    const checkClick = ctx.toggleFn ? `event.stopPropagation();${ctx.toggleFn}('${esc(dish.id)}')` : '';
+    html += `<div class="dash-prep-check" onclick="${checkClick}">${ctx.checked ? '✓' : ''}</div>`;
   }
 
   html += `<span class="dash-chip-dot" style="background:var(--${col})"></span>
@@ -295,8 +317,13 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
 
   if (ctx.liters !== undefined) {
     html += `<span class="dash-chip-liters">${ctx.liters} L</span>`;
-  } else if (ctx.showStock && (dish.stock || 0) > 0) {
-    html += `<span class="dash-chip-liters">${dish.stock} L</span>`;
+  } else if (ctx.showStock && getStockAt(dish, loc) > 0) {
+    // toFixed(1) prevents float-precision dribble like 76.40000000000002 L
+    // (which happens after a cancel-shipment merges qty back into an entry
+    // whose original cookDate matched — the addition is exact-ish but the
+    // IEEE754 representation isn't, and getStockAt just sums entries
+    // without rounding).
+    html += `<span class="dash-chip-liters">${getStockAt(dish, loc).toFixed(1)} L</span>`;
   }
 
   html += `<span class="dash-chip-arrow">${expanded ? '▾' : '›'}</span>
@@ -333,7 +360,7 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
     const cooked = isBatchCooked(dish);
     html += `<div class="dash-chip-detail-row">
       <span class="dash-chip-detail-label">Stock</span>
-      <span>${dish.stock || 0} L ${cooked ? '<span class="dash-chip-badge-ok">cooked</span>' : '<span class="dash-chip-badge-warn">uncooked</span>'}</span>
+      <span>${getStockAt(dish, loc).toFixed(1)} L ${cooked ? '<span class="dash-chip-badge-ok">cooked</span>' : '<span class="dash-chip-badge-warn">uncooked</span>'}</span>
     </div>`;
     if (dish.cookDate) {
       html += `<div class="dash-chip-detail-row">
@@ -342,14 +369,11 @@ function renderDashChip(dish: Batch, ctx: ChipContext): string {
       </div>`;
     }
 
-    // Recipe link
-    if (dish.recipeSheetId) {
+    // Recipe link — only v2 recipes remain; legacy v1 recipeSheetId path
+    // was removed with the unified-batch migration.
+    if (dish.recipeId) {
       html += `<div class="dash-chip-detail-row">
-        <a class="dash-recipe-btn" href="https://docs.google.com/spreadsheets/d/${esc(dish.recipeSheetId)}" target="_blank" onclick="event.stopPropagation()">📄 Open Recipe</a>
-      </div>`;
-    } else if ((dish as Record<string, unknown>).recipeId) {
-      html += `<div class="dash-chip-detail-row">
-        <button class="dash-recipe-btn" onclick="event.stopPropagation();openRecipeDetail('${esc((dish as Record<string, unknown>).recipeId as string)}')">📄 View Recipe</button>
+        <button class="dash-recipe-btn" onclick="event.stopPropagation();openRecipeDetail('${esc(dish.recipeId)}')">📄 View Recipe</button>
       </div>`;
     }
 
@@ -606,11 +630,9 @@ export function loadDayTodos() {
   try {
     const data = JSON.parse(localStorage.getItem(_dayTodosKey()) || '{}');
     S.heatChecked   = new Set(data.heat   || []);
-    S.cookChecked   = new Set(data.cook   || []);
     S.customTodos   = data.custom || [];
   } catch (e: unknown) {
     S.heatChecked = new Set();
-    S.cookChecked = new Set();
     S.customTodos = [];
   }
 }
@@ -618,7 +640,6 @@ export function loadDayTodos() {
 export function saveDayTodos() {
   localStorage.setItem(_dayTodosKey(), JSON.stringify({
     heat:   [...S.heatChecked],
-    cook:   [...S.cookChecked],
     custom: S.customTodos,
   }));
 }
@@ -629,18 +650,33 @@ export function toggleHeatItem(dishId: string) {
   renderDashboardContent();
 }
 
-export function toggleCookItem(dishId: string) {
+/** "What to Cook" checkbox handler. Batches with no recipe have nothing to
+ *  resolve, so they go straight to the standard mark-cooked flow (confirmCooked
+ *  forces the kitchen chooser itself on the dashboard). Recipe batches first
+ *  pick the kitchen — the dashboard's currentLoc is ambiguous — then open the
+ *  batch recipe editor in confirm-cook mode, where Save marks the batch cooked
+ *  at the chosen location. */
+export function startCookConfirm(dishId: string) {
   const d = S.batches.find(x => x.id === dishId);
-  if (d && !isBatchCooked(d)) {
+  if (!d) return;
+  if (!d.recipeId) {
     confirmCooked(dishId);
-    S.cookChecked.add(dishId);
-    saveDayTodos();
-    renderDashboardContent();
     return;
   }
-  S.cookChecked.has(dishId) ? S.cookChecked.delete(dishId) : S.cookChecked.add(dishId);
-  saveDayTodos();
-  renderDashboardContent();
+  showModal(`<h3>Where did you cook "${esc(d.name)}"?</h3>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Pick the kitchen — this sets where the cooked stock lands.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="cookConfirmAt('${esc(dishId)}','west')">Sering West</button>
+      <button class="btn btn-primary" onclick="cookConfirmAt('${esc(dishId)}','centraal')">Sering Centraal</button>
+    </div>`);
+}
+
+/** Kitchen picked from the startCookConfirm chooser → open the batch recipe
+ *  editor in confirm-cook mode for that location. */
+export function cookConfirmAt(dishId: string, cookLoc: Location) {
+  closeModal();
+  openBatchRecipe(dishId, { confirmCook: true, cookLoc });
 }
 
 // ── Team todos (inline) ──────────────────────────────────────
@@ -889,6 +925,68 @@ function _startFreshnessTick() {
 
 // ── MAIN CONTENT RENDER ──────────────────────────────────────
 
+// Compact "Supplies" card on the dashboard. Shows non-archived supplies with
+// per-location stock vs forward demand at the current dashboard location;
+// flags deficits so the user can spot under-stocked toppings/bread/ferments
+// at a glance. Active one-offs at this location are shown with their drip-feed
+// amount instead of a deficit bar.
+function renderSuppliesCard(loc: Location, todayStr: string): string {
+  const supplies = (S.supplies || []).filter(s => !s.archived);
+  if (supplies.length === 0) {
+    return ''; // hide entirely until at least one supply exists
+  }
+  const rows = supplies.map(s => {
+    const stockHere = s.stock?.[loc]?.amount ?? 0;
+    const lastMake = s.stock?.[loc]?.lastMakeDate;
+    if (s.kind === 'standard') {
+      const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+      const need = loc === 'west' ? demand.west : demand.centraal;
+      // Centralized supplies only prep at West; show West demand at both locations
+      // so cooks can see "we need 5kg aioli" regardless of which dashboard they're on
+      const showNeed = s.prepMode === 'centralized' ? demand.west : need;
+      const deficit = Math.max(0, Math.round(showNeed - stockHere));
+      const color = deficit > 0 ? 'var(--red)' : 'var(--text2)';
+      return `<div class="dash-supply-row" style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);">
+        <span>${esc(s.name)}${s.prepMode === 'centralized' && loc !== 'west' ? ' <span style="font-size:10px;color:var(--text3);">(from West)</span>' : ''}</span>
+        <span style="font-size:12px;color:${color};">
+          ${stockHere} / ${Math.round(showNeed)} ${esc(s.unit)}
+          ${deficit > 0 ? ` <strong>−${deficit}</strong>` : ''}
+          ${lastMake ? `<span style="font-size:10px;color:var(--text3);"> · ${lastMake}</span>` : ''}
+        </span>
+      </div>`;
+    }
+    // one-off
+    if (s.oneoffLocation !== loc) return '';
+    return `<div class="dash-supply-row" style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);">
+      <span>${esc(s.name)} <span style="font-size:10px;color:var(--text3);">(one-off)</span></span>
+      <span style="font-size:12px;color:var(--text2);">${stockHere} ${esc(s.unit)} left · ${s.unitsPerService}/service</span>
+    </div>`;
+  }).filter(Boolean).join('');
+  if (!rows) return '';
+  // Per-cover cost: sum of price-per-guest across standard supplies that have
+  // a cost set. Shows what toppings & bread add to each guest's food cost.
+  let costPerGuest = 0;
+  let costedCount = 0;
+  for (const s of supplies) {
+    const ppg = supplyPricePerGuest(s);
+    if (ppg != null) { costPerGuest += ppg; costedCount++; }
+  }
+  const costFooter = costedCount > 0
+    ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border);font-size:12px;color:var(--text2);display:flex;justify-content:space-between;">
+        <span>Toppings &amp; bread per guest</span>
+        <strong>&euro;${costPerGuest.toFixed(2)}</strong>
+      </div>`
+    : '';
+  return `<div class="dash-card">
+    <div class="dash-card-title">
+      <span class="dash-card-icon">🥬</span> Toppings &amp; bread
+      <button class="btn btn-sm" style="margin-left:auto;" onclick="showScreen('supplies')">Manage</button>
+    </div>
+    <div style="margin-top:6px;">${rows}</div>
+    ${costFooter}
+  </div>`;
+}
+
 export function renderDashboardContent() {
   _startFreshnessTick();
   const el = document.getElementById('dash-content');
@@ -915,10 +1013,13 @@ export function renderDashboardContent() {
   const sortedMenu = [...menuDishes].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
 
   // ── Stock overview ──
+  // Show batches with settled stock at this loc (in-flight shipments are
+  // tracked separately in the transport view). Per-loc qty drives the
+  // sort + totals so the cook sees what's physically here.
   const stockBatches = S.batches
-    .filter(b => b.location === loc && (b.stock || 0) > 0 && !b.inTransit)
+    .filter(b => getStockAt(b, loc) > 0)
     .sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
-  const totalStock = Math.round(stockBatches.reduce((s, b) => s + (b.stock || 0), 0) * 10) / 10;
+  const totalStock = Math.round(stockBatches.reduce((s, b) => s + getStockAt(b, loc), 0) * 10) / 10;
 
   // ── Cook: uncooked batches for selected meal today ──
   const cookDishes = (S.planner[`${loc}-${todayStr}-${meal}`] || []).filter(d => !isBatchCooked(d));
@@ -945,6 +1046,9 @@ export function renderDashboardContent() {
         🌙 Dinner <span class="dash-meal-count">${dinnerGuests}</span>
       </button>
     </div>
+
+    <!-- ═══ CENTRAAL TRANSPORT ARRIVAL ═══ -->
+    ${renderCentraalArrivalBlock()}
 
     <!-- ═══ SERVICE BLOCK ═══ -->
     <div class="dash-service-cols">
@@ -991,8 +1095,18 @@ export function renderDashboardContent() {
           ${stockBatches.length === 0
             ? `<div class="dash-empty">No food in stock</div>`
             : (() => {
-                const fresh = stockBatches.filter(b => b.storage !== 'Frozen');
-                const frozen = stockBatches.filter(b => b.storage === 'Frozen');
+                // Per-loc Frozen split: a batch counts as "Frozen at this loc"
+                // when ALL its inventory entries at this loc are Frozen. Any
+                // non-frozen entry at the loc puts it in the "fresh" bucket
+                // (mixed batches surface in the fresh bucket so the cook sees
+                // them as available; the frozen-only batches show up explicitly
+                // under the ❄️ section).
+                const isFrozenAtLoc = (b: Batch) => {
+                  const here = (b.inventory || []).filter(e => e.loc === loc && (e.qty || 0) > 0);
+                  return here.length > 0 && here.every(e => e.storage === 'Frozen');
+                };
+                const fresh = stockBatches.filter(b => !isFrozenAtLoc(b));
+                const frozen = stockBatches.filter(b => isFrozenAtLoc(b));
                 let h = renderGroupedByType(fresh, b => renderDashChip(b, {
                   showStock: true,
                   note: !isBatchCooked(b) ? 'uncooked' : undefined,
@@ -1008,6 +1122,7 @@ export function renderDashboardContent() {
               })()
           }
         </div>
+        ${renderSuppliesCard(loc, todayStr)}
         ${renderTransportCard()}
       </div>
 
@@ -1021,11 +1136,10 @@ export function renderDashboardContent() {
             : cookDishes.map(d => renderDashChip(d, {
                 meal,
                 dateStr: todayStr,
-                liters: calcLitersForService(d, loc, todayStr, meal),
+                liters: calcRequired(d),
                 note: 'cook today',
                 checkable: true,
-                checked: S.cookChecked.has(d.id),
-                toggleFn: 'toggleCookItem',
+                toggleFn: 'startCookConfirm',
               })).join('')
           }
         </div>
@@ -1070,6 +1184,27 @@ export function renderDashboardContent() {
 
 // ── Prep checklist render (partial) ──────────────────────────
 
+/** Standard supplies whose stock at `loc` is below forward demand — surfaced
+ *  as "Make X of Y" tasks in the prep checklist. Centralized supplies are
+ *  prepped at West only, so they appear on the West checklist regardless of
+ *  which location the dashboard is showing. */
+interface SupplyPrepTask { supply: Supply; make: number; have: number; need: number; }
+function computeSupplyPrepTasks(loc: Location, todayStr: string): SupplyPrepTask[] {
+  const tasks: SupplyPrepTask[] = [];
+  for (const s of (S.supplies || [])) {
+    if (s.archived || s.kind !== 'standard') continue;
+    if (s.prepMode === 'centralized' && loc !== 'west') continue;
+    const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+    const need = s.prepMode === 'centralized'
+      ? demand.west
+      : (loc === 'centraal' ? demand.centraal : demand.west);
+    const have = s.stock?.[loc]?.amount ?? 0;
+    const make = need - have;
+    if (make > 0.0001) tasks.push({ supply: s, make, have, need });
+  }
+  return tasks;
+}
+
 export function renderPrepChecklist() {
   const el = document.getElementById('dash-prep-list');
   if (!el) return;
@@ -1089,8 +1224,9 @@ export function renderPrepChecklist() {
   const prepToday = vegToday.map(i => ({ ...i, dayTag: 'today', key: `today-${i.name.toLowerCase().trim()}` }));
   const prepTomorrow = vegTomorrow.map(i => ({ ...i, dayTag: 'tomorrow', key: `tomorrow-${i.name.toLowerCase().trim()}` }));
   const checkedSet = S.prepChecklist[loc] || new Set();
+  const supplyTasks = computeSupplyPrepTasks(loc, todayStr);
 
-  if (prepToday.length === 0 && prepTomorrow.length === 0) {
+  if (prepToday.length === 0 && prepTomorrow.length === 0 && supplyTasks.length === 0) {
     el.innerHTML = `<div class="dash-empty">No fresh ingredients to prep 🎉</div>`;
     return;
   }
@@ -1126,6 +1262,23 @@ export function renderPrepChecklist() {
     </div>`;
     html += tomorrowItems.map(renderItem).join('');
   }
+  // Toppings & bread to make — standard supplies under their forward demand.
+  if (supplyTasks.length > 0) {
+    html += `<div class="dash-prep-group-hdr"${(todayItems.length || tomorrowItems.length) ? ' style="margin-top:8px;"' : ''}>
+      🥬 Toppings &amp; bread to make
+      <span class="dash-prep-group-count">${supplyTasks.length}</span>
+    </div>`;
+    html += supplyTasks.map(t => {
+      const make = Math.ceil(t.make);
+      const unit = esc(t.supply.unit);
+      return `
+      <div class="dash-prep-item dash-prep-supply">
+        <span class="dash-prep-name">Make ${esc(t.supply.name)}</span>
+        <span class="dash-prep-amt">~${make} ${unit} <span style="color:var(--text3);">(have ${Math.round(t.have)})</span></span>
+        <button class="btn btn-sm" onclick="suppliesOpenLogPrep('${esc(t.supply.id)}',${make},'${loc}')">Log prep</button>
+      </div>`;
+    }).join('');
+  }
   el.innerHTML = html;
 }
 
@@ -1134,7 +1287,20 @@ export function navTo(screen: string, subTab: string) {
   showScreen(screen);
 }
 
+/** Re-render the dashboard's content in place if it has been mounted at least
+ *  once this session. Safe to call while the dashboard is NOT the visible
+ *  screen — registered as the background-refresh hook so "Pack for Centraal"
+ *  and the other cards stay in sync with edits made on other screens. No-op
+ *  before the first dashboard visit (#dash-content doesn't exist yet). */
+export function refreshDashboardIfMounted(): void {
+  if (document.getElementById('dash-content')) {
+    renderDashboardContent();
+  }
+}
+
 // Self-register so navigate.ts can dispatch without importing every screen.
 // Other screens self-register from their own files; this one stays here
 // because dashboard.ts owns its render fn.
 registerRenderer('dashboard', renderDashboard);
+// Keep the dashboard's passive cards live when the user edits on other screens.
+setBackgroundRefresh(refreshDashboardIfMounted);

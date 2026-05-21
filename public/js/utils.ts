@@ -2,7 +2,8 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, RecipeFull, Ingredient, StorageConfig } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
+import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
@@ -21,6 +22,12 @@ export function setOnBatchesChanged(fn: () => void) { _onBatchesChanged = fn; }
 // Callback to flush pending undo before remote patch (avoids circular import with undo.ts)
 let _flushUndo: (() => void) | null = null;
 export function setFlushUndo(fn: () => void) { _flushUndo = fn; }
+
+// Callback fired after a remote SSE patch is applied — refreshes an open
+// inventory modal so its embedded row indices don't go stale. Registered by
+// main.ts to avoid a utils → planner circular import.
+let _onRemotePatchApplied: (() => void) | null = null;
+export function setOnRemotePatchApplied(fn: () => void) { _onRemotePatchApplied = fn; }
 
 // Callback to load the full (rich) ingredient shape (avoids circular import with ingredient-db.ts).
 // Used by the bulk-reload path: when the user has the rich shape loaded, we
@@ -87,7 +94,7 @@ export function normalizeGuests(): void {
   for (const loc of ['west', 'centraal']) {
     if (!S.guests[loc]) S.guests[loc] = {};
     for (const day of GUEST_DAYS) {
-      const d = S.guests[loc][day] || {};
+      const d: Partial<GuestDay> = S.guests[loc][day] || {};
       S.guests[loc][day] = {
         lunch: typeof d.lunch === 'number' ? d.lunch : 0,
         dinner: typeof d.dinner === 'number' ? d.dinner : 0,
@@ -174,12 +181,32 @@ export async function doSave(): Promise<void> {
   if (saveState === 'saving') return;
   const patch = computePatch();
   if (patchIsEmpty(patch)) { setSaveState('saved'); return; }
+  // Snapshot exactly what is being sent — BEFORE the await — so an edit typed
+  // while this save is in flight stays dirty and is sent on the next save.
+  // (The old code ran takeSnapshot() AFTER the await, rebuilding the snapshot
+  // from live state and silently absorbing mid-save edits.)
+  const sentBatches = (patch.batches || []).map(b => [b.id, JSON.stringify(b)] as const);
+  const sentDeletedBatches = [...(patch.deletedBatches || [])];
+  const sentGuests = patch.guests ? JSON.stringify(patch.guests) : null;
+  const sentCaterings = (patch.caterings || []).map(c => [c.id, JSON.stringify(c)] as const);
+  const sentDeletedCaterings = [...(patch.deletedCaterings || [])];
+  const sentTransport = (patch.transportItems || []).map(t => [t.id, JSON.stringify(t)] as const);
+  const sentDeletedTransport = [...(patch.deletedTransportItems || [])];
   setSaveState('saving');
   try {
     const result = await apiPost('/api/data/patch', patch);
-    takeSnapshot();
-    setSaveState('saved', 'Saved');
+    // Apply ONLY what was sent to the save snapshot — never the live state.
+    for (const [id, json] of sentBatches) _lastSaved.batches.set(id, json);
+    for (const id of sentDeletedBatches) _lastSaved.batches.delete(id);
+    if (sentGuests !== null) _lastSaved.guests = sentGuests;
+    for (const [id, json] of sentCaterings) _lastSaved.caterings.set(id, json);
+    for (const id of sentDeletedCaterings) _lastSaved.caterings.delete(id);
+    for (const [id, json] of sentTransport) _lastSaved.transportItems.set(id, json);
+    for (const id of sentDeletedTransport) _lastSaved.transportItems.delete(id);
     retryCount = 0;
+    // If an edit landed during the in-flight save, computePatch() now still
+    // sees it — keep the indicator honest instead of flashing "Saved".
+    setSaveState(patchIsEmpty(computePatch()) ? 'saved' : 'unsaved');
     if (result && result.concurrent) {
       const c = result.concurrent;
       toast(`${c.recentUser} saved ${c.agoSeconds < 60 ? c.agoSeconds + 's' : Math.round(c.agoSeconds/60) + 'min'} ago — consider reloading`);
@@ -229,6 +256,7 @@ export async function loadData(): Promise<void> {
     if (data.batches) S.batches = data.batches;
     if (data.caterings) S.caterings = data.caterings;
     if (data.transportItems) S.transportItems = data.transportItems;
+    if (data.supplies) S.supplies = data.supplies;
     takeSnapshot();
     rebuildPlanner();
     // Cold loaders (ingredient DB, storage config, kitchen equipment, guest
@@ -559,6 +587,13 @@ export function disconnectLiveSync(): void {
 // Remote patch message shape (from SSE)
 interface RemotePatchMessage {
   user?: string;
+  // Schema-version envelope (audit S4 deploy-window safety net). Server emits
+  // BATCH_SCHEMA_VERSION on every patch via routes/events.ts:broadcast(); a
+  // mismatched version triggers a force-reload in applyRemotePatch so a
+  // stale browser tab doesn't silently merge new-shape data into old-shape
+  // local state. Optional because old backends won't emit it during the
+  // partial-deploy window — undefined === "compatible, don't reload".
+  schemaVersion?: number;
   // Existing — handled by computePatch() snapshot diff
   batches?: Batch[];
   deletedBatches?: string[];
@@ -572,6 +607,8 @@ interface RemotePatchMessage {
   deletedRecipes?: string[];
   ingredients?: Ingredient[];
   deletedIngredients?: string[];
+  supplies?: Supply[];
+  deletedSupplies?: string[];
   // Full-replace resources
   storageConfig?: StorageConfig;
   kitchenEquipment?: KitchenEquipment;
@@ -588,12 +625,33 @@ interface RemotePatchMessage {
 
 // Merge a patch from another user into local state
 export function applyRemotePatch(msg: RemotePatchMessage): void {
+  // Schema-version safety net (audit S4). A stale browser tab open during a
+  // deploy would otherwise silently merge new-shape data into old-shape
+  // local state and produce zombie fields. Force-reload on mismatch so the
+  // tab picks up the fresh bundle.
+  //
+  // Defensive: undefined version === "old backend that doesn't emit version
+  // yet". Treat as compatible during the partial-deploy window so we don't
+  // force-reload everyone for a transient old-server response.
+  if (msg.schemaVersion !== undefined && msg.schemaVersion !== BATCH_SCHEMA_VERSION) {
+    toast('App updated. Reloading...');
+    // Belt-and-braces: clear both the in-memory snapshot AND the localStorage
+    // key (no-op if it doesn't exist) so a stale-data resave doesn't fire as
+    // the page reloads. The reload itself blows the JS heap so the in-memory
+    // nuke is mostly cosmetic, but cheap.
+    _lastSaved = { batches: new Map(), guests: '', caterings: new Map(), transportItems: new Map() };
+    try { localStorage.removeItem('lastSaved'); } catch (_e) { /* noop */ }
+    setTimeout(() => window.location.reload(), 400);
+    return;
+  }
+
   if (_flushUndo) _flushUndo();
   const { user, batches, deletedBatches, guests,
           caterings, deletedCaterings,
           transportItems, deletedTransportItems,
           recipes, deletedRecipes,
           ingredients, deletedIngredients,
+          supplies, deletedSupplies,
           storageConfig, kitchenEquipment,
           prepChecklist, inventoryCompletion,
           guestsNextWeeks,
@@ -670,6 +728,15 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     S.ingredientDb = [...ingMap.values()];
     invalidateCategoryCache();
     window.dispatchEvent(new CustomEvent('ingredientDbReady'));
+    changed = true;
+  }
+
+  // Merge supplies (item-delta by id) — toppings/bread CRUD + prep/stock events
+  if ((supplies && supplies.length) || (deletedSupplies && deletedSupplies.length)) {
+    const supplyMap = new Map((S.supplies || []).map((s: Supply) => [s.id, s]));
+    if (deletedSupplies) deletedSupplies.forEach((id: string) => supplyMap.delete(id));
+    if (supplies) supplies.forEach((s: Supply) => supplyMap.set(s.id, s));
+    S.supplies = [...supplyMap.values()];
     changed = true;
   }
 
@@ -754,6 +821,8 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
       || guestsNextWeeks);
     if (needsPlanner) rebuildPlanner();
     rerenderCurrentView();
+    // Rebuild an open inventory modal so its embedded row indices stay valid.
+    if (_onRemotePatchApplied) _onRemotePatchApplied();
     toast(`${user || 'Someone'} made changes — updated live`);
   }
 }

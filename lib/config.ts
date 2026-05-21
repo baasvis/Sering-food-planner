@@ -16,6 +16,10 @@ export const CONFIG = {
   // DIRECTOR_EMAILS explicitly.
   DIRECTOR_EMAILS: ((process.env.DIRECTOR_EMAILS ?? 'daandorr36@gmail.com')
     .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)),
+  // Staff-lead allowlist — unlocks Competencies admin actions (chunk sync from
+  // Notion, event corrections, people management). Mirrors the director gate.
+  STAFF_LEAD_EMAILS: ((process.env.STAFF_LEAD_EMAILS ?? '')
+    .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)),
   // Audit S3/S4: explicit auth-mode opt-in. When 'production', the dev-mode
   // bypass in routes/auth.ts is disabled and server.ts refuses to boot if
   // GOOGLE_CLIENT_ID or ALLOWED_EMAILS is empty. Decoupled from NODE_ENV so
@@ -27,6 +31,10 @@ export const CONFIG = {
   HANOS_PASS_WEST: process.env.HANOS_PASS_WEST || '',
   HANOS_USER_CENTRAAL: process.env.HANOS_USER_CENTRAAL || '',
   HANOS_PASS_CENTRAAL: process.env.HANOS_PASS_CENTRAAL || '',
+  // Notion — competency chunk library sync. Notion is the source of truth for
+  // chunk content; the app pulls it in read-only.
+  NOTION_TOKEN: process.env.NOTION_TOKEN || '',
+  NOTION_CHUNKS_DATA_SOURCE_ID: process.env.NOTION_CHUNKS_DATA_SOURCE_ID || '',
 };
 
 // Extract error message safely from unknown caught values

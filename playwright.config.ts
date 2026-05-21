@@ -64,6 +64,9 @@ export default defineConfig({
       DATABASE_URL: process.env.DATABASE_URL || '',
       // Force dev-mode auth (the in-app "Dev mode login" button) for tests.
       GOOGLE_CLIENT_ID: '',
+      // Make the dev-mode user (dev@local) a staff-lead so the Competencies
+      // admin view is reachable in e2e/competencies.spec.ts.
+      STAFF_LEAD_EMAILS: 'dev@local',
       PORT: String(PORT),
       // The compiled server reads static files from dist/client/ when
       // NODE_ENV === 'production' (see app.ts). We're running the production
