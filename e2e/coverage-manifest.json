@@ -12,5 +12,6 @@
   "stocktake-start.spec.ts": ["stocktake_start"],
   "predictions-apply.spec.ts": ["predictions_apply"],
   "recipes.spec.ts": ["recipe_save"],
-  "shipment-flow.test.ts": ["batch_ship", "shipment_mark_arrived", "shipment_cancel", "batch_transfer"]
+  "shipment-flow.test.ts": ["batch_ship", "shipment_mark_arrived", "shipment_cancel", "batch_transfer"],
+  "transport-card-shown.spec.ts": ["transport_card_shown", "transport_card_mode_toggled"]
 }
