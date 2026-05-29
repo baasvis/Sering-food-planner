@@ -162,6 +162,17 @@ describe('isServableBy', () => {
     expect(isServableBy('05/05/2026', '2026-05-06', 'lunch', 'centraal', 'west')).toBe(true);
     expect(isServableBy('05/05/2026', '2026-05-06', 'dinner', 'centraal', 'west')).toBe(true);
   });
+  test('Sunday exception: West cook reaches Centraal SAME-DAY dinner (early cook, late van), not lunch', () => {
+    // 03/05/2026 is a Sunday. Sunday's cook starts very early and there is no
+    // Centraal lunch, so the delivery van leaves later and reaches Centraal's
+    // dinner shift the same day — unlike any other weekday.
+    expect(isServableBy('03/05/2026', '2026-05-03', 'dinner', 'centraal', 'west')).toBe(true);
+    expect(isServableBy('03/05/2026', '2026-05-03', 'lunch', 'centraal', 'west')).toBe(false);
+    // Regression guard: a non-Sunday cook still cannot reach Centraal same-day.
+    expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'centraal', 'west')).toBe(false);
+    // Sunday cook → Centraal next day stays fine.
+    expect(isServableBy('03/05/2026', '2026-05-04', 'lunch', 'centraal', 'west')).toBe(true);
+  });
   test('Centraal-cooked batch (rare): standard same-day-dinner rule still applies', () => {
     expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'centraal', 'centraal')).toBe(true);
     expect(isServableBy('05/05/2026', '2026-05-05', 'lunch', 'centraal', 'centraal')).toBe(false);

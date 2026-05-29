@@ -417,9 +417,12 @@ function isOnlyFrozen(b: Batch): boolean {
  * X is too early — cooking happens during the day). Any later day is fine.
  *
  * Location rules use the batch's cook location (primary loc):
- *   - West-cooked batch + Centraal slot → next-morning delivery only.
- *     Same-day Centraal dinner is too early; the morning van runs the
- *     next day.
+ *   - West-cooked batch + Centraal slot → next-morning delivery, EXCEPT a
+ *     Sunday cook can reach Centraal's SAME-DAY dinner: Sunday's cook starts
+ *     very early and there's no Centraal lunch, so the van leaves later and
+ *     makes the evening shift. (This 'Sun' check is a real calendar-day
+ *     logistics fact — distinct from the configurable big-cook day — so it is
+ *     intentionally hardcoded.)
  *   - Centraal-cooked batch + West slot → NEVER. No reverse delivery.
  *   - Same-location: standard same-day-dinner rule.
  */
@@ -435,7 +438,9 @@ export function isServableBy(
   if (slotIsoDate < cookIso) return false;
   if (slotLoc === 'west' && batchLocation === 'centraal') return false;
   if (slotLoc === 'centraal' && batchLocation === 'west') {
-    return slotIsoDate > cookIso;
+    if (slotIsoDate > cookIso) return true;                       // next morning+
+    // Same-day exception: a Sunday West cook reaches Centraal's dinner shift.
+    return dateToDayName(cookIso) === 'Sun' && slotMeal === 'dinner';
   }
   if (slotIsoDate > cookIso) return true;
   return slotMeal === 'dinner';

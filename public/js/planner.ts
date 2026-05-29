@@ -188,12 +188,13 @@ export function renderLocationPlan(loc: string) {
 //
 // A batch shows up in a location's pool when it's physically here, has an
 // UPCOMING service here, or is COOKED here. The cooked-here rule matters for
-// cross-loc batches: a dish cooked at West that only serves Centraal still
-// needs to appear on the West tab so the West cooks know to make it (anything
-// cooked at West shows up at West). Past-only service ties are excluded — once
-// the food is served, a Centraal-located batch shouldn't keep appearing in the
-// West tab just because it served West last week.
+// cross-loc batches: anything COOKED at a location must appear on that tab so
+// the kitchen knows what to cook and when — even with no planner service. A
+// cooked-here batch counts as live if it has an upcoming service anywhere, an
+// upcoming/undated catering referencing it, OR a today/future cook date (a
+// planned cook). Finished past batches (no stock, no future demand) drop off.
 export function getPoolBatches(loc: string) {
+  const todayIso = dateToIso(getToday());
   return S.batches.filter(d => {
     // "Physically here" now means any stock at this loc, OR a pending
     // shipment in-flight to this loc (so the cook can see incoming food).
@@ -202,11 +203,21 @@ export function getPoolBatches(loc: string) {
     const hasUpcomingSvcHere = (d.services || []).some(s =>
       s.loc === loc && !isServicePast(s));
     // Cook location (unified model): inventory[0].loc, defaulting to 'west' for
-    // empty placeholders (cooking happens at West by default). A dish cooked
-    // here that's still actively planned (any upcoming service) belongs on this
-    // tab even when every service is at the other location.
+    // empty placeholders (cooking happens at West by default).
     const cookLoc = (d.inventory && d.inventory.length > 0) ? d.inventory[0].loc : 'west';
-    const cookedHere = cookLoc === loc && (d.services || []).some(s => !isServicePast(s));
+    let cookedHere = false;
+    if (cookLoc === loc) {
+      const cookD = d.cookDate ? strToDate(d.cookDate) : null;
+      const plannedCook = cookD ? dateToIso(cookD) >= todayIso : false;
+      const svcUpcoming = (d.services || []).some(s => !isServicePast(s));
+      const cateringUpcoming = (S.caterings || []).some(c => {
+        if (!(c.dishes || []).some(cdRef => cdRef.dishId === d.id)) return false;
+        if (!c.date) return true;                    // undated catering → still planned
+        const cDate = strToDate(c.date);
+        return !cDate || dateToIso(cDate) >= todayIso; // today or future only
+      });
+      cookedHere = plannedCook || svcUpcoming || cateringUpcoming;
+    }
     return stockHere || incomingHere || hasUpcomingSvcHere || cookedHere;
   });
 }
