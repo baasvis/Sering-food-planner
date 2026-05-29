@@ -213,6 +213,13 @@ model KitchenEquipment {
   @@map("kitchen_equipment")
 }
 
+model CookRhythm {
+  id     String @id @default("default")
+  config Json   @default("{}") // { days: { Mon: { soup, main, chefs }, ... } } — editable Fix My Menu rules
+
+  @@map("cook_rhythm")
+}
+
 model DailyRevenue {
   id           Int    @id @default(autoincrement())
   date         String

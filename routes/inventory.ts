@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma, dbAppendLog, withWriteLock } from '../lib/db';
 import { asyncHandler, AppError } from '../lib/config';
 import { broadcast } from './events';
@@ -100,6 +101,51 @@ router.post('/kitchen-equipment', asyncHandler(async (req: Request, res: Respons
     user: user.name,
     kitchenEquipment: { pots, gasBurners, inductionBurners, bigBurnerThreshold: threshold },
   });
+  res.json({ ok: true });
+}));
+
+// ── Cook Rhythm (single-row config; editable Fix My Menu rules) ──
+// config = { days: { Mon: { soup, main, chefs }, ... } }. Stored as a single
+// JSON column. The frontend merges these over its built-in defaults, so an
+// empty/missing row falls back to the default rhythm.
+
+const COOK_RHYTHM_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+router.get('/cook-rhythm', asyncHandler(async (_req: Request, res: Response) => {
+  const row = await prisma.cookRhythm.findUnique({ where: { id: 'default' } });
+  res.json(row && row.config ? row.config : { days: {} });
+}));
+
+router.post('/cook-rhythm', asyncHandler(async (req: Request, res: Response) => {
+  const inDays = (req.body && req.body.days) as Record<string, unknown> | undefined;
+  if (!inDays || typeof inDays !== 'object' || Array.isArray(inDays)) {
+    return res.status(400).json({ error: 'Expected { days: { Mon: {soup,main,chefs}, ... } }' });
+  }
+  const days: Record<string, { soup: number; main: number; chefs: number }> = {};
+  for (const day of COOK_RHYTHM_DAYS) {
+    const d = inDays[day] as Record<string, unknown> | undefined;
+    if (!d || typeof d !== 'object') continue;
+    const fields: Record<string, number> = {};
+    for (const key of ['soup', 'main', 'chefs'] as const) {
+      const v = Number(d[key]);
+      if (!Number.isFinite(v) || v < 0 || v > 50) {
+        return res.status(400).json({ error: `${day}.${key} must be a number 0–50` });
+      }
+      fields[key] = Math.round(v);
+    }
+    days[day] = { soup: fields.soup, main: fields.main, chefs: fields.chefs };
+  }
+  const config = { days };
+  await withWriteLock(async () => {
+    await prisma.cookRhythm.upsert({
+      where: { id: 'default' },
+      create: { id: 'default', config: config as unknown as Prisma.InputJsonValue },
+      update: { config: config as unknown as Prisma.InputJsonValue },
+    });
+  });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'cook-rhythm-update', 'Updated Fix My Menu cook rhythm');
+  broadcast(user.email, 'patch', { user: user.name, cookRhythm: config });
   res.json({ ok: true });
 }));
 

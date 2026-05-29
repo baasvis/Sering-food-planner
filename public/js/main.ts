@@ -26,7 +26,7 @@ import { TUTORIALS, startTutorial, tutNext, tutPrev, tutSkip } from './tutorial'
 import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, switchGlobalLocation } from './init';
 import { initTelemetry, trackScreenView, trackEvent, trackError } from './telemetry';
 import { executeUndo, flushUndo } from './undo';
-import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave, fixMenuGoto, fixMenuAction } from './menu-fixer';
+import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave, fixMenuGoto, fixMenuAction, openCookRhythmModal, crUpdateField, crToggleClosed, crResetDefaults, crSave } from './menu-fixer';
 import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals } from './transport-card';
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
 
@@ -113,6 +113,7 @@ Object.assign(window, {
   // menu-fixer
   fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave,
   fixMenuGoto, fixMenuAction,
+  openCookRhythmModal, crUpdateField, crToggleClosed, crResetDefaults, crSave,
 
   // transport-card
   setTransportMode, confirmTransportPlan, confirmCentraalArrivals,

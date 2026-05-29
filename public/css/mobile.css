@@ -197,4 +197,13 @@
     .br-scale-row{flex-wrap:wrap;gap:6px;font-size:12px;}
     .br-scale-row input[type="number"]{width:60px;}
     .br-scale-info{width:100%;margin-left:0;}
+
+    /* Cook-rhythm editor: tighten the 5-column grid so the Soups/Mains/Chefs
+       inputs + Closed checkbox fit small phones (~320px) without clipping. */
+    .cr-modal{max-width:100%;}
+    .cr-help,.cr-summary{font-size:12px;}
+    .cr-rows-hdr,.cr-row{grid-template-columns:minmax(40px,1fr) 38px 38px 38px 64px;gap:4px;}
+    .cr-num{padding:5px 3px;}
+    .cr-closed{font-size:11px;gap:3px;}
+    .cr-actions{flex-wrap:wrap;}
   }
