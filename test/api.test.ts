@@ -1646,7 +1646,7 @@ describe('S2 — id charset validation rejects XSS-shaped ids', () => {
 // the live staging app. These tests SAVE the current config and RESTORE it in
 // afterAll so they don't clobber the real rhythm on the shared test DB.
 describe('Cook Rhythm API (/api/cook-rhythm)', () => {
-  let original: any = { days: {} };
+  let original: { days: Record<string, { soup: number; main: number; chefs: number }> } = { days: {} };
 
   beforeAll(async () => {
     const res = await request(app).get('/api/cook-rhythm');
@@ -1654,7 +1654,10 @@ describe('Cook Rhythm API (/api/cook-rhythm)', () => {
   });
 
   afterAll(async () => {
-    await request(app).post('/api/cook-rhythm').send(original);
+    // Restore the live staging single-row config. Surface a failed restore —
+    // otherwise a transient failure silently leaves staging on a test value.
+    const r = await request(app).post('/api/cook-rhythm').send(original);
+    if (r.status !== 200) console.warn('cook-rhythm restore failed:', r.status, r.body);
   });
 
   it('GET — returns an object with a days map', async () => {
