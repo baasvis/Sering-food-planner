@@ -49,6 +49,7 @@ import {
   runFallbackLadder,
   getActiveRhythm,
   computeWeeklyCapacities,
+  collectWarnings,
   COOK_RHYTHM,
   SLOTS_PER_TYPE,
   PLANNING_HORIZON_DAYS,
@@ -161,6 +162,17 @@ describe('isServableBy', () => {
     expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'centraal', 'west')).toBe(false);
     expect(isServableBy('05/05/2026', '2026-05-06', 'lunch', 'centraal', 'west')).toBe(true);
     expect(isServableBy('05/05/2026', '2026-05-06', 'dinner', 'centraal', 'west')).toBe(true);
+  });
+  test('Sunday exception: West cook reaches Centraal SAME-DAY dinner (early cook, late van), not lunch', () => {
+    // 03/05/2026 is a Sunday. Sunday's cook starts very early and there is no
+    // Centraal lunch, so the delivery van leaves later and reaches Centraal's
+    // dinner shift the same day — unlike any other weekday.
+    expect(isServableBy('03/05/2026', '2026-05-03', 'dinner', 'centraal', 'west')).toBe(true);
+    expect(isServableBy('03/05/2026', '2026-05-03', 'lunch', 'centraal', 'west')).toBe(false);
+    // Regression guard: a non-Sunday cook still cannot reach Centraal same-day.
+    expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'centraal', 'west')).toBe(false);
+    // Sunday cook → Centraal next day stays fine.
+    expect(isServableBy('03/05/2026', '2026-05-04', 'lunch', 'centraal', 'west')).toBe(true);
   });
   test('Centraal-cooked batch (rare): standard same-day-dinner rule still applies', () => {
     expect(isServableBy('05/05/2026', '2026-05-05', 'dinner', 'centraal', 'centraal')).toBe(true);
@@ -935,5 +947,45 @@ describe('computeWeeklyCapacities (chefs share the week\'s cooking)', () => {
     const caps = computeWeeklyCapacities(window, guests);
     expect(caps.get('Tue')! / caps.get('Wed')!).toBeCloseTo(3);
     expect(caps.get('Tue')! + caps.get('Wed')!).toBeCloseTo(2 * 4 * 2 * 40 * 280 / 1000);
+  });
+});
+
+// ─── collectWarnings: undeliverable-Centraal Sunday exception ──────────────
+
+describe('collectWarnings undeliverable-centraal (Sunday delivery exception)', () => {
+  const TEN = (_l: Location, _i: string, _m: Meal) => 10;
+  const has = (ws: { category: string }[]) => ws.some(w => w.category === 'undeliverable-centraal');
+
+  test('Sunday West cook serving Centraal SAME-DAY dinner is NOT flagged', () => {
+    const window = makeWindow([{ iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' }]);
+    const b = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup',
+      inventory: [inv(80, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-03', meal: 'dinner' }],
+    });
+    const ws = collectWarnings([b], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, TEN);
+    expect(has(ws)).toBe(false);
+  });
+
+  test('Sunday West cook serving Centraal same-day LUNCH is still flagged', () => {
+    const window = makeWindow([{ iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' }]);
+    const b = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup lunch',
+      inventory: [inv(80, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-03', meal: 'lunch' }],
+    });
+    const ws = collectWarnings([b], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, TEN);
+    expect(has(ws)).toBe(true);
+  });
+
+  test('non-Sunday West cook serving Centraal same-day dinner is still flagged', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const b = makeBatch({
+      type: 'Soup', cookDate: '06/05/2026', name: 'Wed soup',
+      inventory: [inv(80, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }],
+    });
+    const ws = collectWarnings([b], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, TEN);
+    expect(has(ws)).toBe(true);
   });
 });

@@ -25,7 +25,7 @@ function makeBatch(o: Partial<Batch> & { type: DishType }): Batch {
   return { ...base, ...o };
 }
 
-beforeEach(() => { S.batches = []; });
+beforeEach(() => { S.batches = []; S.caterings = []; });
 
 describe('getPoolBatches cooked-here visibility', () => {
   test('a West-cooked placeholder serving only Centraal still shows on the West tab', () => {
@@ -56,6 +56,28 @@ describe('getPoolBatches cooked-here visibility', () => {
       services: [{ loc: 'west', date: '2026-04-28', meal: 'dinner' }],
     });
     S.batches = [b];
+    expect(getPoolBatches('west').map(x => x.id)).not.toContain(b.id);
+  });
+
+  test('a West-cooked batch attached only to an upcoming catering shows on West (no services)', () => {
+    // Real case: a main on a catering but no planner service. West must still
+    // see it to know what to cook.
+    const b = makeBatch({ type: 'Main course', name: 'South Indian chickpea curry', cookDate: '05/05/2026', inventory: [], services: [] });
+    S.batches = [b];
+    S.caterings = [{ id: 'c1', name: 'AZC lunch', date: '05/05/2026', guestCount: 50, deliveryMode: 'pickup', dishes: [{ dishId: b.id, name: b.name, type: 'Main course' }], logisticsNotes: '' }];
+    expect(getPoolBatches('west').map(x => x.id)).toContain(b.id);
+  });
+
+  test('a West-cooked batch with a future cook date but no demand still shows on West (planned cook)', () => {
+    const b = makeBatch({ type: 'Soup', name: 'Planned soup', cookDate: '05/05/2026', inventory: [], services: [] });
+    S.batches = [b];
+    expect(getPoolBatches('west').map(x => x.id)).toContain(b.id);
+  });
+
+  test('a West-cooked batch tied only to a PAST catering, no stock/service, drops off West', () => {
+    const b = makeBatch({ type: 'Main course', name: 'Old catering main', cookDate: '28/04/2026', inventory: [], services: [] });
+    S.batches = [b];
+    S.caterings = [{ id: 'c2', name: 'Past event', date: '28/04/2026', guestCount: 30, deliveryMode: 'pickup', dishes: [{ dishId: b.id, name: b.name, type: 'Main course' }], logisticsNotes: '' }];
     expect(getPoolBatches('west').map(x => x.id)).not.toContain(b.id);
   });
 });
