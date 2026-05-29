@@ -1,6 +1,6 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, Supply } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, Supply } from '@shared/types';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -32,6 +32,22 @@ export const DEFAULT_STORAGE_CONFIG: StorageArea[] = [
   { name: 'Bar', color: '#9C27B0', spots: ['Counter', 'Under bar'] },
   { name: 'FOH', color: '#F44336', spots: ['Station 1'] },
 ];
+
+// Default cook rhythm — the Fix My Menu "rules" baseline, editable in-app and
+// persisted server-side (S.cookRhythm). Lives here (not menu-fixer.ts) so both
+// menu-fixer and the loader/editor can read it without a circular import.
+// chefs are relative capacity weights: a day's tolerated cook volume = its chefs
+// ÷ the week's total chefs × the week's guest demand (see computeWeeklyCapacities).
+// The defaults keep Sunday as the big-cook day and Mon/Tue lighter.
+export const DEFAULT_COOK_RHYTHM: Record<string, CookRhythmDay> = {
+  Sun: { soup: 3, main: 3, chefs: 6 }, // big cook day — many volunteers
+  Mon: { soup: 0, main: 1, chefs: 1 }, // light day, lives off Sunday
+  Tue: { soup: 1, main: 1, chefs: 2 },
+  Wed: { soup: 1, main: 1, chefs: 2 },
+  Thu: { soup: 1, main: 1, chefs: 2 },
+  Fri: { soup: 1, main: 1, chefs: 2 },
+  Sat: { soup: 1, main: 1, chefs: 2 },
+};
 
 // Mutable — rebuilt from storageConfig when loaded
 export let STORAGE_CATEGORIES: Record<string, string[]> = {};
@@ -151,6 +167,7 @@ export interface AppState {
   guestsNextWeeks: Record<string, Record<string, Record<string, Record<string, number>>>>;
   storageConfig: StorageConfig | null;
   kitchenEquipment: KitchenEquipment | null;
+  cookRhythm: CookRhythmConfig | null;
   financeData: Record<string, unknown>[];
   financeProducts: Record<string, unknown>[];
   financeSyncing: boolean;
@@ -204,6 +221,7 @@ export let S: AppState = {
   guestsNextWeeks:{},
   storageConfig: null,
   kitchenEquipment: null,
+  cookRhythm: null,
   financeData: [],
   financeProducts: [],
   financeSyncing: false,

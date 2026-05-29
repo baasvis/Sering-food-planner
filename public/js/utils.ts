@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
@@ -305,6 +305,7 @@ export async function retryLoad(): Promise<void> {
     loadIngredientDb(),
     loadStorageConfig(),
     loadKitchenEquipment(),
+    loadCookRhythm(),
     loadGuestHistory(),
     loadGuestsNextWeeks(),
     loadInventoryCompletions(),
@@ -400,6 +401,28 @@ export async function saveKitchenEquipment(): Promise<void> {
     await apiPost('/api/kitchen-equipment', S.kitchenEquipment);
   } catch (_e: unknown) {
     toastError('Failed to save kitchen equipment');
+  }
+}
+
+export async function loadCookRhythm(): Promise<void> {
+  try {
+    const cfg = await apiGet('/api/cook-rhythm');
+    if (cfg && typeof cfg === 'object' && cfg.days && typeof cfg.days === 'object'
+        && Object.keys(cfg.days).length > 0) {
+      S.cookRhythm = { days: cfg.days };
+    } else {
+      S.cookRhythm = null; // no saved config → Fix My Menu uses DEFAULT_COOK_RHYTHM
+    }
+  } catch (_e: unknown) {
+    S.cookRhythm = null;
+  }
+}
+
+export async function saveCookRhythm(): Promise<void> {
+  try {
+    await apiPost('/api/cook-rhythm', S.cookRhythm);
+  } catch (_e: unknown) {
+    toastError('Failed to save cook rhythm');
   }
 }
 
@@ -515,6 +538,7 @@ async function reconnectLiveSync(reason: string): Promise<void> {
       loadIngredientDb(),
       loadStorageConfig(),
       loadKitchenEquipment(),
+      loadCookRhythm(),
       loadGuestHistory(),
       loadGuestsNextWeeks(),
       loadInventoryCompletions(),
@@ -612,6 +636,7 @@ interface RemotePatchMessage {
   // Full-replace resources
   storageConfig?: StorageConfig;
   kitchenEquipment?: KitchenEquipment;
+  cookRhythm?: CookRhythmConfig;
   // Partial slot-keyed
   prepChecklist?: { loc: string; date: string; checked: string[] };
   inventoryCompletion?: { loc: string; window: 'lunch' | 'dinner'; completedAt: string };
@@ -652,7 +677,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           recipes, deletedRecipes,
           ingredients, deletedIngredients,
           supplies, deletedSupplies,
-          storageConfig, kitchenEquipment,
+          storageConfig, kitchenEquipment, cookRhythm,
           prepChecklist, inventoryCompletion,
           guestsNextWeeks,
           ingredientsBulkReload, guestHistoryReload, recipesReload } = msg;
@@ -750,6 +775,12 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   // Kitchen equipment (full-replace)
   if (kitchenEquipment) {
     S.kitchenEquipment = kitchenEquipment;
+    changed = true;
+  }
+
+  // Cook rhythm (full-replace) — editable Fix My Menu rules
+  if (cookRhythm) {
+    S.cookRhythm = cookRhythm;
     changed = true;
   }
 

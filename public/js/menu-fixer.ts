@@ -11,9 +11,9 @@
 // same-recipe peers are intentional (audit S7) and counted as distinct
 // menu options for peer-share math.
 
-import type { Batch, DishType, Location, Meal, KitchenEquipment, Catering } from '@shared/types';
-import { S } from './state';
-import { newId, scheduleSave, toast, toastError, saveKitchenEquipment } from './utils';
+import type { Batch, DishType, Location, Meal, KitchenEquipment, CookRhythmDay, Catering } from '@shared/types';
+import { S, DEFAULT_COOK_RHYTHM } from './state';
+import { newId, scheduleSave, toast, toastError, saveKitchenEquipment, saveCookRhythm } from './utils';
 import {
   rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName,
   isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, getGuests, getTotalStock, getStockAt,
@@ -26,18 +26,44 @@ import { markFixMyMenuRun } from './transport-card';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-// Weekly cook rhythm. All cooking happens at West by default.
-// Sunday is the big-cook day (lots of volunteers); Mon/Tue live off Sunday's
-// surplus so cooks can clean and organise. Wed–Sat are steady 1+1 days.
-export const COOK_RHYTHM: Record<string, { soup: number; main: number }> = {
-  Sun: { soup: 3, main: 3 },
-  Mon: { soup: 0, main: 1 },
-  Tue: { soup: 1, main: 1 },
-  Wed: { soup: 1, main: 1 },
-  Thu: { soup: 1, main: 1 },
-  Fri: { soup: 1, main: 1 },
-  Sat: { soup: 1, main: 1 },
-};
+// Weekly cook rhythm — the editable "rules" Fix My Menu plans against.
+// All cooking happens at West by default. Sunday is the big-cook day (lots of
+// volunteers); Mon/Tue live off Sunday's surplus so cooks can clean and
+// organise. Wed–Sat are steady 1+1 days.
+//
+// The default lives in state.ts (DEFAULT_COOK_RHYTHM) so the loader/editor can
+// read it without a circular import; COOK_RHYTHM re-exports it as the baseline.
+// All reads go through getActiveRhythm(), which layers the user's saved config
+// (S.cookRhythm) on top of the default, day by day.
+export const COOK_RHYTHM: Record<string, CookRhythmDay> = DEFAULT_COOK_RHYTHM;
+
+// Reference-keyed memo: S.cookRhythm only changes on load/save, never mid-run,
+// so caching by reference keeps the hot scoring loop allocation-free while
+// still picking up a changed config (or a test mutating S.cookRhythm).
+let _activeRhythmCache: Record<string, CookRhythmDay> | null = null;
+let _activeRhythmKey: unknown = Symbol('uninit');
+export function getActiveRhythm(): Record<string, CookRhythmDay> {
+  if (_activeRhythmKey === S.cookRhythm && _activeRhythmCache) return _activeRhythmCache;
+  const merged: Record<string, CookRhythmDay> = {};
+  for (const day of Object.keys(DEFAULT_COOK_RHYTHM)) {
+    merged[day] = { ...DEFAULT_COOK_RHYTHM[day] };
+  }
+  const saved = S.cookRhythm?.days;
+  if (saved) {
+    for (const day of Object.keys(saved)) {
+      const d = saved[day];
+      if (!d) continue;
+      const soup = Number(d.soup);
+      const main = Number(d.main);
+      if (!Number.isFinite(soup) || !Number.isFinite(main)) continue;
+      const chefs = Number.isFinite(Number(d.chefs)) ? Number(d.chefs) : (soup + main);
+      merged[day] = { soup, main, chefs };
+    }
+  }
+  _activeRhythmCache = merged;
+  _activeRhythmKey = S.cookRhythm;
+  return merged;
+}
 
 export const SLOTS_PER_TYPE = 2;
 export const PLANNING_HORIZON_DAYS = 7;
@@ -268,9 +294,10 @@ function buildPlaceholder(input: PlaceholderInput): Batch {
  */
 export function generateMissingPlaceholders(window: PlanDay[], snapshot: BatchSnapshot): Batch[] {
   const newBatches: Batch[] = [];
+  const activeRhythm = getActiveRhythm();
 
   for (const day of window) {
-    const rhythm = COOK_RHYTHM[day.dayName];
+    const rhythm = activeRhythm[day.dayName];
     if (!rhythm) continue;
     const bucket = snapshot.cookEventsByCookDate.get(day.cookDateStr);
     if (!bucket) continue;
@@ -460,10 +487,10 @@ const FORCED_ASSIGN_MIN_SCORE = 200;
 /** Fallback ladder team threshold: "some coverage" beats "none." */
 const FALLBACK_TEAM_MIN_COVERAGE = 0.6;
 
-/** Per-cook-event production estimate (~90L per dish), threshold for the
- *  workload-overload escape that prefers extending older stock over
- *  piling demand onto an already-busy cook day. */
-const PER_DISH_LITERS = 90;
+/** Portion estimate (ml) per guest per dish, used only to size the week's total
+ *  cook demand for the workload-overload capacity model (computeWeeklyCapacities).
+ *  Each guest at a service eats roughly one soup + one main portion of this size. */
+const DEFAULT_SERVING_ML = 280;
 const WORKLOAD_OVERLOAD_TRIGGER_FACTOR = 1.2;
 const WORKLOAD_PENALTY_PER_LITER = 30;
 
@@ -487,10 +514,48 @@ const SCORE = {
   ALLERGEN_DIVERSITY: 25,
 };
 
-function cookDayThreshold(dayName: string): number {
-  const r = COOK_RHYTHM[dayName];
-  if (!r) return 0;
-  return (r.soup + r.main) * PER_DISH_LITERS;
+/**
+ * Per-day cook capacity (liters) for the workload-overload escape, derived
+ * dynamically from the week's guest demand split across the chefs working each
+ * day:
+ *
+ *     capacity[day] = totalWeeklyDemand × ( chefs[day] / totalChefsThatWeek )
+ *
+ * So a day with more chefs gets a bigger slice of the week's cooking, and a
+ * busier week (more guests → more demand) raises every day's slice. This
+ * replaces the old fixed "(soup+main) × 90 L" cap — chef counts are now relative
+ * weights, not absolute liters. Note the trigger is therefore RELATIVE, not an
+ * absolute liter ceiling: a day is "overloaded" when its share of the week's
+ * cooking outruns its share of the chefs (roughly guest-magnitude-invariant,
+ * since both the day's load and totalDemand scale with guest counts).
+ *
+ * totalWeeklyDemand = liters needed to serve every future guest across the
+ * window for the auto-planned types (≈ one soup + one main portion per guest).
+ * Returns an empty map (→ escape disabled) when there are no chefs or no demand.
+ */
+export function computeWeeklyCapacities(
+  window: PlanDay[],
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+  rhythm: Record<string, CookRhythmDay> = getActiveRhythm(),
+): Map<string, number> {
+  let totalDemand = 0;
+  for (const day of window) {
+    for (const slot of day.slots) {
+      if (slot.isPast) continue;
+      const g = getGuestsFn(slot.loc, day.isoDate, slot.meal);
+      if (g <= 0) continue;
+      totalDemand += TYPES_TO_PLAN.length * g * DEFAULT_SERVING_ML / 1000;
+    }
+  }
+  let totalChefs = 0;
+  for (const day of window) totalChefs += rhythm[day.dayName]?.chefs ?? 0;
+  const caps = new Map<string, number>();
+  if (totalChefs <= 0 || totalDemand <= 0) return caps;
+  const perChef = totalDemand / totalChefs;
+  for (const day of window) {
+    caps.set(day.dayName, (rhythm[day.dayName]?.chefs ?? 0) * perChef);
+  }
+  return caps;
 }
 
 interface CandidatePlace {
@@ -579,6 +644,7 @@ function scoreCandidate(
   calcReq: (b: Batch) => number,
   potCaps: Map<string, number>,
   getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+  dayCapacities: Map<string, number>,
 ): number {
   const { batch, slot, day, type } = c;
   let score = 0;
@@ -612,26 +678,29 @@ function scoreCandidate(
 
   // Workload-overload escape: applies only to fresh placeholder candidates
   // (committing this slot would make the placeholder's cook day busier).
-  // Not applied to already-cooked batches (no impact on cook days), and
-  // not applied on Sundays (cooks accept heavy Sundays).
+  // Not applied to already-cooked batches (no impact on cook days). Every cook
+  // day is gated solely by its own chef-capacity threshold — a well-staffed day
+  // (more chefs → bigger slice of the week's cooking → higher threshold) already
+  // tolerates more load before the penalty bites, so there's no need to
+  // special-case a "big-cook day". (Previously Sunday was hardcoded as exempt;
+  // dropped now that the rhythm — including which day is the big cook — is
+  // user-configurable via the cook-rhythm editor.)
   if (totalStock <= 0 && batch.cookDate) {
     const phCookIso = cookDateToIso(batch.cookDate);
     const cookDayName = phCookIso ? dateToDayName(phCookIso) : '';
-    if (cookDayName !== 'Sun') {
-      const threshold = cookDayThreshold(cookDayName);
-      if (threshold > 0) {
-        const slotGuests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
-        const myShare = (slotGuests / SLOTS_PER_TYPE) * (batch.serving || 280) / 1000;
-        let load = myShare;
-        for (const b of allBatches) {
-          if (b.cookDate !== batch.cookDate) continue;
-          if (!TYPES_TO_PLAN.includes(b.type)) continue;
-          load += calcReq(b);
-        }
-        const trigger = threshold * WORKLOAD_OVERLOAD_TRIGGER_FACTOR;
-        if (load > trigger) {
-          score -= WORKLOAD_PENALTY_PER_LITER * (load - trigger);
-        }
+    const threshold = dayCapacities.get(cookDayName) ?? 0;
+    if (threshold > 0) {
+      const slotGuests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
+      const myShare = (slotGuests / SLOTS_PER_TYPE) * (batch.serving || 280) / 1000;
+      let load = myShare;
+      for (const b of allBatches) {
+        if (b.cookDate !== batch.cookDate) continue;
+        if (!TYPES_TO_PLAN.includes(b.type)) continue;
+        load += calcReq(b);
+      }
+      const trigger = threshold * WORKLOAD_OVERLOAD_TRIGGER_FACTOR;
+      if (load > trigger) {
+        score -= WORKLOAD_PENALTY_PER_LITER * (load - trigger);
       }
     }
   }
@@ -698,6 +767,7 @@ export function forcedAssignmentPrePass(
   potCaps: Map<string, number>,
 ): { committed: number } {
   const todayIso = window[0]?.isoDate ?? '';
+  const dayCapacities = computeWeeklyCapacities(window, getGuestsFn);
   let committed = 0;
   let changed = true;
   let safetyMax = 200;
@@ -720,7 +790,7 @@ export function forcedAssignmentPrePass(
           }
           if (eligible.length !== 1) continue;
           const c = eligible[0];
-          const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn);
+          const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn, dayCapacities);
           if (score < FORCED_ASSIGN_MIN_SCORE) continue;
           c.batch.services.push({ loc: c.slot.loc, date: c.day.isoDate, meal: c.slot.meal });
           committed++;
@@ -745,12 +815,14 @@ export function scoredGreedyAssignment(
   potCaps: Map<string, number>,
 ): { committed: number } {
   const todayIso = window[0]?.isoDate ?? '';
+  const dayCapacities = computeWeeklyCapacities(window, getGuestsFn);
   let committed = 0;
   let safetyMax = 500;
   while (safetyMax-- > 0) {
     let bestScore = 0;
     let best: CandidatePlace | null = null;
     let bestId = '';
+    let bestLoad = 0;
     for (const day of window) {
       for (const slot of day.slots) {
         if (slot.isPast) continue;
@@ -761,14 +833,25 @@ export function scoredGreedyAssignment(
           for (const batch of allBatches) {
             const c: CandidatePlace = { batch, slot, day, type };
             if (!scoredHardConstraintsOk(c, allBatches, calcReq, getGuestsFn, todayIso)) continue;
-            const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn);
+            const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn, dayCapacities);
             if (score <= 0) continue;
+            // Load-balancing tie-break: when scores tie (the classic case is
+            // identical sibling placeholders from one cook day — e.g. Sunday's
+            // 3 soups), prefer the batch carrying the FEWEST services so far.
+            // This round-robins service slots across siblings (the original
+            // plan's §3.3 intent) instead of piling every slot onto the same
+            // two batches and starving the rest — which left surplus siblings
+            // with zero services and stretched one batch across the whole week.
+            // id only breaks a remaining tie, for determinism.
+            const load = batch.services.length;
             if (best === null
               || score > bestScore
-              || (score === bestScore && batch.id.localeCompare(bestId) < 0)) {
+              || (score === bestScore && load < bestLoad)
+              || (score === bestScore && load === bestLoad && batch.id.localeCompare(bestId) < 0)) {
               best = c;
               bestScore = score;
               bestId = batch.id;
+              bestLoad = load;
             }
           }
         }
@@ -1820,4 +1903,152 @@ export async function keqSave(): Promise<void> {
   await saveKitchenEquipment();
   closeModal();
   toast('Kitchen equipment saved');
+}
+
+// ── Cook rhythm editor (editable Fix My Menu rules) ─────────────────────────
+
+const RHYTHM_DAY_ORDER = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const RHYTHM_DAY_LABELS: Record<string, string> = {
+  Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday',
+  Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday',
+};
+
+/** Working draft used by the modal — a copy so Cancel discards cleanly. */
+let _crDraft: Record<string, CookRhythmDay> = {};
+
+function crCloneActive(): Record<string, CookRhythmDay> {
+  const src = getActiveRhythm();
+  const out: Record<string, CookRhythmDay> = {};
+  for (const day of RHYTHM_DAY_ORDER) {
+    const d = src[day] || { soup: 0, main: 0, chefs: 0 };
+    out[day] = { soup: d.soup, main: d.main, chefs: d.chefs };
+  }
+  return out;
+}
+
+function renderCookRhythmRows(): string {
+  return RHYTHM_DAY_ORDER.map(day => {
+    const d = _crDraft[day];
+    const closed = d.soup === 0 && d.main === 0;
+    const dis = closed ? 'disabled' : '';
+    return `<div class="cr-row${closed ? ' cr-row-closed' : ''}">
+      <span class="cr-day">${RHYTHM_DAY_LABELS[day]}</span>
+      <input class="cr-num" type="number" min="0" max="50" value="${d.soup}" ${dis}
+        oninput="crUpdateField('${day}','soup',this.value)" aria-label="${RHYTHM_DAY_LABELS[day]} soups" />
+      <input class="cr-num" type="number" min="0" max="50" value="${d.main}" ${dis}
+        oninput="crUpdateField('${day}','main',this.value)" aria-label="${RHYTHM_DAY_LABELS[day]} mains" />
+      <input class="cr-num" type="number" min="0" max="50" value="${d.chefs}" ${dis}
+        oninput="crUpdateField('${day}','chefs',this.value)" aria-label="${RHYTHM_DAY_LABELS[day]} chefs" />
+      <label class="cr-closed"><input type="checkbox" ${closed ? 'checked' : ''}
+        onchange="crToggleClosed('${day}',this.checked)" /> Closed</label>
+    </div>`;
+  }).join('');
+}
+
+function renderCookRhythmSummary(): string {
+  let soups = 0, mains = 0, totalChefs = 0;
+  let busiest = '', busiestChefs = -1;
+  const closedDays: string[] = [];
+  for (const day of RHYTHM_DAY_ORDER) {
+    const d = _crDraft[day];
+    soups += d.soup; mains += d.main;
+    if (d.soup === 0 && d.main === 0) {
+      closedDays.push(RHYTHM_DAY_LABELS[day]);
+    } else {
+      totalChefs += d.chefs;
+      if (d.chefs > busiestChefs) { busiestChefs = d.chefs; busiest = RHYTHM_DAY_LABELS[day]; }
+    }
+  }
+  // Capacity is now relative: each day's tolerated cook volume = its chefs ÷ the
+  // week's total chef-days × the week's guest demand (computed at plan time).
+  const shareNote = totalChefs > 0
+    ? `Each day's cook capacity = its chefs ÷ <strong>${totalChefs}</strong> chef-days this week × the week's guest demand.${busiest && busiestChefs > 0 ? ` ${esc(busiest)} gets the biggest share (${busiestChefs}/${totalChefs}).` : ''}`
+    : 'Set at least one chef to enable capacity planning.';
+  return `<div class="cr-summary">
+    <div><strong>${soups}</strong> soup${soups === 1 ? '' : 's'} + <strong>${mains}</strong> main${mains === 1 ? '' : 's'} cooked per week</div>
+    <div>${shareNote}</div>
+    ${closedDays.length ? `<div class="cr-closed-note">No cooking: ${esc(closedDays.join(', '))}</div>` : ''}
+  </div>`;
+}
+
+function refreshCookRhythmModal(): void {
+  const rows = document.getElementById('cr-rows');
+  const summary = document.getElementById('cr-summary');
+  if (rows) rows.innerHTML = renderCookRhythmRows();
+  if (summary) summary.innerHTML = renderCookRhythmSummary();
+}
+
+export function openCookRhythmModal(): void {
+  _crDraft = crCloneActive();
+  const html = `
+    <div class="modal-content cr-modal" onclick="event.stopPropagation()">
+      <h2>Cook rhythm</h2>
+      <p class="cr-help">These are the rules Fix My Menu plans against. Set how many soups and
+        mains to cook each weekday, and how many chefs are in. More chefs lets Fix My Menu plan a
+        bigger cook that day before it warns about overloading the kitchen. Tick <em>Closed</em> for
+        a no-cook day.</p>
+      <div class="cr-rows-hdr">
+        <span class="cr-day">Day</span><span>Soups</span><span>Mains</span><span>Chefs</span><span></span>
+      </div>
+      <div id="cr-rows">${renderCookRhythmRows()}</div>
+      <div id="cr-summary">${renderCookRhythmSummary()}</div>
+      <div class="cr-actions">
+        <button class="btn" onclick="crResetDefaults()">Reset to defaults</button>
+        <span class="cr-actions-spacer"></span>
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="crSave()">Save</button>
+      </div>
+    </div>
+  `;
+  showModal(html);
+}
+
+export function crUpdateField(day: string, field: 'soup' | 'main' | 'chefs', value: string): void {
+  const d = _crDraft[day];
+  if (!d) return;
+  const n = Math.max(0, Math.min(50, Math.round(Number(value) || 0)));
+  d[field] = n;
+  // Only refresh the summary — re-rendering the rows here would drop focus from
+  // the number input the cook is typing into. The Closed toggle re-renders rows.
+  const summary = document.getElementById('cr-summary');
+  if (summary) summary.innerHTML = renderCookRhythmSummary();
+}
+
+export function crToggleClosed(day: string, closed: boolean): void {
+  const d = _crDraft[day];
+  if (!d) return;
+  if (closed) {
+    d.soup = 0; d.main = 0; d.chefs = 0;
+  } else {
+    // Re-open with the day's default (or 1+1+2) so the row is editable again.
+    const def = DEFAULT_COOK_RHYTHM[day];
+    if (def && (def.soup > 0 || def.main > 0)) {
+      d.soup = def.soup; d.main = def.main; d.chefs = def.chefs;
+    } else {
+      d.soup = 1; d.main = 1; d.chefs = 2;
+    }
+  }
+  refreshCookRhythmModal();
+}
+
+export function crResetDefaults(): void {
+  const out: Record<string, CookRhythmDay> = {};
+  for (const day of RHYTHM_DAY_ORDER) {
+    const d = DEFAULT_COOK_RHYTHM[day];
+    out[day] = { soup: d.soup, main: d.main, chefs: d.chefs };
+  }
+  _crDraft = out;
+  refreshCookRhythmModal();
+}
+
+export async function crSave(): Promise<void> {
+  const days: Record<string, CookRhythmDay> = {};
+  for (const day of RHYTHM_DAY_ORDER) {
+    const d = _crDraft[day];
+    days[day] = { soup: d.soup, main: d.main, chefs: d.chefs };
+  }
+  S.cookRhythm = { days };
+  await saveCookRhythm();
+  closeModal();
+  toast('Cook rhythm saved');
 }

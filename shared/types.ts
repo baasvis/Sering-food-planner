@@ -117,6 +117,22 @@ export interface KitchenEquipment {
   bigBurnerThreshold: number; // typically 80 — pot size that requires a gas burner
 }
 
+// ── Cook rhythm config (editable Fix My Menu rules) ──
+// One entry per weekday name ('Mon'..'Sun'). Drives how many placeholder cook
+// events Fix My Menu generates per day per type, and the per-day cook capacity
+// used by the workload-overload heuristic. A "closed" day is soup=0 & main=0.
+export interface CookRhythmDay {
+  soup: number;   // target soup cook events that day
+  main: number;   // target main-course cook events that day
+  chefs: number;  // cook capacity weight: a day's tolerated cook volume = its chefs
+                  // ÷ the week's total chefs × the week's guest demand. More chefs =
+                  // bigger share before Fix My Menu warns about overloading the day.
+}
+
+export interface CookRhythmConfig {
+  days: Record<string, CookRhythmDay>; // keyed by 'Mon'..'Sun'
+}
+
 export interface GuestDay {
   lunch: number;
   dinner: number;

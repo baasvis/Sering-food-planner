@@ -102,9 +102,10 @@ export function renderLocationPlan(loc: string) {
   let html = renderDayNav(_plannerDayOffset, -14, 14, 'changePlannerDay', '');
 
   // Fix My Menu button only on West (it plans both locations + caterings globally
-  // — see .claude/plans/fix-my-menu.md §4.1). Equipment editor sits next to it.
+  // — see .claude/plans/fix-my-menu.md §4.1). Rules + Equipment editors sit next to it.
   const fixMenuBtn = loc === 'west'
     ? `<button class="btn btn-fix-menu" onclick="fixMyMenu()" title="Generate placeholders for missing cook events and assign service slots">✨ Fix my menu</button>
+       <button class="btn btn-crhythm" onclick="openCookRhythmModal()" title="Edit the cook rhythm — how many soups/mains and chefs per day">🗓 Cook rules</button>
        <button class="btn btn-keq" onclick="openKitchenEquipmentModal()" title="Pots and burners — used by Fix My Menu to size batches">⚙️ Equipment</button>`
     : '';
 
@@ -185,10 +186,13 @@ export function renderLocationPlan(loc: string) {
 
 // ── BATCH POOL (per-type, below each calendar) ─────────
 //
-// A batch shows up in a location's pool when it's either physically here
-// or has an UPCOMING service here. Past-only service ties are excluded —
-// once the food is served, a Centraal-located batch shouldn't keep
-// appearing in the West tab just because it served West last week.
+// A batch shows up in a location's pool when it's physically here, has an
+// UPCOMING service here, or is COOKED here. The cooked-here rule matters for
+// cross-loc batches: a dish cooked at West that only serves Centraal still
+// needs to appear on the West tab so the West cooks know to make it (anything
+// cooked at West shows up at West). Past-only service ties are excluded — once
+// the food is served, a Centraal-located batch shouldn't keep appearing in the
+// West tab just because it served West last week.
 export function getPoolBatches(loc: string) {
   return S.batches.filter(d => {
     // "Physically here" now means any stock at this loc, OR a pending
@@ -197,7 +201,13 @@ export function getPoolBatches(loc: string) {
     const incomingHere = getPendingFromShipments(d, loc as Location) > 0;
     const hasUpcomingSvcHere = (d.services || []).some(s =>
       s.loc === loc && !isServicePast(s));
-    return stockHere || incomingHere || hasUpcomingSvcHere;
+    // Cook location (unified model): inventory[0].loc, defaulting to 'west' for
+    // empty placeholders (cooking happens at West by default). A dish cooked
+    // here that's still actively planned (any upcoming service) belongs on this
+    // tab even when every service is at the other location.
+    const cookLoc = (d.inventory && d.inventory.length > 0) ? d.inventory[0].loc : 'west';
+    const cookedHere = cookLoc === loc && (d.services || []).some(s => !isServicePast(s));
+    return stockHere || incomingHere || hasUpcomingSvcHere || cookedHere;
   });
 }
 

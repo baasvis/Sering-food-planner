@@ -1640,3 +1640,76 @@ describe('S2 — id charset validation rejects XSS-shaped ids', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ── Cook Rhythm config (editable Fix My Menu rules) ──
+// NOTE: /api/cook-rhythm is a single fixed-row (id:'default') config shared with
+// the live staging app. These tests SAVE the current config and RESTORE it in
+// afterAll so they don't clobber the real rhythm on the shared test DB.
+describe('Cook Rhythm API (/api/cook-rhythm)', () => {
+  let original: { days: Record<string, { soup: number; main: number; chefs: number }> } = { days: {} };
+
+  beforeAll(async () => {
+    const res = await request(app).get('/api/cook-rhythm');
+    if (res.body && res.body.days) original = res.body;
+  });
+
+  afterAll(async () => {
+    // Restore the live staging single-row config. Surface a failed restore —
+    // otherwise a transient failure silently leaves staging on a test value.
+    const r = await request(app).post('/api/cook-rhythm').send(original);
+    if (r.status !== 200) console.warn('cook-rhythm restore failed:', r.status, r.body);
+  });
+
+  it('GET — returns an object with a days map', async () => {
+    const res = await request(app).get('/api/cook-rhythm');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('days');
+    expect(typeof res.body.days).toBe('object');
+  });
+
+  it('POST valid config -> 200 and round-trips via GET', async () => {
+    const days = {
+      Mon: { soup: 0, main: 1, chefs: 1 }, Tue: { soup: 1, main: 1, chefs: 2 },
+      Wed: { soup: 2, main: 2, chefs: 4 }, Thu: { soup: 1, main: 1, chefs: 2 },
+      Fri: { soup: 1, main: 1, chefs: 2 }, Sat: { soup: 1, main: 1, chefs: 2 },
+      Sun: { soup: 3, main: 3, chefs: 6 },
+    };
+    const post = await request(app).post('/api/cook-rhythm').send({ days });
+    expect(post.status).toBe(200);
+    expect(post.body.ok).toBe(true);
+    const get = await request(app).get('/api/cook-rhythm');
+    expect(get.body.days.Wed).toEqual({ soup: 2, main: 2, chefs: 4 });
+    expect(get.body.days.Sun).toEqual({ soup: 3, main: 3, chefs: 6 });
+  });
+
+  it('POST rounds fractional values and drops unknown day keys', async () => {
+    const post = await request(app).post('/api/cook-rhythm')
+      .send({ days: { Mon: { soup: 1.6, main: 0, chefs: 2 }, Funday: { soup: 5, main: 5, chefs: 5 } } });
+    expect(post.status).toBe(200);
+    const get = await request(app).get('/api/cook-rhythm');
+    expect(get.body.days.Mon.soup).toBe(2);
+    expect(get.body.days).not.toHaveProperty('Funday');
+  });
+
+  it('POST non-object days -> 400', async () => {
+    const res = await request(app).post('/api/cook-rhythm').send({ days: 'nope' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST missing days -> 400', async () => {
+    const res = await request(app).post('/api/cook-rhythm').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('POST out-of-range value -> 400', async () => {
+    const res = await request(app).post('/api/cook-rhythm')
+      .send({ days: { Mon: { soup: 99, main: 1, chefs: 1 } } });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST non-numeric value -> 400', async () => {
+    const res = await request(app).post('/api/cook-rhythm')
+      .send({ days: { Mon: { soup: 'x', main: 1, chefs: 1 } } });
+    expect(res.status).toBe(400);
+  });
+});

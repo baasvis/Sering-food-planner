@@ -30,7 +30,7 @@
 // test/setup-dom-stubs.ts in the jest setupFiles list — that runs before
 // module imports here.
 
-import type { Batch, Catering, CateringDish, DishType, InventoryEntry, Location, Meal, Service, StorageType, KitchenEquipment } from '../shared/types';
+import type { Batch, Catering, CateringDish, DishType, InventoryEntry, Location, Meal, Service, StorageType, KitchenEquipment, CookRhythmConfig } from '../shared/types';
 import {
   allocatePotCaps,
   buildPlanningWindow,
@@ -47,12 +47,15 @@ import {
   forcedAssignmentPrePass,
   scoredGreedyAssignment,
   runFallbackLadder,
+  getActiveRhythm,
+  computeWeeklyCapacities,
   COOK_RHYTHM,
   SLOTS_PER_TYPE,
   PLANNING_HORIZON_DAYS,
   TYPES_TO_PLAN,
   type PlanDay,
 } from '../public/js/menu-fixer';
+import { S } from '../public/js/state';
 
 // Pin the system clock to a stable Friday 1 May 2026 so the hardcoded service
 // dates (2026-05-04..10) stay in the future relative to "now". Several
@@ -666,6 +669,30 @@ describe('scoredGreedyAssignment', () => {
     const tueAtDinner = tueCook.services.some(s => s.meal === 'dinner' && s.date === '2026-05-05');
     expect(tueAtDinner).toBe(true);
   });
+
+  test('balances service load across identical sibling placeholders (no starvation)', () => {
+    // Regression: a big-cook day (e.g. Sunday) produces several identical
+    // placeholders of one type. The greedy loop must round-robin them across
+    // the week's slots — not pile every slot onto the same two and starve the
+    // rest. The starved siblings used to end with zero services (then get
+    // deleted as orphans), while the two winners stretched across the whole
+    // horizon. Fixed by the load-balancing tie-break in scoredGreedyAssignment.
+    const window = makeWindow([
+      { iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' },
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    // Sunday is a 0-guest cook day; the placeholders are servable Mon onward.
+    const guests = (_loc: Location, iso: string, _meal: Meal) => (iso >= '2026-05-04' ? 10 : 0);
+    const siblings = [1, 2, 3].map(n => makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: `Sun soup ${n}`, generated: true,
+    }));
+    scoredGreedyAssignment(siblings, window, fixedCalcRequired(1), guests, NO_POT_CAPS);
+    const loads = siblings.map(b => b.services.length);
+    expect(Math.min(...loads)).toBeGreaterThan(0);              // none starved
+    expect(Math.max(...loads) - Math.min(...loads)).toBeLessThanOrEqual(2); // balanced
+  });
 });
 
 // ─── Algorithm: forcedAssignmentPrePass ────────────────────────────────────
@@ -808,5 +835,105 @@ describe('buildPlanningWindow', () => {
     expect(window).toHaveLength(PLANNING_HORIZON_DAYS);
     // Each day has 4 slots (2 locs × 2 meals).
     expect(window[0].slots).toHaveLength(4);
+  });
+});
+
+// ─── Cook rhythm config (editable Fix My Menu rules) ───────────────────────
+
+describe('cook rhythm config', () => {
+  // S is a singleton; reset so the rest of the suite sees built-in defaults.
+  afterEach(() => { S.cookRhythm = null; });
+
+  test('getActiveRhythm returns the built-in defaults when nothing is saved', () => {
+    S.cookRhythm = null;
+    const r = getActiveRhythm();
+    expect(r.Sun).toEqual({ soup: 3, main: 3, chefs: 6 });
+    expect(r.Mon).toEqual({ soup: 0, main: 1, chefs: 1 });
+    expect(r.Wed).toEqual({ soup: 1, main: 1, chefs: 2 });
+  });
+
+  test('getActiveRhythm layers a saved day over the defaults, keeping the rest', () => {
+    S.cookRhythm = { days: { Wed: { soup: 2, main: 3, chefs: 5 } } };
+    const r = getActiveRhythm();
+    expect(r.Wed).toEqual({ soup: 2, main: 3, chefs: 5 }); // overridden
+    expect(r.Mon).toEqual({ soup: 0, main: 1, chefs: 1 }); // default preserved
+  });
+
+  test('getActiveRhythm fills a missing chef count with soup+main (legacy rows)', () => {
+    S.cookRhythm = { days: { Thu: { soup: 2, main: 1 } } } as unknown as CookRhythmConfig;
+    expect(getActiveRhythm().Thu.chefs).toBe(3);
+  });
+
+  test('getActiveRhythm drops a malformed day (non-numeric soup/main) back to the default', () => {
+    // Last line of defense for legacy/SSE-injected rows that bypass the route's
+    // numeric validation — a junk day must not poison the rhythm.
+    S.cookRhythm = { days: { Wed: { soup: 'oops', main: 1, chefs: 2 } } } as unknown as CookRhythmConfig;
+    expect(getActiveRhythm().Wed).toEqual({ soup: 1, main: 1, chefs: 2 }); // default Wed preserved
+  });
+
+  test('generateMissingPlaceholders honours a bumped rhythm', () => {
+    S.cookRhythm = { days: { Mon: { soup: 2, main: 2, chefs: 4 } } };
+    const window = makeWindow([{ iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' }]);
+    const ph = generateMissingPlaceholders(window, snapshotBatches([], window));
+    expect(ph.filter(b => b.type === 'Soup')).toHaveLength(2);
+    expect(ph.filter(b => b.type === 'Main course')).toHaveLength(2);
+  });
+
+  test('generateMissingPlaceholders generates nothing for a closed day', () => {
+    S.cookRhythm = { days: { Tue: { soup: 0, main: 0, chefs: 0 } } };
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    expect(generateMissingPlaceholders(window, snapshotBatches([], window))).toHaveLength(0);
+  });
+});
+
+// ─── Dynamic chef capacity (computeWeeklyCapacities) ───────────────────────
+
+describe('computeWeeklyCapacities (chefs share the week\'s cooking)', () => {
+  afterEach(() => { S.cookRhythm = null; });
+
+  test('splits the week\'s demand proportionally to each day\'s chefs', () => {
+    // Default rhythm: Sunday 6 chefs, Monday 1 chef → Sunday gets 6× the capacity.
+    const window = makeWindow([
+      { iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' },
+      { iso: '2026-05-04', dayName: 'Mon', cookDate: '04/05/2026' },
+    ]);
+    const guests = (_l: Location, _i: string, _m: Meal) => 50;
+    const caps = computeWeeklyCapacities(window, guests);
+    const sun = caps.get('Sun')!, mon = caps.get('Mon')!;
+    expect(sun / mon).toBeCloseTo(6);                 // chef ratio 6:1
+    // Capacities sum to the week's total demand: 2 days × 4 slots × 2 types × 50 guests × 0.28 L.
+    expect(sun + mon).toBeCloseTo(2 * 4 * 2 * 50 * 280 / 1000);
+  });
+
+  test('scales with demand — a busier week raises every day\'s capacity', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const low = computeWeeklyCapacities(window, () => 20).get('Tue')!;
+    const high = computeWeeklyCapacities(window, () => 80).get('Tue')!;
+    expect(high).toBeCloseTo(low * 4);                // 4× guests → 4× capacity
+  });
+
+  test('returns an empty map (escape disabled) when there are no guests', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    expect(computeWeeklyCapacities(window, () => 0).size).toBe(0);
+  });
+
+  test('returns an empty map when no day is staffed (zero total chefs, no div-by-zero)', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    // Guests > 0 but the only window day has 0 chefs → escape disabled, not NaN.
+    S.cookRhythm = { days: { Tue: { soup: 0, main: 0, chefs: 0 } } };
+    expect(computeWeeklyCapacities(window, () => 50).size).toBe(0);
+  });
+
+  test('more chefs on a day = a bigger slice of the same total', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const guests = (_l: Location, _i: string, _m: Meal) => 40;
+    // Tue staffed at 3 chefs, Wed at 1 → Tue capacity is 3× Wed's, total unchanged.
+    S.cookRhythm = { days: { Tue: { soup: 1, main: 1, chefs: 3 }, Wed: { soup: 1, main: 1, chefs: 1 } } };
+    const caps = computeWeeklyCapacities(window, guests);
+    expect(caps.get('Tue')! / caps.get('Wed')!).toBeCloseTo(3);
+    expect(caps.get('Tue')! + caps.get('Wed')!).toBeCloseTo(2 * 4 * 2 * 40 * 280 / 1000);
   });
 });
