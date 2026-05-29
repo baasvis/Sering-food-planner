@@ -49,6 +49,7 @@ import {
   runFallbackLadder,
   getActiveRhythm,
   computeWeeklyCapacities,
+  collectWarnings,
   COOK_RHYTHM,
   SLOTS_PER_TYPE,
   PLANNING_HORIZON_DAYS,
@@ -946,5 +947,45 @@ describe('computeWeeklyCapacities (chefs share the week\'s cooking)', () => {
     const caps = computeWeeklyCapacities(window, guests);
     expect(caps.get('Tue')! / caps.get('Wed')!).toBeCloseTo(3);
     expect(caps.get('Tue')! + caps.get('Wed')!).toBeCloseTo(2 * 4 * 2 * 40 * 280 / 1000);
+  });
+});
+
+// ─── collectWarnings: undeliverable-Centraal Sunday exception ──────────────
+
+describe('collectWarnings undeliverable-centraal (Sunday delivery exception)', () => {
+  const TEN = (_l: Location, _i: string, _m: Meal) => 10;
+  const has = (ws: { category: string }[]) => ws.some(w => w.category === 'undeliverable-centraal');
+
+  test('Sunday West cook serving Centraal SAME-DAY dinner is NOT flagged', () => {
+    const window = makeWindow([{ iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' }]);
+    const b = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup',
+      inventory: [inv(80, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-03', meal: 'dinner' }],
+    });
+    const ws = collectWarnings([b], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, TEN);
+    expect(has(ws)).toBe(false);
+  });
+
+  test('Sunday West cook serving Centraal same-day LUNCH is still flagged', () => {
+    const window = makeWindow([{ iso: '2026-05-03', dayName: 'Sun', cookDate: '03/05/2026' }]);
+    const b = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup lunch',
+      inventory: [inv(80, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-03', meal: 'lunch' }],
+    });
+    const ws = collectWarnings([b], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, TEN);
+    expect(has(ws)).toBe(true);
+  });
+
+  test('non-Sunday West cook serving Centraal same-day dinner is still flagged', () => {
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const b = makeBatch({
+      type: 'Soup', cookDate: '06/05/2026', name: 'Wed soup',
+      inventory: [inv(80, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }],
+    });
+    const ws = collectWarnings([b], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, TEN);
+    expect(has(ws)).toBe(true);
   });
 });

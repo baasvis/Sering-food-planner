@@ -1406,15 +1406,18 @@ export function collectWarnings(
   // 6. Undeliverable Centraal: West-cooked batch (primaryLoc === 'west')
   // with a Centraal service on the same day as cookDate. Food is delivered
   // to Centraal the morning AFTER cooking, so same-day Centraal can't
-  // physically arrive. Catches manual pre-existing assignments. Past
-  // services excluded — they're history.
+  // physically arrive — EXCEPT a Sunday cook reaches Centraal's same-day
+  // dinner (early cook + no Centraal lunch → later van), mirroring isServableBy.
+  // Catches manual pre-existing assignments. Past services excluded — history.
   for (const b of allBatches) {
     if (!TYPES_TO_PLAN.includes(b.type)) continue;
     if (!b.cookDate || primaryLoc(b) !== 'west') continue;
     const cookIso = cookDateToIso(b.cookDate);
     if (!cookIso) continue;
+    const sundayDinnerOk = dateToDayName(cookIso) === 'Sun';
     const violating = (b.services || []).filter(s =>
-      s.loc === 'centraal' && s.date === cookIso && !isServicePast(s));
+      s.loc === 'centraal' && s.date === cookIso && !isServicePast(s)
+      && !(sundayDinnerOk && s.meal === 'dinner'));
     if (violating.length > 0) {
       const meals = violating.map(s => s.meal).join(' + ');
       warnings.push({
