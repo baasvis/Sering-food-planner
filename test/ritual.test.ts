@@ -55,6 +55,7 @@ function mkCtx(p: Partial<RitualContext>): RitualContext {
     },
     ritualDone: p.ritualDone ?? (() => false),
     packPending: p.packPending ?? false,
+    isWindowClosed: p.isWindowClosed ?? (() => false),
   };
 }
 
@@ -122,6 +123,21 @@ describe('computeRitual — West', () => {
       inventoryCompletions: { west: { lunch: YESTERDAY_TS, dinner: null }, centraal: { lunch: null, dinner: null } },
     }));
     expect(stepOf(stale, 'inv-lunch').done).toBe(false);
+  });
+
+  it('treats a CLOSED inventory window as satisfied (no overdue nag)', () => {
+    // Past the 14:30 backstop, no inventory done → normally overdue.
+    const open = computeRitual(mkCtx({ now: new Date(2026, 4, 25, 14, 45) }));
+    expect(stepOf(open, 'inv-lunch').status).toBe('overdue');
+    // But if lunch is closed today, the step is done/quiet, never overdue —
+    // and dinner (still open) is unaffected.
+    const closed = computeRitual(mkCtx({
+      now: new Date(2026, 4, 25, 14, 45),
+      isWindowClosed: (w) => w === 'lunch',
+    }));
+    expect(stepOf(closed, 'inv-lunch').done).toBe(true);
+    expect(stepOf(closed, 'inv-lunch').status).toBe('done');
+    expect(stepOf(closed, 'inv-dinner').done).toBe(false);
   });
 
   it('derives cook-underway from real cooked stock, NOT the planning cookDate', () => {

@@ -82,6 +82,10 @@ export interface RitualContext {
    *  transport plan has sendable rows). Passed in because computing it needs
    *  the planner's family-allocation cache, which isn't pure over `batches`. */
   packPending: boolean;
+  /** True if the given service window at this location is CLOSED today (the
+   *  closed-services feature). A closed window's inventory step counts as
+   *  satisfied so the panel doesn't nag / go overdue when nothing is seating. */
+  isWindowClosed: (window: 'lunch' | 'dinner') => boolean;
 }
 
 // ── Derived-signal helpers (pure over ctx) ───────────────────────────────
@@ -169,7 +173,7 @@ const WEST_STEPS: RitualStep[] = [
     done: cooksDone },
   { key: 'inv-lunch', label: 'Cooked-food inventory', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'inventory',
     why: 'After lunch, count the cooked food. Based on these numbers the plan for this evening, and the rest of the week is made. The earlier we know what is up, the better. Count both the cold food, and the food still in pots.',
-    done: (c) => inventoryFresh(c, 'lunch') },
+    done: (c) => c.isWindowClosed('lunch') || inventoryFresh(c, 'lunch') },
   { key: 'fmm-lunch', label: 'Run Fix My Menu', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'fmm',
     why: 'After inventory is done both here, and at Centraal, run "Fix My Menu". Based on how busy it was during lunch the food will be redivided over both locations. It will warn you if there is a problem after this reorganisation.',
     done: (c) => c.ritualDone('fmm-lunch') },
@@ -181,7 +185,7 @@ const WEST_STEPS: RitualStep[] = [
     done: (c) => c.ritualDone('stocktake') },
   { key: 'inv-dinner', label: 'Cooked-food inventory', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'inventory',
     why: 'At dinner, count the cooked food that is leftover from the day. Make sure the food that has been cooked this day is counted as well. Our plans for tomorrow and the upcoming days depend on these numbers.',
-    done: (c) => inventoryFresh(c, 'dinner') },
+    done: (c) => c.isWindowClosed('dinner') || inventoryFresh(c, 'dinner') },
   { key: 'fmm-dinner', label: 'Run Fix My Menu', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'fmm',
     why: 'After counting, run Fix My Menu. It will redivide the food over the upcoming services. It will tell you if there are problems.',
     done: (c) => c.ritualDone('fmm-dinner') },
@@ -202,7 +206,7 @@ const CENTRAAL_STEPS: RitualStep[] = [
     done: (c) => c.ritualDone('service-lunch') },
   { key: 'inv-lunch', label: 'Cooked-food inventory', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'inventory',
     why: 'After lunch, count the cooked food. Do it as close to 13:45 as possible! The people at West are waiting on your inventory to make the cooking plan. Count both the cold food, and the food still in pots.',
-    done: (c) => inventoryFresh(c, 'lunch') },
+    done: (c) => c.isWindowClosed('lunch') || inventoryFresh(c, 'lunch') },
   { key: 'service-dinner', label: 'Set up dinner service', phase: 'afternoon', overdueAfter: null, action: null, manual: true,
     why: 'Set up dinner before the evening.',
     done: (c) => c.ritualDone('service-dinner') },
@@ -211,7 +215,7 @@ const CENTRAAL_STEPS: RitualStep[] = [
     done: (c) => c.ritualDone('stocktake') },
   { key: 'inv-dinner', label: 'Cooked-food inventory', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'inventory',
     why: 'At the end of the day, count the cooked food. Do this around 20:45 if possible! The people at West are waiting on this info for placing their order and packing the food for tomorrow.',
-    done: (c) => inventoryFresh(c, 'dinner') },
+    done: (c) => c.isWindowClosed('dinner') || inventoryFresh(c, 'dinner') },
   { key: 'hanos-order', label: 'Place Hanos order', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, orderDayOnly: true, action: 'orders', manual: true,
     why: 'Order now. The ingredients arrive the next day.',
     done: (c) => c.ritualDone('hanos-order') },

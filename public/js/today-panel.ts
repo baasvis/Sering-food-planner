@@ -13,7 +13,7 @@
 // module pulls in no screen modules and creates no import cycle.
 
 import { S } from './state';
-import { getAmsterdamNow } from './core';
+import { getAmsterdamNow, isServiceClosed } from './core';
 import { todayIso, isRitualStepDone, markRitualStep } from './utils';
 import { esc } from './modal';
 import { rerenderCurrentView } from './navigate';
@@ -48,14 +48,16 @@ function packPendingFor(loc: string): boolean {
 /** Build the live ritual view for the current location + clock. */
 function currentView() {
   const loc = S.currentLoc;
+  const today = todayIso();
   const ctx: RitualContext = {
     loc,
     now: getAmsterdamNow(),
-    todayIso: todayIso(),
+    todayIso: today,
     batches: S.batches,
     inventoryCompletions: S.inventoryCompletions,
     ritualDone: (step) => isRitualStepDone(loc, step),
     packPending: packPendingFor(loc),
+    isWindowClosed: (w) => isServiceClosed(loc, today, w),
   };
   return computeRitual(ctx);
 }

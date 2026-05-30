@@ -1116,9 +1116,9 @@ function _fixMyMenuBody(): void {
   for (const b of newPlaceholders) S.batches.push(b);
   rebuildPlanner();
 
-  // Per-run getGuests memo: the scored algorithm queries the same ~56
+  // Per-run getEffectiveGuests memo: the scored algorithm queries the same ~56
   // (loc,date,meal) slots tens of thousands of times — once per candidate,
-  // even though the value is batch-independent — and getGuests does ~6 Date
+  // even though the value is batch-independent — and getEffectiveGuests does ~6 Date
   // constructions per call. Collapsing that to one compute per slot is the
   // bulk of the speed-up. The cache lives only for this synchronous run, so a
   // guest edit elsewhere can't make it stale.
