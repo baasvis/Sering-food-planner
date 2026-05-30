@@ -196,6 +196,23 @@ model PrepChecklist {
   @@map("prep_checklist")
 }
 
+// Per-(location, date) set of completed daily-ritual step keys (e.g.
+// "fmm-lunch", "service-dinner", "stocktake"). Backs the dashboard "Today"
+// guidance panel. Modelled exactly on PrepChecklist: a JSON array of done
+// step-key strings, overwritten wholesale on save so tick/untick is trivial.
+// Only steps with no observable domain signal are stored here; steps backed
+// by real state (inventory, cookDate, shipments) are derived, never stored.
+model RitualCompletion {
+  id        Int      @id @default(autoincrement())
+  loc       String
+  date      String
+  completed Json     @default("[]")
+  updatedAt DateTime @default(now()) @map("updated_at")
+
+  @@unique([loc, date])
+  @@map("ritual_completions")
+}
+
 model StorageConfig {
   id     String @id @default("default")
   config Json   @default("{}")

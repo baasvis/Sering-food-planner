@@ -13,9 +13,9 @@
 
 import type { Batch, DishType, Location, Meal, KitchenEquipment, CookRhythmDay, Catering } from '@shared/types';
 import { S, DEFAULT_COOK_RHYTHM } from './state';
-import { newId, scheduleSave, toast, toastError, saveKitchenEquipment, saveCookRhythm } from './utils';
+import { newId, scheduleSave, toast, toastError, saveKitchenEquipment, saveCookRhythm, markRitualStep } from './utils';
 import {
-  rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName,
+  rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, getAmsterdamNow,
   isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, getEffectiveGuests, isServiceClosed, getTotalStock, getStockAt,
   getServeableStockAt, getServeableTotalStock,
   consolidateInventory,
@@ -23,6 +23,7 @@ import {
 import { rerenderCurrentView } from './navigate';
 import { showModal, closeModal, esc } from './modal';
 import { markFixMyMenuRun } from './transport-card';
+import { fixMyMenuRitualStep } from './ritual';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -1194,6 +1195,10 @@ function _fixMyMenuBody(): void {
   }
 
   markFixMyMenuRun();
+  // Record the run in the shared ritual store too (lunch vs dinner by the
+  // clock), so every device's "Today" panel sees it — markFixMyMenuRun only
+  // writes this browser's localStorage. Always a West step (FMM is West-only).
+  markRitualStep('west', fixMyMenuRitualStep(getAmsterdamNow()));
   rerenderCurrentView();
   scheduleSave();
 

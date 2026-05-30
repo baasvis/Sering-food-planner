@@ -565,6 +565,7 @@ async function reconnectLiveSync(reason: string): Promise<void> {
       loadGuestHistory(),
       loadGuestsNextWeeks(),
       loadInventoryCompletions(),
+      loadRitualCompletions(),
     ]);
     rebuildPlanner();
     rerenderCurrentView();
@@ -664,6 +665,7 @@ interface RemotePatchMessage {
   // Partial slot-keyed
   prepChecklist?: { loc: string; date: string; checked: string[] };
   inventoryCompletion?: { loc: string; window: 'lunch' | 'dinner'; completedAt: string };
+  ritualCompletion?: { loc: string; date: string; completed: string[] };
   // Partial week-keyed (subset of S.guestsNextWeeks)
   guestsNextWeeks?: Record<string, Record<string, Record<string, Record<string, number>>>>;
   // Reload triggers — too expensive to ship through SSE
@@ -702,7 +704,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           ingredients, deletedIngredients,
           supplies, deletedSupplies,
           storageConfig, kitchenEquipment, cookRhythm, closedServices,
-          prepChecklist, inventoryCompletion,
+          prepChecklist, inventoryCompletion, ritualCompletion,
           guestsNextWeeks,
           ingredientsBulkReload, guestHistoryReload, recipesReload } = msg;
 
@@ -828,6 +830,12 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
       S.inventoryCompletions[loc as Location] = { lunch: null, dinner: null };
     }
     S.inventoryCompletions[loc as Location][win] = completedAt;
+    changed = true;
+  }
+
+  // Ritual completions (only apply if the patch is for today's date)
+  if (ritualCompletion && ritualCompletion.date === todayIso()) {
+    S.ritualCompletions[ritualCompletion.loc] = new Set(ritualCompletion.completed);
     changed = true;
   }
 
@@ -1004,6 +1012,70 @@ export function schedulePrepSave(loc: string): void {
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown error';
       console.warn('Could not save prep checklist:', message);
+    }
+  }, 600);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// RITUAL COMPLETIONS API
+// ═══════════════════════════════════════════════════════════════════
+//
+// Backs the dashboard "Today" guidance panel. Mirrors the prep-checklist API
+// above: a per-(loc, date) set of completed step keys, persisted server-side
+// and live-synced over SSE. Loaded for BOTH locations at boot (not just the
+// current one) so markRitualStep never overwrites the other location's row
+// with an empty set when a step is marked for a location that wasn't loaded.
+
+/** Hydrate S.ritualCompletions for both locations from today's rows. */
+export async function loadRitualCompletions(): Promise<void> {
+  const date = todayIso();
+  await Promise.all((['west', 'centraal'] as const).map(async (loc) => {
+    try {
+      const data = await apiGet(`/api/ritual-completions?loc=${loc}&date=${date}`);
+      S.ritualCompletions[loc] = new Set(Array.isArray(data) ? data : []);
+    } catch (_e: unknown) {
+      S.ritualCompletions[loc] = new Set();
+    }
+  }));
+}
+
+/** True iff ritual `step` is marked done for `loc` today. */
+export function isRitualStepDone(loc: string, step: string): boolean {
+  return !!S.ritualCompletions[loc]?.has(step);
+}
+
+/** Mark (done=true) or clear (done=false) a ritual step for `loc` today, then
+ *  schedule a debounced save. No-op if already in the desired state. The set
+ *  is created lazily, so this is safe to call for any location from anywhere
+ *  (e.g. Fix My Menu marking a West step while the user is elsewhere). */
+export function markRitualStep(loc: string, step: string, done = true): void {
+  let set = S.ritualCompletions[loc];
+  if (!set) { set = new Set(); S.ritualCompletions[loc] = set; }
+  if (done) {
+    if (set.has(step)) return;
+    set.add(step);
+  } else {
+    if (!set.has(step)) return;
+    set.delete(step);
+  }
+  scheduleRitualSave(loc);
+}
+
+// Per-location debounce timers so a mark for one location never clobbers a
+// pending save for the other.
+const _ritualSaveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+export function scheduleRitualSave(loc: string): void {
+  if (_ritualSaveTimers[loc]) clearTimeout(_ritualSaveTimers[loc]);
+  _ritualSaveTimers[loc] = setTimeout(async () => {
+    try {
+      await apiPost('/api/ritual-completions', {
+        loc,
+        date: todayIso(),
+        completed: [...(S.ritualCompletions[loc] || new Set())],
+      });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      console.warn('Could not save ritual completions:', message);
     }
   }, 600);
 }

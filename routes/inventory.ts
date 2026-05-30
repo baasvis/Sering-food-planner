@@ -262,6 +262,48 @@ router.post('/prep-checklist', asyncHandler(async (req: Request, res: Response) 
   res.json({ ok: true });
 }));
 
+// ── Ritual completions ──
+// Per-(loc, date) set of completed daily-ritual step keys backing the
+// dashboard "Today" guidance panel. Same shape and lifecycle as the prep
+// checklist above: a JSON array of step-key strings, overwritten wholesale on
+// save (so tick/untick is trivial), broadcast for live sync, and pruned after
+// a few days. Only steps with NO observable domain signal are stored here;
+// steps backed by real state (inventory, cookDate, shipments) are derived
+// client-side and never written here.
+
+router.get('/ritual-completions', asyncHandler(async (req: Request, res: Response) => {
+  const { loc, date } = req.query as { loc?: string; date?: string };
+  if (!loc || !date) return res.status(400).json({ error: 'loc and date required' });
+  const entry = await prisma.ritualCompletion.findUnique({
+    where: { loc_date: { loc, date } },
+  });
+  res.json(entry ? entry.completed : []);
+}));
+
+router.post('/ritual-completions', asyncHandler(async (req: Request, res: Response) => {
+  const { loc, date, completed } = req.body;
+  if (!loc || !date) return res.status(400).json({ error: 'loc and date required' });
+  const completedArr: string[] = Array.isArray(completed) ? completed : [];
+  await withWriteLock(async () => {
+    await prisma.ritualCompletion.upsert({
+      where: { loc_date: { loc, date } },
+      create: { loc, date, completed: completedArr },
+      update: { completed: completedArr, updatedAt: new Date() },
+    });
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 3);
+    await prisma.ritualCompletion.deleteMany({
+      where: { updatedAt: { lt: cutoff } },
+    });
+  });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  broadcast(user.email, 'patch', {
+    user: user.name,
+    ritualCompletion: { loc, date, completed: completedArr },
+  });
+  res.json({ ok: true });
+}));
+
 // ── Cooked Food Inventory completions ──
 // Persists "the lunch/dinner inventory was completed at this time" so every
 // device can show a freshness counter. We piggyback on the Log table — no

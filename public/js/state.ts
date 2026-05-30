@@ -163,6 +163,13 @@ export interface AppState {
   dashVegMode: string;
   dashVegModeTomorrow: string;
   prepChecklist: Record<string, Set<string>>;
+  /** Per-location set of completed daily-ritual step keys for *today*, backing
+   *  the dashboard "Today" guidance panel. Keyed by location ("west" /
+   *  "centraal"); the value is the set of done step keys (e.g. "fmm-lunch",
+   *  "service-dinner"). Only steps with no observable domain signal live here;
+   *  everything else is derived from real state. Loaded for both locations at
+   *  boot so a mark never overwrites the other location's row. */
+  ritualCompletions: Record<string, Set<string>>;
   heatChecked: Set<string>;
   customTodos: CustomTodo[];
   teamTodosOpen: boolean;
@@ -218,6 +225,7 @@ export let S: AppState = {
   dashVegMode:'combined',
   dashVegModeTomorrow:'combined',
   prepChecklist: {},
+  ritualCompletions: {},
   heatChecked: new Set(),
   customTodos: [],
   teamTodosOpen: false,
