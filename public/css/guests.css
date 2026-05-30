@@ -37,6 +37,15 @@
   .gt-pred-up{color:var(--green);}
   .gt-pred-down{color:var(--amber);}
   .gt-staff{font-size:9px;color:var(--text3);text-align:center;margin-top:1px;font-style:italic;}
+  /* Closed-services controls + rolled-demand display.
+     "Closed" is a routine, expected state, so it reads QUIET — a greyed cell +
+     muted grey labels — not red. Red is reserved for the genuine "no dish" warning. */
+  .gt-status{display:block;width:100%;box-sizing:border-box;font-size:9px;margin-top:2px;padding:1px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text3);cursor:pointer;}
+  .gt-status.gt-status-closed{color:var(--text2);background:var(--bg2);}
+  .gt-closed-cell{background:var(--bg2);}
+  .gt-closed-tag{font-size:9px;color:var(--text3);text-align:center;margin-top:2px;}
+  .gt-rolled{font-size:9px;color:var(--blue);text-align:center;margin-top:2px;font-weight:600;}
+  .gt-roll-warn{font-size:9px;color:var(--red);text-align:center;margin-top:1px;font-weight:700;}
   .gt-future-val{font-size:14px;font-weight:500;color:var(--text2);padding:6px 0;}
   .upload-zone{border:2px dashed var(--border2);border-radius:var(--radius);padding:20px;text-align:center;color:var(--text2);cursor:pointer;transition:all .15s;}
   .upload-zone:hover,.upload-zone.dragover{border-color:var(--blue);background:var(--blue-bg);}

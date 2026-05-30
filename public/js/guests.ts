@@ -1,7 +1,7 @@
-import type { GuestDay } from '@shared/types';
+import type { GuestDay, Meal, Location, ClosedServiceOverride } from '@shared/types';
 import { S, DAYS, MEALS, LOCATIONS } from './state';
-import { scheduleSave, toast, apiGet, apiPost, scheduleNextWeeksSave, toastError } from './utils';
-import { getGuests, calcTotalGuests, getToday } from './core';
+import { scheduleSave, toast, apiGet, apiPost, scheduleNextWeeksSave, toastError, saveClosedServices } from './utils';
+import { getGuests, calcTotalGuests, getToday, isServiceClosed, previousOpenService, rolledInto, rolledFromMeal, rollWarning, rebuildPlanner } from './core';
 import { parseCSV, categorizeUploadedFiles, predictGuests, getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav } from './predictions';
 import { esc } from './modal';
 import { registerRenderer } from './navigate';
@@ -50,7 +50,7 @@ export function renderGuests() {
     let weekTotal = 0;
     days.forEach(d => {
       MEALS.forEach(meal => {
-        weekTotal += getGuestForDay(loc.key, d)[meal] || 0;
+        weekTotal += effectiveCellGuests(loc.key, d, meal);
       });
     });
 
@@ -75,35 +75,63 @@ export function renderGuests() {
       let mealTotal = 0;
       html += `<tr><td>${meal.charAt(0).toUpperCase() + meal.slice(1)}</td>`;
       days.forEach(d => {
+        const iso = localDateStr(d.date);
         const vals = getGuestForDay(loc.key, d);
         const v = vals[meal] || 0;
-        mealTotal += v;
+        const closed = isServiceClosed(loc.key, iso, meal);
+        const rolled = rolledInto(loc.key, iso, meal);
+        // Effective total: a closed cell counts as 0; an open cell adds rolled-in demand.
+        mealTotal += closed ? 0 : v + rolled;
+
         const pred = S.predictions && S.predictions[loc.key] && S.predictions[loc.key][d.dayName]
           ? S.predictions[loc.key][d.dayName][meal] : null;
 
         const cellClass = d.isToday ? 'gt-today-cell' : d.isPast ? 'gt-past-cell' : '';
 
         // Determine the right onchange handler based on which week this day belongs to
-        const dateKey = localDateStr(d.date);
         const onchange = d.isCurrentWeek
           ? `updateGuests('${loc.key}','${d.dayName}','${meal}',this.value)`
           : `updateGuestsNextWeek('${d.mondayKey}','${loc.key}','${d.dayName}','${meal}',this.value)`;
 
         // Staff count for this meal (staff_lunch or staff_dinner)
         const staffKey = meal === 'lunch' ? 'staff_lunch' : 'staff_dinner';
-        const staffVal = getGuestForDay(loc.key, d)[staffKey] || 0;
+        const staffVal = vals[staffKey] || 0;
 
-        html += `<td class="${cellClass}">
+        html += `<td class="${cellClass}${closed ? ' gt-closed-cell' : ''}">
           <input class="gt-input" type="number" min="0" value="${v}" onchange="${onchange}" />`;
-        if (pred !== null && pred !== undefined) {
-          const delta = v - pred;
-          let deltaHtml = '';
-          if (delta > 0) deltaHtml = `<span class="gt-pred-delta gt-pred-up">+${delta}</span>`;
-          else if (delta < 0) deltaHtml = `<span class="gt-pred-delta gt-pred-down">${delta}</span>`;
-          html += `<div class="gt-pred" title="Predicted from historical data">~${pred} ${deltaHtml}</div>`;
-        }
-        if (staffVal > 0) {
-          html += `<div class="gt-staff" title="${staffVal} staff/volunteer meals included in total">${staffVal} staff</div>`;
+        // Open/closed control — future cells only (closing a past service is moot).
+        if (!d.isPast) html += renderStatusControl(loc.key, iso, d.dayName, meal, closed);
+        if (closed) {
+          const tgt = previousOpenService(loc.key, iso, meal);
+          const tgtLabel = tgt ? tgt.meal.charAt(0).toUpperCase() + tgt.meal.slice(1) : null;
+          html += `<div class="gt-closed-tag" title="Closed — its ${v} guests are cooked at ${tgtLabel || 'the previous open service'}">Closed${tgtLabel ? ` → ${tgtLabel}` : ''}</div>`;
+        } else {
+          if (pred !== null && pred !== undefined) {
+            const delta = v - pred;
+            let deltaHtml = '';
+            if (delta > 0) deltaHtml = `<span class="gt-pred-delta gt-pred-up">+${delta}</span>`;
+            else if (delta < 0) deltaHtml = `<span class="gt-pred-delta gt-pred-down">${delta}</span>`;
+            html += `<div class="gt-pred" title="Predicted from historical data">~${pred} ${deltaHtml}</div>`;
+          }
+          if (staffVal > 0) {
+            html += `<div class="gt-staff" title="${staffVal} staff/volunteer meals included in total">${staffVal} staff</div>`;
+          }
+          if (rolled > 0) {
+            // Name the source meal when it's unambiguous (e.g. a closed dinner →
+            // lunch); fall back to a generic label when demand aggregates from
+            // more than one source (e.g. a whole closed day rolling cross-day).
+            const fromMeal = rolledFromMeal(loc.key, iso, meal);
+            const srcLabel = fromMeal ? fromMeal.charAt(0).toUpperCase() + fromMeal.slice(1) : null;
+            const rolledText = srcLabel ? `+${rolled} from ${srcLabel} (closed)` : `+${rolled} rolled in`;
+            const rolledTitle = srcLabel
+              ? `${rolled} guests rolled in from the closed ${srcLabel} service`
+              : `${rolled} guests rolled in from closed service(s) at this location`;
+            html += `<div class="gt-rolled" title="${rolledTitle}">${rolledText}</div>`;
+            const warn = rollWarning(loc.key, iso, meal);
+            if (warn && warn.reason === 'no-dish') {
+              html += `<div class="gt-roll-warn" title="These rolled guests have no dish assigned here yet — add one or run Fix My Menu">no dish here</div>`;
+            }
+          }
         }
         html += `</td>`;
       });
@@ -126,8 +154,7 @@ export function renderGuests() {
     html += `<tr><td style="font-weight:600;">Daily</td>`;
     days.forEach(d => {
       let dayTotal = 0;
-      const vals = getGuestForDay(loc.key, d);
-      MEALS.forEach(meal => { dayTotal += vals[meal] || 0; });
+      MEALS.forEach(meal => { dayTotal += effectiveCellGuests(loc.key, d, meal); });
       const cellClass = d.isToday ? 'gt-today-cell' : d.isPast ? 'gt-past-cell' : '';
       html += `<td class="gt-total-cell ${cellClass}">${dayTotal}</td>`;
     });
@@ -167,6 +194,114 @@ export function getGuestForDay(loc: any, dayInfo: any) {
     if (pred.staff_dinner !== undefined) base.staff_dinner = pred.staff_dinner;
   }
   return base;
+}
+
+// ── Closed-services controls (inline on the Guests screen) ──────────────────
+
+// Effective guests for a Guests-screen cell: a closed slot counts as 0; an open
+// slot adds anything rolled in from closed siblings (shares the demand roll-map
+// via rolledInto, so the table foots to what the kitchen actually cooks).
+function effectiveCellGuests(locKey: string, d: any, meal: string): number {
+  const iso = localDateStr(d.date);
+  if (isServiceClosed(locKey, iso, meal)) return 0;
+  const raw = getGuestForDay(locKey, d)[meal] || 0;
+  return raw + rolledInto(locKey, iso, meal);
+}
+
+// Per-cell open/closed control. Scope-explicit options so "Open" never silently
+// cancels a standing weekly rule. The chosen value drives setServiceClosure().
+function renderStatusControl(locKey: string, iso: string, dayName: string, meal: string, closed: boolean): string {
+  const cfg = S.closedServices;
+  const recClosed = !!(cfg && cfg.recurring && cfg.recurring[locKey]
+    && (cfg.recurring[locKey][dayName] || []).indexOf(meal as Meal) !== -1);
+  let opts: string;
+  if (recClosed) {
+    opts = `<option value="open-date">Open just this date</option>`
+      + `<option value="open-recurring">Open — every ${dayName}</option>`
+      + `<option value="closed-recurring" selected>Closed — every ${dayName}</option>`;
+  } else if (closed) {
+    opts = `<option value="open">Open</option>`
+      + `<option value="closed-date" selected>Closed — this date</option>`
+      + `<option value="closed-recurring">Closed — every ${dayName}</option>`;
+  } else {
+    opts = `<option value="open" selected>Open</option>`
+      + `<option value="closed-date">Closed — this date</option>`
+      + `<option value="closed-recurring">Closed — every ${dayName}</option>`;
+  }
+  return `<select class="gt-status${closed ? ' gt-status-closed' : ''}" title="Mark this service open or closed"`
+    + ` onchange="setServiceClosure('${locKey}','${iso}','${dayName}','${meal}',this.value)">${opts}</select>`;
+}
+
+// Mutate S.closedServices for one service, then persist + rebuild + re-render.
+// 'open' clears whatever currently closes the slot at its own scope; scope-explicit
+// recurring/date variants are offered when a recurring rule is in effect.
+export async function setServiceClosure(locKey: string, iso: string, dayName: string, meal: string, action: string): Promise<void> {
+  if (!S.closedServices) S.closedServices = { recurring: {} };
+  const cfg = S.closedServices;
+  if (!cfg.recurring) cfg.recurring = {};
+  const m = meal as Meal;
+
+  const addRecurring = () => {
+    if (!cfg.recurring[locKey]) cfg.recurring[locKey] = {};
+    const arr = cfg.recurring[locKey][dayName] || [];
+    if (arr.indexOf(m) === -1) arr.push(m);
+    cfg.recurring[locKey][dayName] = arr;
+  };
+  const removeRecurring = () => {
+    const byDay = cfg.recurring[locKey];
+    if (!byDay || !byDay[dayName]) return;
+    const next = (byDay[dayName] || []).filter(x => x !== m);
+    if (next.length === 0) delete byDay[dayName];
+    else byDay[dayName] = next;
+    if (Object.keys(byDay).length === 0) delete cfg.recurring[locKey];
+  };
+  const findOverride = (): ClosedServiceOverride | undefined =>
+    cfg.dates && cfg.dates[iso] ? cfg.dates[iso].find(o => o.loc === locKey) : undefined;
+  const ensureOverride = (): ClosedServiceOverride => {
+    if (!cfg.dates) cfg.dates = {};
+    if (!cfg.dates[iso]) cfg.dates[iso] = [];
+    let o = cfg.dates[iso].find(x => x.loc === locKey);
+    if (!o) { o = { loc: locKey as Location }; cfg.dates[iso].push(o); }
+    return o;
+  };
+  const clearOverrideMeal = () => {
+    const o = findOverride();
+    if (!o) return;
+    if (o.closed) o.closed = o.closed.filter(x => x !== m);
+    if (o.open) o.open = o.open.filter(x => x !== m);
+  };
+  const pruneDates = () => {
+    if (!cfg.dates) return;
+    if (cfg.dates[iso]) {
+      cfg.dates[iso] = cfg.dates[iso].filter(o => (o.closed && o.closed.length) || (o.open && o.open.length));
+      if (cfg.dates[iso].length === 0) delete cfg.dates[iso];
+    }
+    if (Object.keys(cfg.dates).length === 0) delete cfg.dates;
+  };
+
+  if (action === 'closed-recurring') {
+    addRecurring();
+    clearOverrideMeal();          // a one-off rule for this slot is now redundant
+  } else if (action === 'closed-date') {
+    const o = ensureOverride();
+    o.closed = Array.from(new Set([...(o.closed || []), m]));
+    o.open = (o.open || []).filter(x => x !== m);
+  } else if (action === 'open-date') {
+    const o = ensureOverride();   // open just this date despite a recurring closure
+    o.open = Array.from(new Set([...(o.open || []), m]));
+    o.closed = (o.closed || []).filter(x => x !== m);
+  } else if (action === 'open-recurring') {
+    removeRecurring();
+    clearOverrideMeal();
+  } else { // 'open' — clear whatever closes this slot at its own scope
+    removeRecurring();
+    clearOverrideMeal();
+  }
+  pruneDates();
+
+  await saveClosedServices();
+  rebuildPlanner();
+  renderGuests();
 }
 
 // ── Upload Section HTML ───────────────────────────────────

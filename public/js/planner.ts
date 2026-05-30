@@ -2,7 +2,7 @@ import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, M
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, todayIso } from './utils';
 import { computeSupplyDemand } from '@shared/supply-demand';
-import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry } from './core';
+import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, cleanCateringRefs } from './dishes';
@@ -154,7 +154,19 @@ export function renderLocationPlan(loc: string) {
         const k = `${loc}-${isoDate}-${meal}`;
         const slotDishes = (S.planner[k] || []).filter(dish => dish.type === tg.key);
         const slotServed = isServicePast({loc: loc as Location, date: isoDate, meal});
-        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}" data-loc="${loc}" data-date="${isoDate}" data-meal="${meal}" data-type="${tg.key}" onclick="openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')" ondragover="slotDragOver(event)" ondragleave="slotDragLeave(event)" ondrop="slotDrop(event,'${loc}','${isoDate}','${meal}')">`;
+        const slotClosed = isServiceClosed(loc, isoDate, meal);
+        // Closed slots: no add/drop handlers (can't add new dishes); existing
+        // dishes still render with their remove button (decision #6).
+        const slotHandlers = slotClosed ? ''
+          : ` onclick="openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')" ondragover="slotDragOver(event)" ondragleave="slotDragLeave(event)" ondrop="slotDrop(event,'${loc}','${isoDate}','${meal}')"`;
+        html += `<div class="slot${d.isToday ? ' today' : ''}${d.isPast ? ' past-slot' : ''}${slotClosed ? ' closed-slot' : ''}" data-loc="${loc}" data-date="${isoDate}" data-meal="${meal}" data-type="${tg.key}"${slotClosed ? ' title="Closed — its demand rolls onto the previous open service"' : ''}${slotHandlers}>`;
+        if (slotClosed) {
+          html += `<span class="closed-slot-lbl">Closed</span>`;
+        } else if (tg.key === typeGroups[0].key && !slotServed) {
+          // Empty roll-target warning, shown once per slot (first type section).
+          const rw = rollWarning(loc, isoDate, meal);
+          if (rw && rw.reason === 'no-dish') html += `<div class="slot-roll-warn" title="${rw.amount} guests rolled in from a closed service, but no dish is planned here">⚠ ${rw.amount} rolled, no dish</div>`;
+        }
         // One chip per batch — unified-batch model means each batch is its
         // own canonical menu option. Cross-batch same-recipe duplicates
         // (audit S7) intentionally render as separate chips: cook can see
@@ -176,7 +188,7 @@ export function renderLocationPlan(loc: string) {
             : '';
           html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(dish.name)}"><span class="chip-nm">${esc(dish.name)}</span>${fromTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
         }
-        html += `<div class="add-slot-btn" data-testid="slot-add-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div>`;
+        if (!slotClosed) html += `<div class="add-slot-btn" data-testid="slot-add-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div>`;
         html += `</div>`;
       });
     });
@@ -332,7 +344,7 @@ export function batchDragStart(e: DragEvent, batchId: string) {
   }
   (e.target as HTMLElement)?.closest('.batch-tile')?.classList.add('dragging');
   // Highlight all slots as drop targets
-  document.querySelectorAll('.slot').forEach(s => s.classList.add('slot-assign-target'));
+  document.querySelectorAll('.slot:not(.closed-slot)').forEach(s => s.classList.add('slot-assign-target'));
 }
 
 export function batchDragEnd(e: DragEvent) {
@@ -358,6 +370,9 @@ export function slotDrop(e: DragEvent, loc: string, date: string, meal: string) 
   trackEvent('batch_assign_drag');
   e.preventDefault();
   (e.currentTarget as HTMLElement)?.classList.remove('slot-drag-over');
+  // Closed services can't take new dishes (belt-and-suspenders: closed slots
+  // also have no ondrop handler, so this is a defensive guard).
+  if (isServiceClosed(loc, date, meal)) { S.draggingBatchId = null; return; }
   const batchId = S.draggingBatchId || e.dataTransfer?.getData('text/plain');
   if (!batchId) return;
   const batch = S.batches.find(d => d.id === batchId);

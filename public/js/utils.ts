@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
@@ -306,6 +306,7 @@ export async function retryLoad(): Promise<void> {
     loadStorageConfig(),
     loadKitchenEquipment(),
     loadCookRhythm(),
+    loadClosedServices(),
     loadGuestHistory(),
     loadGuestsNextWeeks(),
     loadInventoryCompletions(),
@@ -426,6 +427,27 @@ export async function saveCookRhythm(): Promise<void> {
   }
 }
 
+export async function loadClosedServices(): Promise<void> {
+  try {
+    const cfg = await apiGet('/api/closed-services');
+    if (cfg && typeof cfg === 'object' && cfg.recurring && typeof cfg.recurring === 'object') {
+      S.closedServices = { recurring: cfg.recurring, dates: cfg.dates };
+    } else {
+      S.closedServices = null; // no saved config → everything open
+    }
+  } catch (_e: unknown) {
+    S.closedServices = null;
+  }
+}
+
+export async function saveClosedServices(): Promise<void> {
+  try {
+    await apiPost('/api/closed-services', S.closedServices);
+  } catch (_e: unknown) {
+    toastError('Failed to save closed services');
+  }
+}
+
 export async function loadGuestHistory(): Promise<void> {
   try {
     const data = await apiGet('/api/guest-history');
@@ -539,6 +561,7 @@ async function reconnectLiveSync(reason: string): Promise<void> {
       loadStorageConfig(),
       loadKitchenEquipment(),
       loadCookRhythm(),
+      loadClosedServices(),
       loadGuestHistory(),
       loadGuestsNextWeeks(),
       loadInventoryCompletions(),
@@ -637,6 +660,7 @@ interface RemotePatchMessage {
   storageConfig?: StorageConfig;
   kitchenEquipment?: KitchenEquipment;
   cookRhythm?: CookRhythmConfig;
+  closedServices?: ClosedServicesConfig;
   // Partial slot-keyed
   prepChecklist?: { loc: string; date: string; checked: string[] };
   inventoryCompletion?: { loc: string; window: 'lunch' | 'dinner'; completedAt: string };
@@ -677,7 +701,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           recipes, deletedRecipes,
           ingredients, deletedIngredients,
           supplies, deletedSupplies,
-          storageConfig, kitchenEquipment, cookRhythm,
+          storageConfig, kitchenEquipment, cookRhythm, closedServices,
           prepChecklist, inventoryCompletion,
           guestsNextWeeks,
           ingredientsBulkReload, guestHistoryReload, recipesReload } = msg;
@@ -784,6 +808,13 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     changed = true;
   }
 
+  // Closed services (full-replace). Unlike cook-rhythm this feeds the demand
+  // allocation cache, so it must trigger a rebuildPlanner — wired via needsPlanner below.
+  if (closedServices) {
+    S.closedServices = closedServices;
+    changed = true;
+  }
+
   // Prep checklist (only apply if the patch is for today's date)
   if (prepChecklist && prepChecklist.date === todayIso()) {
     S.prepChecklist[prepChecklist.loc] = new Set(prepChecklist.checked);
@@ -849,7 +880,8 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
       || caterings || deletedCaterings
       || recipes || deletedRecipes
       || ingredients || deletedIngredients
-      || guestsNextWeeks);
+      || guestsNextWeeks
+      || closedServices);
     if (needsPlanner) rebuildPlanner();
     rerenderCurrentView();
     // Rebuild an open inventory modal so its embedded row indices stay valid.

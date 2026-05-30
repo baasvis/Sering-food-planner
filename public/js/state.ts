@@ -1,6 +1,6 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, Supply } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, Supply } from '@shared/types';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -48,6 +48,11 @@ export const DEFAULT_COOK_RHYTHM: Record<string, CookRhythmDay> = {
   Fri: { soup: 1, main: 1, chefs: 2 },
   Sat: { soup: 1, main: 1, chefs: 2 },
 };
+
+// Default closed-services schedule — empty means nothing is closed (behaviour
+// unchanged until the operator marks a service closed on the Guests screen).
+// Persisted server-side as S.closedServices; null also means "all open".
+export const DEFAULT_CLOSED_SERVICES: ClosedServicesConfig = { recurring: {} };
 
 // Mutable — rebuilt from storageConfig when loaded
 export let STORAGE_CATEGORIES: Record<string, string[]> = {};
@@ -168,6 +173,7 @@ export interface AppState {
   storageConfig: StorageConfig | null;
   kitchenEquipment: KitchenEquipment | null;
   cookRhythm: CookRhythmConfig | null;
+  closedServices: ClosedServicesConfig | null;
   financeData: Record<string, unknown>[];
   financeProducts: Record<string, unknown>[];
   financeSyncing: boolean;
@@ -222,6 +228,7 @@ export let S: AppState = {
   storageConfig: null,
   kitchenEquipment: null,
   cookRhythm: null,
+  closedServices: null,
   financeData: [],
   financeProducts: [],
   financeSyncing: false,

@@ -1713,3 +1713,78 @@ describe('Cook Rhythm API (/api/cook-rhythm)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ── Closed Services config (per-location open/closed schedule) ──
+// Single fixed-row (id:'default') config shared with the live staging app —
+// SAVE current + RESTORE it in afterAll so we don't clobber the real schedule.
+describe('Closed Services API (/api/closed-services)', () => {
+  let original: { recurring: Record<string, Record<string, string[]>>; dates?: Record<string, unknown> } = { recurring: {} };
+
+  beforeAll(async () => {
+    const res = await request(app).get('/api/closed-services');
+    if (res.body && res.body.recurring) original = res.body;
+  });
+
+  afterAll(async () => {
+    const r = await request(app).post('/api/closed-services').send(original);
+    if (r.status !== 200) console.warn('closed-services restore failed:', r.status, r.body);
+  });
+
+  it('GET — returns an object with a recurring map', async () => {
+    const res = await request(app).get('/api/closed-services');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('recurring');
+    expect(typeof res.body.recurring).toBe('object');
+  });
+
+  it('POST valid config -> 200 and round-trips via GET', async () => {
+    const post = await request(app).post('/api/closed-services')
+      .send({ recurring: { centraal: { Fri: ['dinner'] } } });
+    expect(post.status).toBe(200);
+    expect(post.body.ok).toBe(true);
+    const get = await request(app).get('/api/closed-services');
+    expect(get.body.recurring.centraal.Fri).toEqual(['dinner']);
+  });
+
+  it('POST drops unknown locations/weekdays and filters + dedupes invalid meals', async () => {
+    const post = await request(app).post('/api/closed-services').send({
+      recurring: {
+        centraal: { Fri: ['dinner', 'brunch', 'dinner'], Funday: ['lunch'] }, // brunch invalid, dup, Funday invalid
+        mars: { Mon: ['lunch'] }, // invalid location
+      },
+    });
+    expect(post.status).toBe(200);
+    const get = await request(app).get('/api/closed-services');
+    expect(get.body.recurring.centraal.Fri).toEqual(['dinner']); // deduped + filtered
+    expect(get.body.recurring.centraal).not.toHaveProperty('Funday');
+    expect(get.body.recurring).not.toHaveProperty('mars');
+  });
+
+  it('POST per-date overrides merge to one entry per loc (close lunch then dinner same date)', async () => {
+    const post = await request(app).post('/api/closed-services').send({
+      recurring: {},
+      dates: {
+        '2026-12-25': [
+          { loc: 'centraal', closed: ['lunch'] },
+          { loc: 'centraal', closed: ['dinner'] }, // same loc/date — must merge, not clobber
+        ],
+      },
+    });
+    expect(post.status).toBe(200);
+    const get = await request(app).get('/api/closed-services');
+    const xmas = get.body.dates['2026-12-25'];
+    expect(Array.isArray(xmas)).toBe(true);
+    expect(xmas.length).toBe(1); // merged to a single centraal entry
+    expect([...xmas[0].closed].sort()).toEqual(['dinner', 'lunch']);
+  });
+
+  it('POST non-object recurring -> 400', async () => {
+    const res = await request(app).post('/api/closed-services').send({ recurring: 'nope' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST missing recurring -> 400', async () => {
+    const res = await request(app).post('/api/closed-services').send({});
+    expect(res.status).toBe(400);
+  });
+});

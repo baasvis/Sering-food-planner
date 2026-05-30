@@ -220,6 +220,13 @@ model CookRhythm {
   @@map("cook_rhythm")
 }
 
+model ClosedServices {
+  id     String @id @default("default")
+  config Json   @default("{}") // { recurring: { <loc>: { <weekday>: Meal[] } }, dates?: {...} } — closed-service schedule
+
+  @@map("closed_services")
+}
+
 model DailyRevenue {
   id           Int    @id @default(autoincrement())
   date         String
