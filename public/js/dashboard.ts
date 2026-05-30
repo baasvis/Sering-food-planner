@@ -4,7 +4,7 @@ import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS } from './state';
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
 type DashBatch = Batch & { starch?: string | null };
 import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId, formatRelativeTime } from './utils';
-import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getToday, dateToStr, chipClass, getStockAt, getPendingFromShipments } from './core';
+import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getEffectiveGuests, getToday, dateToStr, chipClass, getStockAt, getPendingFromShipments } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
 import { esc } from './modal';
@@ -181,7 +181,7 @@ export function calcLitersForService(dish: Batch, loc: Location, dateStr: string
   const k = `${loc}-${dateStr}-${meal}`;
   const peers = (S.planner[k] || []).filter(d => d.type === dish.type);
   const count = Math.max(peers.length, 1);
-  const g = getGuests(loc, dateStr, meal);
+  const g = getEffectiveGuests(loc, dateStr, meal);
   return Math.round((g / count) * ((dish.serving || 280) / 1000) * 10) / 10;
 }
 

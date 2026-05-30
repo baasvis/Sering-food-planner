@@ -1,7 +1,7 @@
 import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories, restoreGlobalLocation } from './state';
 import type { Location } from '@shared/types';
 import { loadData, connectLiveSync, saveState,
-         loadIngredientDb, loadStorageConfig, loadKitchenEquipment, loadCookRhythm,
+         loadIngredientDb, loadStorageConfig, loadKitchenEquipment, loadCookRhythm, loadClosedServices,
          loadGuestHistory, loadGuestsNextWeeks, loadInventoryCompletions } from './utils';
 import { flushUndo } from './undo';
 import { rebuildPlanner } from './core';
@@ -193,6 +193,7 @@ export async function initApp() {
     loadStorageConfig(),
     loadKitchenEquipment(),
     loadCookRhythm(),
+    loadClosedServices(),
     loadGuestHistory(),
     loadGuestsNextWeeks(),
     loadInventoryCompletions(),

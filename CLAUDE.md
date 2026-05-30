@@ -256,6 +256,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Standard inventory: `GET/POST /api/standard-inventory?location=west|centraal` — per-location weekly base order
 - Prep checklist: `GET/POST /api/prep-checklist?loc=west&date=YYYY-MM-DD`
 - Kitchen equipment: `GET/POST /api/kitchen-equipment` — pots, gas/induction burners, big-burner threshold (single JSON row)
+- Closed services: `GET/POST /api/closed-services` — per-location open/closed service schedule (recurring weekday rules + per-date overrides, single JSON row). A service can be marked closed (no seating) while the guest/staff demand registered to it still gets cooked: its demand rolls onto the previous open service at the same location. Implemented as a once-per-rebuild roll-map in `public/js/core.ts` (`buildRollMap`/`getEffectiveGuests`/`previousOpenService`) that all demand consumers read; edited inline on the Guests screen (per-cell open/closed control), and closed slots render greyed with a red "Closed" label on the week planner.
 - Activity log: `GET /api/log` (last 50 actions, oldest first)
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
 - Finance: `GET /api/finance/revenue?start=...&end=...&location=...`, `GET /api/finance/products?...`, `POST /api/finance/sync`, `POST /api/finance/sync-cancel`, `GET /api/finance/sync-status`. Status auto-hydrates from telemetry on first call after a restart.

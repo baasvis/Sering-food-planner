@@ -1,7 +1,7 @@
 // CORE LOGIC
 // ═══════════════════════════════════════════════════════════════════
 
-import { S, DAYS } from './state';
+import { S, DAYS, LOCATIONS } from './state';
 import type { InventoryDone } from './state';
 import type { Batch, Service, Catering, CateringDish, Location, Meal, DishType, StorageType, BatchRatings, InventoryEntry } from '@shared/types';
 import { scheduleSave, apiPost } from './utils';
@@ -260,6 +260,7 @@ function recordAllocation(byBatch: Map<string, Map<string, number>>, batchId: st
 let _batchAllocations: { byBatch: Map<string, Map<string, number>> } = { byBatch: new Map() };
 
 export function recomputeBatchAllocations(): void {
+  buildRollMap(); // refresh closed->open roll-map before any getEffectiveGuests read
   const byBatch = new Map<string, Map<string, number>>();
 
   for (const b of S.batches) {
@@ -268,7 +269,7 @@ export function recomputeBatchAllocations(): void {
       const k = slotKey(svc);
       const peers = (S.planner[k] || []).filter(p => p.type === b.type);
       const peerCount = Math.max(peers.length, 1);
-      const guests = getGuests(svc.loc, svc.date, svc.meal);
+      const guests = getEffectiveGuests(svc.loc, svc.date, svc.meal);
       const serving = (b.serving || 280) / 1000;
       const liters = (guests / peerCount) * serving;
       recordAllocation(byBatch, b.id, k, liters);
@@ -357,6 +358,161 @@ export function getGuests(loc: string, dateStr: string, meal: Meal | string): nu
   return ((S.guests[lk] || {})[dn] || {} as any)[meal] || 0;
 }
 
+// ── Closed services + demand roll-back ──────────────────────────────────────
+//
+// A service can be marked closed (no seating) while the guest/staff demand
+// registered to it still gets cooked — by rolling that demand onto the previous
+// OPEN service at the same location. The roll-map below is built once per
+// rebuildPlanner() so every demand consumer agrees and the hot loop stays O(1).
+
+const CLOSED_WALK_DAYS = 21;   // how far to walk for the previous/next open service
+const ROLL_HORIZON_DAYS = 56;  // forward scan horizon (>= planner/guests/Fix-My-Menu windows)
+const MEAL_ORDER: Meal[] = ['lunch', 'dinner']; // earliest -> latest within a day
+
+/** Is this (loc, date, meal) marked closed? Per-date overrides win over the
+ *  recurring weekday rule. Null config -> everything open. */
+export function isServiceClosed(loc: string, dateStr: string, meal: Meal | string): boolean {
+  const cfg = S.closedServices;
+  if (!cfg) return false;
+  const overrides = cfg.dates ? cfg.dates[dateStr] : undefined;
+  if (overrides) {
+    for (const o of overrides) {
+      if (o.loc !== loc) continue;
+      if (o.open && o.open.indexOf(meal as Meal) !== -1) return false;   // re-opened for this date
+      if (o.closed && o.closed.indexOf(meal as Meal) !== -1) return true;
+    }
+  }
+  const rec = cfg.recurring && cfg.recurring[loc];
+  const meals = rec ? rec[dateToDayName(dateStr)] : undefined;
+  return !!meals && meals.indexOf(meal as Meal) !== -1;
+}
+
+/** Demand registered to a CLOSED slot: the entered count if any, else the
+ *  predicted count for that loc/weekday/meal (predictions already fold staff
+ *  into lunch/dinner) — so forgotten/late staff meals still roll. */
+function closedSlotDemand(loc: string, dateStr: string, meal: Meal | string): number {
+  const entered = getGuests(loc, dateStr, meal);
+  if (entered > 0) return entered;
+  const lk = loc === 'west' ? 'west' : 'centraal';
+  const dn = dateToDayName(dateStr);
+  if (S.predictions && S.predictions[lk] && S.predictions[lk][dn] && S.predictions[lk][dn][meal] !== undefined) {
+    const p = S.predictions[lk][dn][meal];
+    return typeof p === 'number' && p > 0 ? p : 0;
+  }
+  return 0;
+}
+
+/** The open service a closed slot's demand rolls onto: walk BACKWARD (earlier
+ *  meal same day, then prior days latest->earliest), then a forward fallback.
+ *  Config-only (ignores whether a batch is assigned). null if all-closed in window. */
+export function previousOpenService(loc: string, dateStr: string, meal: Meal): Service | null {
+  const base = new Date(dateStr + 'T12:00:00');
+  const startIdx = MEAL_ORDER.indexOf(meal);
+  for (let off = 0; off <= CLOSED_WALK_DAYS; off++) {
+    const d = new Date(base); d.setDate(base.getDate() - off);
+    const iso = dateToIso(d);
+    const meals = off === 0 ? MEAL_ORDER.slice(0, startIdx).reverse() : MEAL_ORDER.slice().reverse();
+    for (const m of meals) if (!isServiceClosed(loc, iso, m)) return { loc: loc as Location, date: iso, meal: m };
+  }
+  for (let off = 0; off <= CLOSED_WALK_DAYS; off++) {
+    const d = new Date(base); d.setDate(base.getDate() + off);
+    const iso = dateToIso(d);
+    const meals = off === 0 ? MEAL_ORDER.slice(startIdx + 1) : MEAL_ORDER.slice();
+    for (const m of meals) if (!isServiceClosed(loc, iso, m)) return { loc: loc as Location, date: iso, meal: m };
+  }
+  return null;
+}
+
+// Roll-map: open-slot key -> rolled guest amount. Warnings: slot key -> reason.
+let _rollMap = new Map<string, number>();
+let _rollWarn = new Map<string, { amount: number; reason: 'no-dish' | 'no-target' }>();
+// Per open-target: the set of source meals whose closed-slot demand rolled in.
+// Used only to label the rolled-in badge ("from Dinner" vs a generic label when
+// the demand aggregates from more than one kind of source meal).
+let _rollFrom = new Map<string, Set<Meal>>();
+
+/** Rebuild the closed->open roll-map. Called at the top of
+ *  recomputeBatchAllocations (i.e. once per rebuildPlanner). Iterating closed
+ *  slots and resolving each via previousOpenService once means the sum-side and
+ *  the target-side can never disagree. Depends only on closures + raw/predicted
+ *  guests, so it stays valid through Fix My Menu's speculative assignment. */
+export function buildRollMap(): void {
+  _rollMap = new Map();
+  _rollWarn = new Map();
+  _rollFrom = new Map();
+  if (!S.closedServices) return;
+  // Horizon: today - walk .. max(today + ROLL_HORIZON_DAYS, latest service date) + walk.
+  const today = getToday();
+  let maxTime = today.getTime() + ROLL_HORIZON_DAYS * 86400000;
+  for (const b of S.batches) {
+    for (const svc of (b.services || [])) {
+      const t = new Date(svc.date + 'T12:00:00').getTime();
+      if (t > maxTime) maxTime = t;
+    }
+  }
+  const cur = new Date(today.getTime() - CLOSED_WALK_DAYS * 86400000);
+  const end = new Date(maxTime + CLOSED_WALK_DAYS * 86400000);
+  while (cur <= end) {
+    const iso = dateToIso(cur);
+    for (const loc of LOCATIONS) {
+      for (const meal of MEAL_ORDER) {
+        if (!isServiceClosed(loc, iso, meal)) continue;
+        const svc: Service = { loc, date: iso, meal };
+        if (isServicePast(svc)) continue;
+        const amt = closedSlotDemand(loc, iso, meal);
+        if (amt <= 0) continue;
+        const tgt = previousOpenService(loc, iso, meal);
+        if (!tgt) { _rollWarn.set(slotKey(svc), { amount: amt, reason: 'no-target' }); continue; }
+        // If the roll-target's cook window has already passed (e.g. a closed Fri
+        // dinner resolving to the same-day Fri lunch, viewed in the afternoon),
+        // the demand can no longer be cooked — it retires like any served
+        // service rather than lingering as a phantom rolled badge on a past slot.
+        if (isServicePast(tgt)) continue;
+        const tk = slotKey(tgt);
+        _rollMap.set(tk, (_rollMap.get(tk) || 0) + amt);
+        let fromSet = _rollFrom.get(tk);
+        if (!fromSet) { fromSet = new Set(); _rollFrom.set(tk, fromSet); }
+        fromSet.add(meal);
+      }
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  // Flag roll-targets that currently have no dish assigned (#7 — empty target).
+  for (const [tk, amount] of _rollMap) {
+    if (!(S.planner[tk] || []).length) _rollWarn.set(tk, { amount, reason: 'no-dish' });
+  }
+}
+
+/** Guests a service actually needs cooking for: a closed slot -> 0 (counted at
+ *  its roll-target); an open slot -> its own raw guests + anything rolled in.
+ *  O(1): reads the cached roll-map (callers must rebuildPlanner first). */
+export function getEffectiveGuests(loc: string, dateStr: string, meal: Meal | string): number {
+  if (isServiceClosed(loc, dateStr, meal)) return 0;
+  return getGuests(loc, dateStr, meal) + (_rollMap.get(`${loc}-${dateStr}-${meal}`) || 0);
+}
+
+/** Guests rolled INTO this open slot from closed siblings (0 if none). */
+export function rolledInto(loc: string, dateStr: string, meal: Meal | string): number {
+  return _rollMap.get(`${loc}-${dateStr}-${meal}`) || 0;
+}
+
+/** Roll warning for a slot, or null. 'no-dish' = open target has rolled demand
+ *  but no batch; 'no-target' = closed slot found no open service in window. */
+export function rollWarning(loc: string, dateStr: string, meal: Meal | string): { amount: number; reason: 'no-dish' | 'no-target' } | null {
+  return _rollWarn.get(`${loc}-${dateStr}-${meal}`) || null;
+}
+
+/** The source meal of demand rolled INTO this open slot, when unambiguous
+ *  (a single kind of source meal — e.g. a closed dinner rolling onto lunch).
+ *  Returns null when demand aggregates from more than one source meal (e.g. a
+ *  whole closed day rolling cross-day), so callers can show a generic label
+ *  instead of mislabelling the source. */
+export function rolledFromMeal(loc: string, dateStr: string, meal: Meal | string): Meal | null {
+  const set = _rollFrom.get(`${loc}-${dateStr}-${meal}`);
+  if (set && set.size === 1) return [...set][0];
+  return null;
+}
+
 /** Per-service allocation in liters, read from the per-batch peer-share
  *  allocator cache (set by recomputeBatchAllocations).
  *  Single source of truth for "how many liters does this batch contribute
@@ -415,7 +571,7 @@ export function calcRequired(dish: Batch): number {
  *  under the algorithm's speculative `services.push(...) / pop()` pattern. */
 export function calcRequiredLive(
   dish: Batch,
-  getGuestsFn: (loc: Location, date: string, meal: Meal) => number = getGuests,
+  getGuestsFn: (loc: Location, date: string, meal: Meal) => number = getEffectiveGuests,
 ): number {
   let total = 0;
   (dish.services || []).forEach((svc: Service) => {
@@ -456,7 +612,14 @@ export function calcRequiredBreakdown(dish: Batch): string[] {
     const allocated = lookupBatchAllocation(dish, svc) ?? 0;
     const liters = Math.round(allocated * 10) / 10;
     if (liters > 0) {
-      lines.push(`${liters}L \u2014 ${dayName} ${meal} ${loc}`);
+      const rolled = rolledInto(svc.loc, svc.date, svc.meal);
+      let suffix = '';
+      if (rolled > 0) {
+        const fromMeal = rolledFromMeal(svc.loc, svc.date, svc.meal);
+        const src = fromMeal ? `closed ${fromMeal.charAt(0).toUpperCase() + fromMeal.slice(1)}` : 'closed services';
+        suffix = ` (incl. ${Math.round(rolled)} from ${src})`;
+      }
+      lines.push(`${liters}L \u2014 ${dayName} ${meal} ${loc}${suffix}`);
     }
   });
   (S.caterings || []).forEach((c: Catering) => {

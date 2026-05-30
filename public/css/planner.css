@@ -44,6 +44,11 @@
   .slot{min-height:44px;border:1px solid var(--border);border-radius:var(--radius);padding:4px;display:flex;flex-direction:column;gap:2px;background:var(--bg);transition:border-color .1s;cursor:pointer;min-width:0;overflow:hidden;}
   .slot.today{border-color:var(--blue);}
   .slot:hover{border-color:var(--border2);}
+  /* Closed service: greyed, dashed, "Closed" in red so the cook sees why nothing's assigned */
+  .slot.closed-slot{background:var(--bg2);border:1px dashed var(--border2);align-items:center;justify-content:center;cursor:default;}
+  .slot.closed-slot:hover{border-color:var(--border2);}
+  .closed-slot-lbl{font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.04em;}
+  .slot-roll-warn{font-size:9px;font-weight:700;color:var(--red);background:var(--red-bg);border-radius:4px;padding:1px 3px;text-align:center;}
   .meal-spacer{height:8px;}
   .dish-chip{border-radius:5px;padding:3px 6px;font-size:11px;font-weight:500;display:flex;justify-content:space-between;align-items:flex-start;gap:3px;cursor:default;min-width:0;overflow:hidden;}
   .chip-tr-border{border-left:2px solid var(--purple);}

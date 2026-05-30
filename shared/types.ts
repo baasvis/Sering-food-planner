@@ -133,6 +133,23 @@ export interface CookRhythmConfig {
   days: Record<string, CookRhythmDay>; // keyed by 'Mon'..'Sun'
 }
 
+// ── Closed services config ──
+// Marks a service (location + meal) as closed — no seating, but any guest/staff
+// demand registered to it rolls onto the previous open service at the same
+// location (see core.ts getEffectiveGuests / previousOpenService). Default
+// (empty recurring) closes nothing, so behaviour is unchanged until configured.
+export interface ClosedServiceOverride {
+  loc: Location;
+  closed?: Meal[]; // meals forced closed on this specific date
+  open?: Meal[];   // meals forced open on this date (overrides a recurring closure)
+}
+export interface ClosedServicesConfig {
+  // recurring[location][weekday 'Mon'..'Sun'] = meals closed every week.
+  recurring: Record<string, Partial<Record<string, Meal[]>>>;
+  // dates[ISO 'YYYY-MM-DD'] = one-off overrides, checked BEFORE recurring.
+  dates?: Record<string, ClosedServiceOverride[]>;
+}
+
 export interface GuestDay {
   lunch: number;
   dinner: number;

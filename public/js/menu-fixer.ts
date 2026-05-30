@@ -16,7 +16,7 @@ import { S, DEFAULT_COOK_RHYTHM } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment, saveCookRhythm } from './utils';
 import {
   rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName,
-  isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, getGuests, getTotalStock, getStockAt,
+  isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, getEffectiveGuests, isServiceClosed, getTotalStock, getStockAt,
   getServeableStockAt, getServeableTotalStock,
   consolidateInventory,
 } from './core';
@@ -1125,7 +1125,7 @@ function _fixMyMenuBody(): void {
   const memoGuests = (loc: Location, date: string, meal: Meal): number => {
     const k = `${loc}|${date}|${meal}`;
     let v = _guestCache.get(k);
-    if (v === undefined) { v = getGuests(loc, date, meal); _guestCache.set(k, v); }
+    if (v === undefined) { v = getEffectiveGuests(loc, date, meal); _guestCache.set(k, v); }
     return v;
   };
 
@@ -1417,6 +1417,7 @@ export function collectWarnings(
     const sundayDinnerOk = dateToDayName(cookIso) === 'Sun';
     const violating = (b.services || []).filter(s =>
       s.loc === 'centraal' && s.date === cookIso && !isServicePast(s)
+      && !isServiceClosed(s.loc, s.date, s.meal)
       && !(sundayDinnerOk && s.meal === 'dinner'));
     if (violating.length > 0) {
       const meals = violating.map(s => s.meal).join(' + ');
@@ -1433,7 +1434,7 @@ export function collectWarnings(
   for (const b of allBatches) {
     if (!TYPES_TO_PLAN.includes(b.type)) continue;
     if (primaryLoc(b) !== 'centraal') continue;
-    const violating = (b.services || []).filter(s => s.loc === 'west' && !isServicePast(s));
+    const violating = (b.services || []).filter(s => s.loc === 'west' && !isServicePast(s) && !isServiceClosed(s.loc, s.date, s.meal));
     if (violating.length > 0) {
       warnings.push({
         category: 'centraal-batch-at-west',

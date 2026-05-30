@@ -57,6 +57,7 @@ import {
   type PlanDay,
 } from '../public/js/menu-fixer';
 import { S } from '../public/js/state';
+import { getEffectiveGuests, buildRollMap } from '../public/js/core';
 
 // Pin the system clock to a stable Friday 1 May 2026 so the hardcoded service
 // dates (2026-05-04..10) stay in the future relative to "now". Several
@@ -987,5 +988,51 @@ describe('collectWarnings undeliverable-centraal (Sunday delivery exception)', (
     });
     const ws = collectWarnings([b], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, TEN);
     expect(has(ws)).toBe(true);
+  });
+});
+
+// ─── collectWarnings + closed services ─────────────────────────────────────
+
+describe('closed services: Fix My Menu warnings', () => {
+  const TEN = (_l: Location, _i: string, _m: Meal) => 10;
+  const hasCat = (ws: { category: string }[], cat: string) => ws.some(w => w.category === cat);
+  afterEach(() => { S.closedServices = null; });
+
+  test('a dish left on a CLOSED Centraal slot is not flagged undeliverable-centraal', () => {
+    // Without closure this is exactly the "non-Sunday West cook → Centraal
+    // same-day dinner" case that IS flagged (describe above). Closing the slot
+    // must suppress the delivery warning — decision #6 keeps the dish (removable).
+    S.closedServices = { recurring: { centraal: { Wed: ['dinner'] } } } as any;
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const b = makeBatch({
+      type: 'Soup', cookDate: '06/05/2026', name: 'Wed soup',
+      inventory: [inv(80, 'west')],
+      services: [{ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }],
+    });
+    const ws = collectWarnings([b], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, TEN);
+    expect(hasCat(ws, 'undeliverable-centraal')).toBe(false);
+  });
+
+  test('a CLOSED slot with guests is skipped by under-filled; the same slot open IS flagged', () => {
+    const z = () => ({ Mon: { lunch: 0, dinner: 0 }, Tue: { lunch: 0, dinner: 0 }, Wed: { lunch: 0, dinner: 0 }, Thu: { lunch: 0, dinner: 0 }, Fri: { lunch: 0, dinner: 0 }, Sat: { lunch: 0, dinner: 0 }, Sun: { lunch: 0, dinner: 0 } });
+    S.guests = { west: z(), centraal: z() } as any;
+    S.guests.centraal.Wed.dinner = 10;  // demand exists, but no dish is on the slot
+    S.predictions = {} as any; S.guestsNextWeeks = {} as any; S.batches = []; S.planner = {};
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const isClosedDinner = (w: { category: string; anchor?: { kind: string; loc?: Location; date?: string; meal?: Meal } }) =>
+      w.category === 'under-filled-slot' && !!w.anchor && w.anchor.loc === 'centraal'
+      && w.anchor.meal === 'dinner' && w.anchor.date === '2026-05-06';
+
+    // Closed → effective guests 0 → slot skipped, no under-filled warning for it.
+    S.closedServices = { recurring: { centraal: { Wed: ['dinner'] } } } as any;
+    buildRollMap();
+    const wsClosed = collectWarnings([], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, getEffectiveGuests);
+    expect(wsClosed.some(isClosedDinner)).toBe(false);
+
+    // Open → 10 guests, no dish → under-filled warning appears.
+    S.closedServices = null;
+    buildRollMap();
+    const wsOpen = collectWarnings([], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, getEffectiveGuests);
+    expect(wsOpen.some(isClosedDinner)).toBe(true);
   });
 });

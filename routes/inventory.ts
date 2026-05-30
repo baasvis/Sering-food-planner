@@ -149,6 +149,84 @@ router.post('/cook-rhythm', asyncHandler(async (req: Request, res: Response) => 
   res.json({ ok: true });
 }));
 
+// ── Closed Services (single-row config; per-location service open/closed schedule) ──
+// config = { recurring: { <loc>: { <weekday>: Meal[] } }, dates?: { <iso>: [{loc, closed?, open?}] } }.
+// Demand registered to a closed service rolls onto the previous open service at the same
+// location (see public/js/core.ts getEffectiveGuests). Empty config closes nothing.
+
+const CLOSED_LOCS = new Set(['west', 'centraal']);
+const CLOSED_DAYS = new Set(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
+const CLOSED_MEALS = new Set(['lunch', 'dinner']);
+
+function cleanClosedMeals(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return Array.from(new Set(v.filter((m): m is string => typeof m === 'string' && CLOSED_MEALS.has(m))));
+}
+
+router.get('/closed-services', asyncHandler(async (_req: Request, res: Response) => {
+  const row = await prisma.closedServices.findUnique({ where: { id: 'default' } });
+  res.json(row && row.config ? row.config : { recurring: {} });
+}));
+
+router.post('/closed-services', asyncHandler(async (req: Request, res: Response) => {
+  const inRec = (req.body && req.body.recurring) as Record<string, unknown> | undefined;
+  if (!inRec || typeof inRec !== 'object' || Array.isArray(inRec)) {
+    return res.status(400).json({ error: 'Expected { recurring: { <loc>: { <weekday>: Meal[] } } }' });
+  }
+  // Sanitize recurring: known locs/weekdays only, meals filtered + deduped, empties dropped.
+  const recurring: Record<string, Record<string, string[]>> = {};
+  for (const loc of Object.keys(inRec)) {
+    if (!CLOSED_LOCS.has(loc)) continue;
+    const byDay = inRec[loc] as Record<string, unknown> | undefined;
+    if (!byDay || typeof byDay !== 'object') continue;
+    for (const day of Object.keys(byDay)) {
+      if (!CLOSED_DAYS.has(day)) continue;
+      const meals = cleanClosedMeals((byDay as Record<string, unknown>)[day]);
+      if (meals.length) {
+        if (!recurring[loc]) recurring[loc] = {};
+        recurring[loc][day] = meals;
+      }
+    }
+  }
+  // Sanitize per-date overrides: merge to exactly one override per (date, loc).
+  const dates: Record<string, { loc: string; closed?: string[]; open?: string[] }[]> = {};
+  const inDates = req.body && req.body.dates;
+  if (inDates && typeof inDates === 'object' && !Array.isArray(inDates)) {
+    for (const iso of Object.keys(inDates as Record<string, unknown>)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
+      const arr = (inDates as Record<string, unknown>)[iso];
+      if (!Array.isArray(arr)) continue;
+      const byLoc = new Map<string, { loc: string; closed?: string[]; open?: string[] }>();
+      for (const o of arr) {
+        if (!o || typeof o !== 'object') continue;
+        const loc = (o as { loc?: unknown }).loc;
+        if (typeof loc !== 'string' || !CLOSED_LOCS.has(loc)) continue;
+        const closed = cleanClosedMeals((o as { closed?: unknown }).closed);
+        const open = cleanClosedMeals((o as { open?: unknown }).open);
+        if (!closed.length && !open.length) continue;
+        const entry = byLoc.get(loc) || { loc };
+        if (closed.length) entry.closed = Array.from(new Set([...(entry.closed || []), ...closed]));
+        if (open.length) entry.open = Array.from(new Set([...(entry.open || []), ...open]));
+        byLoc.set(loc, entry);
+      }
+      if (byLoc.size) dates[iso] = Array.from(byLoc.values());
+    }
+  }
+  const config: { recurring: typeof recurring; dates?: typeof dates } = { recurring };
+  if (Object.keys(dates).length) config.dates = dates;
+  await withWriteLock(async () => {
+    await prisma.closedServices.upsert({
+      where: { id: 'default' },
+      create: { id: 'default', config: config as unknown as Prisma.InputJsonValue },
+      update: { config: config as unknown as Prisma.InputJsonValue },
+    });
+  });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'closed-services-update', 'Updated closed-service schedule');
+  broadcast(user.email, 'patch', { user: user.name, closedServices: config });
+  res.json({ ok: true });
+}));
+
 // ── Prep Checklist ──
 
 router.get('/prep-checklist', asyncHandler(async (req: Request, res: Response) => {
