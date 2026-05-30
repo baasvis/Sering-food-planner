@@ -372,7 +372,12 @@ All chosen for: (1) Claude compatibility, (2) stability, (3) readability by non-
 ### Tutorial Maintenance Rule
 **Every time a new feature is added or an existing feature is modified, the in-app tutorial steps for that page must be updated to match.**
 
-The tutorials live in `public/js/tutorial.ts`, organised by screen name (`dashboard`, `guests`, `planner`, `recipes`, `orders`). Each step is a plain object with a `selector`, `title`, and `body`. When you add a new section to a page, add a corresponding step. When you rename or restructure something, update the step that references it. The tutorials are the first thing a new cook reads — keeping them accurate is as important as keeping the code working.
+The tutorials live in `public/js/tutorial.ts`, organised by screen name — the key must equal the screen id (the part after `screen-`): `dashboard`, `guests`, `planner`, `recipe-index`, `orders`, `competencies`, `supplies`, `finance`, `feedback-admin`. Each step is a `TutStep` object with a `selector`, `title`, and `body`, plus an optional `before()` hook. Two rules to respect when editing:
+
+- **Selectors resolve inside the active screen** (`.screen.active`). Every screen lives in the DOM at once (hidden ones are just `display:none`), so a bare class like `.ing-table` would otherwise match a hidden screen. Target elements inside the screen — not the top bar or FABs.
+- **Tabbed content uses `before()`.** A step can carry a `before()` that switches a sub-tab (or otherwise reveals its element) so the tour can walk through tabbed views — see the Week Plan and Orders tours. `before()` must be idempotent (it also runs when stepping back), and the user's original sub-tab is restored when the tour ends. A step whose element is absent is silently skipped, so conditional UI (director-only buttons, Hanos buttons, empty states) is safe to reference.
+
+When you add a new section to a page, add a corresponding step; when you rename or restructure something, update the step that references it. The tutorials are the first thing a new cook reads — keeping them accurate is as important as keeping the code working.
 
 ---
 

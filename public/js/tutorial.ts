@@ -1,22 +1,67 @@
-import { S, NAV_SCREENS } from './state';
+import { S } from './state';
+import { setPlannerSubTab } from './planner';
+import { switchOrdersTab, getOrdersTab } from './orders';
 
 // ── TUTORIAL SYSTEM ─────────────────────────────────────────────────────────
-// Step-by-step walkthrough for each screen. Spotlights one element at a time
-// with a tooltip. Language is intentionally plain — written for a brand new cook.
+// The "?" button (bottom-right, "How does this page work?") runs a step-by-step
+// walkthrough of the current screen. Each step spotlights one element and shows
+// a plain-language tooltip — written for a brand new cook.
+//
+// Two mechanics worth knowing:
+//   • Selectors are resolved *inside the active screen* (`.screen.active`). Every
+//     screen lives in the DOM at once (hidden ones are just display:none), so a
+//     bare class like `.ing-table` would otherwise match a hidden screen. Keep
+//     selectors relative to the screen — don't target the top bar or FABs.
+//   • A step may carry a `before()` hook that switches a sub-tab (or otherwise
+//     reveals its element) so the tour can walk through tabbed content — see the
+//     Week Plan and Orders tours. `before()` must be idempotent (it also runs
+//     when stepping back). The original sub-tab is restored when the tour ends.
 //
 // ⚠️  MAINTENANCE RULE (see DESIGN.md §6):
-//     Any time a new feature is added or an existing one changes, update the
-//     relevant steps array below to match.
+//     Any time a feature is added or changed, update that screen's steps below to
+//     match. Keys must equal the screen id (the part after `screen-`):
+//     dashboard, guests, planner, recipe-index, orders, competencies, supplies,
+//     finance, feedback-admin.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const TUTORIALS = {
+export interface TutStep {
+  /** CSS selector, resolved within the active screen. */
+  selector: string;
+  title: string;
+  body: string;
+  /** Optional: reveal this step's element first (e.g. switch to its sub-tab).
+   *  Runs on both Next and Back, so it must be idempotent. */
+  before?: () => void;
+}
+
+// Switch a sub-tab only when not already there, so stepping through several
+// steps on the same tab doesn't re-render (and flash) the screen each time.
+function goPlannerTab(tab: string) { if (S.plannerSubTab !== tab) setPlannerSubTab(tab); }
+function goOrdersTab(tab: string)  { if (getOrdersTab() !== tab) switchOrdersTab(tab); }
+
+export const TUTORIALS: Record<string, TutStep[]> = {
 
   // ── DASHBOARD ──────────────────────────────────────────────────────────────
   dashboard: [
     {
-      selector: '.dash-tab-bar',
-      title: 'Your kitchen',
-      body: "You're looking at one location at a time. Tap here to switch between Sering West and Sering Centraal.",
+      selector: '.dash-meal-toggle',
+      title: 'Lunch or Dinner',
+      body: "Everything on this screen follows this switch — the menu, the guest count, what to cook and what to chop. It flips to dinner automatically later in the day, but you can tap to change it any time.",
+    },
+    {
+      selector: '#dash-menu-card',
+      title: "Today's menu",
+      body: "Every batch on the menu for the meal you picked, grouped by type. Allergens are listed on each one so front-of-house always knows what's inside.",
+    },
+    {
+      selector: '.dash-starch-meal-summary',
+      title: 'Rice or pasta',
+      body: "Open any main on the menu and tap Rice or Pasta — the total kilos to cook add up right here, so there's no mental maths.",
+    },
+    {
+      selector: '.dash-guest-big',
+      title: 'Guests expected',
+      body: "How many people are expected for this meal — you set these in the Guests tab, and they scale every recipe. The graph below shows when they arrive, with a 'Now' line and the busiest moment marked so you can time your plating.",
     },
     {
       selector: '.ritual-panel',
@@ -24,49 +69,34 @@ export const TUTORIALS = {
       body: "This is your guide for the day at this location. It shows what to do and when. The step for right now is highlighted, and steps turn red if they are late. Tap a step to see why we do it. Some steps tick themselves; tap the box on the others.",
     },
     {
-      selector: '#dash-guests-card',
-      title: 'Guests today',
-      body: "How many people are eating lunch and dinner today. You set these numbers in the Guests tab — they update here automatically.",
-    },
-    {
-      selector: '#dash-flow-card',
-      title: 'Guest flow',
-      body: "A graph showing the estimated number of guests arriving per 5 minutes. Toggle between Lunch and Dinner to see each service. The peak label shows the busiest moment — plan your plating around it.",
-    },
-    {
-      selector: '#dash-menu-card',
-      title: "Today's menu",
-      body: "Every batch planned for today. Allergens are listed so front-of-house always knows what's in each batch.",
-    },
-    {
-      selector: '.dash-starch-picker',
-      title: 'Pick a starch',
-      body: "For each main batch, tap Rice or Pasta. The total kilos to cook will appear below the meal — no guessing or mental maths needed.",
-    },
-    {
       selector: '#dash-stock-card',
       title: "What's in stock",
-      body: "A snapshot of all cooked food on hand at this location. Shows each batch with its type, liters in stock, and whether it's frozen. Handy for arriving at a location and seeing what's available at a glance.",
+      body: "All cooked food on hand at this location, grouped by type with frozen split out. The chips show when each kitchen last counted its stock; the buttons open the cooked-food inventory and start an ingredient stocktake.",
     },
     {
-      selector: '#dash-heatup-card',
-      title: 'What to heat up',
-      body: "These batches are already fully cooked. Your only job here is to reheat them in time for service — no cooking needed.",
+      selector: '#dash-supplies-card',
+      title: 'Toppings & bread',
+      body: "Stock versus demand for your toppings, sides and bread — a red number means you're short — plus the cost they add per guest. 'Manage' opens the full Toppings & bread screen.",
+    },
+    {
+      selector: '.tcard',
+      title: 'Pack for Centraal',
+      body: "When food needs to travel to Centraal, this card lists what to send. Confirm the amounts once everything's cooked and it moves onto the Transport list.",
     },
     {
       selector: '#dash-cook-card',
       title: 'What to cook',
-      body: "These batches still need cooking. They're split into today's lunch, today's dinner, and anything being batch-cooked for upcoming days. Tick each off when done.",
+      body: "Batches still to cook for this meal. Tick one off to record it as cooked — you'll pick the kitchen, then confirm the recipe.",
     },
     {
-      selector: '#dash-prep-card',
+      selector: '#dash-prep-list',
       title: 'What to chop',
-      body: "Fresh ingredients that need prepping today (and tomorrow). Tap each one to tick it off — it saves automatically and resets at midnight.",
+      body: "Fresh ingredients to prep for today and tomorrow. Tap each one to tick it off — it saves automatically and resets at midnight.",
     },
     {
-      selector: '.dash-team-float',
-      title: "Team todo's",
-      body: "Tap this button to jot down extra tasks for the team — like 'clean walk-in' or 'fix label printer'. Tick them off when done.",
+      selector: '#custom-todo-input',
+      title: 'Team to-dos',
+      body: "Jot down extra jobs for the team — like 'clean the walk-in' or 'fix the label printer'. Type and hit Add, then tick them off when done.",
     },
   ],
 
@@ -74,23 +104,33 @@ export const TUTORIALS = {
   guests: [
     {
       selector: '.gt-header',
-      title: 'The week',
-      body: "You're looking at one week at a time. Use the arrows to jump forward or back, or tap Today to come back to the current week.",
+      title: 'Your week',
+      body: "You're looking at a rolling 7-day window. Use the arrows to move a day at a time, or tap Today to jump back to now.",
     },
     {
       selector: '.guest-table',
-      title: 'Guest count table',
-      body: "Each column is one day. Each row is lunch or dinner. Tap any number to edit it — just type the new headcount and tap away to save.",
+      title: 'Guest counts',
+      body: "Each column is a day; the two rows are lunch and dinner. These numbers flow straight to the Dashboard and scale every recipe automatically.",
     },
     {
       selector: '.gt-input',
-      title: 'Edit a number',
-      body: "Type the expected number of guests for that meal. These numbers flow directly to the Dashboard and are used to scale all recipes automatically.",
+      title: 'Set a number',
+      body: "Tap any cell and type the expected headcount, then tap away to save. The grey ~number underneath is the prediction from past weeks, so you can see if you're above or below normal.",
+    },
+    {
+      selector: '[data-testid="apply-predictions-btn"]',
+      title: 'Fill from history',
+      body: "Once there's enough history, this fills the whole window with predicted counts in one tap — then you just tweak the days you know will be busier or quieter.",
+    },
+    {
+      selector: '.gt-upload-card',
+      title: 'Import from the till',
+      body: "Drop a Tebi or Lightspeed export here to build guest history automatically — the app works out the format for you. Counts also fill in on their own from the daily Tebi sync.",
     },
     {
       selector: '.gt-total-cell',
-      title: 'Weekly totals',
-      body: "The total column adds up guests across the whole week. Useful for spotting heavy or light weeks at a glance.",
+      title: 'Totals',
+      body: "The totals add up guests per day and across the whole week — handy for spotting a heavy or quiet week at a glance.",
     },
   ],
 
@@ -98,57 +138,94 @@ export const TUTORIALS = {
   planner: [
     {
       selector: '.sub-tab-bar',
-      title: 'Plan views',
-      body: "Three views: the weekly menu overview, an inventory check, and transport between locations. Start with Overview.",
+      title: 'Five views',
+      body: "Plan Sering West or Sering Centraal one kitchen at a time, see food set To Transport between kitchens, manage Caterings, or open Overview for every batch in one list. I'll walk you through each.",
+    },
+    {
+      selector: '[data-testid="new-batch-btn"]',
+      title: 'Make a new batch',
+      body: "A batch is one container of food. Start one here, then place it on the days it's served.",
+      before: () => goPlannerTab(S.currentLoc),
     },
     {
       selector: '.week-grid',
-      title: 'The weekly menu',
-      body: "Each column is one day, split into lunch and dinner. This is where you plan what gets served and when.",
+      title: 'The week',
+      body: "Each column is a day, split into lunch and dinner. There's a separate calendar for soups, mains and desserts so nothing gets lost.",
+      before: () => goPlannerTab(S.currentLoc),
     },
     {
       selector: '.dish-chip',
       title: 'A planned batch',
-      body: "Each chip is one batch assigned to that meal. Colours show the type — green is soup, blue is main, purple is dessert.",
+      body: "Each chip is one batch sitting in a slot. The colour shows the type — green for soup, blue for main, purple for dessert.",
     },
     {
       selector: '.add-slot-btn',
-      title: 'Add a batch',
-      body: "Tap + to add a batch to this meal. You'll pick from your recipe library. A batch can appear on multiple days.",
+      title: 'Fill a slot',
+      body: "Tap + on any meal to drop a batch into it. The same batch can serve several days in a row.",
+      before: () => goPlannerTab(S.currentLoc),
     },
     {
-      selector: '.type-dish-list',
-      title: 'Unscheduled batches',
-      body: "Batches that aren't on the plan yet live here. Drag them into the grid — or use the + button on any slot.",
+      selector: '.batch-pool-toggle',
+      title: 'Unplaced batches',
+      body: "Batches that exist but aren't on the calendar yet wait in these pools, grouped by type. Open one and drag a batch up into the grid.",
+    },
+    {
+      selector: '.btn-fix-menu',
+      title: 'Fix my menu',
+      body: "On the West tab, this fills the gaps for you — it generates placeholder batches for everything that still needs cooking and slots them in. The Cook rules and Equipment buttons next to it tell it how much to make at once.",
+      before: () => goPlannerTab('west'),
+    },
+    {
+      selector: '.catering-layout',
+      title: 'Caterings',
+      body: "Plan one-off catering jobs here — create the event on the left, then drag dishes onto it from the list on the right.",
+      before: () => goPlannerTab('caterings'),
+    },
+    {
+      selector: '#transport-item-input',
+      title: 'Between kitchens',
+      body: "Food on its way from one kitchen to another shows here as a shipment you mark 'arrived' on the other side. You can also jot free-text items to remember to bring along.",
+      before: () => goPlannerTab('transport'),
+    },
+    {
+      selector: '.filter-bar',
+      title: 'Everything at once',
+      body: "Overview lists every batch across both kitchens. Filter by location or storage and sort to find anything fast.",
+      before: () => goPlannerTab('overview'),
     },
   ],
 
   // ── RECIPES ────────────────────────────────────────────────────────────────
   'recipe-index': [
     {
+      selector: '#ri-search-input',
+      title: 'Find a recipe',
+      body: "Type here to filter the list by recipe name or allergen as you go.",
+    },
+    {
       selector: '.ri-filter-bar',
       title: 'Filter by type',
-      body: "Quickly narrow the list to just soups, mains, or desserts. Use the search box to find a recipe by name.",
+      body: "Narrow the list to just soups, mains or desserts. 'All types' shows everything.",
     },
     {
-      selector: '.ri-btn-group',
-      title: 'Create or import',
-      body: "'Create recipe' opens the guided editor where you build a recipe step by step — ingredients, method, storage. 'Import from Sheet' pulls in a recipe from the old Google Sheets format.",
+      selector: '[data-testid="recipe-create-btn"]',
+      title: 'Build a recipe',
+      body: "Opens the step-by-step editor: add ingredients from the database, the method, storage and serving size. Allergens, cost and nutrition fill in automatically.",
     },
     {
-      selector: '.re-card',
-      title: 'Recipe cards',
-      body: "New recipes show as cards with cost, allergens, and quick actions: View (read-only detail), Edit (open the editor), Menu (add to this week's plan), Delete.",
+      selector: '[data-testid="recipe-ai-btn"]',
+      title: 'Draft with AI',
+      body: "Describe a dish and the assistant drafts a full recipe you can tweak and save. (Only the director sees this button.)",
     },
     {
       selector: '.ri-table',
-      title: 'Legacy recipes',
-      body: "Recipes imported from Google Sheets appear in this table. They still work for batch planning. Over time, recreate them with 'Create recipe' for full features.",
+      title: 'Your recipes',
+      body: "Every recipe lives here — click a column heading to sort, or a recipe's name to view it. Each row has Edit, + Menu to add it to this week's plan, and ✕ to delete.",
     },
     {
       selector: '.allergen-pill',
       title: 'Allergens',
-      body: "Allergen tags appear on every recipe. New recipes auto-detect allergens from ingredients in the database — no manual entry needed.",
+      body: "Allergen tags show on every recipe, detected automatically from its ingredients — no manual entry needed.",
     },
   ],
 
@@ -156,71 +233,220 @@ export const TUTORIALS = {
   orders: [
     {
       selector: '.order-tab-bar',
-      title: 'Order views',
-      body: "Four ways to see what needs ordering: this week's batch ingredients, your standard stock items, a combined supplier list, and the full ingredient database.",
+      title: 'Four views',
+      body: "Four ways to see what to buy: a Combined order to send your supplier, your Standard stock list, this week's Batch ingredients, and the full Ingredient database. I'll show each one.",
     },
     {
-      selector: '.order-tab-btn',
+      selector: '.ing-table',
       title: 'Combined order',
-      body: "The combined view merges everything into one clean list — that's what you copy and send to your supplier. Hit 'Do stocktake' to walk through storage areas and count stock. Empty fields mean 'not counted', entering 0 means 'counted but nothing there'.",
+      body: "Everything you need merged into one list, grouped by storage area and shown in supplier units. The 'To order' column is what to actually buy: what the recipes need minus what's already in stock. Copy it and send it off.",
+      before: () => goOrdersTab('combined'),
+    },
+    {
+      selector: '[data-testid="stocktake-start-btn"]',
+      title: 'Count your stock',
+      body: "Walk storage area by area and count what's on the shelf. An empty box means 'not counted'; typing 0 means 'counted, none there'. Your counts feed straight into the 'To order' column.",
+      before: () => goOrdersTab('combined'),
+    },
+    {
+      selector: '.hanos-bulk-btn',
+      title: 'Order from Hanos',
+      body: "If Hanos is connected for this kitchen, these 🛒 buttons push items straight into your Hanos cart — one item, or a whole storage group at once.",
     },
     {
       selector: '.batch-toggle-list',
       title: 'Batch ingredients',
-      body: "Toggle batches on or off to see what ingredients they need. Only batches at the current location with recipe data appear here. The coloured dots in the breakdown column show how much each batch contributes.",
-    },
-    {
-      selector: '.ing-table',
-      title: 'Ingredient table',
-      body: "Each row is one ingredient. The 'To order' column tells you exactly how much to buy, based on what the recipes need minus what you already have in stock.",
+      body: "Switch individual batches on or off to see exactly what they need. Only batches at this kitchen with recipe data appear; the coloured dots show how much each batch contributes.",
+      before: () => goOrdersTab('batches'),
     },
     {
       selector: '#si-search-input',
       title: 'Standard stock',
-      body: "Search here to add items to your regular order list — things you always keep stocked regardless of the weekly menu, like oil, salt, or cleaning supplies.",
+      body: "Your always-in-stock items — oil, salt, cleaning supplies — kept regardless of the weekly menu. Search to add one; the amount to order is worked out from your target minus what's on hand.",
+      before: () => goOrdersTab('standard'),
+    },
+    {
+      selector: '.ing-filter-bar',
+      title: 'Ingredient database',
+      body: "The full catalogue behind everything — prices, suppliers, order codes, storage areas and allergens. This is also where supplier price-list uploads land.",
+      before: () => goOrdersTab('ingredientDb'),
+    },
+  ],
+
+  // ── TRAINING (competencies) ─────────────────────────────────────────────────
+  competencies: [
+    {
+      selector: '.comp-header',
+      title: 'Training board',
+      body: "This tracks who's been taught what. A 'chunk' is one skill or station task. You add people, log teachings, and see at a glance who still needs what.",
+    },
+    {
+      selector: '[data-testid="comp-add-person"]',
+      title: 'Add a name',
+      body: "Put a new cook or learner on the board so you can start tracking their skills.",
+    },
+    {
+      selector: '.comp-grid-wrap',
+      title: 'Who knows what',
+      body: "Rows are people, columns are skills. A green cell was taught recently; a blank cell means it hasn't been taught yet — that's your cue to teach it.",
+    },
+    {
+      selector: '[data-testid="comp-cell"]',
+      title: 'Log a teaching',
+      body: "Tap any cell to record that someone was taught that skill — pick who taught it and the date. Tap a person's name or a column heading to open their full history.",
+    },
+    {
+      selector: '.comp-ledger',
+      title: 'Recent teachings',
+      body: "A running list of the latest teachings across the team, newest first.",
+    },
+  ],
+
+  // ── TOPPINGS & BREAD (supplies) ──────────────────────────────────────────────
+  supplies: [
+    {
+      selector: '.screen-header',
+      title: 'Toppings & bread',
+      body: "Track the accompaniments — toppings, sides, sauces and bread — separately from your main batches, so you always know how much to make versus what's already in stock.",
+    },
+    {
+      selector: '[data-testid="supplies-new"]',
+      title: 'Add an item',
+      body: "Create a new topping, side or bread. Standard items scale with guest numbers (like '1 bread per 10 guests'); one-off items are a fixed batch you use up over time.",
+    },
+    {
+      selector: '#supplies-results',
+      title: 'Stock vs demand',
+      body: "Each item shows stock at each kitchen against the demand for the next few days — a red number means you're short — plus the cost it adds per guest. After you make a batch, hit 'Log prep' on its row to add it to stock.",
+    },
+    {
+      selector: '#sup-search',
+      title: 'Find & tidy',
+      body: "Search by name to jump to an item, or tick 'Include archived' to bring back ones you've retired.",
+    },
+  ],
+
+  // ── FINANCE ──────────────────────────────────────────────────────────────────
+  finance: [
+    {
+      selector: '.fin-header',
+      title: 'Week & sync',
+      body: "All the numbers here come from the Tebi till. Use the arrows to pick a week, and 'Sync from Tebi' to pull in the latest takings.",
+    },
+    {
+      selector: '.fin-month-summary',
+      title: 'This month',
+      body: "Totals for the whole month around the week you're viewing: gross (with VAT) and net (without), the number of sales, and covers served.",
+    },
+    {
+      selector: '.fin-chart-section',
+      title: 'Day by day',
+      body: "Gross takings for each day of the selected week, with today highlighted.",
+    },
+    {
+      selector: '.fin-table-section',
+      title: 'By location',
+      body: "The same week broken down per kitchen — Sering West, Centraal and TestTafel — with a weekly total on the right.",
+    },
+    {
+      selector: '.fin-product-filters',
+      title: 'Filter the breakdown',
+      body: "Below this, drill into what actually sold. Filter by service (morning, lunch, dinner, bar…) and by location.",
+    },
+    {
+      selector: '.fin-product-table-wrap',
+      title: 'Top products',
+      body: "Your best-selling products by revenue, with their category and share of the total.",
+    },
+  ],
+
+  // ── FEEDBACK ─────────────────────────────────────────────────────────────────
+  'feedback-admin': [
+    {
+      selector: '#feedback-admin-header',
+      title: 'The feedback inbox',
+      body: "Everything submitted through the floating Feedback button lands here. 'Copy for Claude' grabs all of it as text to paste into a Claude chat for help acting on it.",
+    },
+    {
+      selector: '#feedback-filter-bar',
+      title: 'Filter by type',
+      body: "Jump to ideas, issues, confusing bits, nice notes or general feedback — each with a live count. By default only open items show; the 'Show processed' toggle reveals the ones already marked done.",
+    },
+    {
+      selector: '.feedback-card',
+      title: 'One piece of feedback',
+      body: "Each card shows the type, which screen it came from, and who sent it when. Hit Done once you've handled it — the count at the top tracks what's left.",
     },
   ],
 };
 
-// ── State ─────────────────────────────────────────────────────────────────────
-export let _tutScreen = null;
-export let _tutStep   = 0;
+// ── State ───────────────────────────────────────────────────────────────────
+export let _tutScreen: string | null = null;
+export let _tutStep = 0;
+// Set when a tour switches sub-tabs, so we can put the screen back on teardown.
+let _tutRestore: (() => void) | null = null;
 
-// ── Public entry points ───────────────────────────────────────────────────────
+// ── Public entry points ──────────────────────────────────────────────────────
 
 export function startTutorial() {
   const active = document.querySelector('.screen.active');
   if (!active) return;
   const name = active.id.replace('screen-', '');
-  if (!TUTORIALS[name] || !TUTORIALS[name].length) return;
+  const steps = TUTORIALS[name];
+  if (!steps || !steps.length) return;
   _tutScreen = name;
-  _tutStep   = 0;
+  _tutStep = 0;
+  // Remember where the user was, so the auto-walk puts sub-tabs back at the end.
+  _tutRestore = null;
+  if (name === 'planner') { const t = S.plannerSubTab; _tutRestore = () => goPlannerTab(t); }
+  else if (name === 'orders') { const t = getOrdersTab(); _tutRestore = () => goOrdersTab(t); }
   _tutAdvance();
 }
 
 export function tutNext() { _tutStep++; _tutAdvance(); }
 export function tutPrev() { _tutStep = Math.max(0, _tutStep - 1); _tutAdvance(); }
-export function tutSkip() { _tutTeardown(); }
+export function tutSkip() { _tutFinish(); }
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-export function _tutAdvance() {
-  _tutTeardown();
-  const steps = TUTORIALS[_tutScreen];
-  if (!steps || _tutStep >= steps.length) { _tutTeardown(); return; }
-
-  const step = steps[_tutStep];
-  const el   = document.querySelector(step.selector);
-
-  // Skip steps whose element isn't in the DOM (e.g. no starch picker if no mains)
-  if (!el) { _tutStep++; _tutAdvance(); return; }
-
-  // Scroll element into view, then render overlay after scroll settles
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  setTimeout(() => _tutRender(el, step, _tutStep + 1, steps.length), 320);
+// Resolve a step's selector inside the screen that's currently showing, so a
+// class name shared with a hidden screen can't be matched by mistake.
+function _tutFindEl(selector: string): Element | null {
+  const root = document.querySelector('.screen.active');
+  return root ? root.querySelector(selector) : null;
 }
 
-export function _tutRender(el: any, step: any, current: any, total: any) {
+// Poll briefly for an element — used after a `before` hook that may have just
+// re-rendered (sometimes asynchronously, e.g. a tab that lazy-loads its data).
+function _tutWaitFor(selector: string, cb: (el: Element | null) => void, tries = 16) {
+  const el = _tutFindEl(selector);
+  if (el || tries <= 0) { cb(el); return; }
+  setTimeout(() => _tutWaitFor(selector, cb, tries - 1), 60);
+}
+
+export function _tutAdvance() {
+  _tutTeardown();
+  const steps = _tutScreen ? TUTORIALS[_tutScreen] : null;
+  if (!steps || _tutStep < 0 || _tutStep >= steps.length) { _tutFinish(); return; }
+
+  const step = steps[_tutStep];
+  if (step.before) { try { step.before(); } catch (e: unknown) { /* a missing tab shouldn't break the tour */ } }
+
+  const show = (el: Element | null) => {
+    // Skip steps whose element isn't on this screen — e.g. no mains → no starch
+    // summary, no Hanos creds → no Hanos button, non-director → no AI button.
+    if (!el) { _tutStep++; _tutAdvance(); return; }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => _tutRender(el, step, _tutStep + 1, steps.length), 320);
+  };
+
+  // Only poll when a `before` ran (the DOM may still be settling). Otherwise the
+  // element is either here now or never — skip instantly, no needless wait.
+  if (step.before) _tutWaitFor(step.selector, show);
+  else show(_tutFindEl(step.selector));
+}
+
+export function _tutRender(el: Element, step: TutStep, current: number, total: number) {
   const pad  = 10;
   const rect = el.getBoundingClientRect();
 
@@ -270,4 +496,13 @@ export function _tutRender(el: any, step: any, current: any, total: any) {
 
 export function _tutTeardown() {
   document.getElementById('tut-overlay')?.remove();
+}
+
+// Final teardown when the tour ends (Skip, Done, or running off the end):
+// remove the overlay and restore any sub-tab the auto-walk switched away from.
+function _tutFinish() {
+  _tutTeardown();
+  if (_tutRestore) { try { _tutRestore(); } catch (e: unknown) { /* ignore */ } _tutRestore = null; }
+  _tutScreen = null;
+  _tutStep = 0;
 }

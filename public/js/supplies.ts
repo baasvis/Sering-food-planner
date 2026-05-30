@@ -67,7 +67,7 @@ export async function renderSupplies(): Promise<void> {
         <label style="font-size:12px;display:flex;gap:4px;align-items:center;">
           <input type="checkbox" id="sup-incl-arch" ${_includeArchived ? 'checked' : ''} onchange="suppliesToggleArchived()" /> Include archived
         </label>
-        <button class="btn btn-primary" onclick="suppliesOpenNewKindPicker()">+ New item</button>
+        <button class="btn btn-primary" data-testid="supplies-new" onclick="suppliesOpenNewKindPicker()">+ New item</button>
       </div>
     </div>
     <div id="supplies-results"></div>
