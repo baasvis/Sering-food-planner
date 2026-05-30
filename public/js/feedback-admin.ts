@@ -50,7 +50,7 @@ function updateFeedbackUI(el?: HTMLElement | null) {
   const typeIcons: Record<string, string> = { idea: '&#128161;', issue: '&#128027;', confusing: '&#128566;', nice: '&#128077;', general: '&#128172;' };
 
   el.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+    <div id="feedback-admin-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
       <h2 style="margin:0;">Feedback (${unprocessedCount} open${processedCount ? `, ${processedCount} done` : ''})</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn${feedbackShowProcessed ? ' btn-purple' : ''}" style="font-size:12px;" onclick="toggleFeedbackProcessed()">
@@ -62,7 +62,7 @@ function updateFeedbackUI(el?: HTMLElement | null) {
       </div>
     </div>
 
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">
+    <div id="feedback-filter-bar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">
       ${['all', 'idea', 'issue', 'confusing', 'nice', 'general'].map(t =>
         `<button class="btn${feedbackFilter === t ? ' btn-purple' : ''}" style="font-size:12px;padding:5px 12px;" onclick="setFeedbackFilter('${t}')">
           ${t === 'all' ? 'All' : (typeIcons[t] || '') + ' ' + (typeLabels[t] || t)} (${counts[t] || 0})

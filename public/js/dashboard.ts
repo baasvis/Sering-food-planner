@@ -981,7 +981,7 @@ function renderSuppliesCard(loc: Location, todayStr: string): string {
         <strong>&euro;${costPerGuest.toFixed(2)}</strong>
       </div>`
     : '';
-  return `<div class="dash-card">
+  return `<div class="dash-card" id="dash-supplies-card">
     <div class="dash-card-title">
       <span class="dash-card-icon">🥬</span> Toppings &amp; bread
       <button class="btn btn-sm" style="margin-left:auto;" onclick="showScreen('supplies')">Manage</button>
@@ -1056,7 +1056,7 @@ export function renderDashboardContent() {
 
     <!-- ═══ SERVICE BLOCK ═══ -->
     <div class="dash-service-cols">
-      <div class="dash-card">
+      <div class="dash-card" id="dash-menu-card">
         <div class="dash-card-title">${meal === 'lunch' ? '☀️' : '🌙'} ${meal.charAt(0).toUpperCase() + meal.slice(1)} Menu</div>
         ${sortedMenu.length === 0
           ? `<div class="dash-empty">No batches planned for ${meal}</div>`
@@ -1089,7 +1089,7 @@ export function renderDashboardContent() {
       <!-- LEFT: TODAY RITUAL + STOCK + TRANSPORT -->
       <div class="dash-col">
         ${renderTodayPanel()}
-        <div class="dash-card">
+        <div class="dash-card" id="dash-stock-card">
           <div class="dash-card-title">
             <span class="dash-card-icon">📦</span> Stock
             <span class="dash-stock-total">${stockBatches.length} batches — ${totalStock} L</span>
@@ -1134,7 +1134,7 @@ export function renderDashboardContent() {
       <!-- RIGHT: CHEF TO-DOS -->
       <div class="dash-col">
         <!-- WHAT TO COOK -->
-        <div class="dash-card">
+        <div class="dash-card" id="dash-cook-card">
           <div class="dash-card-title"><span class="dash-card-icon">👨‍🍳</span> What to Cook</div>
           ${cookDishes.length === 0
             ? `<div class="dash-empty">All cooked for ${meal} 🎉</div>`

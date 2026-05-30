@@ -382,6 +382,11 @@ export function switchOrdersTab(tab: string) {
   renderOrders();
 }
 
+/** Current Orders sub-tab. Used by the tutorial to restore the user's tab after the walkthrough. */
+export function getOrdersTab(): string {
+  return currentOrdersTab;
+}
+
 /** Reset batch toggles so they re-read from batch.orderFor on next render (called on SSE patch) */
 export function resetBatchToggles() {
   batchIngredientTogglesInitialized = false;
