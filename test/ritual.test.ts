@@ -125,19 +125,27 @@ describe('computeRitual — West', () => {
     expect(stepOf(stale, 'inv-lunch').done).toBe(false);
   });
 
-  it('treats a CLOSED inventory window as satisfied (no overdue nag)', () => {
-    // Past the 14:30 backstop, no inventory done → normally overdue.
+  it('hides window-specific steps when that service window is closed', () => {
+    // Open: West lunch inventory is present (and overdue past 14:30).
     const open = computeRitual(mkCtx({ now: new Date(2026, 4, 25, 14, 45) }));
+    expect(open.steps.some(s => s.key === 'inv-lunch')).toBe(true);
     expect(stepOf(open, 'inv-lunch').status).toBe('overdue');
-    // But if lunch is closed today, the step is done/quiet, never overdue —
-    // and dinner (still open) is unaffected.
-    const closed = computeRitual(mkCtx({
+    // Lunch closed → the lunch inventory step is gone entirely; dinner stays,
+    // and the day's flow shrinks by exactly that one step.
+    const lunchClosed = computeRitual(mkCtx({
       now: new Date(2026, 4, 25, 14, 45),
       isWindowClosed: (w) => w === 'lunch',
     }));
-    expect(stepOf(closed, 'inv-lunch').done).toBe(true);
-    expect(stepOf(closed, 'inv-lunch').status).toBe('done');
-    expect(stepOf(closed, 'inv-dinner').done).toBe(false);
+    expect(lunchClosed.steps.some(s => s.key === 'inv-lunch')).toBe(false);
+    expect(lunchClosed.steps.some(s => s.key === 'inv-dinner')).toBe(true);
+    expect(lunchClosed.total).toBe(open.total - 1);
+
+    // Centraal: closing lunch hides BOTH "set up lunch service" and lunch inventory.
+    const cOpen = computeRitual(mkCtx({ loc: 'centraal', now: new Date(2026, 4, 25, 12, 0) }));
+    const cClosed = computeRitual(mkCtx({ loc: 'centraal', now: new Date(2026, 4, 25, 12, 0), isWindowClosed: (w) => w === 'lunch' }));
+    expect(cOpen.steps.some(s => s.key === 'service-lunch')).toBe(true);
+    expect(cClosed.steps.some(s => s.key === 'service-lunch')).toBe(false);
+    expect(cClosed.steps.some(s => s.key === 'inv-lunch')).toBe(false);
   });
 
   it('derives cook-underway from real cooked stock, NOT the planning cookDate', () => {
