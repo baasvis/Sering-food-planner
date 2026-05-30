@@ -706,6 +706,42 @@ describe('scoredGreedyAssignment', () => {
     expect(Math.min(...loads)).toBeGreaterThan(0);              // none starved
     expect(Math.max(...loads) - Math.min(...loads)).toBeLessThanOrEqual(2); // balanced
   });
+
+  test('use-it-up rule: ready stock is assigned before a not-yet-cooked dish, even at dinner', () => {
+    // Daan's rule (2026-05-30): already-cooked stock must be drained before any
+    // new cook is planned for the same slot. Old behaviour gave a same-day
+    // (Tue) placeholder the +SAME_DAY_DINNER edge, so it beat day-old cooked
+    // stock for the Tue dinner and the stock went to waste.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const onlyWestDinner = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 10 : 0;
+    const cooked = makeBatch({ type: 'Main course', cookDate: '04/05/2026', name: 'Cooked yesterday', inventory: [inv(100, 'west')] });
+    const phA = makeBatch({ type: 'Main course', cookDate: '05/05/2026', name: 'Placeholder A', generated: true, inventory: [] });
+    const phB = makeBatch({ type: 'Main course', cookDate: '05/05/2026', name: 'Placeholder B', generated: true, inventory: [] });
+    // One west-dinner slot holds 2: the cooked batch must take a spot; only one
+    // of the two same-day placeholders gets the remaining spot (ready wins).
+    scoredGreedyAssignment([cooked, phA, phB], window, fixedCalcRequired(1), onlyWestDinner, NO_POT_CAPS);
+    expect(cooked.services.some(s => s.meal === 'dinner' && s.date === '2026-05-05')).toBe(true);
+    const placeholdersUsed = [phA, phB].filter(p => p.services.length > 0).length;
+    expect(placeholdersUsed).toBe(1);
+  });
+
+  test('FIFO: when one peer slot is left, the OLDER cooked batch takes it', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const onlyWestDinner = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 10 : 0;
+    // West dinner already has one peer assigned → exactly one spot left.
+    const filler = makeBatch({
+      type: 'Main course', cookDate: '04/05/2026', name: 'Filler',
+      inventory: [inv(100, 'west')], services: [{ loc: 'west', date: '2026-05-05', meal: 'dinner' }],
+    });
+    const older = makeBatch({ type: 'Main course', cookDate: '02/05/2026', name: 'Older stock', inventory: [inv(100, 'west')] });
+    const newer = makeBatch({ type: 'Main course', cookDate: '04/05/2026', name: 'Newer stock', inventory: [inv(100, 'west')] });
+    scoredGreedyAssignment([filler, older, newer], window, fixedCalcRequired(1), onlyWestDinner, NO_POT_CAPS);
+    // Only one spot was open; the older (closer-to-spoiling) stock claims it.
+    expect(older.services.length).toBeGreaterThan(0);
+    expect(newer.services.length).toBe(0);
+  });
 });
 
 // ─── Algorithm: forcedAssignmentPrePass ────────────────────────────────────
