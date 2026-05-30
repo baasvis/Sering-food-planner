@@ -518,6 +518,20 @@ const SCORE = {
   SAME_LOCATION: 50,
   POT_FILL_BONUS_MAX: 30,
   ALLERGEN_DIVERSITY: 25,
+  /** Use-it-up priority (Daan's rule, 2026-05-30): a batch that is already
+   *  cooked with serveable stock — and still inside the 5-day freshness window
+   *  enforced by the hard constraints — must be drained before any not-yet-
+   *  cooked dish is planned for the same slot, even at dinner. This band lifts
+   *  every ready-stock candidate above every to-cook one (it exceeds the
+   *  largest timing advantage a same-day cook can earn, ~SAME_DAY_DINNER +
+   *  CENTRAAL_SLOT_PRIORITY), while staying below EMPTY_SLOT − HALF_FILLED_SLOT
+   *  so slot-urgency ordering inside each tier is preserved. */
+  READY_STOCK_PRIORITY: 2000,
+  /** Within the ready-stock tier, older stock ranks higher so the food closest
+   *  to spoiling is served first (FIFO). Capped well under the EMPTY/HALF gap
+   *  (max age ≈ 4 days → ≤ 240) so it only orders ready stock, never inverts
+   *  empty-vs-half-filled urgency. */
+  READY_STOCK_FIFO_PER_DAY: 60,
 };
 
 /**
@@ -651,6 +665,7 @@ function scoreCandidate(
   potCaps: Map<string, number>,
   getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
   dayCapacities: Map<string, number>,
+  todayIso: string,
 ): number {
   const { batch, slot, day, type } = c;
   let score = 0;
@@ -663,24 +678,43 @@ function scoreCandidate(
 
   // totalStock = anything in inventory or in-flight shipments (including
   // frozen) — used for the "is this a placeholder?" check downstream.
-  // serveableStock = non-frozen — used for the "has cooked food ready
-  // for service" bonus. A frozen-only batch shouldn't get the
-  // COOKED_WITH_STOCK reward; the cook hasn't thawed it yet.
+  // serveableStock = non-frozen — i.e. food cooked and ready to serve right
+  // now. A frozen-only batch shouldn't count as ready; the cook hasn't thawed
+  // it yet (it's also excluded upstream by the isOnlyFrozen hard constraint).
   const totalStock = getTotalStock(batch);
   const serveableStock = getServeableTotalStock(batch);
-  if (serveableStock > 0) score += SCORE.COOKED_WITH_STOCK;
 
   const cookIso = cookDateToIso(batch.cookDate)!;
   const days = diffDaysIso(cookIso, day.isoDate);
-  if (slot.meal === 'dinner') {
-    if (days === 0) score += SCORE.SAME_DAY_DINNER;
-    else score += SCORE.PRIOR_DAY_DINNER;
+  if (serveableStock > 0) {
+    // Ready stock: already cooked, and within the 5-day freshness window
+    // (enforced by the hard constraints). Daan's rule (2026-05-30): use it up
+    // before planning any new cook — even at dinner — OLDEST first, so cooked
+    // food isn't wasted while fresh dishes grab the prime slots. The priority
+    // band lifts every ready candidate above every to-cook one; the per-day
+    // age bonus (relative to today, so it ranks dishes without biasing which
+    // slot a given dish prefers) orders ready stock oldest-first. The graduated
+    // staleness penalty / 4-day surcharge below intentionally do NOT apply to
+    // ready stock: for food already in the fridge, older means MORE urgent to
+    // serve, not less.
+    score += SCORE.COOKED_WITH_STOCK;
+    score += SCORE.READY_STOCK_PRIORITY;
+    const ageDays = Math.max(0, diffDaysIso(cookIso, todayIso));
+    score += SCORE.READY_STOCK_FIFO_PER_DAY * ageDays;
   } else {
-    if (days === 0) score += SCORE.SAME_DAY_LUNCH_PENALTY;
-    else score += SCORE.PRIOR_DAY_LUNCH;
+    // Not-yet-cooked (placeholder / planned dish): freshness scoring steers
+    // when it should be cooked-and-served. Same-day dinner is ideal; same-day
+    // lunch is too early; multi-day extensions get the graduated penalties.
+    if (slot.meal === 'dinner') {
+      if (days === 0) score += SCORE.SAME_DAY_DINNER;
+      else score += SCORE.PRIOR_DAY_DINNER;
+    } else {
+      if (days === 0) score += SCORE.SAME_DAY_LUNCH_PENALTY;
+      else score += SCORE.PRIOR_DAY_LUNCH;
+    }
+    if (days > 0) score += SCORE.STALE_PENALTY_PER_DAY * days;
+    if (days >= 4) score += SCORE.STALE_DAY_4_SURCHARGE;
   }
-  if (days > 0) score += SCORE.STALE_PENALTY_PER_DAY * days;
-  if (days >= 4) score += SCORE.STALE_DAY_4_SURCHARGE;
 
   // Workload-overload escape: applies only to fresh placeholder candidates
   // (committing this slot would make the placeholder's cook day busier).
@@ -796,7 +830,7 @@ export function forcedAssignmentPrePass(
           }
           if (eligible.length !== 1) continue;
           const c = eligible[0];
-          const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn, dayCapacities);
+          const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn, dayCapacities, todayIso);
           if (score < FORCED_ASSIGN_MIN_SCORE) continue;
           c.batch.services.push({ loc: c.slot.loc, date: c.day.isoDate, meal: c.slot.meal });
           committed++;
@@ -839,7 +873,7 @@ export function scoredGreedyAssignment(
           for (const batch of allBatches) {
             const c: CandidatePlace = { batch, slot, day, type };
             if (!scoredHardConstraintsOk(c, allBatches, calcReq, getGuestsFn, todayIso)) continue;
-            const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn, dayCapacities);
+            const score = scoreCandidate(c, allBatches, calcReq, potCaps, getGuestsFn, dayCapacities, todayIso);
             if (score <= 0) continue;
             // Load-balancing tie-break: when scores tie (the classic case is
             // identical sibling placeholders from one cook day — e.g. Sunday's
