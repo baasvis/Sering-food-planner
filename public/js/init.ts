@@ -7,7 +7,7 @@ import { flushUndo } from './undo';
 import { rebuildPlanner } from './core';
 import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
 import { checkSession, initGoogleSignIn } from './auth';
-import { closeModal } from './modal';
+import { closeModal, showModal } from './modal';
 import { rerenderCurrentView } from './navigate';
 
 // Re-export modal functions so existing imports from init.ts keep working
@@ -25,15 +25,53 @@ export function toggleTheme() {
 }
 
 // ── GLOBAL LOCATION SWITCH ───────────────────────────────
-export function switchGlobalLocation() {
-  const newLoc: Location = S.currentLoc === 'west' ? 'centraal' : 'west';
-  setGlobalLocation(newLoc);
+/** Inner HTML of the switcher pill: coloured dot + "Sering <Loc>" + swap hint. */
+function locTitleHtml(loc: Location): string {
+  const name = loc === 'west' ? 'West' : 'Centraal';
+  return `<span class="app-title-dot"></span>Sering <span class="app-title-loc">${name}</span><span class="app-title-swap" aria-hidden="true">⇄</span>`;
+}
 
-  // Update title
+/** Mirror the active location onto <body> so the accent colour (--loc-accent)
+ *  cascades to the top bar, bottom nav and anything else outside the title. */
+export function applyLocationTheme(loc: Location): void {
+  document.body.classList.toggle('loc-west', loc === 'west');
+  document.body.classList.toggle('loc-centraal', loc === 'centraal');
+}
+
+/** Step 1: clicking the switcher asks for confirmation — switching changes the
+ *  whole app's location context, so it shouldn't happen on an accidental tap. */
+export function confirmSwitchLocation() {
+  const target: Location = S.currentLoc === 'west' ? 'centraal' : 'west';
+  const targetName = target === 'west' ? 'West' : 'Centraal';
+  const currentName = S.currentLoc === 'west' ? 'West' : 'Centraal';
+  showModal(`
+    <div class="loc-switch-modal loc-${target}">
+      <h3>Switch location?</h3>
+      <p class="modal-note">You're currently working in <strong>Sering ${currentName}</strong>.</p>
+      <p style="margin-top:8px;">Switch the whole app to <strong class="loc-switch-target">Sering ${targetName}</strong>?</p>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn loc-switch-confirm" onclick="switchGlobalLocation('${target}')">Switch to Sering ${targetName}</button>
+      </div>
+    </div>
+  `);
+}
+
+/** Step 2: actually flip the location (called from the confirm button, which
+ *  passes the exact target it displayed so the two can't drift). Falls back to
+ *  toggling the current location if called without a valid target. */
+export function switchGlobalLocation(target?: Location) {
+  const newLoc: Location = (target === 'west' || target === 'centraal')
+    ? target
+    : (S.currentLoc === 'west' ? 'centraal' : 'west');
+  setGlobalLocation(newLoc);
+  applyLocationTheme(newLoc);
+
+  // Update the switcher pill
   const title = document.getElementById('app-title');
   if (title) {
     title.className = 'app-title ' + (newLoc === 'west' ? 'loc-west' : 'loc-centraal');
-    title.innerHTML = `Sering <span class="app-title-loc">${newLoc === 'west' ? 'West' : 'Centraal'}</span>`;
+    title.innerHTML = locTitleHtml(newLoc);
   }
 
   // Sync finance filter to new location
@@ -42,7 +80,8 @@ export function switchGlobalLocation() {
   // Rebuild storage categories for new location
   rebuildStorageCategories(newLoc);
 
-  // Re-render active screen
+  // Close the confirm modal and re-render the active screen
+  closeModal();
   rerenderCurrentView();
 }
 
@@ -55,7 +94,7 @@ export function buildNav() {
 
   // Top bar: title + nav buttons + save indicator + user menu
   topBar.innerHTML = `
-    <h1 class="app-title ${S.currentLoc === 'west' ? 'loc-west' : 'loc-centraal'}" id="app-title" onclick="switchGlobalLocation()" title="Click to switch location">Sering <span class="app-title-loc">${S.currentLoc === 'west' ? 'West' : 'Centraal'}</span></h1>
+    <h1 class="app-title ${S.currentLoc === 'west' ? 'loc-west' : 'loc-centraal'}" id="app-title" onclick="confirmSwitchLocation()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();confirmSwitchLocation();}" title="Switch location" role="button" tabindex="0">${locTitleHtml(S.currentLoc)}</h1>
     ${NAV_SCREENS.map((s: any, i: any) =>
       `<button class="nav-btn${i === 0 ? ' active' : ''}" data-screen="${s.id}" onclick="showScreen('${s.id}')">${s.topLabel}</button>`
     ).join('')}
@@ -83,6 +122,9 @@ export function buildNav() {
       <span>${s.bottomLabel}</span>
     </button>`
   ).join('');
+
+  // Mirror the active location onto <body> for the accent-colour cascade
+  applyLocationTheme(S.currentLoc);
 }
 
 // ── GLOBAL KEY HANDLERS ──────────────────────────────────

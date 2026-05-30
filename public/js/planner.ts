@@ -48,7 +48,18 @@ export function renderWeekPlan() {
   ];
   let html = `<div class="sub-tab-bar">`;
   tabs.forEach(t => {
-    html += `<button class="sub-tab ${tab === t.id ? 'active' : ''}" data-tab="${t.id}" onclick="setPlannerSubTab('${t.id}')">${t.label}</button>`;
+    // West/Centraal tabs get the location accent (dot + filled active); the
+    // Transport/Caterings/Overview tabs stay neutral. The tab matching the
+    // user's current global location also shows a "your location" caption.
+    const isLoc = (t.id === 'west' || t.id === 'centraal');
+    const locCls = isLoc ? ` sub-tab-loc loc-${t.id}` : '';
+    let label = t.label;
+    if (isLoc) {
+      const here = t.id === S.currentLoc;
+      label = `<span class="stl-main"><span class="stl-dot"></span>${t.label}</span>` +
+              (here ? `<span class="sub-tab-here-cap">your location</span>` : '');
+    }
+    html += `<button class="sub-tab ${tab === t.id ? 'active' : ''}${locCls}" data-tab="${t.id}" onclick="setPlannerSubTab('${t.id}')">${label}</button>`;
   });
   html += `</div><div id="planner-content"></div>`;
   el.innerHTML = html;
@@ -784,8 +795,8 @@ export function renderAddModal(loc: string, date: string, meal: string, existing
   // Location toggle
   const slotLocLabel = locName(loc);
   const locToggleHtml = `<div class="order-loc-bar" style="margin-bottom:10px;" id="add-modal-loc-toggle">
-    <button class="order-loc-btn${locFilter === 'west' ? ' active' : ''}" onclick="switchAddModalLoc('west')">Sering West</button>
-    <button class="order-loc-btn${locFilter === 'centraal' ? ' active' : ''}" onclick="switchAddModalLoc('centraal')">Sering Centraal</button>
+    <button class="order-loc-btn loc-west${locFilter === 'west' ? ' active' : ''}" onclick="switchAddModalLoc('west')">Sering West</button>
+    <button class="order-loc-btn loc-centraal${locFilter === 'centraal' ? ' active' : ''}" onclick="switchAddModalLoc('centraal')">Sering Centraal</button>
   </div>`;
 
   // If the modal is already open, only update the dynamic parts

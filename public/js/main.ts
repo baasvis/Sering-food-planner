@@ -23,7 +23,7 @@ import { renderFinance, loadFinanceData, loadFinanceProducts, checkSyncStatus, t
 import { openFeedback, selectFeedbackType, submitFeedback, showFeedbackFab, feedbackTypes, feedbackSelectedType } from './feedback';
 import { renderFeedbackAdmin, setFeedbackFilter, copyFeedbackForClaude, formatFeedbackDate, feedbackData, feedbackFilter, toggleFeedbackItemProcessed, toggleFeedbackProcessed } from './feedback-admin';
 import { TUTORIALS, startTutorial, tutNext, tutPrev, tutSkip } from './tutorial';
-import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, switchGlobalLocation } from './init';
+import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, switchGlobalLocation, confirmSwitchLocation } from './init';
 import { initTelemetry, trackScreenView, trackEvent, trackError } from './telemetry';
 import { executeUndo, flushUndo } from './undo';
 import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave, fixMenuGoto, fixMenuAction, openCookRhythmModal, crUpdateField, crToggleClosed, crResetDefaults, crSave } from './menu-fixer';
@@ -105,7 +105,7 @@ Object.assign(window, {
   startTutorial, tutNext, tutPrev, tutSkip,
 
   // init
-  toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, switchGlobalLocation,
+  toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, switchGlobalLocation, confirmSwitchLocation,
 
   // telemetry
   initTelemetry, trackScreenView, trackEvent, trackError,

@@ -17,6 +17,8 @@
     --blue: #185FA5;  --blue-bg:  #E6F1FB;
     --purple: #534AB7; --purple-bg: #EEEDFE;
     --gray-bg: #F1EFE8; --gray-text: #444441;
+    /* Active-location accent — overridden by .loc-west / .loc-centraal (west default) */
+    --loc-accent: var(--amber); --loc-accent-bg: var(--amber-bg);
   }
   :root.dark {
       --bg:#1c1c1a; --bg2:#252523; --bg3:#2e2e2b;
@@ -47,7 +49,7 @@
   .top-bar{background:var(--bg);border-bottom:1px solid var(--border);padding:0 16px;display:flex;align-items:center;gap:0;overflow-x:auto;flex-shrink:0;}
   .top-bar h1{font-size:15px;font-weight:600;margin-right:24px;white-space:nowrap;color:var(--text);padding:14px 0;}
   .nav-btn{padding:14px 14px;font-size:13px;font-weight:500;border:none;background:none;cursor:pointer;color:var(--text2);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s;}
-  .nav-btn.active{color:var(--text);border-bottom-color:var(--text);}
+  .nav-btn.active{color:var(--text);border-bottom-color:var(--loc-accent);}
   .nav-btn:hover:not(.active){color:var(--text);}
   .content{flex:1;padding:16px;max-width:1200px;width:100%;margin:0 auto;overflow-x:hidden;}
   .screen{display:none;}.screen.active{display:block;}
@@ -166,18 +168,58 @@
   .location-chooser-card p{font-size:0.95rem;color:var(--text2);margin-bottom:24px;}
   .location-chooser-buttons{display:flex;gap:16px;justify-content:center;}
   .loc-choose-btn{display:flex;flex-direction:column;align-items:center;gap:12px;padding:28px 36px;border:2px solid var(--border2);border-radius:var(--radius-lg);background:var(--bg2);cursor:pointer;transition:all .15s;min-width:150px;}
-  .loc-choose-btn:hover{border-color:var(--green);background:var(--green-bg);transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,0.08);}
+  .loc-choose-btn:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,0.08);}
   .loc-choose-icon{display:flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;font-size:1.3rem;font-weight:700;color:#fff;}
-  .loc-choose-west .loc-choose-icon{background:var(--green);}
-  .loc-choose-centraal .loc-choose-icon{background:var(--blue);}
+  /* West = amber, Centraal = green (canonical location colours) */
+  .loc-choose-west .loc-choose-icon{background:var(--amber);}
+  .loc-choose-centraal .loc-choose-icon{background:var(--green);}
+  .loc-choose-west:hover{border-color:var(--amber);background:var(--amber-bg);}
+  .loc-choose-centraal:hover{border-color:var(--green);background:var(--green-bg);}
   .loc-choose-label{font-size:1rem;font-weight:600;color:var(--text);}
 
-  /* ── Top-bar title as location switcher ── */
-  .app-title{cursor:pointer;transition:color .15s;user-select:none;}
-  .app-title:hover{opacity:0.8;}
-  .app-title-loc{font-weight:700;}
-  .app-title.loc-west .app-title-loc{color:var(--green);}
-  .app-title.loc-centraal .app-title-loc{color:var(--blue);}
+  /* ── Per-location accent colours (canonical: West = amber, Centraal = green) ──
+     Mirrors the planner batch tiles, location badges and service columns. The
+     accent is exposed as a CSS var on the loc-* class, so the same colour
+     cascades to everything the class wraps: <body> → top-bar + bottom-nav, the
+     switcher pill, and the switch-confirm modal (which carries the *target*
+     location's class). Built on --amber/--green so dark mode adapts for free. */
+  .loc-west{--loc-accent:var(--amber);--loc-accent-bg:var(--amber-bg);}
+  .loc-centraal{--loc-accent:var(--green);--loc-accent-bg:var(--green-bg);}
+
+  /* Accent strip along the very top edge — visible on every screen */
+  .top-bar{border-top:3px solid var(--loc-accent);}
+
+  /* ── Top-bar title doubles as the location switcher (coloured pill) ── */
+  .top-bar .app-title{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;
+    padding:5px 12px;border-radius:20px;background:var(--loc-accent-bg);
+    border:1px solid transparent;transition:border-color .15s;}
+  .top-bar .app-title:hover{border-color:var(--loc-accent);}
+  .top-bar .app-title:focus-visible{outline:2px solid var(--loc-accent);outline-offset:2px;}
+  .app-title-dot{width:9px;height:9px;border-radius:50%;background:var(--loc-accent);flex-shrink:0;}
+  .app-title-loc{font-weight:700;color:var(--loc-accent);}
+  .app-title-swap{font-size:13px;color:var(--loc-accent);opacity:.65;line-height:1;}
+  .top-bar .app-title:hover .app-title-swap{opacity:1;}
+
+  /* ── Location switch confirm modal (wrapper carries the target loc-* class) ── */
+  .loc-switch-target{color:var(--loc-accent);font-weight:700;}
+  .loc-switch-confirm{background:var(--loc-accent);border-color:var(--loc-accent);color:#fff;}
+  .loc-switch-confirm:hover{background:var(--loc-accent);opacity:.88;}
+
+  /* ── Reusable location accents (consume --loc-accent from a loc-* ancestor) ── */
+  /* Inline text tinted to the active location, bold so it reads at a glance
+     (e.g. orders headers, guest-card names/totals) */
+  .loc-accent-text{color:var(--loc-accent);font-weight:700;}
+  /* Location sub-tabs (planner West/Centraal): coloured dot + accent-filled active,
+     with an optional "your location" caption under the tab matching S.currentLoc.
+     Scoped via .sub-tab-loc so the shared neutral .sub-tab elsewhere is untouched. */
+  .sub-tab-loc{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;}
+  .sub-tab-loc .stl-main{display:inline-flex;align-items:center;gap:6px;}
+  .sub-tab-loc .stl-dot{width:7px;height:7px;border-radius:50%;background:var(--loc-accent);flex-shrink:0;}
+  .sub-tab-loc.active{background:var(--loc-accent);border-color:var(--loc-accent);color:#fff;}
+  .sub-tab-loc.active .stl-dot{background:#fff;}
+  .sub-tab-here-cap{font-size:9px;font-weight:600;line-height:1;text-transform:none;letter-spacing:0;opacity:.8;}
+  /* Location filter chips (dishes All/West/Centraal): accent fill when active */
+  .fc-loc.on{background:var(--loc-accent);border-color:var(--loc-accent);color:#fff;}
 
   /* ── Bottom nav (hidden by default, shown on mobile via .active) ── */
   .bottom-nav{display:none;}

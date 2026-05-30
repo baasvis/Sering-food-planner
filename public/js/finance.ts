@@ -391,10 +391,12 @@ export function renderProductBreakdown() {
         <div class="fin-filter-group">
           <label>Location</label>
           <div class="fin-pill-group">
-            ${FINANCE_LOCATIONS.map(l =>
-              `<button class="fin-pill ${S.financeProductLoc === l.key ? 'active' : ''}"
-                       onclick="setFinanceProductFilter('loc','${l.key}')">${l.label}</button>`
-            ).join('')}
+            ${FINANCE_LOCATIONS.map(l => {
+              // West/Centraal pills take the location accent when active.
+              const locCls = (l.key === 'west' || l.key === 'centraal') ? ` fin-pill-loc loc-${l.key}` : '';
+              return `<button class="fin-pill${locCls} ${S.financeProductLoc === l.key ? 'active' : ''}"
+                       onclick="setFinanceProductFilter('loc','${l.key}')">${l.label}</button>`;
+            }).join('')}
           </div>
         </div>
       </div>

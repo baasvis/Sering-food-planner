@@ -587,7 +587,7 @@ export function renderStandardInventoryTab() {
   return `
     <div>
       <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
-        <span>Set Standard Inventory &mdash; ${esc(locName(curLoc))}</span>
+        <span>Set Standard Inventory &mdash; <span class="loc-accent-text">${esc(locName(curLoc))}</span></span>
         ${totalValue > 0 ? `<span style="font-size:13px;font-weight:600;">Estimated order: \u20AC${totalValue.toFixed(2)}</span>` : ''}
       </div>
       <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">Set target stock levels for each ingredient. The order is calculated automatically from the deficit (target \u2212 current stock).</p>
@@ -652,7 +652,7 @@ export function toggleBatchIngredient(batchId: string) {
   const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
   const header = document.querySelector('.section-title span');
   if (header && header.textContent.includes('selected')) {
-    header.textContent = `Batches at ${locName(curLoc)} (${onCount}/${eligible.length} selected)`;
+    header.innerHTML = `Batches at <span class="loc-accent-text">${esc(locName(curLoc))}</span> (${onCount}/${eligible.length} selected)`;
   }
   // Persist to server (syncs across devices via SSE batch update)
   persistBatchOrderFor(batchId, isOn);
@@ -687,7 +687,7 @@ export function toggleAllBatchIngredients(on: boolean) {
   const onCount = on ? eligible.length : 0;
   const header = document.querySelector('.section-title span');
   if (header && header.textContent.includes('selected')) {
-    header.textContent = `Batches at ${locName(curLoc)} (${onCount}/${eligible.length} selected)`;
+    header.innerHTML = `Batches at <span class="loc-accent-text">${esc(locName(curLoc))}</span> (${onCount}/${eligible.length} selected)`;
   }
 }
 
@@ -708,7 +708,7 @@ export function renderDishesTab() {
   const onCount = eligible.filter(b => batchIngredientToggles[b.id]).length;
   let html = `<div style="margin-bottom:16px;">
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <span>Batches at ${locName(curLoc)} (${onCount}/${eligible.length} selected)</span>
+      <span>Batches at <span class="loc-accent-text">${esc(locName(curLoc))}</span> (${onCount}/${eligible.length} selected)</span>
       <div style="display:flex;align-items:center;gap:8px;">
         <button class="copy-all-btn" onclick="toggleAllBatchIngredients(true)">All on</button>
         <button class="copy-all-btn" onclick="toggleAllBatchIngredients(false)">All off</button>
@@ -1016,7 +1016,7 @@ export function renderCombinedOrderTab() {
 
   const hanosAllCombinedBtn = isHanosEnabled() && ingList.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk()" title="Send entire combined order to Hanos cart">🛒 Send all to Hanos</button>` : '';
   html += `<div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <span>Combined Order &mdash; ${esc(locName(curLoc))}</span>
+      <span>Combined Order &mdash; <span class="loc-accent-text">${esc(locName(curLoc))}</span></span>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="font-size:13px;font-weight:600;">${totalValue > 0 ? 'Estimated: \u20AC' + totalValue.toFixed(2) : ''}</span>
         ${hanosAllCombinedBtn}

@@ -149,11 +149,11 @@ export function showLocationChooser() {
         <h2>Welke locatie?</h2>
         <p>In welke keuken werk je vandaag?</p>
         <div class="location-chooser-buttons">
-          <button onclick="selectLocation('west')" class="loc-choose-btn loc-choose-west">
+          <button onclick="selectLocation('west')" class="loc-choose-btn loc-choose-west" data-testid="loc-choose-west">
             <span class="loc-choose-icon">W</span>
             <span class="loc-choose-label">Sering West</span>
           </button>
-          <button onclick="selectLocation('centraal')" class="loc-choose-btn loc-choose-centraal">
+          <button onclick="selectLocation('centraal')" class="loc-choose-btn loc-choose-centraal" data-testid="loc-choose-centraal">
             <span class="loc-choose-icon">C</span>
             <span class="loc-choose-label">Sering Centraal</span>
           </button>

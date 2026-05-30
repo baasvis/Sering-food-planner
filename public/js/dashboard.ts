@@ -506,11 +506,14 @@ export function drawGuestFlowChart() {
   const totalGuests = getGuests(loc, todayStr, meal);
   const data = buildGuestFlowData(totalGuests, meal, loc);
 
-  const isDark = document.documentElement.classList.contains('dark') || window.matchMedia('(prefers-color-scheme: dark)').matches;
+  // Follow the app's theme strictly (class-based, like the rest of the UI) so the
+  // chart's location colours never disagree with the surrounding CSS variables.
+  const isDark = document.documentElement.classList.contains('dark');
   const textColor = isDark ? '#a0a09a' : '#6b6b66';
   const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
-  const lineColor = meal === 'lunch' ? (isDark ? '#E4A84D' : '#BA7517') : (isDark ? '#8B82E0' : '#534AB7');
-  const fillColor = meal === 'lunch' ? (isDark ? 'rgba(228,168,77,0.12)' : 'rgba(186,117,23,0.08)') : (isDark ? 'rgba(139,130,224,0.12)' : 'rgba(83,74,183,0.08)');
+  // Line + shading take the current location's accent (West=amber, Centraal=green)
+  const lineColor = loc === 'centraal' ? (isDark ? '#4EC9A0' : '#0F6E56') : (isDark ? '#E4A84D' : '#BA7517');
+  const fillColor = loc === 'centraal' ? (isDark ? 'rgba(78,201,160,0.14)' : 'rgba(15,110,86,0.08)') : (isDark ? 'rgba(228,168,77,0.14)' : 'rgba(186,117,23,0.08)');
 
   const pad = { top: 14, right: 12, bottom: 24, left: 32 };
   const cw = w - pad.left - pad.right;
