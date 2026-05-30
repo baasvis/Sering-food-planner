@@ -290,6 +290,12 @@
   background: var(--primary, #5b6abf);
   color: #fff;
 }
+/* West/Centraal pills use the location accent when active (reads --loc-accent
+   from their own loc-* class). Other pills (All/TestTafel) keep the default. */
+.fin-pill-loc.active {
+  background: var(--loc-accent);
+  color: #fff;
+}
 
 /* Category horizontal bar chart */
 .fin-cat-chart {

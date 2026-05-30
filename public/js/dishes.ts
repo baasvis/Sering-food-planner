@@ -131,8 +131,8 @@ export function renderDishesOverview() {
   <div class="filter-bar">
     <div style="display:flex;gap:4px;flex-wrap:wrap;">
       <button class="fc ${f.loc === 'all' ? 'on' : ''}" onclick="setFilter('loc','all')">All locations</button>
-      <button class="fc ${f.loc === 'west' ? 'on' : ''}" onclick="setFilter('loc','west')">Sering West</button>
-      <button class="fc ${f.loc === 'centraal' ? 'on' : ''}" onclick="setFilter('loc','centraal')">Sering Centraal</button>
+      <button class="fc fc-loc loc-west ${f.loc === 'west' ? 'on' : ''}" onclick="setFilter('loc','west')">Sering West</button>
+      <button class="fc fc-loc loc-centraal ${f.loc === 'centraal' ? 'on' : ''}" onclick="setFilter('loc','centraal')">Sering Centraal</button>
     </div>
     <div class="filter-sep"></div>
     <div style="display:flex;gap:4px;flex-wrap:wrap;">

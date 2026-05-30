@@ -54,10 +54,10 @@ export function renderGuests() {
       });
     });
 
-    html += `<div class="card">
+    html += `<div class="card guests-loc-card loc-${loc.key}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border);">
-        <h3 style="font-size:14px;font-weight:600;margin:0;">${loc.label}</h3>
-        <span style="font-size:12px;color:var(--text2);">Total: <strong>${weekTotal}</strong></span>
+        <h3 class="loc-accent-text" style="font-size:14px;margin:0;">${loc.label}</h3>
+        <span style="font-size:12px;color:var(--text2);">Total: <strong class="loc-accent-text">${weekTotal}</strong></span>
       </div>
       <div style="overflow-x:auto;">
       <table class="guest-table">
