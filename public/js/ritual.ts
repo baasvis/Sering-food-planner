@@ -141,46 +141,63 @@ export interface RitualStep {
   /** True iff this step has no derivable signal and is ticked by hand (so the
    *  panel can render a checkbox rather than a read-only status dot). */
   manual?: boolean;
+  /** One-line rationale — why this action happens at this point in the day.
+   *  Shown when the cook folds the step open in the panel. */
+  why: string;
   done: (ctx: RitualContext) => boolean;
 }
 
 const WEST_STEPS: RitualStep[] = [
   { key: 'cook-underway', label: "Cook today's food", phase: 'morning', overdueAfter: null, action: 'planner',
+    why: 'Start cooking as early as possible in the day. This leaves time for the food to cook, cool down, and to be packed for Centraal.',
     done: cooksDone },
   { key: 'inv-lunch', label: 'Cooked-food inventory', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'inventory',
+    why: 'After lunch, count the cooked food. Based on these numbers the plan for this evening, and the rest of the week is made. The earlier we know what is up, the better. Count both the cold food, and the food still in pots.',
     done: (c) => inventoryFresh(c, 'lunch') },
   { key: 'fmm-lunch', label: 'Run Fix My Menu', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'fmm',
+    why: 'After inventory is done both here, and at Centraal, run "Fix My Menu". Based on how busy it was during lunch the food will be redivided over both locations. It will warn you if there is a problem after this reorganisation.',
     done: (c) => c.ritualDone('fmm-lunch') },
   { key: 'replace-placeholders', label: 'Replace placeholders with recipes', phase: 'afternoon', overdueAfter: null, orderDayOnly: true, action: 'planner',
+    why: 'On order days, change the placeholder dishes into real recipes first. The order is based on the recipes.',
     done: placeholdersReplaced },
   { key: 'stocktake', label: 'Ingredient stocktake', phase: 'afternoon', overdueAfter: null, orderDayOnly: true, action: 'orders', manual: true,
+    why: 'Count your ingredients before you order. Then the amount to order is correct.',
     done: (c) => c.ritualDone('stocktake') },
-  { key: 'yields', label: 'Confirm real cooked amounts', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'planner', manual: true,
-    done: (c) => c.ritualDone('yields') || inventoryFresh(c, 'dinner') },
   { key: 'inv-dinner', label: 'Cooked-food inventory', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'inventory',
+    why: 'At dinner, count the cooked food that is leftover from the day. Make sure the food that has been cooked this day is counted as well. Our plans for tomorrow and the upcoming days depend on these numbers.',
     done: (c) => inventoryFresh(c, 'dinner') },
   { key: 'fmm-dinner', label: 'Run Fix My Menu', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'fmm',
+    why: 'After counting, run Fix My Menu. It will redivide the food over the upcoming services. It will tell you if there are problems.',
     done: (c) => c.ritualDone('fmm-dinner') },
   { key: 'pack-send', label: 'Pack & send for Centraal', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'transport',
+    why: "Pack Centraal's food tonight. It will be picked up early in the morning, when there is no time to pack.",
     done: (c) => !c.packPending },
   { key: 'hanos-order', label: 'Place Hanos order', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, orderDayOnly: true, action: 'orders', manual: true,
+    why: 'Order now, when the plan is ready. The ingredients arrive the next day.',
     done: (c) => c.ritualDone('hanos-order') },
 ];
 
 const CENTRAAL_STEPS: RitualStep[] = [
   { key: 'arrivals', label: 'Confirm transport arrived', phase: 'morning', overdueAfter: null, action: 'arrivals',
+    why: 'Say yes when the food arrives. It goes into your stock, so your numbers stay correct.',
     done: noPendingArrivals },
   { key: 'service-lunch', label: 'Set up lunch service', phase: 'morning', overdueAfter: null, action: null, manual: true,
+    why: 'Set up lunch before the guests come.',
     done: (c) => c.ritualDone('service-lunch') },
   { key: 'inv-lunch', label: 'Cooked-food inventory', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'inventory',
+    why: 'After lunch, count the cooked food. Do it as close to 13:45 as possible! The people at West are waiting on your inventory to make the cooking plan. Count both the cold food, and the food still in pots.',
     done: (c) => inventoryFresh(c, 'lunch') },
   { key: 'service-dinner', label: 'Set up dinner service', phase: 'afternoon', overdueAfter: null, action: null, manual: true,
+    why: 'Set up dinner before the evening.',
     done: (c) => c.ritualDone('service-dinner') },
   { key: 'stocktake', label: 'Ingredient stocktake', phase: 'afternoon', overdueAfter: null, orderDayOnly: true, action: 'orders', manual: true,
+    why: 'Count your ingredients before you order. Then the amount to order is correct.',
     done: (c) => c.ritualDone('stocktake') },
   { key: 'inv-dinner', label: 'Cooked-food inventory', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'inventory',
+    why: 'At the end of the day, count the cooked food. Do this around 20:45 if possible! The people at West are waiting on this info for placing their order and packing the food for tomorrow.',
     done: (c) => inventoryFresh(c, 'dinner') },
   { key: 'hanos-order', label: 'Place Hanos order', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, orderDayOnly: true, action: 'orders', manual: true,
+    why: 'Order now. The ingredients arrive the next day.',
     done: (c) => c.ritualDone('hanos-order') },
 ];
 
@@ -196,6 +213,7 @@ export interface RitualStepView {
   phase: RitualPhase;
   action: RitualAction;
   manual: boolean;
+  why: string;
   done: boolean;
   status: StepStatus;
 }
@@ -240,6 +258,7 @@ export function computeRitual(ctx: RitualContext): RitualView {
       phase: step.phase,
       action: step.action,
       manual: step.manual === true,
+      why: step.why,
       done,
       status: statusFor(step, done, ctx.now, phase),
     });

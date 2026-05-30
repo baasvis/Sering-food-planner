@@ -18,6 +18,7 @@ import { showModal, closeModal } from './modal';
 import { getStorageConfigForLoc } from './state';
 import { locName } from '@shared/location';
 import { renderTransportCard, renderCentraalArrivalBlock } from './transport-card';
+import { renderTodayPanel } from './today-panel';
 import { openBatchRecipe } from './recipe-editor';
 import { computeSupplyDemand, supplyPricePerGuest } from '@shared/supply-demand';
 
@@ -1085,8 +1086,9 @@ export function renderDashboardContent() {
     <!-- ═══ TWO-COLUMN LAYOUT ═══ -->
     <div class="dash-columns">
 
-      <!-- LEFT: STOCK + TRANSPORT -->
+      <!-- LEFT: TODAY RITUAL + STOCK + TRANSPORT -->
       <div class="dash-col">
+        ${renderTodayPanel()}
         <div class="dash-card">
           <div class="dash-card-title">
             <span class="dash-card-icon">📦</span> Stock

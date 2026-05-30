@@ -103,9 +103,9 @@ describe('computeRitual — West', () => {
     const order = computeRitual(mkCtx({ now: new Date(2026, 4, 25, 13, 50) })); // Mon
     const nonOrder = computeRitual(mkCtx({ now: new Date(2026, 4, 27, 13, 50) })); // Wed
     expect(order.isOrderDay).toBe(true);
-    expect(order.total).toBe(10);
+    expect(order.total).toBe(9);
     expect(nonOrder.isOrderDay).toBe(false);
-    expect(nonOrder.total).toBe(7);
+    expect(nonOrder.total).toBe(6);
     for (const k of ['replace-placeholders', 'stocktake', 'hanos-order']) {
       expect(order.steps.some(s => s.key === k)).toBe(true);
       expect(nonOrder.steps.some(s => s.key === k)).toBe(false);
@@ -140,17 +140,6 @@ describe('computeRitual — West', () => {
     const v = computeRitual(mkCtx({ ritualDone: (k) => k === 'fmm-lunch' }));
     expect(stepOf(v, 'fmm-lunch').done).toBe(true);
     expect(stepOf(v, 'fmm-dinner').done).toBe(false);
-  });
-
-  it('yields step falls back to the dinner inventory being done', () => {
-    // ritualDone('yields') is false, but the evening inventory is fresh, so the
-    // yields step is satisfied by the backstop.
-    const v = computeRitual(mkCtx({
-      now: new Date(2026, 4, 25, 20, 50),
-      ritualDone: () => false,
-      inventoryCompletions: { west: { lunch: null, dinner: TODAY_TS }, centraal: { lunch: null, dinner: null } },
-    }));
-    expect(stepOf(v, 'yields').done).toBe(true);
   });
 
   it('flags an undone close-step overdue past its hard deadline', () => {
