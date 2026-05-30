@@ -27,7 +27,9 @@ export async function loginAsDev(page: Page): Promise<void> {
     page.waitForResponse((r) => r.url().endsWith('/api/guests-next-weeks') && r.request().method() === 'GET', { timeout: 15_000 }),
     page.waitForResponse((r) => r.url().endsWith('/api/guest-history') && r.request().method() === 'GET', { timeout: 15_000 }),
   ];
-  await page.getByRole('button', { name: 'Sering West' }).click();
+  // Target the location-chooser button by testid: the top-bar switcher pill is
+  // also a role=button named "Sering West", so a text match is now ambiguous.
+  await page.getByTestId('loc-choose-west').click();
   await Promise.all(waits);
 
   await expect(page.locator('.nav-btn[data-screen="dashboard"]')).toBeVisible();

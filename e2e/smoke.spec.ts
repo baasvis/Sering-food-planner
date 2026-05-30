@@ -19,7 +19,7 @@ test.describe('Smoke', () => {
     // Fresh browser context has no saved location, so the chooser appears.
     const chooser = page.locator('.location-chooser');
     await expect(chooser).toBeVisible();
-    await page.getByRole('button', { name: 'Sering West' }).click();
+    await page.getByTestId('loc-choose-west').click();
 
     // After selecting a location, buildNav() runs and populates the top bar
     // with a Dashboard nav button — proves the logged-in shell is rendering.
