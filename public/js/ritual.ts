@@ -58,8 +58,9 @@ export function isOrderDay(now: Date): boolean {
 }
 
 /** A West Fix-My-Menu run maps to the lunch or dinner ritual depending on when
- *  it's run (split at 17:00, the same boundary as the afternoon phase). Lets
- *  the panel tell the ~13:45 run apart from the ~20:45 one. */
+ *  it's run (split at 17:00). Lets the panel tell the ~13:45 run apart from the
+ *  ~20:45 one. Note: an afternoon run (17:00–20:45) marks `fmm-dinner` done
+ *  before the dinner-close phase begins — intentional; the cook ran it early. */
 export function fixMyMenuRitualStep(now: Date): 'fmm-lunch' | 'fmm-dinner' {
   return minutesOfDay(now) < AFTERNOON_FROM ? 'fmm-lunch' : 'fmm-dinner';
 }
@@ -85,25 +86,40 @@ export interface RitualContext {
 
 // ── Derived-signal helpers (pure over ctx) ───────────────────────────────
 
-function startOfTodayMs(now: Date): number {
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+/** Local calendar date (Y-M-D) of an instant, in the browser's zone — the same
+ *  basis as ctx.todayIso (todayIso() / Service.date). Comparing dates this way
+ *  keeps day checks consistent instead of mixing an Amsterdam-derived local
+ *  midnight with a UTC instant, which mis-judged "today" for browsers outside
+ *  NL near the midnight boundary. */
+function localYmd(t: Date): string {
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
 }
 
-/** An inventory window counts as done if its completion timestamp is today. */
+/** An inventory window counts as done if its completion timestamp falls on
+ *  today (compared as local calendar dates). */
 function inventoryFresh(ctx: RitualContext, window: 'lunch' | 'dinner'): boolean {
   const iso = ctx.inventoryCompletions[ctx.loc]?.[window] ?? null;
   if (!iso) return false;
-  const t = Date.parse(iso);
-  return !isNaN(t) && t >= startOfTodayMs(ctx.now);
+  const t = new Date(iso);
+  return !isNaN(t.getTime()) && localYmd(t) === ctx.todayIso;
 }
 
-/** Every batch with a West service today has a cookDate (cooking done).
- *  Empty set is trivially done. Mirrors transport-card getReadiness. */
+/** A batch counts as cooked once it has stock or a pending shipment. Mirrors
+ *  core.isBatchCooked, inlined to keep this model free of core/DOM imports. */
+function batchCooked(b: Batch): boolean {
+  return (b.inventory || []).some(e => (e.qty || 0) > 0)
+      || (b.shipments || []).some(s => !s.arrived && (s.qty || 0) > 0);
+}
+
+/** Every batch with a West service today is actually cooked (has stock or a
+ *  shipment), not merely planned. `cookDate` is set at PLANNING time — when a
+ *  dish is dropped into a slot or a placeholder is generated — so it can't be
+ *  the "cooked" signal; use real stock instead. Empty set is trivially done. */
 function cooksDone(ctx: RitualContext): boolean {
   for (const b of ctx.batches) {
     const hasTodayWest = (b.services || []).some(s => s.loc === 'west' && s.date === ctx.todayIso);
     if (!hasTodayWest) continue;
-    if (!b.cookDate) return false;
+    if (!batchCooked(b)) return false;
   }
   return true;
 }

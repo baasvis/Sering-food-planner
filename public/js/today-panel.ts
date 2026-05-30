@@ -39,7 +39,9 @@ function packPendingFor(loc: string): boolean {
   if (loc !== 'west') return false;
   // computeTransportPlan only returns rows with sendQty > 0, so any row means
   // there's still Centraal-bound stock to pack. rebuildPlanner() has already
-  // run — renderDashboardContent calls it before this.
+  // run — renderDashboardContent calls it before this. 'lean' = the next 3
+  // Centraal service slots only (deliberate: pack-send tracks IMMINENT packing,
+  // not stock due for slots further out that tonight's pack needn't cover).
   return computeTransportPlan('lean', S.batches).length > 0;
 }
 
@@ -62,7 +64,7 @@ function currentView() {
 // global window handlers registered in main.ts.
 function goAttr(action: RitualAction, loc: string): string {
   switch (action) {
-    case 'inventory': return `onclick="openInventory('${loc}')"`;
+    case 'inventory': return `onclick="openInventory('${esc(loc)}')"`;
     case 'fmm': return `onclick="fixMyMenu()"`;
     case 'planner': return `onclick="showScreen('planner')"`;
     case 'orders': return `onclick="showScreen('orders')"`;
@@ -87,7 +89,7 @@ function stepRow(step: RitualStepView, loc: string): string {
   // read-only status glyph (it can't be ticked by hand — it reflects reality).
   const lead = step.manual
     ? `<button class="ritual-check" role="checkbox" aria-checked="${step.done}"
-         onclick="toggleRitualStep('${loc}','${esc(step.key)}')"
+         onclick="toggleRitualStep('${esc(loc)}','${esc(step.key)}')"
          title="${step.done ? 'Mark not done' : 'Mark done'}">${step.done ? '✓' : ''}</button>`
     : `<span class="ritual-dot" aria-hidden="true">${STATUS_GLYPH[step.status]}</span>`;
   const go = step.action && !step.done
@@ -103,10 +105,10 @@ function stepRow(step: RitualStepView, loc: string): string {
   return `<div class="${cls}" data-step="${esc(step.key)}">
     <div class="ritual-step-row">
       ${lead}
-      <button class="ritual-label-btn" onclick="toggleRitualWhy('${loc}','${esc(step.key)}')" aria-expanded="${open}" title="Why do we do this now?">
+      <button class="ritual-label-btn" onclick="toggleRitualWhy('${esc(loc)}','${esc(step.key)}')" aria-expanded="${open}" title="Why do we do this now?">
         <span class="ritual-label">${esc(step.label)}</span>
       </button>
-      <button class="ritual-why-tag" onclick="toggleRitualWhy('${loc}','${esc(step.key)}')" tabindex="-1" title="Why do we do this now?">why<span class="ritual-chev" aria-hidden="true">›</span></button>
+      <button class="ritual-why-tag" onclick="toggleRitualWhy('${esc(loc)}','${esc(step.key)}')" tabindex="-1" title="Why do we do this now?">why<span class="ritual-chev" aria-hidden="true">›</span></button>
       ${goSlot}
     </div>
     <div class="ritual-why">${esc(step.why)}</div>

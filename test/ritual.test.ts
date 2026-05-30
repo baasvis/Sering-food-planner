@@ -124,16 +124,26 @@ describe('computeRitual — West', () => {
     expect(stepOf(stale, 'inv-lunch').done).toBe(false);
   });
 
-  it('derives cook-underway from cookDate on today\'s West batches', () => {
-    const uncooked = computeRitual(mkCtx({
-      batches: [mkBatch({ cookDate: null, services: [{ loc: 'west', date: '2026-05-25', meal: 'lunch' }] })],
+  it('derives cook-underway from real cooked stock, NOT the planning cookDate', () => {
+    const westLunch = { loc: 'west' as const, date: '2026-05-25', meal: 'lunch' as const };
+    // Regression guard (H1): cookDate is set when a dish is slotted/generated,
+    // so a planned-but-uncooked batch (cookDate set, no stock) must NOT be done.
+    const planned = computeRitual(mkCtx({
+      batches: [mkBatch({ cookDate: '25/05/2026', inventory: [], services: [westLunch] })],
     }));
-    expect(stepOf(uncooked, 'cook-underway').done).toBe(false);
+    expect(stepOf(planned, 'cook-underway').done).toBe(false);
 
+    // Actually cooked — has stock.
     const cooked = computeRitual(mkCtx({
-      batches: [mkBatch({ cookDate: '25/05/2026', services: [{ loc: 'west', date: '2026-05-25', meal: 'lunch' }] })],
+      batches: [mkBatch({ cookDate: '25/05/2026', inventory: [{ loc: 'west', storage: 'Gastro', qty: 40, cookDate: '25/05/2026' }], services: [westLunch] })],
     }));
     expect(stepOf(cooked, 'cook-underway').done).toBe(true);
+
+    // Cooked then shipped (stock now in a pending shipment) still counts as cooked.
+    const shipped = computeRitual(mkCtx({
+      batches: [mkBatch({ cookDate: '25/05/2026', inventory: [], shipments: [{ id: 's1', fromLoc: 'west', toLoc: 'centraal', storage: 'Gastro', qty: 20, sentAt: TODAY_TS, arrived: false, cookDate: '25/05/2026' }], services: [westLunch] })],
+    }));
+    expect(stepOf(shipped, 'cook-underway').done).toBe(true);
   });
 
   it('reads manual-tick steps from ritualDone', () => {
