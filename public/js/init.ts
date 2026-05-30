@@ -2,7 +2,8 @@ import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories, restoreGlo
 import type { Location } from '@shared/types';
 import { loadData, connectLiveSync, saveState,
          loadIngredientDb, loadStorageConfig, loadKitchenEquipment, loadCookRhythm, loadClosedServices,
-         loadGuestHistory, loadGuestsNextWeeks, loadInventoryCompletions } from './utils';
+         loadGuestHistory, loadGuestsNextWeeks, loadInventoryCompletions,
+         loadRitualCompletions } from './utils';
 import { flushUndo } from './undo';
 import { rebuildPlanner } from './core';
 import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
@@ -197,6 +198,7 @@ export async function initApp() {
     loadGuestHistory(),
     loadGuestsNextWeeks(),
     loadInventoryCompletions(),
+    loadRitualCompletions(),
   ]);
   rebuildPlanner();
   // Restore screen from URL hash (e.g. #planner, #orders) or default to dashboard

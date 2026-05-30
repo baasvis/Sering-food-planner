@@ -35,6 +35,14 @@
   .inv-stock-input{width:70px;font-size:13px;height:32px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 8px;background:var(--bg);color:var(--text);text-align:right;}
   .inv-stock-input:focus{border-color:var(--blue);outline:none;}
   .inv-served-btn{font-size:11px;color:var(--text2);border-color:var(--border2);}
+  /* "Did you cook these today?" section at the top of the inventory pass */
+  .inv-cook-confirm{background:var(--green-bg);border:1px solid var(--green);border-radius:var(--radius);padding:10px 12px;margin-bottom:14px;}
+  .inv-cook-confirm-hd{font-size:13px;font-weight:700;color:var(--green);margin-bottom:2px;}
+  .inv-cook-confirm-sub{font-size:11px;color:var(--text2);margin-bottom:8px;}
+  .inv-cook-row{display:flex;align-items:center;gap:8px;padding:4px 0;}
+  .inv-cook-name{flex:1;font-size:13px;font-weight:500;min-width:0;}
+  .inv-cook-row .inv-stock-input{width:60px;}
+  .inv-cook-btn{flex-shrink:0;white-space:nowrap;}
   .inv-served-btn:hover{color:var(--red);border-color:var(--red);}
   .type-lbl{display:flex;align-items:center;gap:4px;font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.03em;padding:2px 4px;}
   .type-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}

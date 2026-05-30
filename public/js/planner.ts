@@ -2,7 +2,7 @@ import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, M
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, todayIso } from './utils';
 import { computeSupplyDemand } from '@shared/supply-demand';
-import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry } from './core';
+import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, cleanCateringRefs } from './dishes';
@@ -1244,9 +1244,26 @@ let _lastInventoryLoc = 'west';
 // POST /api/supplies/:id/stock on "Finish inventory"; cleared on open/cancel.
 const _supplyInvEdits = new Map<string, number>();
 
+// Pending "litres cooked" typed into the cook-confirm rows during the inventory
+// pass (batchId → litres). Persisted across modal re-renders so confirming one
+// dish doesn't wipe values typed for the others. Cleared on open/cancel.
+const _cookConfirmEdits = new Map<string, number>();
+
+/** Record a litres value typed into a cook-confirm row (pending until the cook
+ *  clicks "Cooked ✓"). Survives modal re-renders. */
+export function updateCookConfirmQty(id: string, valueStr: string): void {
+  const n = parseFloat(valueStr);
+  if (Number.isFinite(n) && n >= 0) _cookConfirmEdits.set(id, n);
+  else _cookConfirmEdits.delete(id);
+}
+
 export function openInventory(loc: string) {
   _invMode = 'loc-scoped';
   _supplyInvEdits.clear();
+  _cookConfirmEdits.clear();
+  // Refresh the family-allocation cache so the cook-confirm litres estimate
+  // (calcRequired) is accurate even when the modal is deep-linked "cold".
+  rebuildPlanner();
   renderInventoryModal(loc);
 }
 
@@ -1394,11 +1411,79 @@ export function updateSupplyInvCount(supplyId: string, valueStr: string): void {
   if (Number.isFinite(n) && n >= 0) _supplyInvEdits.set(supplyId, n);
 }
 
+/** Pure: planned dishes whose cook DAY is `todayCook` (DD/MM/YYYY) that aren't
+ *  cooked yet and belong to `loc` to cook — the source for the inventory
+ *  cook-confirm section. Matches the dashboard "What to Cook" signals
+ *  (dashboard.getCookDateDishes):
+ *    - not cooked: no stock / pending shipment (isBatchCooked) AND no inventory
+ *      entries at all, so an already-cooked-then-served batch (which keeps
+ *      zero-qty entries) can't reappear here;
+ *    - cook location: an uncooked batch has no placed stock, so by the app's
+ *      convention it belongs to West (primaryLoc default), which cooks for both
+ *      sites. Centraal cooks ~nothing itself, so its list stays empty.
+ *  Exported for unit testing. */
+export function plannedCookConfirmDishes(batches: Batch[], loc: Location, todayCook: string): Batch[] {
+  return batches
+    .filter(b => {
+      if (b.cookDate !== todayCook) return false;
+      if (isBatchCooked(b) || (b.inventory || []).length > 0) return false;
+      const primaryLoc: Location = (b.inventory || [])[0]?.loc || 'west';
+      return primaryLoc === loc;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** The inventory pass opens with these: confirm what was actually cooked (with
+ *  real litres) before counting. Confirmed dishes join the count list below.
+ *  Replaces the old separate "confirm real cooked amounts" ritual step. */
+function renderCookConfirmSection(loc: string): string {
+  const todayCook = dateToStr(getToday());   // DD/MM/YYYY — matches Batch.cookDate
+  const planned = plannedCookConfirmDishes(S.batches, loc as Location, todayCook);
+  if (planned.length === 0) return '';
+  const locEsc = esc(loc);
+  let html = `<div class="inv-cook-confirm">
+    <div class="inv-cook-confirm-hd">🍳 Have the planned dishes for today finished cooking?</div>
+    <div class="inv-cook-confirm-sub">Confirm the ones that are done, with how many litres. Then leave the rest.</div>`;
+  for (const b of planned) {
+    const idEsc = esc(b.id);
+    const pending = _cookConfirmEdits.get(b.id);
+    const est = Math.round(calcRequired(b));
+    const val = pending !== undefined ? String(pending) : (est > 0 ? String(est) : '');
+    html += `<div class="inv-cook-row">
+      <span class="inv-cook-name">${esc(b.name)}</span>
+      <input type="number" class="inv-stock-input" id="cookq-${idEsc}" value="${val}" step="0.5" min="0" placeholder="L" title="Litres you cooked" oninput="updateCookConfirmQty('${idEsc}',this.value)" />
+      <button class="btn btn-sm btn-primary inv-cook-btn" onclick="confirmPlannedCookedAt('${idEsc}','${locEsc}',document.getElementById('cookq-${idEsc}').value)">Cooked ✓</button>
+    </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+/** Mark a planned dish as cooked at `loc` with the litres the cook entered, then
+ *  refresh the inventory modal so the dish moves into the count list. Captures
+ *  the real yield right at inventory time. */
+export function confirmPlannedCookedAt(id: string, loc: string, amountStr: string): void {
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  let qty = parseFloat(amountStr);
+  if (!Number.isFinite(qty) || qty <= 0) { toast('Enter how many litres you cooked'); return; }
+  qty = Math.round(qty * 10) / 10;            // 0.1 L precision, like the rest of the app
+  if (qty > 2000) { toast('That looks too high — check the litres'); return; }   // fat-finger guard
+  const today = dateToStr(getToday());
+  d.cookDate = today;
+  addInventory(d, { loc: loc as Location, storage: 'Gastro', qty, cookDate: today });
+  _cookConfirmEdits.delete(id);               // confirmed — drop the pending litres
+  scheduleSave();
+  toast(`${d.name} — ${qty.toFixed(1)} L cooked at ${locName(loc)}`);
+  renderInventoryModal(loc);
+}
+
 function renderLocScopedInventory(loc: string, locLabel: string, modeToggle: string) {
   const rows = buildLocScopedRows(loc as Location);
   const suppliesSection = renderSuppliesInvSection(loc);
+  const cookConfirm = renderCookConfirmSection(loc);
 
-  if (rows.length === 0 && !suppliesSection) {
+  if (rows.length === 0 && !suppliesSection && !cookConfirm) {
     showModal(`<h3>Inventory — ${locLabel}${modeToggle}</h3>
       <div class="empty" style="margin:20px 0;">No cooked stock at ${locLabel}.</div>
       <div class="modal-actions">
@@ -1441,6 +1526,7 @@ function renderLocScopedInventory(loc: string, locLabel: string, modeToggle: str
 
   let html = `<h3>Inventory — ${locLabel}${modeToggle}</h3>`;
   html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Editing stock at ${locLabel} only. Multiple cookDates per (batch, storage) aggregate to one row; FIFO — oldest absorbs the delta first.</div>`;
+  html += cookConfirm;
   html += `<div class="inv-list">`;
 
   let lastType = '';

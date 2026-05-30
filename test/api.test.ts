@@ -803,6 +803,40 @@ describe('Prep Checklist API', () => {
   });
 });
 
+describe('Ritual Completions API', () => {
+  it('GET /api/ritual-completions — requires loc and date', async () => {
+    const res = await request(app).get('/api/ritual-completions');
+    expect(res.status).toBe(400);
+  });
+
+  it('POST + GET /api/ritual-completions — roundtrip and untick', async () => {
+    const loc = 'centraal';
+    const date = '2099-01-02';
+    const completed = ['fmm-lunch', 'service-lunch'];
+
+    const postRes = await request(app)
+      .post('/api/ritual-completions')
+      .send({ loc, date, completed });
+    expect(postRes.status).toBe(200);
+
+    const getRes = await request(app).get(`/api/ritual-completions?loc=${loc}&date=${date}`);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body).toEqual(completed);
+
+    // Overwrite-on-save: a smaller set replaces the prior one, so unticking a
+    // step persists (the property the dedicated table buys over the Log
+    // piggyback used by inventory-completions).
+    const post2 = await request(app)
+      .post('/api/ritual-completions')
+      .send({ loc, date, completed: [] });
+    expect(post2.status).toBe(200);
+    const get2 = await request(app).get(`/api/ritual-completions?loc=${loc}&date=${date}`);
+    expect(get2.body).toEqual([]);
+
+    await prisma.ritualCompletion.deleteMany({ where: { loc, date } });
+  });
+});
+
 // ── Activity Log ──
 
 describe('GET /api/log', () => {
