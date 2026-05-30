@@ -19,6 +19,11 @@ export const TUTORIALS = {
       body: "You're looking at one location at a time. Tap here to switch between Sering West and Sering Centraal.",
     },
     {
+      selector: '.ritual-panel',
+      title: 'Your day, step by step',
+      body: "This is your guide for the day at this location. It shows what to do and when. The step for right now is highlighted, and steps turn red if they are late. Tap a step to see why we do it. Some steps tick themselves; tap the box on the others.",
+    },
+    {
       selector: '#dash-guests-card',
       title: 'Guests today',
       body: "How many people are eating lunch and dinner today. You set these numbers in the Guests tab — they update here automatically.",
