@@ -83,6 +83,10 @@ export interface RitualContext {
   now: Date;
   /** Local Y-M-D for `now` (today), matching Service.date format. */
   todayIso: string;
+  /** Today in Batch.cookDate format (dateToStr(getToday())) — selects the day's
+   *  planned cooks for the cook-underway step. Passed in to keep this model free
+   *  of core/DOM date helpers. */
+  todayCook: string;
   batches: Batch[];
   /** Server-persisted inventory completion timestamps per loc/window. */
   inventoryCompletions: Record<string, { lunch: string | null; dinner: string | null }>;
@@ -125,17 +129,19 @@ function batchCooked(b: Batch): boolean {
       || (b.shipments || []).some(s => !s.arrived && (s.qty || 0) > 0);
 }
 
-/** Every batch with a West service today is actually cooked (has stock or a
- *  shipment), not merely planned. `cookDate` is set at PLANNING time — when a
- *  dish is dropped into a slot or a placeholder is generated — so it can't be
- *  the "cooked" signal; use real stock instead. Empty set is trivially done. */
+/** "Cook today's food" is done when nothing is still waiting to be cooked HERE
+ *  today. Dishes are selected by COOK DATE (Batch.cookDate, the planned cook
+ *  day), NOT by today's service slots: on the big Sunday cook the dishes are
+ *  cooked today for later in the week and have no service today, so a
+ *  service-slot check would wrongly read "all done". `cookDate` is the right
+ *  selector; real stock / a shipment (batchCooked) is the "actually cooked yet"
+ *  signal. Mirrors dashboard.getCookDateDishes so the panel's step and the
+ *  "What to Cook" card always agree. Empty set is trivially done. */
 function cooksDone(ctx: RitualContext): boolean {
-  for (const b of ctx.batches) {
-    const hasTodayWest = (b.services || []).some(s => s.loc === 'west' && s.date === ctx.todayIso);
-    if (!hasTodayWest) continue;
-    if (!batchCooked(b)) return false;
-  }
-  return true;
+  return !ctx.batches.some(b =>
+    b.cookDate === ctx.todayCook &&
+    !batchCooked(b) &&
+    (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west') === ctx.loc);
 }
 
 /** No shipment is still in flight toward Centraal. */

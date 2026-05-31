@@ -13,7 +13,7 @@
 // module pulls in no screen modules and creates no import cycle.
 
 import { S } from './state';
-import { getAmsterdamNow, isServiceClosed } from './core';
+import { getAmsterdamNow, isServiceClosed, getToday, dateToStr } from './core';
 import { todayIso, isRitualStepDone, markRitualStep } from './utils';
 import { esc } from './modal';
 import { rerenderCurrentView } from './navigate';
@@ -53,6 +53,7 @@ function currentView() {
     loc,
     now: getAmsterdamNow(),
     todayIso: today,
+    todayCook: dateToStr(getToday()),
     batches: S.batches,
     inventoryCompletions: S.inventoryCompletions,
     ritualDone: (step) => isRitualStepDone(loc, step),
