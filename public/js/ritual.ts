@@ -65,6 +65,16 @@ export function fixMyMenuRitualStep(now: Date): 'fmm-lunch' | 'fmm-dinner' {
   return minutesOfDay(now) < AFTERNOON_FROM ? 'fmm-lunch' : 'fmm-dinner';
 }
 
+/** The ritual step(s) a Fix-My-Menu run should mark done. A lunch-time run marks
+ *  only fmm-lunch; a dinner-time (evening) run does the full redistribution,
+ *  which subsumes the lunch run — so it ALSO catches up a still-pending
+ *  fmm-lunch instead of leaving it stuck overdue (otherwise a run after 17:00
+ *  can never clear the earlier one). markRitualStep is idempotent, so marking an
+ *  already-done lunch step again is harmless. */
+export function fixMyMenuRitualSteps(now: Date): ('fmm-lunch' | 'fmm-dinner')[] {
+  return fixMyMenuRitualStep(now) === 'fmm-dinner' ? ['fmm-dinner', 'fmm-lunch'] : ['fmm-lunch'];
+}
+
 // ── Context the predicates read ──────────────────────────────────────────
 
 export interface RitualContext {
@@ -176,7 +186,7 @@ const WEST_STEPS: RitualStep[] = [
     done: cooksDone },
   { key: 'inv-lunch', label: 'Cooked-food inventory', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'inventory', window: 'lunch',
     why: 'After lunch, count the cooked food. Based on these numbers the plan for this evening, and the rest of the week is made. The earlier we know what is up, the better. Count both the cold food, and the food still in pots.',
-    done: (c) => inventoryFresh(c, 'lunch') },
+    done: (c) => inventoryFresh(c, 'lunch') || inventoryFresh(c, 'dinner') },
   { key: 'fmm-lunch', label: 'Run Fix My Menu', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'fmm',
     why: 'After inventory is done both here, and at Centraal, run "Fix My Menu". Based on how busy it was during lunch the food will be redivided over both locations. It will warn you if there is a problem after this reorganisation.',
     done: (c) => c.ritualDone('fmm-lunch') },
@@ -209,7 +219,7 @@ const CENTRAAL_STEPS: RitualStep[] = [
     done: (c) => c.ritualDone('service-lunch') },
   { key: 'inv-lunch', label: 'Cooked-food inventory', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'inventory', window: 'lunch',
     why: 'After lunch, count the cooked food. Do it as close to 13:45 as possible! The people at West are waiting on your inventory to make the cooking plan. Count both the cold food, and the food still in pots.',
-    done: (c) => inventoryFresh(c, 'lunch') },
+    done: (c) => inventoryFresh(c, 'lunch') || inventoryFresh(c, 'dinner') },
   { key: 'service-dinner', label: 'Set up dinner service', phase: 'afternoon', overdueAfter: null, action: null, manual: true, window: 'dinner',
     why: 'Set up dinner before the evening.',
     done: (c) => c.ritualDone('service-dinner') },

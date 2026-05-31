@@ -23,7 +23,7 @@ import {
 import { rerenderCurrentView } from './navigate';
 import { showModal, closeModal, esc } from './modal';
 import { markFixMyMenuRun } from './transport-card';
-import { fixMyMenuRitualStep } from './ritual';
+import { fixMyMenuRitualSteps } from './ritual';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -1231,8 +1231,10 @@ function _fixMyMenuBody(): void {
   markFixMyMenuRun();
   // Record the run in the shared ritual store too (lunch vs dinner by the
   // clock), so every device's "Today" panel sees it — markFixMyMenuRun only
-  // writes this browser's localStorage. Always a West step (FMM is West-only).
-  markRitualStep('west', fixMyMenuRitualStep(getAmsterdamNow()));
+  // writes this browser's localStorage. Always West steps (FMM is West-only).
+  // An evening run also catches up a still-pending lunch run, so a missed
+  // fmm-lunch doesn't stay overdue once you've run FMM in the evening.
+  fixMyMenuRitualSteps(getAmsterdamNow()).forEach(step => markRitualStep('west', step));
   rerenderCurrentView();
   scheduleSave();
 

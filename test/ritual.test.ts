@@ -16,7 +16,7 @@
 
 import type { Batch } from '@shared/types';
 import {
-  currentPhase, isOrderDay, fixMyMenuRitualStep, computeRitual,
+  currentPhase, isOrderDay, fixMyMenuRitualStep, fixMyMenuRitualSteps, computeRitual,
   type RitualContext, type RitualView, type RitualStepView,
 } from '../public/js/ritual';
 
@@ -97,6 +97,15 @@ describe('ritual clock + order days', () => {
     expect(fixMyMenuRitualStep(new Date(2026, 4, 25, 17, 0))).toBe('fmm-dinner');
     expect(fixMyMenuRitualStep(new Date(2026, 4, 25, 20, 45))).toBe('fmm-dinner');
   });
+
+  it('fixMyMenuRitualSteps: a lunch run marks lunch; an evening run also catches up the missed lunch run', () => {
+    expect(fixMyMenuRitualSteps(new Date(2026, 4, 25, 13, 50))).toEqual(['fmm-lunch']);
+    expect(fixMyMenuRitualSteps(new Date(2026, 4, 25, 16, 59))).toEqual(['fmm-lunch']);
+    // After 17:00 a run clears the dinner step AND a still-pending lunch one,
+    // so a missed fmm-lunch doesn't stay overdue once FMM is run in the evening.
+    expect(fixMyMenuRitualSteps(new Date(2026, 4, 25, 17, 0))).toEqual(['fmm-dinner', 'fmm-lunch']);
+    expect(fixMyMenuRitualSteps(new Date(2026, 4, 25, 20, 45))).toEqual(['fmm-dinner', 'fmm-lunch']);
+  });
 });
 
 describe('computeRitual — West', () => {
@@ -123,6 +132,13 @@ describe('computeRitual — West', () => {
       inventoryCompletions: { west: { lunch: YESTERDAY_TS, dinner: null }, centraal: { lunch: null, dinner: null } },
     }));
     expect(stepOf(stale, 'inv-lunch').done).toBe(false);
+
+    // A same-day DINNER completion also satisfies the lunch inventory step —
+    // doing the evening count means a missed lunch count needn't stay overdue.
+    const dinnerOnly = computeRitual(mkCtx({
+      inventoryCompletions: { west: { lunch: null, dinner: TODAY_TS }, centraal: { lunch: null, dinner: null } },
+    }));
+    expect(stepOf(dinnerOnly, 'inv-lunch').done).toBe(true);
   });
 
   it('hides window-specific steps when that service window is closed', () => {
