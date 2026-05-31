@@ -48,6 +48,7 @@ function mkCtx(p: Partial<RitualContext>): RitualContext {
     loc: p.loc ?? 'west',
     now: p.now ?? new Date(2026, 4, 25, 13, 50),
     todayIso: p.todayIso ?? '2026-05-25',
+    todayCook: p.todayCook ?? '25/05/2026',
     batches: p.batches ?? [],
     inventoryCompletions: p.inventoryCompletions ?? {
       west: { lunch: null, dinner: null },
@@ -164,26 +165,40 @@ describe('computeRitual — West', () => {
     expect(cClosed.steps.some(s => s.key === 'inv-lunch')).toBe(false);
   });
 
-  it('derives cook-underway from real cooked stock, NOT the planning cookDate', () => {
-    const westLunch = { loc: 'west' as const, date: '2026-05-25', meal: 'lunch' as const };
-    // Regression guard (H1): cookDate is set when a dish is slotted/generated,
-    // so a planned-but-uncooked batch (cookDate set, no stock) must NOT be done.
+  it('derives cook-underway from the day\'s planned cooks by COOK DATE, not service slots', () => {
+    // The Sunday-cook regression: dishes cooked TODAY for later in the week have
+    // NO service today. A cookDate-today batch with only a FUTURE service must
+    // still count as "to cook" — the old service-slot check wrongly read "done".
+    const sundayCook = computeRitual(mkCtx({
+      todayIso: '2026-05-31', todayCook: '31/05/2026',
+      batches: [mkBatch({ cookDate: '31/05/2026', inventory: [], services: [{ loc: 'west', date: '2026-06-02', meal: 'dinner' }] })],
+    }));
+    expect(stepOf(sundayCook, 'cook-underway').done).toBe(false);
+
+    // Regression guard (H1): cookDate is set when a dish is slotted/generated, so
+    // a planned-but-uncooked batch (cookDate today, no stock) must NOT be done.
     const planned = computeRitual(mkCtx({
-      batches: [mkBatch({ cookDate: '25/05/2026', inventory: [], services: [westLunch] })],
+      batches: [mkBatch({ cookDate: '25/05/2026', inventory: [] })],
     }));
     expect(stepOf(planned, 'cook-underway').done).toBe(false);
 
     // Actually cooked — has stock.
     const cooked = computeRitual(mkCtx({
-      batches: [mkBatch({ cookDate: '25/05/2026', inventory: [{ loc: 'west', storage: 'Gastro', qty: 40, cookDate: '25/05/2026' }], services: [westLunch] })],
+      batches: [mkBatch({ cookDate: '25/05/2026', inventory: [{ loc: 'west', storage: 'Gastro', qty: 40, cookDate: '25/05/2026' }] })],
     }));
     expect(stepOf(cooked, 'cook-underway').done).toBe(true);
 
     // Cooked then shipped (stock now in a pending shipment) still counts as cooked.
     const shipped = computeRitual(mkCtx({
-      batches: [mkBatch({ cookDate: '25/05/2026', inventory: [], shipments: [{ id: 's1', fromLoc: 'west', toLoc: 'centraal', storage: 'Gastro', qty: 20, sentAt: TODAY_TS, arrived: false, cookDate: '25/05/2026' }], services: [westLunch] })],
+      batches: [mkBatch({ cookDate: '25/05/2026', inventory: [], shipments: [{ id: 's1', fromLoc: 'west', toLoc: 'centraal', storage: 'Gastro', qty: 20, sentAt: TODAY_TS, arrived: false, cookDate: '25/05/2026' }] })],
     }));
     expect(stepOf(shipped, 'cook-underway').done).toBe(true);
+
+    // A batch whose cook day isn't today is not part of today's cooking.
+    const otherDay = computeRitual(mkCtx({
+      batches: [mkBatch({ cookDate: '24/05/2026', inventory: [] })],
+    }));
+    expect(stepOf(otherDay, 'cook-underway').done).toBe(true);
   });
 
   it('reads manual-tick steps from ritualDone', () => {

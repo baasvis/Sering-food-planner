@@ -1025,8 +1025,11 @@ export function renderDashboardContent() {
     .sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
   const totalStock = Math.round(stockBatches.reduce((s, b) => s + getStockAt(b, loc), 0) * 10) / 10;
 
-  // ── Cook: uncooked batches for selected meal today ──
-  const cookDishes = (S.planner[`${loc}-${todayStr}-${meal}`] || []).filter(d => !isBatchCooked(d));
+  // ── Cook: batches scheduled to be cooked here today, BY COOK DATE — not by
+  //    today's service slots. The big Sunday cook is cooked today for later in
+  //    the week (no service today), so a slot lookup would miss it. Same signal
+  //    as the "Today" panel's cook step (getCookDateDishes). ──
+  const cookDishes = getCookDateDishes(loc, getToday());
 
   // ── Chop: ingredients for selected meal today + tomorrow ──
   const vegToday = getVegIngredients(getMenuDishesForMeal(loc, todayStr, meal));
@@ -1137,7 +1140,7 @@ export function renderDashboardContent() {
         <div class="dash-card" id="dash-cook-card">
           <div class="dash-card-title"><span class="dash-card-icon">👨‍🍳</span> What to Cook</div>
           ${cookDishes.length === 0
-            ? `<div class="dash-empty">All cooked for ${meal} 🎉</div>`
+            ? `<div class="dash-empty">All cooked for today 🎉</div>`
             : cookDishes.map(d => renderDashChip(d, {
                 meal,
                 dateStr: todayStr,
