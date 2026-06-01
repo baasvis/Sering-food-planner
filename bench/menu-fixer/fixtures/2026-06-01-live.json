@@ -1,0 +1,1839 @@
+{
+  "today": "2026-06-01",
+  "batches": [
+    {
+      "id": "45a9df46-40b8-4a1f-beab-1511dc542c65",
+      "name": "Freezer items TBD",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "19/05/2026",
+      "note": "",
+      "services": [],
+      "createdAt": "2026-05-18T19:24:45.221Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "846cc29e-4fb8-4492-846f-3601a289c7c6",
+      "name": "North indian tomato and funegreek dahl",
+      "type": "Main course",
+      "serving": 240,
+      "allergens": [
+        "241",
+        "Sulphite"
+      ],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "29/05/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-01",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-01",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-05-31T19:21:53.021Z",
+      "recipeId": "07e3030b-f24d-4c4c-86b3-8cdd3909626f",
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [
+        {
+          "loc": "west",
+          "qty": 5,
+          "storage": "Gastro",
+          "cookDate": "29/05/2026"
+        }
+      ],
+      "shipments": []
+    },
+    {
+      "id": "62a82bbe-969e-4f75-92c1-d7d33c8f60c7",
+      "name": "Pea mint soup",
+      "type": "Soup",
+      "serving": 250,
+      "allergens": [
+        "Sulphite"
+      ],
+      "extraAllergens": [],
+      "orderFor": true,
+      "cookDate": "31/05/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-01",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-01",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-01",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-02",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-02",
+          "meal": "lunch"
+        }
+      ],
+      "createdAt": "2026-05-28T14:11:07.264Z",
+      "recipeId": "aba213c1-72d2-4bb0-a37f-62e34fd81104",
+      "actualIngredients": [
+        {
+          "name": "onion",
+          "unit": "Kilos",
+          "amount": 23.045,
+          "ingredientId": "eaa157dc-0d5e-4eb0-b782-139907e13973"
+        },
+        {
+          "name": "frozen pea",
+          "unit": "Kilos",
+          "amount": 46.089,
+          "ingredientId": "b43b14de-49ac-4708-9e0e-cfde9021ae1b"
+        },
+        {
+          "name": "Veggie stock (bought)",
+          "unit": "Kilos",
+          "amount": 46.089,
+          "ingredientId": "69a28f7a-8fd7-43a4-b9a6-7916c93bf1af"
+        },
+        {
+          "name": "mint",
+          "unit": "Grams",
+          "amount": 3073,
+          "ingredientId": "50c8f7bc-1e16-45c2-a24f-268820046307"
+        }
+      ],
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [
+        {
+          "loc": "west",
+          "qty": 15,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        },
+        {
+          "loc": "centraal",
+          "qty": 28,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        }
+      ],
+      "shipments": [
+        {
+          "id": "974ab5ce-009f-4f61-8e75-98b9f270cfd8",
+          "qty": 25,
+          "toLoc": "centraal",
+          "sentAt": "2026-05-31T14:53:28.809Z",
+          "arrived": true,
+          "fromLoc": "west",
+          "storage": "Gastro",
+          "cookDate": "31/05/2026",
+          "arrivedAt": "2026-05-31T15:04:14.708Z"
+        },
+        {
+          "id": "080c5ece-6532-41e1-9d05-209be4486c9a",
+          "qty": 20,
+          "toLoc": "centraal",
+          "sentAt": "2026-06-01T10:16:06.764Z",
+          "arrived": true,
+          "fromLoc": "west",
+          "storage": "Gastro",
+          "cookDate": "31/05/2026",
+          "arrivedAt": "2026-06-01T10:17:15.985Z"
+        }
+      ]
+    },
+    {
+      "id": "7084ecb2-139b-4a0a-8d55-7eb50081400a",
+      "name": "Pumpkin Celeriac Stew",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "29/05/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "centraal",
+          "date": "2026-05-30",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-05-30",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-05-30",
+          "meal": "dinner"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-05-31",
+          "meal": "dinner"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-01",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-01",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-05-29T17:18:53.195Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [
+        {
+          "loc": "west",
+          "qty": 0,
+          "storage": "Gastro",
+          "cookDate": "29/05/2026"
+        },
+        {
+          "loc": "centraal",
+          "qty": 7,
+          "storage": "Gastro",
+          "cookDate": "29/05/2026"
+        }
+      ],
+      "shipments": [
+        {
+          "id": "5622b3c6-b14e-4030-a9c8-a8cf66cbd19c",
+          "qty": 46.7,
+          "toLoc": "centraal",
+          "sentAt": "2026-05-31T14:53:31.707Z",
+          "arrived": true,
+          "fromLoc": "west",
+          "storage": "Gastro",
+          "cookDate": "29/05/2026",
+          "arrivedAt": "2026-05-31T15:04:10.525Z"
+        }
+      ]
+    },
+    {
+      "id": "a9d6e04d-a450-4707-9a75-83b6f674d93f",
+      "name": "Jeera Aloo",
+      "type": "Main course",
+      "serving": 250,
+      "allergens": [
+        "Sulphite"
+      ],
+      "extraAllergens": [],
+      "orderFor": true,
+      "cookDate": "01/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-02",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-03",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-03",
+          "meal": "lunch"
+        }
+      ],
+      "createdAt": "2026-05-28T14:32:51.818Z",
+      "recipeId": "e14757fa-2944-4563-98db-95e4be3568f4",
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "60f6ac83-2bdc-4e0f-8753-ad68a4a561bb",
+      "name": "Sat Soup",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "16/05/2026",
+      "note": "",
+      "services": [],
+      "createdAt": "2026-05-15T15:17:08.506Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "db6b00b2-b049-4d9b-960a-986cc754de2f",
+      "name": "Tue main 02/06",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "02/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-04",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-03",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-03",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-04",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-03",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-02",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "1f3fd192-5a52-48cb-a6ee-970c01b3b47e",
+      "name": "Wed soup 03/06",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "03/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-03",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-04",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-04",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-05",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-05",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-04",
+          "meal": "lunch"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "d09b81a5-4a82-490d-91cd-e07cf46f5ab2",
+      "name": "Tue soup 02/06",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "02/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-02",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-03",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-03",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-04",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-04",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-03",
+          "meal": "lunch"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "2b853730-bb03-479f-814d-e2cc0a480471",
+      "name": "Mon soup 01/06",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "01/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-01",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-02",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-03",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-03",
+          "meal": "lunch"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "cfb1df42-8e6d-4c3b-9c79-8e32eb3e13e0",
+      "name": "Wed main 03/06",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "03/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-05",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-04",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-03",
+          "meal": "dinner"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-05",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-04",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-04",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "e7fcc1ed-0ab2-4e36-8a03-8ca4a7438911",
+      "name": "Pumpkin Coconut Curry Soup",
+      "type": "Soup",
+      "serving": 250,
+      "allergens": [
+        "Sulphite"
+      ],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": null,
+      "note": "",
+      "services": [],
+      "createdAt": "2026-05-26T14:42:44.926Z",
+      "recipeId": "d6737edf-cc26-40a5-a5de-b7ad10a8c25d",
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "4f4c8a39-809c-4da4-baa4-6343ebb816c7",
+      "name": "Sun soup 1 07/06",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "07/06/2026",
+      "note": "",
+      "services": [],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "a6052e18-bf1d-47be-a0bb-a9bff1453633",
+      "name": "Sun soup 2 07/06",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "07/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "centraal",
+          "date": "2026-06-07",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "e97c471c-c42b-4ccf-b527-7266fa91b413",
+      "name": "Sun soup 3 07/06",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "07/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "centraal",
+          "date": "2026-06-07",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "ac1ace19-9a58-4620-802f-168e15a63afd",
+      "name": "Sun main 1 07/06",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "07/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "centraal",
+          "date": "2026-06-07",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "bd89f1b7-d67d-4e82-bbb9-7c8a5c25e515",
+      "name": "Sun main 2 07/06",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "07/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "centraal",
+          "date": "2026-06-07",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "0918afe1-f2fd-433c-a485-20922f671c6b",
+      "name": "Sun main 3 07/06",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "07/06/2026",
+      "note": "",
+      "services": [],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "302310cd-dd79-4e2a-b3de-755504535aa6",
+      "name": "Fri soup 05/06",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "05/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-05",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-06",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "cd5fbb2e-6a9c-47f1-bf5a-99b81ac80032",
+      "name": "Thu soup 04/06",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "04/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-04",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-05",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-05",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-06",
+          "meal": "dinner"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-05",
+          "meal": "lunch"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "000bc1f6-e33f-4e28-b41e-5f66417b948b",
+      "name": "Fri main 05/06",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "05/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-05",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-06",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "7bfa340c-c9bb-4089-91ea-3d629d1bdb37",
+      "name": "Thu main 04/06",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": "04/06/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "centraal",
+          "date": "2026-06-05",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-05",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-05",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-06",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-04",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-06-01T11:56:08.907Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": true,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "e705c137-d1c9-4dac-81ca-4cf15f0c1a7e",
+      "name": "Mushroom Butter Masala",
+      "type": "Main course",
+      "serving": 240,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": true,
+      "cookDate": "31/05/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "centraal",
+          "date": "2026-05-31",
+          "meal": "dinner"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-01",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-01",
+          "meal": "dinner"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-02",
+          "meal": "lunch"
+        }
+      ],
+      "createdAt": "2026-05-28T14:13:28.318Z",
+      "recipeId": "a3e3fab6-6372-4364-a1a3-a1158332dd28",
+      "actualIngredients": [
+        {
+          "name": "onion",
+          "unit": "Grams",
+          "amount": 14963,
+          "ingredientId": "eaa157dc-0d5e-4eb0-b782-139907e13973"
+        },
+        {
+          "name": "Tomato (Tinned)",
+          "unit": "Grams",
+          "amount": 33666,
+          "ingredientId": "115c3701-17a7-4294-b442-8de400336c2b"
+        },
+        {
+          "name": "Salt",
+          "unit": "Grams",
+          "amount": 449,
+          "ingredientId": "6f24e5c3-16f1-4a6e-9fb2-7f5d9aa95cb0"
+        },
+        {
+          "name": "Chilli powder",
+          "unit": "Grams",
+          "amount": 224,
+          "ingredientId": "9aec20a6-1ab7-47c7-aaa9-dfd1ee5bd0e4"
+        },
+        {
+          "name": "Garam masala",
+          "unit": "Grams",
+          "amount": 299,
+          "ingredientId": "1d3c2de0-26d1-457b-b419-8e4e77b45e93"
+        },
+        {
+          "name": "Coriander (powder)",
+          "unit": "Grams",
+          "amount": 224,
+          "ingredientId": "a3e83328-fe3b-43e3-b39a-12e1369b1a22"
+        },
+        {
+          "name": "Bay Leaf",
+          "unit": "Grams",
+          "amount": 75,
+          "ingredientId": "1d7defb9-326b-440b-b0d6-42cd23e1c196"
+        },
+        {
+          "name": "Cinnamon",
+          "unit": "Grams",
+          "amount": 224,
+          "ingredientId": "7b1173ac-de93-4562-8474-04c8afa5f5b8"
+        },
+        {
+          "name": "cardamon (whole)",
+          "unit": "Grams",
+          "amount": 224,
+          "ingredientId": "30e98ea0-a7b1-46c2-9432-c67802d35df7"
+        },
+        {
+          "name": "vegan butter",
+          "unit": "Grams",
+          "amount": 2805,
+          "ingredientId": "dc48dd1e-5e78-4d5a-a618-a3120bfe5c31"
+        },
+        {
+          "name": "Garlic mashed",
+          "unit": "Grams",
+          "amount": 561,
+          "ingredientId": "94a6d64e-0ded-4149-964c-a79af910b33b"
+        },
+        {
+          "name": "Ginger mashed",
+          "unit": "Grams",
+          "amount": 748,
+          "ingredientId": "54d05a55-15f4-4acb-acc1-87843ddbf84c"
+        },
+        {
+          "name": "Water",
+          "unit": "ML",
+          "amount": 14963,
+          "ingredientId": "9ce37781-174f-455d-b906-95f5799c4720"
+        },
+        {
+          "name": "Vegan cream 15%",
+          "unit": "Grams",
+          "amount": 4489,
+          "ingredientId": "535391a3-7b5c-46a5-959e-7cef0a550110"
+        },
+        {
+          "name": "Sunflower oil",
+          "unit": "ML",
+          "amount": 1122,
+          "ingredientId": "c99c4a5f-ff62-4679-bdcd-95b701a8d2f4"
+        }
+      ],
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [
+        {
+          "loc": "west",
+          "qty": 12,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        },
+        {
+          "loc": "centraal",
+          "qty": 7,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        }
+      ],
+      "shipments": [
+        {
+          "id": "4119389c-3d6a-4ae6-9ee3-17fe23f31d9f",
+          "qty": 40,
+          "toLoc": "centraal",
+          "sentAt": "2026-05-31T14:53:30.336Z",
+          "arrived": true,
+          "fromLoc": "west",
+          "storage": "Gastro",
+          "cookDate": "31/05/2026",
+          "arrivedAt": "2026-05-31T15:04:15.167Z"
+        }
+      ]
+    },
+    {
+      "id": "4a38ad3b-8149-4d38-89b4-4a9ec5b48adb",
+      "name": "Watermelon Gazpacho",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [
+        "Sulphites"
+      ],
+      "extraAllergens": [],
+      "orderFor": true,
+      "cookDate": "31/05/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "centraal",
+          "date": "2026-05-31",
+          "meal": "dinner"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-01",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-01",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-02",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-02",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-02",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-05-28T14:10:30.215Z",
+      "recipeId": "d3ac4d91-0806-41a0-bd74-2e5e96391790",
+      "actualIngredients": [
+        {
+          "name": "Tomato (meaty)",
+          "unit": "Kilos",
+          "amount": 13.206,
+          "ingredientId": "bd8edf14-6dd0-46f9-b3ba-eb33b94061a3"
+        },
+        {
+          "name": "red pepper",
+          "unit": "Kilos",
+          "amount": 6.603,
+          "ingredientId": "ce319683-2109-4c57-943d-0bd65e84136e"
+        },
+        {
+          "name": "Cucumber",
+          "unit": "Kilos",
+          "amount": 6.603,
+          "ingredientId": "557058f6-2070-48fc-9d10-3a6b0a4d04a2"
+        },
+        {
+          "name": "Red onion",
+          "unit": "Grams",
+          "amount": 2641,
+          "ingredientId": "2f886a8c-a6b7-4e95-9ef8-97dfc0eab1f9"
+        },
+        {
+          "name": "Garlic mashed",
+          "unit": "Grams",
+          "amount": 396,
+          "ingredientId": "94a6d64e-0ded-4149-964c-a79af910b33b"
+        },
+        {
+          "name": "Spicy green pepper",
+          "unit": "Grams",
+          "amount": 396,
+          "ingredientId": "25367c33-32cd-49e3-bd01-06af964a1096"
+        },
+        {
+          "name": "Olive oil (cooking)",
+          "unit": "ML",
+          "amount": 1321,
+          "ingredientId": "3fc2edfe-cbcf-4f5a-8db4-17e56d8e8f9b"
+        },
+        {
+          "name": "White wine vinegar",
+          "unit": "ML",
+          "amount": 990,
+          "ingredientId": "1ddf565c-ba59-44bd-86f7-2ed0253043eb"
+        },
+        {
+          "name": "Salt",
+          "unit": "Grams",
+          "amount": 198,
+          "ingredientId": "6f24e5c3-16f1-4a6e-9fb2-7f5d9aa95cb0"
+        },
+        {
+          "name": "Parsley",
+          "unit": "Grams",
+          "amount": 330,
+          "ingredientId": "7cb82283-5f34-46c4-bb88-58820fa311cb"
+        },
+        {
+          "name": "Lemon",
+          "unit": "Grams",
+          "amount": 1321,
+          "ingredientId": "e219e4e3-75fe-4dbd-a56f-1c6f49f44a34"
+        }
+      ],
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [
+        {
+          "loc": "west",
+          "qty": 45,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        },
+        {
+          "loc": "centraal",
+          "qty": 28,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        }
+      ],
+      "shipments": [
+        {
+          "id": "0fd39817-b08e-48bf-908f-d5ec32fb53b0",
+          "qty": 18.7,
+          "toLoc": "centraal",
+          "sentAt": "2026-05-31T14:53:29.876Z",
+          "arrived": true,
+          "fromLoc": "west",
+          "storage": "Gastro",
+          "cookDate": "31/05/2026",
+          "arrivedAt": "2026-05-31T15:04:14.248Z"
+        },
+        {
+          "id": "115f919d-59f3-42a4-9174-cd831f052695",
+          "qty": 40,
+          "toLoc": "centraal",
+          "sentAt": "2026-06-01T10:15:48.131Z",
+          "arrived": true,
+          "fromLoc": "west",
+          "storage": "Gastro",
+          "cookDate": "31/05/2026",
+          "arrivedAt": "2026-06-01T10:17:14.145Z"
+        }
+      ]
+    },
+    {
+      "id": "1d330ae1-72d3-4d80-ba30-c2039d08cc1a",
+      "name": "South Indian Chickpea Curry (quick version)",
+      "type": "Main course",
+      "serving": 250,
+      "allergens": [
+        "Mustard",
+        "Sulphite",
+        "Sulphites"
+      ],
+      "extraAllergens": [],
+      "orderFor": true,
+      "cookDate": "31/05/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-01",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-02",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-02",
+          "meal": "lunch"
+        }
+      ],
+      "createdAt": "2026-05-28T14:13:54.091Z",
+      "recipeId": "f2a89c08-5496-415c-a238-fc2c6e1453d3",
+      "actualIngredients": [
+        {
+          "name": "Sunflower oil",
+          "unit": "ML",
+          "amount": 1485,
+          "ingredientId": "c99c4a5f-ff62-4679-bdcd-95b701a8d2f4"
+        },
+        {
+          "name": "Cumin (whole)",
+          "unit": "Grams",
+          "amount": 148,
+          "ingredientId": "8d723521-4994-4bc9-a6f8-83eaae0a9ed7"
+        },
+        {
+          "name": "Yellow Mustard Seeds",
+          "unit": "Grams",
+          "amount": 186,
+          "ingredientId": "13b14f1c-b76e-42a5-b2e7-fa23a9836c3b"
+        },
+        {
+          "name": "Curry Leaves",
+          "unit": "Grams",
+          "amount": 74,
+          "ingredientId": "2056e211-9acb-4c51-9b27-f1e0d7adcf08"
+        },
+        {
+          "name": "Garlic mashed",
+          "unit": "Grams",
+          "amount": 1485,
+          "ingredientId": "94a6d64e-0ded-4149-964c-a79af910b33b"
+        },
+        {
+          "name": "Ginger mashed",
+          "unit": "Grams",
+          "amount": 891,
+          "ingredientId": "54d05a55-15f4-4acb-acc1-87843ddbf84c"
+        },
+        {
+          "name": "Kurkumma",
+          "unit": "Grams",
+          "amount": 148,
+          "ingredientId": "579aa468-680c-4004-bef6-531f5e9a2faf"
+        },
+        {
+          "name": "Coriander (powder)",
+          "unit": "Grams",
+          "amount": 223,
+          "ingredientId": "a3e83328-fe3b-43e3-b39a-12e1369b1a22"
+        },
+        {
+          "name": "Chilli powder",
+          "unit": "Grams",
+          "amount": 111,
+          "ingredientId": "9aec20a6-1ab7-47c7-aaa9-dfd1ee5bd0e4"
+        },
+        {
+          "name": "Tomato puree",
+          "unit": "Grams",
+          "amount": 2969,
+          "ingredientId": "d009dc6f-5b97-4547-853a-cc561f2aa244"
+        },
+        {
+          "name": "Tomato (Tinned)",
+          "unit": "Grams",
+          "amount": 22270,
+          "ingredientId": "115c3701-17a7-4294-b442-8de400336c2b"
+        },
+        {
+          "name": "coconut milk",
+          "unit": "ML",
+          "amount": 11878,
+          "ingredientId": "4ff9ae97-71b4-4fe8-b785-63499c6b0c4a"
+        },
+        {
+          "name": "chickpeas (canned)",
+          "unit": "Grams",
+          "amount": 29694,
+          "ingredientId": "70e28473-5578-41f9-8733-beb7c9406b2b"
+        },
+        {
+          "name": "Tamarind Paste",
+          "unit": "Grams",
+          "amount": 594,
+          "ingredientId": "6ae066b2-bb55-484f-b04a-2aeddb731649"
+        },
+        {
+          "name": "Salt",
+          "unit": "Grams",
+          "amount": 223,
+          "ingredientId": "6f24e5c3-16f1-4a6e-9fb2-7f5d9aa95cb0"
+        },
+        {
+          "name": "Coriander (herb)",
+          "unit": "Grams",
+          "amount": 445,
+          "ingredientId": "5598fc22-0638-458e-907c-10625b2f7619"
+        }
+      ],
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [
+        {
+          "loc": "west",
+          "qty": 40,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        }
+      ],
+      "shipments": []
+    },
+    {
+      "id": "d4140541-d421-42ec-93ab-09714666865f",
+      "name": "Pasta al Pesto",
+      "type": "Main course",
+      "serving": 80,
+      "allergens": [
+        "Nuts",
+        "Soy",
+        "Peanuts",
+        "milk",
+        "Sesame",
+        "seeds"
+      ],
+      "extraAllergens": [],
+      "orderFor": true,
+      "cookDate": "31/05/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "centraal",
+          "date": "2026-06-01",
+          "meal": "dinner"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-02",
+          "meal": "lunch"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-02",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-01",
+          "meal": "dinner"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-02",
+          "meal": "lunch"
+        }
+      ],
+      "createdAt": "2026-05-28T14:05:06.117Z",
+      "recipeId": "24ba0cc4-3f84-441e-bd4d-8a68801550c6",
+      "actualIngredients": [
+        {
+          "name": "pesto",
+          "unit": "Kilos",
+          "amount": 5,
+          "ingredientId": "a0137ee3-d3f1-45fe-acb7-1c69d5c3fbc3"
+        },
+        {
+          "name": "Spinach (frozen)",
+          "unit": "Kilos",
+          "amount": 15,
+          "ingredientId": "56fe9fb3-181b-4de6-a40d-b5743f82858a"
+        },
+        {
+          "name": "Pumpkinseeds",
+          "unit": "Kilos",
+          "amount": 3.75,
+          "ingredientId": "8030e08f-5842-4aac-a182-c988f5c0632c"
+        },
+        {
+          "name": "Nutritional Yeast",
+          "unit": "Kilos",
+          "amount": 2.5,
+          "ingredientId": "65baa949-3406-4d2f-bed1-b66259d42a26"
+        }
+      ],
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [
+        {
+          "loc": "west",
+          "qty": 20,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        },
+        {
+          "loc": "centraal",
+          "qty": 8,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        }
+      ],
+      "shipments": [
+        {
+          "id": "c52c12c1-cbbd-4ed8-b5ad-0e9a6b8cda38",
+          "qty": 8,
+          "toLoc": "centraal",
+          "sentAt": "2026-06-01T10:17:06.364Z",
+          "arrived": true,
+          "fromLoc": "west",
+          "storage": "Gastro",
+          "cookDate": "31/05/2026",
+          "arrivedAt": "2026-06-01T10:17:16.846Z"
+        }
+      ]
+    },
+    {
+      "id": "9706b122-b64c-4067-8cae-23fb0f6f80fb",
+      "name": "Roasted red pepper and garlic soup",
+      "type": "Soup",
+      "serving": 280,
+      "allergens": [
+        "241"
+      ],
+      "extraAllergens": [],
+      "orderFor": true,
+      "cookDate": "31/05/2026",
+      "note": "",
+      "services": [
+        {
+          "loc": "west",
+          "date": "2026-06-01",
+          "meal": "lunch"
+        },
+        {
+          "loc": "west",
+          "date": "2026-06-01",
+          "meal": "dinner"
+        },
+        {
+          "loc": "centraal",
+          "date": "2026-06-02",
+          "meal": "dinner"
+        }
+      ],
+      "createdAt": "2026-05-28T14:10:57.472Z",
+      "recipeId": "a82ffd47-cece-4e4c-b75b-5ef433c792c6",
+      "actualIngredients": [
+        {
+          "name": "Red onion",
+          "unit": "Kilos",
+          "amount": 30.574,
+          "ingredientId": "2f886a8c-a6b7-4e95-9ef8-97dfc0eab1f9"
+        },
+        {
+          "name": "smoked paprika powder (sweet)",
+          "unit": "Grams",
+          "amount": 566,
+          "ingredientId": "e1eed39d-0adc-4e2c-914e-1222d8385a58"
+        },
+        {
+          "name": "Tomato (Tinned)",
+          "unit": "Kilos",
+          "amount": 61.149,
+          "ingredientId": "115c3701-17a7-4294-b442-8de400336c2b"
+        },
+        {
+          "name": "Thyme",
+          "unit": "Grams",
+          "amount": 138,
+          "ingredientId": "e1e51102-2a44-41de-a479-1391ac1cfd8b"
+        },
+        {
+          "name": "Garlic mashed",
+          "unit": "Grams",
+          "amount": 2568,
+          "ingredientId": "94a6d64e-0ded-4149-964c-a79af910b33b"
+        },
+        {
+          "name": "Date sytup",
+          "unit": "Grams",
+          "amount": 1575,
+          "ingredientId": "600c5ec1-bf47-42f4-9fe4-2030dc7f3640"
+        },
+        {
+          "name": "Harissa paste",
+          "unit": "Grams",
+          "amount": 2003,
+          "ingredientId": "b3ebb438-e3d5-4fbe-989d-d0ceb83b0b5f"
+        },
+        {
+          "name": "Roasted paprika (canned)",
+          "unit": "Kilos",
+          "amount": 30.574,
+          "ingredientId": "938d1bd0-b7ef-486c-80b9-f4918fa9f79d"
+        },
+        {
+          "name": "Veggie stock (bought)",
+          "unit": "Liters",
+          "amount": 45.862,
+          "ingredientId": "69a28f7a-8fd7-43a4-b9a6-7916c93bf1af"
+        }
+      ],
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [
+        {
+          "loc": "west",
+          "qty": 30,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        },
+        {
+          "loc": "centraal",
+          "qty": 20,
+          "storage": "Gastro",
+          "cookDate": "31/05/2026"
+        }
+      ],
+      "shipments": [
+        {
+          "id": "a2a5e219-b6a4-48a6-86bb-7af8ca60463a",
+          "qty": 14,
+          "toLoc": "centraal",
+          "sentAt": "2026-05-31T14:53:29.418Z",
+          "arrived": true,
+          "fromLoc": "west",
+          "storage": "Gastro",
+          "cookDate": "31/05/2026",
+          "arrivedAt": "2026-05-31T15:04:13.786Z"
+        },
+        {
+          "id": "0d8abae1-865a-4985-af77-bf941d6bb605",
+          "qty": 20,
+          "toLoc": "centraal",
+          "sentAt": "2026-06-01T10:16:33.047Z",
+          "arrived": true,
+          "fromLoc": "west",
+          "storage": "Gastro",
+          "cookDate": "31/05/2026",
+          "arrivedAt": "2026-06-01T10:17:15.212Z"
+        }
+      ]
+    },
+    {
+      "id": "7227779a-9c8b-43db-9577-6a3bd36e8745",
+      "name": "Pumpkin Celeriac Stew",
+      "type": "Main course",
+      "serving": 200,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": null,
+      "note": "",
+      "services": [],
+      "createdAt": "2026-05-29T17:17:56.324Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [],
+      "shipments": []
+    },
+    {
+      "id": "7dcb1b78-714a-4640-be94-af10df9e3b03",
+      "name": "Pumpkin Celeriac Stew",
+      "type": "Main course",
+      "serving": 280,
+      "allergens": [],
+      "extraAllergens": [],
+      "orderFor": false,
+      "cookDate": null,
+      "note": "",
+      "services": [],
+      "createdAt": "2026-05-29T17:18:21.789Z",
+      "recipeId": null,
+      "actualIngredients": null,
+      "cookNotes": "",
+      "stockDeducted": false,
+      "generated": false,
+      "inventory": [],
+      "shipments": []
+    }
+  ],
+  "guests": {
+    "west": {
+      "Mon": {
+        "lunch": 100,
+        "dinner": 110
+      },
+      "Tue": {
+        "lunch": 100,
+        "dinner": 110
+      },
+      "Wed": {
+        "lunch": 100,
+        "dinner": 110
+      },
+      "Thu": {
+        "lunch": 133,
+        "dinner": 121
+      },
+      "Fri": {
+        "lunch": 98,
+        "dinner": 133
+      },
+      "Sat": {
+        "lunch": 3,
+        "dinner": 120
+      },
+      "Sun": {
+        "lunch": 0,
+        "dinner": 0
+      }
+    },
+    "centraal": {
+      "Mon": {
+        "lunch": 80,
+        "dinner": 85
+      },
+      "Tue": {
+        "lunch": 100,
+        "dinner": 240
+      },
+      "Wed": {
+        "lunch": 100,
+        "dinner": 0
+      },
+      "Thu": {
+        "lunch": 110,
+        "dinner": 0
+      },
+      "Fri": {
+        "lunch": 100,
+        "dinner": 0
+      },
+      "Sat": {
+        "lunch": 2,
+        "dinner": 0
+      },
+      "Sun": {
+        "lunch": 3,
+        "dinner": 200
+      }
+    }
+  },
+  "caterings": [
+    {
+      "id": "d0a63caa-0333-4faf-ac7a-dfecc4f1e8c5",
+      "name": "Het Actiefonds Lunch 3",
+      "date": "03/06/2026",
+      "guestCount": 40,
+      "deliveryMode": "delivery",
+      "dishes": [
+        {
+          "name": "Tue main 02/06",
+          "type": "Main course",
+          "dishId": "db6b00b2-b049-4d9b-960a-986cc754de2f"
+        },
+        {
+          "name": "Tue soup 02/06",
+          "type": "Soup",
+          "dishId": "d09b81a5-4a82-490d-91cd-e07cf46f5ab2"
+        }
+      ],
+      "toppings": [],
+      "logisticsNotes": "Number of guests: 40\n\nPick up: No\n\nDelivery: COLD\n\nTime for pick up or delivery:\n\nLocation: Lombokstrat 40, Amsterdam\n\nFood required: FULL DE SERING MEAL (SOUP, MAIN, BREAD, TOPPINGS)\n\nAllergies (essential):\n\n- 1p with a Honey allergy\n\n- 1p with Gluten intolerance\n\nOptional extras\n\nDrinks (if required): \n\nEquipment needed (if required): bread knife",
+      "createdAt": "2026-05-27T09:21:18.707Z"
+    },
+    {
+      "id": "2ef07e22-a271-4b66-b80e-e9cf738c1f9d",
+      "name": "43k AZC Lunch 3/6",
+      "date": "03/06/2026",
+      "guestCount": 50,
+      "deliveryMode": "delivery",
+      "dishes": [
+        {
+          "name": "Tue main 02/06",
+          "type": "Main course",
+          "dishId": "db6b00b2-b049-4d9b-960a-986cc754de2f"
+        },
+        {
+          "name": "Tue soup 02/06",
+          "type": "Soup",
+          "dishId": "d09b81a5-4a82-490d-91cd-e07cf46f5ab2"
+        }
+      ],
+      "toppings": [],
+      "logisticsNotes": "Catering info: FULL SERING (bread, 1x soup, 1x main, toppings) for 50 people\nFirst lunch for the Traveling Kitchen (43k) Project\n\nWe agreed to bring food for 50 people to the location, warm and ready to serve. \n\nLotti will be bringing 2 volunteers with her to the site and we will be serving out of their cantine.",
+      "createdAt": "2026-05-27T09:23:50.541Z"
+    },
+    {
+      "id": "9292a888-991d-4c07-b8dc-76168c169d05",
+      "name": "43k Cascoland 3/6",
+      "date": "03/06/2026",
+      "guestCount": 15,
+      "deliveryMode": "delivery",
+      "dishes": [
+        {
+          "name": "Tue main 02/06",
+          "type": "Main course",
+          "dishId": "db6b00b2-b049-4d9b-960a-986cc754de2f"
+        },
+        {
+          "name": "Tue soup 02/06",
+          "type": "Soup",
+          "dishId": "d09b81a5-4a82-490d-91cd-e07cf46f5ab2"
+        }
+      ],
+      "toppings": [],
+      "logisticsNotes": "Catering info: FULL SERING (bread, 1x soup, 1x main, toppings) for 15 people\nDinner for the Traveling Kitchen (43k) Project\n\nWe agreed to bring food for 15 people to the location, warm and ready to serve (check with Lotti)\n\nLotti will be bringing 2 volunteers with her to the site and we will be serving out of their cantine.",
+      "createdAt": "2026-05-27T09:25:16.723Z"
+    },
+    {
+      "id": "77c72270-f4f7-4e64-872d-c62f304f73fe",
+      "name": "Het Actiefonds Lunch 2",
+      "date": "02/06/2026",
+      "guestCount": 40,
+      "deliveryMode": "delivery",
+      "dishes": [
+        {
+          "name": "Jeera Aloo",
+          "type": "Main course",
+          "dishId": "a9d6e04d-a450-4707-9a75-83b6f674d93f"
+        },
+        {
+          "name": "Mon soup 01/06",
+          "type": "Soup",
+          "dishId": "2b853730-bb03-479f-814d-e2cc0a480471"
+        }
+      ],
+      "toppings": [],
+      "logisticsNotes": "Number of guests: 40\n\nPick up: No\n\nDelivery: COLD\n\nTime for pick up or delivery:\n\nLocation: Lombokstrat 40, Amsterdam\n\nFood required: FULL DE SERING MEAL (SOUP, MAIN, BREAD, TOPPINGS) \n\nAllergies (essential):\n\n- 1p with a Honey allergy\n\n- 1p with Gluten intolerance\n\nOptional extras\n\nDrinks (if required): \n\nEquipment needed (if required): bread knife",
+      "createdAt": "2026-05-27T09:20:51.942Z"
+    }
+  ],
+  "kitchenEquipment": {
+    "pots": [
+      140,
+      140,
+      100,
+      70,
+      70,
+      70,
+      100
+    ],
+    "gasBurners": 4,
+    "inductionBurners": 4,
+    "bigBurnerThreshold": 80
+  },
+  "cookRhythm": {
+    "days": {
+      "Fri": {
+        "main": 1,
+        "soup": 1,
+        "chefs": 2
+      },
+      "Mon": {
+        "main": 1,
+        "soup": 1,
+        "chefs": 1
+      },
+      "Sat": {
+        "main": 0,
+        "soup": 0,
+        "chefs": 2
+      },
+      "Sun": {
+        "main": 3,
+        "soup": 3,
+        "chefs": 6
+      },
+      "Thu": {
+        "main": 1,
+        "soup": 1,
+        "chefs": 2
+      },
+      "Tue": {
+        "main": 1,
+        "soup": 1,
+        "chefs": 2
+      },
+      "Wed": {
+        "main": 1,
+        "soup": 1,
+        "chefs": 2
+      }
+    }
+  },
+  "closedServices": {
+    "recurring": {
+      "west": {
+        "Sat": [
+          "lunch"
+        ],
+        "Sun": [
+          "lunch",
+          "dinner"
+        ]
+      },
+      "centraal": {
+        "Fri": [
+          "dinner"
+        ],
+        "Sat": [
+          "lunch",
+          "dinner"
+        ],
+        "Sun": [
+          "lunch"
+        ],
+        "Thu": [
+          "dinner"
+        ],
+        "Wed": [
+          "dinner"
+        ]
+      }
+    }
+  }
+}
