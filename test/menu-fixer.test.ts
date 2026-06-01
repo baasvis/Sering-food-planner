@@ -742,6 +742,41 @@ describe('scoredGreedyAssignment', () => {
     expect(older.services.length).toBeGreaterThan(0);
     expect(newer.services.length).toBe(0);
   });
+
+  test('coverage dominance: scarce ready stock fills an EMPTY slot before topping up a HALF-filled one', () => {
+    // Regression guard for the 2026-06 starvation bug: a ready-stock preference
+    // must NEVER outrank slot-coverage urgency. With the old additive weights,
+    // READY_STOCK_PRIORITY (2000) overpowered EMPTY_SLOT (1000), so scarce
+    // cooked stock piled onto already-covered slots and left empty ones to
+    // emergency placeholders. The tiered score makes coverage strictly dominant.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const westLD = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && (meal === 'lunch' || meal === 'dinner')) ? 10 : 0;
+    // West dinner already holds one main → half-filled. West lunch is empty.
+    const filler = makeBatch({
+      type: 'Main course', cookDate: '04/05/2026', name: 'Filler',
+      inventory: [inv(100, 'west')], services: [{ loc: 'west', date: '2026-05-05', meal: 'dinner' }],
+    });
+    // Scarce ready stock: serveable capacity for exactly ONE service.
+    const scarce = makeBatch({ type: 'Main course', cookDate: '04/05/2026', name: 'Scarce ready', inventory: [inv(1, 'west')] });
+    scoredGreedyAssignment([filler, scarce], window, fixedCalcRequired(1), westLD, NO_POT_CAPS);
+    expect(scarce.services).toEqual([{ loc: 'west', date: '2026-05-05', meal: 'lunch' }]);
+  });
+
+  test('soonness: scarce ready stock fills the SOONEST slot first (reserve today)', () => {
+    // Cooked stock must flow to the earliest eligible slot, so today's slots —
+    // the only ones a fresh same-day cook can't cover — are reserved, and stock
+    // is served before it ages out.
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },
+    ]);
+    const westDinner = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 10 : 0;
+    const scarce = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Scarce ready', inventory: [inv(1, 'west')] });
+    scoredGreedyAssignment([scarce], window, fixedCalcRequired(1), westDinner, NO_POT_CAPS);
+    expect(scarce.services).toEqual([{ loc: 'west', date: '2026-05-05', meal: 'dinner' }]);
+  });
 });
 
 // ─── Algorithm: forcedAssignmentPrePass ────────────────────────────────────
