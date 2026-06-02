@@ -830,6 +830,60 @@ export function forcedAssignmentPrePass(
 }
 
 /**
+ * Team pre-pass for high-demand slots that NO single batch can seed.
+ *
+ * The scored greedy loop commits one batch per iteration, and the capacity hard
+ * constraint charges the first dish entering an EMPTY slot for the slot's WHOLE
+ * guest count (live peerCount = 1). On a very large slot — e.g. a 222-guest
+ * Centraal dinner — no single cooked batch holds that much, so the greedy can't
+ * seed it, spends the eligible stock on smaller slots, and the fallback ladder
+ * later emergency-cooks on top of real food (2026-06). This pass runs BEFORE the
+ * greedy: for an under-filled slot where no single batch passes the hard
+ * constraints, it asks findCombinationTeam (the SAME multi-batch coverage logic
+ * the fallback uses) to assemble a cooked team and commits it — reserving that
+ * stock for the big slot before the greedy can drain it elsewhere.
+ *
+ * Targeted by design: if ANY single batch could seed the slot (the normal case,
+ * including a reachable fresh-cook placeholder), this pass skips it and leaves it
+ * to the scored loop (better scoring + variety). So it never relaxes capacity on
+ * ordinary slots — avoiding the over-spread a blanket capacity relaxation caused
+ * (fmm-bench-verified net-negative, 2026-06). It only fires where the alternative
+ * is otherwise an emergency cook.
+ */
+export function teamFillBigSlots(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+): { committed: number } {
+  const todayIso = window[0]?.isoDate ?? '';
+  let committed = 0;
+  for (const day of window) {
+    for (const slot of day.slots) {
+      if (slot.isPast) continue;
+      const guests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
+      if (guests <= 0) continue;
+      for (const type of TYPES_TO_PLAN) {
+        const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+        if (filled >= SLOTS_PER_TYPE) continue;
+        // Only act when no single batch can seed this slot on its own — the
+        // big-slot chicken-and-egg. If something can (cooked or a reachable
+        // placeholder), leave it to the scored greedy loop.
+        const anySingle = allBatches.some(b =>
+          scoredHardConstraintsOk({ batch: b, slot, day, type }, allBatches, calcReq, getGuestsFn, todayIso));
+        if (anySingle) continue;
+        const team = findCombinationTeam(
+          allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq, todayIso);
+        if (team.length === 0) continue;
+        for (const b of team) b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+        committed += team.length;
+      }
+    }
+  }
+  return { committed };
+}
+
+/**
  * Single scored greedy loop. Each iteration scores every (batch, slot, type)
  * candidate, picks the highest-scoring one, commits it. Stops when no
  * candidate has positive score.
@@ -1173,6 +1227,10 @@ function _fixMyMenuBody(): void {
 
   const phaseB0 = forcedAssignmentPrePass(S.batches, planWindow, calcReqLive, memoGuests, potCaps);
   rebuildPlanner();
+  // Team-fill the big slots no single batch can seed (e.g. the 222-guest Centraal
+  // dinner) BEFORE the greedy spends that stock on smaller slots.
+  const phaseTeam = teamFillBigSlots(S.batches, planWindow, calcReqLive, memoGuests);
+  rebuildPlanner();
   potCaps = allocatePotCaps(
     S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type)),
     S.kitchenEquipment, calcRequired,
@@ -1233,7 +1291,7 @@ function _fixMyMenuBody(): void {
   showResultsModal({
     cleaned: orphans.length,
     created: newPlaceholders.length + phaseC.emergenciesCreated,
-    assigned: phaseB0.committed + phaseB.committed,
+    assigned: phaseB0.committed + phaseTeam.committed + phaseB.committed,
     retired: retireIds.size,
     placeholderNames: [...newPlaceholders.map(p => p.name), ...phaseC.emergencyBatches.map(p => p.name)],
     teamsFormed: phaseC.teamsFormed,

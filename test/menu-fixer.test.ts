@@ -45,6 +45,7 @@ import {
   snapshotBatches,
   stripFutureServices,
   forcedAssignmentPrePass,
+  teamFillBigSlots,
   scoredGreedyAssignment,
   runFallbackLadder,
   getActiveRhythm,
@@ -57,7 +58,7 @@ import {
   type PlanDay,
 } from '../public/js/menu-fixer';
 import { S } from '../public/js/state';
-import { getEffectiveGuests, buildRollMap } from '../public/js/core';
+import { getEffectiveGuests, buildRollMap, calcRequiredLive } from '../public/js/core';
 
 // Pin the system clock to a stable Friday 1 May 2026 so the hardcoded service
 // dates (2026-05-04..10) stay in the future relative to "now". Several
@@ -829,6 +830,42 @@ describe('reachability lets the fallback team cover a big Centraal slot', () => 
     const onCentraalDinner = soups.filter(s => s.services.some(v => v.loc === 'centraal' && v.meal === 'dinner'));
     expect(onCentraalDinner.length).toBeGreaterThanOrEqual(2);
     for (const s of soups) expect(s.services.every(v => v.loc === 'centraal')).toBe(true); // never West
+  });
+});
+
+describe('teamFillBigSlots: cover high-guest slots no single batch can seed', () => {
+  afterEach(() => { S.batches = []; S.caterings = []; });
+
+  test('teams cooked batches onto a slot whose guest count exceeds any single batch', () => {
+    // 100-guest Centraal dinner → full-slot demand 28L; neither 16L soup can seed
+    // it alone (the chicken-and-egg). The pre-pass must team them before the
+    // greedy spends them elsewhere. This is the 222-guest Centraal soup case in
+    // miniature — the safe replacement for the dropped capacity relaxation.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const bigCentraalDinner = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'centraal' && meal === 'dinner') ? 100 : 0;
+    const a = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'A', inventory: [inv(16, 'centraal')] });
+    const b = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'B', inventory: [inv(16, 'centraal')] });
+    S.batches = [a, b]; S.caterings = [];
+    const calc = (x: Batch) => calcRequiredLive(x, bigCentraalDinner);
+    const res = teamFillBigSlots([a, b], window, calc, bigCentraalDinner);
+    expect(res.committed).toBeGreaterThanOrEqual(2);
+    expect(countTypeInSlot([a, b], 'Soup', 'centraal', '2026-05-05', 'dinner')).toBe(2);
+  });
+
+  test('leaves a normal slot a single batch CAN seed to the greedy (no over-spread)', () => {
+    // 40-guest Centraal dinner → 11.2L; a 50L soup covers it alone, so the
+    // pre-pass must NOT fire here (that distinguishes it from the dropped blanket
+    // capacity relaxation that touched every slot).
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const smallCentraalDinner = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'centraal' && meal === 'dinner') ? 40 : 0;
+    const a = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Big enough', inventory: [inv(50, 'centraal')] });
+    S.batches = [a]; S.caterings = [];
+    const calc = (x: Batch) => calcRequiredLive(x, smallCentraalDinner);
+    const res = teamFillBigSlots([a], window, calc, smallCentraalDinner);
+    expect(res.committed).toBe(0);
+    expect(a.services).toHaveLength(0);
   });
 });
 
