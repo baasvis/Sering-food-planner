@@ -543,7 +543,7 @@ export function calcRequiredAtService(dish: Batch, svc: Service): number {
 export function cateringActive(c: { date: string | null }): boolean {
   if (!c.date) return true;
   const d = strToDate(c.date);
-  if (!d) return true;
+  if (!d || isNaN(d.getTime())) return true;   // unparseable date → fail safe: keep cooking
   const now = getAmsterdamNow();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const cDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());

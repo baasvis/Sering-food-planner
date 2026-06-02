@@ -64,6 +64,11 @@ test('an UNDATED catering keeps counting (no date to compare)', () => {
   expect(calcRequiredLive(batch(), NO_GUESTS)).toBeCloseTo(14.0);
 });
 
+test('an UNPARSEABLE date keeps counting (fail safe — never silently under-cook)', () => {
+  S.caterings = [catering('garbage')];
+  expect(calcRequiredLive(batch(), NO_GUESTS)).toBeCloseTo(14.0);
+});
+
 test('only the past catering is dropped when several reference the same dish', () => {
   S.caterings = [catering('30/05/2026'), catering('03/06/2026')]; // one past, one future
   expect(calcRequiredLive(batch(), NO_GUESTS)).toBeCloseTo(14.0); // past dropped, future kept
