@@ -486,9 +486,10 @@ export function alreadyInSlot(batch: Batch, loc: Location, isoDate: string, meal
  *  penalty (see scoreCandidate). */
 const FRESH_LIMIT_DAYS = 5;
 
-/** Floor for forced-assignment lock-in. A unique-candidate slot only gets
- *  pre-locked if its score clears this — bad-only-options compete normally. */
-const FORCED_ASSIGN_MIN_SCORE = 200;
+/** Floor for forced-assignment lock-in. A unique-candidate slot is pre-locked
+ *  only if it fills a real coverage tier (any in-window slot does). Set to the
+ *  coverage band so the threshold tracks the tiered score, not a raw number. */
+const FORCED_ASSIGN_MIN_SCORE = 1_000_000_000; // = T_COVERAGE (see SCORE below)
 
 /** Fallback ladder team threshold: "some coverage" beats "none." */
 const FALLBACK_TEAM_MIN_COVERAGE = 0.6;
@@ -500,38 +501,57 @@ const DEFAULT_SERVING_ML = 280;
 const WORKLOAD_OVERLOAD_TRIGGER_FACTOR = 1.2;
 const WORKLOAD_PENALTY_PER_LITER = 30;
 
-/** Score weights. Tuned so empty-slot urgency dominates. */
+// ── Lexicographic tier scoring ──────────────────────────────────────────────
+//
+// A candidate's score is composed of four tiers, combined so a higher tier
+// STRICTLY dominates every lower one regardless of their values:
+//
+//   score = coverage·BAND³ + primary·BAND² + secondary·BAND + tiebreak
+//
+// Every tier value is kept in [0, BAND) so it can never overflow the tier
+// above. This is the structural fix for the 2026-06 fragility: previously all
+// ~12 factors were additive weights of similar magnitude, so a dish preference
+// (READY_STOCK_PRIORITY 2000) could overpower slot-coverage urgency
+// (EMPTY_SLOT 1000) and strand today's slots. With tiers, coverage can never
+// be overridden by preference, nor preference by a tiebreaker.
+//
+//   tier 1 coverage  — fill empty slots before half-filled ones
+//   tier 2 primary   — ready stock before a new cook, SOONEST slot first
+//                      (reserve today); for new cooks, cook-timing fitness
+//   tier 3 secondary — Centraal coverage priority + FIFO (oldest cooked first)
+//   tier 4 tiebreak  — drain local/Centraal stock, pot fill, allergen variety,
+//                      workload-overload deterrent
+//
+// To bias toward draining stock over reserving today ("waste-lean" mode from
+// the bench), move READY_SOON_PER_DAY out of `primary` into `tiebreak`.
+const SCORE_BAND = 1000;
+const T_COVERAGE = SCORE_BAND ** 3; // 1e9
+const T_PRIMARY = SCORE_BAND ** 2;  // 1e6
+const T_SECONDARY = SCORE_BAND;     // 1e3
+
 const SCORE = {
-  EMPTY_SLOT: 1000,
-  HALF_FILLED_SLOT: 300,
-  CENTRAAL_SLOT_PRIORITY: 150,
-  COOKED_WITH_STOCK: 80,
-  SAME_DAY_DINNER: 200,
-  PRIOR_DAY_LUNCH: 200,
-  SAME_DAY_LUNCH_PENALTY: -300,
-  PRIOR_DAY_DINNER: 30,
-  STALE_PENALTY_PER_DAY: -50,
-  /** Pushes 4-day extensions from "preferred" to "last resort." Defeated
-   *  by the workload-overload escape on overloaded cook days. */
-  STALE_DAY_4_SURCHARGE: -600,
+  // tier 1 — coverage
+  COVER_EMPTY: 2,
+  COVER_HALF: 1,
+  // tier 2 — primary (each ≤ 999)
+  READY_BASE: 500,            // any ready-stock candidate outranks any new cook
+  READY_SOON_PER_DAY: 40,     // ready: soonest slot first (reserve today)
+  COOK_DINNER_SAMEDAY: 400,   // new cook: ideal — cook & serve same evening
+  COOK_DINNER_PRIOR: 200,
+  COOK_LUNCH_PRIOR: 300,      // new cook at lunch: prior-day cook is best
+  COOK_LUNCH_SAMEDAY: 80,     // same-day lunch is too early (no cooling cycle)
+  COOK_STALE_PER_DAY: 25,     // graduated freshness penalty for multi-day reach
+  COOK_STALE_DAY4: 120,       // extra push past 4 days
+  // tier 3 — secondary (each ≤ 999)
+  CENTRAAL_PRIORITY: 200,     // harder to improvise an emergency cook at Centraal
+  READY_FIFO_PER_DAY: 40,     // oldest cooked stock first
+  // tier 4 — tiebreak (centered on a positive base so penalties can't go < 0)
+  TIE_BASE: 500,
   CENTRAAL_STOCK_AT_CENTRAAL: 100,
   SAME_LOCATION: 50,
   POT_FILL_BONUS_MAX: 30,
   ALLERGEN_DIVERSITY: 25,
-  /** Use-it-up priority (Daan's rule, 2026-05-30): a batch that is already
-   *  cooked with serveable stock — and still inside the 5-day freshness window
-   *  enforced by the hard constraints — must be drained before any not-yet-
-   *  cooked dish is planned for the same slot, even at dinner. This band lifts
-   *  every ready-stock candidate above every to-cook one (it exceeds the
-   *  largest timing advantage a same-day cook can earn, ~SAME_DAY_DINNER +
-   *  CENTRAAL_SLOT_PRIORITY), while staying below EMPTY_SLOT − HALF_FILLED_SLOT
-   *  so slot-urgency ordering inside each tier is preserved. */
-  READY_STOCK_PRIORITY: 2000,
-  /** Within the ready-stock tier, older stock ranks higher so the food closest
-   *  to spoiling is served first (FIFO). Capped well under the EMPTY/HALF gap
-   *  (max age ≈ 4 days → ≤ 240) so it only orders ready stock, never inverts
-   *  empty-vs-half-filled urgency. */
-  READY_STOCK_FIFO_PER_DAY: 60,
+  WORKLOAD_PENALTY_MAX: 400,  // bounded so it stays a tiebreaker, never flips a tier
 };
 
 /**
@@ -668,126 +688,88 @@ function scoreCandidate(
   todayIso: string,
 ): number {
   const { batch, slot, day, type } = c;
-  let score = 0;
-
   const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
-  if (filled === 0) score += SCORE.EMPTY_SLOT;
-  else if (filled === 1) score += SCORE.HALF_FILLED_SLOT;
 
-  if (slot.loc === 'centraal') score += SCORE.CENTRAAL_SLOT_PRIORITY;
+  // ── tier 1: coverage urgency (empty before half-filled) ──
+  const coverage = filled === 0 ? SCORE.COVER_EMPTY : SCORE.COVER_HALF;
 
-  // totalStock = anything in inventory or in-flight shipments (including
-  // frozen) — used for the "is this a placeholder?" check downstream.
-  // serveableStock = non-frozen — i.e. food cooked and ready to serve right
-  // now. A frozen-only batch shouldn't count as ready; the cook hasn't thawed
-  // it yet (it's also excluded upstream by the isOnlyFrozen hard constraint).
+  // serveableStock = non-frozen, cooked & ready now. totalStock includes
+  // frozen / in-transit — used to detect an (uncooked) placeholder.
   const totalStock = getTotalStock(batch);
   const serveableStock = getServeableTotalStock(batch);
-
   const cookIso = cookDateToIso(batch.cookDate)!;
   const days = diffDaysIso(cookIso, day.isoDate);
+
+  // ── tier 2: primary — use ready stock before a new cook (soonest slot
+  // first, to reserve today); for a new cook, score the cook-timing fitness.
+  // Ready's floor (READY_BASE) sits above any new-cook value, so ready stock
+  // always outranks a fresh cook for the same slot. ──
+  let primary: number;
   if (serveableStock > 0) {
-    // Ready stock: already cooked, and within the 5-day freshness window
-    // (enforced by the hard constraints). Daan's rule (2026-05-30): use it up
-    // before planning any new cook — even at dinner — OLDEST first, so cooked
-    // food isn't wasted while fresh dishes grab the prime slots. The priority
-    // band lifts every ready candidate above every to-cook one; the per-day
-    // age bonus (relative to today, so it ranks dishes without biasing which
-    // slot a given dish prefers) orders ready stock oldest-first. The graduated
-    // staleness penalty / 4-day surcharge below intentionally do NOT apply to
-    // ready stock: for food already in the fridge, older means MORE urgent to
-    // serve, not less.
-    score += SCORE.COOKED_WITH_STOCK;
-    score += SCORE.READY_STOCK_PRIORITY;
-    const ageDays = Math.max(0, diffDaysIso(cookIso, todayIso));
-    score += SCORE.READY_STOCK_FIFO_PER_DAY * ageDays;
+    const slotDaysOut = Math.max(0, diffDaysIso(todayIso, day.isoDate));
+    const soon = Math.max(0, PLANNING_HORIZON_DAYS - slotDaysOut);
+    primary = SCORE.READY_BASE + SCORE.READY_SOON_PER_DAY * soon;
   } else {
-    // Not-yet-cooked (placeholder / planned dish): freshness scoring steers
-    // when it should be cooked-and-served. Same-day dinner is ideal; same-day
-    // lunch is too early; multi-day extensions get the graduated penalties.
-    if (slot.meal === 'dinner') {
-      if (days === 0) score += SCORE.SAME_DAY_DINNER;
-      else score += SCORE.PRIOR_DAY_DINNER;
-    } else {
-      if (days === 0) score += SCORE.SAME_DAY_LUNCH_PENALTY;
-      else score += SCORE.PRIOR_DAY_LUNCH;
-    }
-    if (days > 0) score += SCORE.STALE_PENALTY_PER_DAY * days;
-    if (days >= 4) score += SCORE.STALE_DAY_4_SURCHARGE;
+    let t: number;
+    if (slot.meal === 'dinner') t = days === 0 ? SCORE.COOK_DINNER_SAMEDAY : SCORE.COOK_DINNER_PRIOR;
+    else t = days === 0 ? SCORE.COOK_LUNCH_SAMEDAY : SCORE.COOK_LUNCH_PRIOR;
+    if (days > 0) t -= SCORE.COOK_STALE_PER_DAY * days;
+    if (days >= 4) t -= SCORE.COOK_STALE_DAY4;
+    primary = Math.max(0, Math.min(SCORE.READY_BASE - 1, t));
   }
 
-  // Workload-overload escape: applies only to fresh placeholder candidates
-  // (committing this slot would make the placeholder's cook day busier).
-  // Not applied to already-cooked batches (no impact on cook days). Every cook
-  // day is gated solely by its own chef-capacity threshold — a well-staffed day
-  // (more chefs → bigger slice of the week's cooking → higher threshold) already
-  // tolerates more load before the penalty bites, so there's no need to
-  // special-case a "big-cook day". (Previously Sunday was hardcoded as exempt;
-  // dropped now that the rhythm — including which day is the big cook — is
-  // user-configurable via the cook-rhythm editor.)
+  // ── tier 3: secondary — Centraal coverage priority + FIFO (oldest first) ──
+  let secondary = slot.loc === 'centraal' ? SCORE.CENTRAAL_PRIORITY : 0;
+  if (serveableStock > 0) {
+    const ageDays = Math.max(0, Math.min(7, diffDaysIso(cookIso, todayIso)));
+    secondary += SCORE.READY_FIFO_PER_DAY * ageDays;
+  }
+
+  // ── tier 4: tiebreak — drain local/Centraal stock, fill pots, vary
+  // allergens; a workload-overloaded cook day is deterred (bounded). ──
+  let tie = SCORE.TIE_BASE;
+  if (slot.loc === 'centraal' && getServeableStockAt(batch, 'centraal') > 0) tie += SCORE.CENTRAAL_STOCK_AT_CENTRAAL;
+  if (getServeableStockAt(batch, slot.loc) > 0) tie += SCORE.SAME_LOCATION;
+  const cap = potCaps.get(batch.id);
+  if (cap != null && cap > 0) {
+    const slotGuests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
+    const projected = calcReq(batch) + (slotGuests / SLOTS_PER_TYPE) * (batch.serving || 280) / 1000;
+    if (projected <= cap) tie += SCORE.POT_FILL_BONUS_MAX * Math.min(1, projected / cap);
+  }
+  if (filled > 0 && batch.allergens && batch.allergens.length > 0) {
+    const peerAllergens = new Set<string>();
+    for (const b of allBatches) {
+      if (b.id === batch.id || b.type !== type) continue;
+      if (!(b.services || []).some(s => s.loc === slot.loc && s.date === day.isoDate && s.meal === slot.meal)) continue;
+      for (const a of b.allergens || []) peerAllergens.add(a);
+    }
+    if (peerAllergens.size > 0) {
+      const mine = new Set(batch.allergens);
+      const overlap = [...peerAllergens].filter(a => mine.has(a)).length;
+      if (overlap < peerAllergens.size) tie += SCORE.ALLERGEN_DIVERSITY;
+    }
+  }
+  // Workload-overload deterrent (fresh cooks only; cooked stock doesn't load a
+  // cook day). Bounded so it stays a tiebreaker — it can defer a busy day's
+  // cook against an equally-urgent alternative, never override coverage/timing.
   if (totalStock <= 0 && batch.cookDate) {
     const phCookIso = cookDateToIso(batch.cookDate);
     const cookDayName = phCookIso ? dateToDayName(phCookIso) : '';
     const threshold = dayCapacities.get(cookDayName) ?? 0;
     if (threshold > 0) {
       const slotGuests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
-      const myShare = (slotGuests / SLOTS_PER_TYPE) * (batch.serving || 280) / 1000;
-      let load = myShare;
+      let load = (slotGuests / SLOTS_PER_TYPE) * (batch.serving || 280) / 1000;
       for (const b of allBatches) {
-        if (b.cookDate !== batch.cookDate) continue;
-        if (!TYPES_TO_PLAN.includes(b.type)) continue;
+        if (b.cookDate !== batch.cookDate || !TYPES_TO_PLAN.includes(b.type)) continue;
         load += calcReq(b);
       }
       const trigger = threshold * WORKLOAD_OVERLOAD_TRIGGER_FACTOR;
-      if (load > trigger) {
-        score -= WORKLOAD_PENALTY_PER_LITER * (load - trigger);
-      }
+      if (load > trigger) tie -= Math.min(SCORE.WORKLOAD_PENALTY_MAX, WORKLOAD_PENALTY_PER_LITER * (load - trigger));
     }
   }
+  tie = Math.max(0, Math.min(SCORE_BAND - 1, tie));
 
-  // Per-loc inventory bonuses (replaces the legacy batch.location read).
-  // CENTRAAL_STOCK_AT_CENTRAAL: bonus when the slot is Centraal AND the
-  // batch has SERVEABLE Centraal-located stock — drains Centraal-arrived
-  // inventory before pulling more across the morning van. Frozen at
-  // Centraal doesn't qualify; it has to thaw before it can serve.
-  if (slot.loc === 'centraal' && getServeableStockAt(batch, 'centraal') > 0) {
-    score += SCORE.CENTRAAL_STOCK_AT_CENTRAAL;
-  }
-  // SAME_LOCATION: bonus when the batch has serveable stock physically
-  // at the slot's location — drains local stock before remote.
-  if (getServeableStockAt(batch, slot.loc) > 0) {
-    score += SCORE.SAME_LOCATION;
-  }
-
-  const cap = potCaps.get(batch.id);
-  if (cap != null && cap > 0) {
-    const slotGuests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
-    const projected = calcReq(batch)
-      + (slotGuests / SLOTS_PER_TYPE) * (batch.serving || 280) / 1000;
-    if (projected <= cap) {
-      const fill = Math.min(1, projected / cap);
-      score += SCORE.POT_FILL_BONUS_MAX * fill;
-    }
-  }
-
-  // Allergen diversity: bonus when this batch's allergens differ from the
-  // slot's existing peer (only kicks in for the 2nd position).
-  if (filled > 0 && batch.allergens && batch.allergens.length > 0) {
-    const peerAllergens = new Set<string>();
-    for (const b of allBatches) {
-      if (b.id === batch.id) continue;
-      if (b.type !== type) continue;
-      if (!(b.services || []).some(s => s.loc === slot.loc && s.date === day.isoDate && s.meal === slot.meal)) continue;
-      for (const a of b.allergens || []) peerAllergens.add(a);
-    }
-    if (peerAllergens.size > 0) {
-      const myAllergens = new Set(batch.allergens);
-      const overlap = [...peerAllergens].filter(a => myAllergens.has(a)).length;
-      if (overlap < peerAllergens.size) score += SCORE.ALLERGEN_DIVERSITY;
-    }
-  }
-
-  return score;
+  return coverage * T_COVERAGE + primary * T_PRIMARY + secondary * T_SECONDARY + tie;
 }
 
 /**
