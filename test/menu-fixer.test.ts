@@ -57,7 +57,7 @@ import {
   type PlanDay,
 } from '../public/js/menu-fixer';
 import { S } from '../public/js/state';
-import { getEffectiveGuests, buildRollMap } from '../public/js/core';
+import { getEffectiveGuests, buildRollMap, calcRequiredLive } from '../public/js/core';
 
 // Pin the system clock to a stable Friday 1 May 2026 so the hardcoded service
 // dates (2026-05-04..10) stay in the future relative to "now". Several
@@ -776,6 +776,55 @@ describe('scoredGreedyAssignment', () => {
     const scarce = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Scarce ready', inventory: [inv(1, 'west')] });
     scoredGreedyAssignment([scarce], window, fixedCalcRequired(1), westDinner, NO_POT_CAPS);
     expect(scarce.services).toEqual([{ loc: 'west', date: '2026-05-05', meal: 'dinner' }]);
+  });
+});
+
+// ─── Location reachability + peer-share capacity (2026-06 fixes) ────────────
+
+describe('reachability: no reverse Centraal→West move', () => {
+  test('a cooked batch whose serveable stock is all at Centraal is never assigned to a West slot', () => {
+    // The Pea-mint case: West-cooked (so primaryLoc='west' via inventory[0]),
+    // but its stock has since shipped to Centraal — zero serveable at West. The
+    // legacy isServableBy gate (keyed on primaryLoc) passes a West slot; the
+    // reachability gate must still block it, because Centraal stock can never be
+    // moved back to West.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const batch = makeBatch({
+      type: 'Soup', cookDate: '04/05/2026', name: 'Shipped to Centraal',
+      inventory: [inv(0, 'west'), inv(25, 'centraal')],
+    });
+    scoredGreedyAssignment([batch], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    expect(batch.services.length).toBeGreaterThan(0);                 // it CAN serve Centraal
+    expect(batch.services.every(s => s.loc === 'centraal')).toBe(true); // but NEVER West
+  });
+
+  test('a batch with serveable West stock can still serve West', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const westOnlyGuests = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 10 : 0;
+    const batch = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'At West', inventory: [inv(40, 'west')] });
+    scoredGreedyAssignment([batch], window, fixedCalcRequired(1), westOnlyGuests, NO_POT_CAPS);
+    expect(batch.services.some(s => s.loc === 'west')).toBe(true);
+  });
+
+  test('a PARTIAL-split batch is not over-assigned to West beyond its West stock', () => {
+    // The reviewer's High finding: a batch with SOME West stock and the rest at
+    // Centraal passes a naive "zero West stock" gate, but its West-service demand
+    // could still exceed its West stock — the overflow implies a Centraal→West
+    // move. Location-aware capacity caps West-bound demand at West stock.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const westDinner10 = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 10 : 0;          // sole peer needs 10×0.28 = 2.8L at West
+    // 1 L West + 30 L Centraal: total (31 L) trivially fits 2.8 L, but West stock is only 1 L.
+    const batch = makeBatch({
+      type: 'Main course', cookDate: '04/05/2026', name: 'Split',
+      inventory: [inv(1, 'west'), inv(30, 'centraal')],
+    });
+    S.batches = [batch]; S.caterings = [];
+    const calc = (b: Batch) => calcRequiredLive(b, westDinner10);
+    scoredGreedyAssignment([batch], window, calc, westDinner10, NO_POT_CAPS);
+    // Old (total-stock) capacity would have placed it on West; location-aware must not.
+    expect(batch.services.some(s => s.loc === 'west')).toBe(false);
   });
 });
 

@@ -16,7 +16,7 @@ import { S, DEFAULT_COOK_RHYTHM } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment, saveCookRhythm, markRitualStep } from './utils';
 import {
   rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, getAmsterdamNow,
-  isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, getEffectiveGuests, isServiceClosed, getTotalStock, getStockAt,
+  isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, calcRequiredAtLocLive, getEffectiveGuests, isServiceClosed, getTotalStock, getStockAt,
   getServeableStockAt, getServeableTotalStock,
   consolidateInventory,
 } from './core';
@@ -654,19 +654,32 @@ function scoredHardConstraintsOk(
   // but only eligible if its cook day hasn't already passed (no retroactive
   // cooking — a stale empty placeholder must not be slotted into the future).
   if (totalStock <= 0) return cookIso >= todayIso;
-  // Capacity check: tentatively add the service and verify the batch's
-  // total demand still fits its SERVEABLE stock (Daan smoke 2026-05-12:
-  // frozen qty should stay frozen until explicitly assigned; the auto
-  // allocator must not satisfy a service slot by counting frozen
-  // coverage). calcReq is calcReqLive which rebuilds the planner
-  // (refreshes _batchAllocations peer-share cache) so the speculative
-  // service is reflected in the next read. try/finally so a throwing
-  // calcReq can't leave the speculative service stuck.
+  // Capacity + reachability (NO reverse van — Daan's rule, 2026-06). West stock
+  // is delivered West→Centraal the morning after cooking, but Centraal stock NEVER
+  // comes back to West. Tentatively add the service, then require BOTH:
+  //   (1) total demand ≤ total serveable stock, AND
+  //   (2) the batch's WEST-located service demand ≤ its WEST-located serveable stock.
+  // Those are exactly the transportation constraints Dw ≤ W and Dw+Dc ≤ W+C, so (2)
+  // makes a West slot un-servable from Centraal stock for ANY split — including
+  // partial-split batches (some West, rest at Centraal) that a "zero West stock"
+  // gate would miss. The West portion is derived from the SAME calcReq (total minus
+  // demand-with-West-services-removed), so it tracks calcReq's peer-share model —
+  // and any unit-test stub — exactly. (Frozen stays frozen until assigned — Daan
+  // smoke 2026-05-12.) try/finally so a throw can't strand the speculative service.
   batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-  let fits: boolean;
+  const withNew = batch.services;
+  let fits = false;
   try {
-    fits = calcReq(batch) <= serveableStock;
+    const totalDemand = calcReq(batch);
+    if (totalDemand <= serveableStock) {
+      batch.services = withNew.filter(s => s.loc !== 'west');
+      const nonWestDemand = calcReq(batch);
+      batch.services = withNew;
+      const westDemand = Math.round((totalDemand - nonWestDemand) * 10) / 10;
+      fits = westDemand <= getServeableStockAt(batch, 'west');
+    }
   } finally {
+    batch.services = withNew;
     batch.services.pop();
   }
   return fits;
@@ -824,6 +837,14 @@ export function forcedAssignmentPrePass(
   return { committed };
 }
 
+// NOTE (2026-06): a `teamFillBigSlots` pre-pass was prototyped here to cover very
+// large slots (e.g. the 222-guest Centraal dinner) that no single batch can seed.
+// Adversarial review showed its trigger was fragile (it leaned on the peer-share-
+// discounted capacity check, so it was a no-op once a slot held one peer) and the
+// real fix is a proper VOLUME-AWARE coverage/repair pass over the finished greedy
+// solution — tracked as separate work. Deliberately NOT shipped here to avoid
+// half-working machinery; this branch ships only the catering + reachability fixes.
+
 /**
  * Single scored greedy loop. Each iteration scores every (batch, slot, type)
  * candidate, picks the highest-scoring one, commits it. Stops when no
@@ -914,7 +935,7 @@ export function runFallbackLadder(
         while (filled < SLOTS_PER_TYPE && safety-- > 0) {
           const startFilled = filled;
           const team = findCombinationTeam(
-            allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq, todayIso,
+            allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq, getGuestsFn, todayIso,
           );
           if (team.length > 0) {
             for (const b of team) b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
@@ -960,6 +981,7 @@ function findCombinationTeam(
   guests: number,
   existingPeers: number,
   calcReq: (b: Batch) => number,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
   todayIso: string,
 ): Batch[] {
   const eligible = allBatches.filter(b => {
@@ -968,6 +990,11 @@ function findCombinationTeam(
     if (isOnlyFrozen(b)) return false;
     if (alreadyInSlot(b, loc, isoDate, meal)) return false;
     if (!isServableBy(b.cookDate, isoDate, meal, loc, primaryLoc(b))) return false;
+    // Reachability — no reverse van: a cooked batch can serve a WEST slot only
+    // from serveable West stock (Centraal stock never returns to West). Mirrors
+    // the gate in scoredHardConstraintsOk so the fallback can't build a West
+    // team out of Centraal-located stock.
+    if (loc === 'west' && getTotalStock(b) > 0 && getServeableStockAt(b, 'west') <= 0) return false;
     const cookIso = cookDateToIso(b.cookDate);
     if (!cookIso) return false;
     if (getTotalStock(b) > 0) {
@@ -1008,10 +1035,18 @@ function findCombinationTeam(
     for (const cand of eligible) {
       if (team.length >= k) break;
       const shareLitersAtThisSlot = guestsPerPeer * (cand.serving || 280) / 1000;
-      const batchStock = getTotalStock(cand);
-      const existingDemand = calcReq(cand);
-      const projectedDemand = existingDemand + shareLitersAtThisSlot;
-      if (batchStock > 0 && projectedDemand > batchStock) continue;
+      // Location-aware capacity (no reverse van): a WEST slot's share must fit the
+      // member's WEST-located stock and West-bound demand; a Centraal slot's share
+      // fits total serveable (West can ship in). Mirrors scoredHardConstraintsOk.
+      if (loc === 'west') {
+        const westStock = getServeableStockAt(cand, 'west');
+        if (westStock <= 0) continue;
+        if (calcRequiredAtLocLive(cand, 'west', getGuestsFn) + shareLitersAtThisSlot > westStock) continue;
+      } else {
+        const batchStock = getTotalStock(cand);
+        const projectedDemand = calcReq(cand) + shareLitersAtThisSlot;
+        if (batchStock > 0 && projectedDemand > batchStock) continue;
+      }
       team.push(cand);
       coverageGuests += guestsPerPeer;
     }
