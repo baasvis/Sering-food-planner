@@ -176,7 +176,14 @@ export function renderGuests() {
 export function getGuestForDay(loc: any, dayInfo: any) {
   let base;
   if (dayInfo.isCurrentWeek) {
-    base = { ...((S.guests[loc] || {})[dayInfo.dayName] || {}) };
+    // Mirror core.ts getGuests: overlay any carried-forward week-specific value
+    // (entered when this week was "next week") on top of the base weekday pattern,
+    // so the grid shows what the planner will actually use.
+    const wk = S.guestsNextWeeks[dayInfo.mondayKey];
+    const pattern = (S.guests[loc] || {})[dayInfo.dayName] || {};
+    base = (wk && wk[loc] && wk[loc][dayInfo.dayName])
+      ? { ...pattern, ...wk[loc][dayInfo.dayName] }
+      : { ...pattern };
   } else {
     const weekData = S.guestsNextWeeks[dayInfo.mondayKey];
     if (weekData && weekData[loc] && weekData[loc][dayInfo.dayName]) {
@@ -421,6 +428,7 @@ export function applyPredictions() {
   trackEvent('predictions_apply');
   if (!S.predictions) return;
   const days = getVisibleDays(_guestsDayOffset);
+  let clearedNextWeek = false;
 
   days.forEach(d => {
     for (const loc of ['west', 'centraal']) {
@@ -433,6 +441,13 @@ export function applyPredictions() {
           if (!S.guests[loc]) S.guests[loc] = {};
           if (!S.guests[loc][d.dayName]) S.guests[loc][d.dayName] = {} as GuestDay;
           S.guests[loc][d.dayName][meal] = pred;
+          // Clear any carried-forward week-specific value shadowing the base pattern
+          // (getGuests prefers it), so the applied prediction wins.
+          const wk = S.guestsNextWeeks[d.mondayKey];
+          if (wk && wk[loc] && wk[loc][d.dayName] && wk[loc][d.dayName][meal] !== undefined) {
+            delete wk[loc][d.dayName][meal];
+            clearedNextWeek = true;
+          }
         } else {
           if (!S.guestsNextWeeks[d.mondayKey]) S.guestsNextWeeks[d.mondayKey] = {};
           if (!S.guestsNextWeeks[d.mondayKey][loc]) S.guestsNextWeeks[d.mondayKey][loc] = {};
@@ -446,7 +461,7 @@ export function applyPredictions() {
   // Save whichever stores were touched
   scheduleSave();
   const hasNonCurrent = days.some(d => !d.isCurrentWeek);
-  if (hasNonCurrent) scheduleNextWeeksSave();
+  if (hasNonCurrent || clearedNextWeek) scheduleNextWeeksSave();
   toast('Predictions applied — adjust for known events');
   renderGuests();
 }
@@ -474,6 +489,15 @@ export function updateGuests(loc: any, day: any, meal: any, val: any) {
   if (!S.guests[loc][day]) S.guests[loc][day] = {} as GuestDay;
   seedMissingMealsFromPrediction(S.guests[loc][day], loc, day);
   S.guests[loc][day][meal] = parseInt(val) || 0;
+  // This handler only fires for the current week (the grid uses updateGuestsNextWeek
+  // for other weeks). If a carried-forward week-specific value was shadowing the base
+  // pattern (getGuests/getGuestForDay prefer it), clear it so this manual edit wins.
+  const curMk = getMondayKeyForDate(getToday());
+  const wk = S.guestsNextWeeks[curMk];
+  if (wk && wk[loc] && wk[loc][day] && wk[loc][day][meal] !== undefined) {
+    delete wk[loc][day][meal];
+    scheduleNextWeeksSave();
+  }
   scheduleSave();
   restoreFocusAfterRender(renderGuests);
 }

@@ -336,8 +336,16 @@ export function getGuests(loc: string, dateStr: string, meal: Meal | string): nu
   curMon.setDate(today.getDate() + (todayDow === 0 ? -6 : 1 - todayDow));
   const curMk = dateToIso(curMon);
 
-  // Current week: use S.guests (user-edited base counts)
+  // Current week: prefer a week-specific value carried forward from when this week
+  // was still "next week" (guestsNextWeeks), else the base weekday pattern. Without
+  // this, a count entered for the week (e.g. a 240-guest event) is silently dropped
+  // for the default pattern the moment the week becomes current. Editing a current-
+  // week cell clears the carried value (see updateGuests), so a manual edit wins.
   if (mk === curMk) {
+    const wk = S.guestsNextWeeks[mk];
+    if (wk && wk[lk] && wk[lk][dn] && (wk[lk][dn] as any)[meal] !== undefined) {
+      return (wk[lk][dn] as any)[meal];
+    }
     return ((S.guests[lk] || {})[dn] || {} as any)[meal] || 0;
   }
 
