@@ -654,14 +654,19 @@ function scoredHardConstraintsOk(
   // but only eligible if its cook day hasn't already passed (no retroactive
   // cooking — a stale empty placeholder must not be slotted into the future).
   if (totalStock <= 0) return cookIso >= todayIso;
-  // Capacity check: tentatively add the service and verify the batch's
-  // total demand still fits its SERVEABLE stock (Daan smoke 2026-05-12:
-  // frozen qty should stay frozen until explicitly assigned; the auto
-  // allocator must not satisfy a service slot by counting frozen
-  // coverage). calcReq is calcReqLive which rebuilds the planner
-  // (refreshes _batchAllocations peer-share cache) so the speculative
-  // service is reflected in the next read. try/finally so a throwing
-  // calcReq can't leave the speculative service stuck.
+  // Reachability — NO reverse van (Daan's rule, 2026-06). West stock is
+  // delivered West→Centraal the morning after cooking, but Centraal stock NEVER
+  // comes back to West. So an already-cooked batch may serve a WEST slot only
+  // from serveable stock physically AT West; Centraal-located (or in-transit-to-
+  // Centraal) stock can't satisfy a West service. Centraal slots stay reachable
+  // by any serveable stock (West ships in; the West→Centraal timing is already
+  // enforced by isServableBy above), so only the West case needs a gate.
+  if (slot.loc === 'west' && getServeableStockAt(batch, 'west') <= 0) return false;
+  // Capacity check: tentatively add the service and verify the batch's total
+  // demand still fits its SERVEABLE stock (frozen qty stays frozen until
+  // explicitly assigned — Daan smoke 2026-05-12). calcReq is calcReqLive, which
+  // reads b.services live, so the speculative push is reflected. try/finally so
+  // a throwing calcReq can't leave the speculative service stuck.
   batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
   let fits: boolean;
   try {
@@ -968,6 +973,11 @@ function findCombinationTeam(
     if (isOnlyFrozen(b)) return false;
     if (alreadyInSlot(b, loc, isoDate, meal)) return false;
     if (!isServableBy(b.cookDate, isoDate, meal, loc, primaryLoc(b))) return false;
+    // Reachability — no reverse van: a cooked batch can serve a WEST slot only
+    // from serveable West stock (Centraal stock never returns to West). Mirrors
+    // the gate in scoredHardConstraintsOk so the fallback can't build a West
+    // team out of Centraal-located stock.
+    if (loc === 'west' && getTotalStock(b) > 0 && getServeableStockAt(b, 'west') <= 0) return false;
     const cookIso = cookDateToIso(b.cookDate);
     if (!cookIso) return false;
     if (getTotalStock(b) > 0) {

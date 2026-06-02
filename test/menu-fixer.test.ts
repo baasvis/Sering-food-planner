@@ -779,6 +779,59 @@ describe('scoredGreedyAssignment', () => {
   });
 });
 
+// ─── Location reachability + peer-share capacity (2026-06 fixes) ────────────
+
+describe('reachability: no reverse Centraal→West move', () => {
+  test('a cooked batch whose serveable stock is all at Centraal is never assigned to a West slot', () => {
+    // The Pea-mint case: West-cooked (so primaryLoc='west' via inventory[0]),
+    // but its stock has since shipped to Centraal — zero serveable at West. The
+    // legacy isServableBy gate (keyed on primaryLoc) passes a West slot; the
+    // reachability gate must still block it, because Centraal stock can never be
+    // moved back to West.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const batch = makeBatch({
+      type: 'Soup', cookDate: '04/05/2026', name: 'Shipped to Centraal',
+      inventory: [inv(0, 'west'), inv(25, 'centraal')],
+    });
+    scoredGreedyAssignment([batch], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    expect(batch.services.length).toBeGreaterThan(0);                 // it CAN serve Centraal
+    expect(batch.services.every(s => s.loc === 'centraal')).toBe(true); // but NEVER West
+  });
+
+  test('a batch with serveable West stock can still serve West', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const westOnlyGuests = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 10 : 0;
+    const batch = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'At West', inventory: [inv(40, 'west')] });
+    scoredGreedyAssignment([batch], window, fixedCalcRequired(1), westOnlyGuests, NO_POT_CAPS);
+    expect(batch.services.some(s => s.loc === 'west')).toBe(true);
+  });
+});
+
+describe('reachability lets the fallback team cover a big Centraal slot', () => {
+  test('Centraal-stranded soups stay available and team up for a high-guest Centraal dinner', () => {
+    // The 222-guest Centraal soup failure (2026-06): the soups that could cover
+    // Centraal had been drained onto West first (a now-illegal reverse move), so
+    // the fallback found them spent and emergency-cooked. With the reachability
+    // gate, those soups can't go West — they stay free, and the fallback team
+    // (which already handles multi-batch coverage) assembles them at Centraal.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const bigCentraalDinner = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'centraal' && meal === 'dinner') ? 60 : 0;       // 60×0.28 = 16.8L; 3-way share = 5.6L
+    // Three West-cooked soups whose stock now sits only at Centraal (West qty 0):
+    // the reachability gate forbids them from any West slot.
+    const soups = ['A', 'B', 'C'].map(n => makeBatch({
+      type: 'Soup', cookDate: '04/05/2026', name: `Soup ${n}`,
+      inventory: [inv(0, 'west'), inv(8, 'centraal')],
+    }));
+    // None go West; the fallback teams them onto the Centraal dinner.
+    runFallbackLadder(soups, window, fixedCalcRequired(1), bigCentraalDinner);
+    const onCentraalDinner = soups.filter(s => s.services.some(v => v.loc === 'centraal' && v.meal === 'dinner'));
+    expect(onCentraalDinner.length).toBeGreaterThanOrEqual(2);
+    for (const s of soups) expect(s.services.every(v => v.loc === 'centraal')).toBe(true); // never West
+  });
+});
+
 // ─── Algorithm: forcedAssignmentPrePass ────────────────────────────────────
 
 describe('forcedAssignmentPrePass', () => {

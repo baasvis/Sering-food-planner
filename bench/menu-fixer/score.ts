@@ -10,7 +10,7 @@
 //   - missed match (slot empty when eligible food had spare capacity)  ← the
 //     "Monday starvation" class.
 import type { Batch, DishType, Location, Meal } from '../../shared/types';
-import { getServeableTotalStock, getTotalStock, calcRequired, getEffectiveGuests, isServicePast } from '../../public/js/core';
+import { getServeableTotalStock, getServeableStockAt, getTotalStock, calcRequired, getEffectiveGuests, isServicePast } from '../../public/js/core';
 import { buildPlanningWindow, isServableBy, SLOTS_PER_TYPE, TYPES_TO_PLAN, type PlanDay } from '../../public/js/menu-fixer';
 
 const W_SLOT_FILLED = 1000;
@@ -89,6 +89,10 @@ export function scoreSolution(today: string, all: Batch[]): ScoreReport {
             if (here.includes(b)) return false;
             const serveable = getServeableTotalStock(b);
             if (getTotalStock(b) <= 0) return ci <= day.isoDate ? false : true; // uncooked placeholder, future cook
+            // Reachability — no reverse van (mirrors the engine's hard constraint):
+            // a cooked batch can fill a WEST slot only from serveable West stock;
+            // Centraal-stranded stock can't reach West, so it isn't a "missed match".
+            if (slot.loc === 'west' && getServeableStockAt(b, 'west') <= 0) return false;
             if (daysBetween(ci, day.isoDate) >= 5) return false; // stale-hard
             return serveable - calcRequired(b) > 1;
           });

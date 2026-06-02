@@ -534,7 +534,21 @@ export function calcRequiredAtService(dish: Batch, svc: Service): number {
  *  cannot drift apart. */
 function cateringDemand(dish: Batch): number {
   let total = 0;
+  const today = getToday();
   (S.caterings || []).forEach((c: Catering) => {
+    // A catering whose date is strictly before today has already been
+    // delivered — its demand must retire like a past service (isServiceDatePast),
+    // otherwise it keeps forcing extra cooking long after the food left. Undated
+    // caterings (date === null) keep counting; a catering dated today still
+    // counts until it's confirmed delivered (the "did today's catering leave?"
+    // inventory prompt is a separate, future step). Date stored as DD/MM/YYYY.
+    if (c.date) {
+      const cDate = strToDate(c.date);
+      if (cDate) {
+        const cDay = new Date(cDate.getFullYear(), cDate.getMonth(), cDate.getDate());
+        if (cDay < today) return;
+      }
+    }
     const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
     if (cd) {
       const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
