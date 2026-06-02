@@ -16,7 +16,7 @@ import { S, DEFAULT_COOK_RHYTHM } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment, saveCookRhythm, markRitualStep } from './utils';
 import {
   rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, getAmsterdamNow,
-  isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, getEffectiveGuests, isServiceClosed, getTotalStock, getStockAt,
+  isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, calcRequiredAtLocLive, getEffectiveGuests, isServiceClosed, getTotalStock, getStockAt,
   getServeableStockAt, getServeableTotalStock,
   consolidateInventory,
 } from './core';
@@ -654,24 +654,32 @@ function scoredHardConstraintsOk(
   // but only eligible if its cook day hasn't already passed (no retroactive
   // cooking — a stale empty placeholder must not be slotted into the future).
   if (totalStock <= 0) return cookIso >= todayIso;
-  // Reachability — NO reverse van (Daan's rule, 2026-06). West stock is
-  // delivered West→Centraal the morning after cooking, but Centraal stock NEVER
-  // comes back to West. So an already-cooked batch may serve a WEST slot only
-  // from serveable stock physically AT West; Centraal-located (or in-transit-to-
-  // Centraal) stock can't satisfy a West service. Centraal slots stay reachable
-  // by any serveable stock (West ships in; the West→Centraal timing is already
-  // enforced by isServableBy above), so only the West case needs a gate.
-  if (slot.loc === 'west' && getServeableStockAt(batch, 'west') <= 0) return false;
-  // Capacity check: tentatively add the service and verify the batch's total
-  // demand still fits its SERVEABLE stock (frozen qty stays frozen until
-  // explicitly assigned — Daan smoke 2026-05-12). calcReq is calcReqLive, which
-  // reads b.services live, so the speculative push is reflected. try/finally so
-  // a throwing calcReq can't leave the speculative service stuck.
+  // Capacity + reachability (NO reverse van — Daan's rule, 2026-06). West stock
+  // is delivered West→Centraal the morning after cooking, but Centraal stock NEVER
+  // comes back to West. Tentatively add the service, then require BOTH:
+  //   (1) total demand ≤ total serveable stock, AND
+  //   (2) the batch's WEST-located service demand ≤ its WEST-located serveable stock.
+  // Those are exactly the transportation constraints Dw ≤ W and Dw+Dc ≤ W+C, so (2)
+  // makes a West slot un-servable from Centraal stock for ANY split — including
+  // partial-split batches (some West, rest at Centraal) that a "zero West stock"
+  // gate would miss. The West portion is derived from the SAME calcReq (total minus
+  // demand-with-West-services-removed), so it tracks calcReq's peer-share model —
+  // and any unit-test stub — exactly. (Frozen stays frozen until assigned — Daan
+  // smoke 2026-05-12.) try/finally so a throw can't strand the speculative service.
   batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-  let fits: boolean;
+  const withNew = batch.services;
+  let fits = false;
   try {
-    fits = calcReq(batch) <= serveableStock;
+    const totalDemand = calcReq(batch);
+    if (totalDemand <= serveableStock) {
+      batch.services = withNew.filter(s => s.loc !== 'west');
+      const nonWestDemand = calcReq(batch);
+      batch.services = withNew;
+      const westDemand = Math.round((totalDemand - nonWestDemand) * 10) / 10;
+      fits = westDemand <= getServeableStockAt(batch, 'west');
+    }
   } finally {
+    batch.services = withNew;
     batch.services.pop();
   }
   return fits;
@@ -829,59 +837,13 @@ export function forcedAssignmentPrePass(
   return { committed };
 }
 
-/**
- * Team pre-pass for high-demand slots that NO single batch can seed.
- *
- * The scored greedy loop commits one batch per iteration, and the capacity hard
- * constraint charges the first dish entering an EMPTY slot for the slot's WHOLE
- * guest count (live peerCount = 1). On a very large slot — e.g. a 222-guest
- * Centraal dinner — no single cooked batch holds that much, so the greedy can't
- * seed it, spends the eligible stock on smaller slots, and the fallback ladder
- * later emergency-cooks on top of real food (2026-06). This pass runs BEFORE the
- * greedy: for an under-filled slot where no single batch passes the hard
- * constraints, it asks findCombinationTeam (the SAME multi-batch coverage logic
- * the fallback uses) to assemble a cooked team and commits it — reserving that
- * stock for the big slot before the greedy can drain it elsewhere.
- *
- * Targeted by design: if ANY single batch could seed the slot (the normal case,
- * including a reachable fresh-cook placeholder), this pass skips it and leaves it
- * to the scored loop (better scoring + variety). So it never relaxes capacity on
- * ordinary slots — avoiding the over-spread a blanket capacity relaxation caused
- * (fmm-bench-verified net-negative, 2026-06). It only fires where the alternative
- * is otherwise an emergency cook.
- */
-export function teamFillBigSlots(
-  allBatches: Batch[],
-  window: PlanDay[],
-  calcReq: (b: Batch) => number,
-  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
-): { committed: number } {
-  const todayIso = window[0]?.isoDate ?? '';
-  let committed = 0;
-  for (const day of window) {
-    for (const slot of day.slots) {
-      if (slot.isPast) continue;
-      const guests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
-      if (guests <= 0) continue;
-      for (const type of TYPES_TO_PLAN) {
-        const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
-        if (filled >= SLOTS_PER_TYPE) continue;
-        // Only act when no single batch can seed this slot on its own — the
-        // big-slot chicken-and-egg. If something can (cooked or a reachable
-        // placeholder), leave it to the scored greedy loop.
-        const anySingle = allBatches.some(b =>
-          scoredHardConstraintsOk({ batch: b, slot, day, type }, allBatches, calcReq, getGuestsFn, todayIso));
-        if (anySingle) continue;
-        const team = findCombinationTeam(
-          allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq, todayIso);
-        if (team.length === 0) continue;
-        for (const b of team) b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
-        committed += team.length;
-      }
-    }
-  }
-  return { committed };
-}
+// NOTE (2026-06): a `teamFillBigSlots` pre-pass was prototyped here to cover very
+// large slots (e.g. the 222-guest Centraal dinner) that no single batch can seed.
+// Adversarial review showed its trigger was fragile (it leaned on the peer-share-
+// discounted capacity check, so it was a no-op once a slot held one peer) and the
+// real fix is a proper VOLUME-AWARE coverage/repair pass over the finished greedy
+// solution — tracked as separate work. Deliberately NOT shipped here to avoid
+// half-working machinery; this branch ships only the catering + reachability fixes.
 
 /**
  * Single scored greedy loop. Each iteration scores every (batch, slot, type)
@@ -973,7 +935,7 @@ export function runFallbackLadder(
         while (filled < SLOTS_PER_TYPE && safety-- > 0) {
           const startFilled = filled;
           const team = findCombinationTeam(
-            allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq, todayIso,
+            allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq, getGuestsFn, todayIso,
           );
           if (team.length > 0) {
             for (const b of team) b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
@@ -1019,6 +981,7 @@ function findCombinationTeam(
   guests: number,
   existingPeers: number,
   calcReq: (b: Batch) => number,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
   todayIso: string,
 ): Batch[] {
   const eligible = allBatches.filter(b => {
@@ -1072,10 +1035,18 @@ function findCombinationTeam(
     for (const cand of eligible) {
       if (team.length >= k) break;
       const shareLitersAtThisSlot = guestsPerPeer * (cand.serving || 280) / 1000;
-      const batchStock = getTotalStock(cand);
-      const existingDemand = calcReq(cand);
-      const projectedDemand = existingDemand + shareLitersAtThisSlot;
-      if (batchStock > 0 && projectedDemand > batchStock) continue;
+      // Location-aware capacity (no reverse van): a WEST slot's share must fit the
+      // member's WEST-located stock and West-bound demand; a Centraal slot's share
+      // fits total serveable (West can ship in). Mirrors scoredHardConstraintsOk.
+      if (loc === 'west') {
+        const westStock = getServeableStockAt(cand, 'west');
+        if (westStock <= 0) continue;
+        if (calcRequiredAtLocLive(cand, 'west', getGuestsFn) + shareLitersAtThisSlot > westStock) continue;
+      } else {
+        const batchStock = getTotalStock(cand);
+        const projectedDemand = calcReq(cand) + shareLitersAtThisSlot;
+        if (batchStock > 0 && projectedDemand > batchStock) continue;
+      }
       team.push(cand);
       coverageGuests += guestsPerPeer;
     }
@@ -1227,10 +1198,6 @@ function _fixMyMenuBody(): void {
 
   const phaseB0 = forcedAssignmentPrePass(S.batches, planWindow, calcReqLive, memoGuests, potCaps);
   rebuildPlanner();
-  // Team-fill the big slots no single batch can seed (e.g. the 222-guest Centraal
-  // dinner) BEFORE the greedy spends that stock on smaller slots.
-  const phaseTeam = teamFillBigSlots(S.batches, planWindow, calcReqLive, memoGuests);
-  rebuildPlanner();
   potCaps = allocatePotCaps(
     S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type)),
     S.kitchenEquipment, calcRequired,
@@ -1291,7 +1258,7 @@ function _fixMyMenuBody(): void {
   showResultsModal({
     cleaned: orphans.length,
     created: newPlaceholders.length + phaseC.emergenciesCreated,
-    assigned: phaseB0.committed + phaseTeam.committed + phaseB.committed,
+    assigned: phaseB0.committed + phaseB.committed,
     retired: retireIds.size,
     placeholderNames: [...newPlaceholders.map(p => p.name), ...phaseC.emergencyBatches.map(p => p.name)],
     teamsFormed: phaseC.teamsFormed,

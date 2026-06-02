@@ -532,23 +532,28 @@ export function calcRequiredAtService(dish: Batch, svc: Service): number {
  *  (no family-wide reallocation). Shared by calcRequired (cache-backed) and
  *  calcRequiredLive (uncached) so the catering half of the two functions
  *  cannot drift apart. */
+/** A catering still pulls cooking + ordering demand UNLESS it has already been
+ *  delivered — i.e. its date is strictly before today (Amsterdam-local, matching
+ *  isServiceDatePast / the service retirement FMM uses). Undated caterings, and a
+ *  catering dated today, keep counting (the explicit "did today's catering leave?"
+ *  inventory prompt is a separate future step). An unparseable date fails safe
+ *  (keeps counting). SINGLE SOURCE OF TRUTH for catering retirement — cateringDemand,
+ *  calcTotalGuests, calcRequiredBreakdown and the dish detail view all gate on this
+ *  so cooking-litres and ingredient-order quantities can never drift apart. */
+export function cateringActive(c: { date: string | null }): boolean {
+  if (!c.date) return true;
+  const d = strToDate(c.date);
+  if (!d) return true;
+  const now = getAmsterdamNow();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const cDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return cDay >= today;
+}
+
 function cateringDemand(dish: Batch): number {
   let total = 0;
-  const today = getToday();
   (S.caterings || []).forEach((c: Catering) => {
-    // A catering whose date is strictly before today has already been
-    // delivered — its demand must retire like a past service (isServiceDatePast),
-    // otherwise it keeps forcing extra cooking long after the food left. Undated
-    // caterings (date === null) keep counting; a catering dated today still
-    // counts until it's confirmed delivered (the "did today's catering leave?"
-    // inventory prompt is a separate, future step). Date stored as DD/MM/YYYY.
-    if (c.date) {
-      const cDate = strToDate(c.date);
-      if (cDate) {
-        const cDay = new Date(cDate.getFullYear(), cDate.getMonth(), cDate.getDate());
-        if (cDay < today) return;
-      }
-    }
+    if (!cateringActive(c)) return;   // delivered catering — demand retired
     const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
     if (cd) {
       const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
@@ -608,6 +613,31 @@ export function calcRequiredLive(
   return Math.round(total * 10) / 10;
 }
 
+/** Live peer-share demand (liters) from this dish's non-past services AT `loc`
+ *  only — catering excluded (it isn't location-tagged). Mirrors calcRequiredLive's
+ *  per-service math, filtered to one location, so the reachability capacity check
+ *  can require a batch's West-located demand to fit its West-located stock (West
+ *  ships to Centraal, Centraal never returns to West). Reads live S.batches, so it
+ *  stays correct under the engine's speculative services.push()/pop(). */
+export function calcRequiredAtLocLive(
+  dish: Batch,
+  loc: Location,
+  getGuestsFn: (loc: Location, date: string, meal: Meal) => number = getEffectiveGuests,
+): number {
+  let total = 0;
+  (dish.services || []).forEach((svc: Service) => {
+    if (svc.loc !== loc) return;
+    if (isServicePast(svc)) return;
+    let peerCount = 0;
+    for (const p of S.batches) {
+      if (p.type !== dish.type) continue;
+      if ((p.services || []).some((s: Service) => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal)) peerCount++;
+    }
+    total += Math.round((getGuestsFn(svc.loc, svc.date, svc.meal) / Math.max(peerCount, 1)) * ((dish.serving || 280) / 1000) * 10) / 10;
+  });
+  return Math.round(total * 10) / 10;
+}
+
 export interface BreakdownLine {
   text: string;
 }
@@ -638,11 +668,16 @@ export function calcRequiredBreakdown(dish: Batch): string[] {
   });
   (S.caterings || []).forEach((c: Catering) => {
     const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
-    if (cd) {
-      const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
-      const liters = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000) * 10) / 10;
-      if (liters > 0) lines.push(`${liters}L \u2014 ${c.name} (${c.guestCount} guests${peers > 1 ? ', 1/' + peers + ' split' : ''})`);
+    if (!cd) return;
+    if (!cateringActive(c)) {
+      // Delivered catering \u2014 shown done (like a served service), pulls no demand,
+      // so the breakdown lines keep summing to calcRequired.
+      lines.push(`\u2713 ${c.name} (delivered)`);
+      return;
     }
+    const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;
+    const liters = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * ((dish.serving || 280) / 1000) * 10) / 10;
+    if (liters > 0) lines.push(`${liters}L \u2014 ${c.name} (${c.guestCount} guests${peers > 1 ? ', 1/' + peers + ' split' : ''})`);
   });
   return lines;
 }
@@ -657,8 +692,11 @@ export function calcTotalGuests(dish: Batch): number {
     const servingL = (dish.serving || 280) / 1000;
     if (servingL > 0) g += litersHere / servingL;
   });
-  // Add catering guests (split by same-type peers)
+  // Add catering guests (split by same-type peers) — but only for caterings that
+  // haven't been delivered, so ingredient ORDER quantities retire in lockstep
+  // with the cooking litres (calcRequired). This is what feeds calcIngredientsFromRecipe.
   (S.caterings || []).forEach((c: Catering) => {
+    if (!cateringActive(c)) return;
     const cd = (c.dishes || []).find((cd: CateringDish) => cd.dishId === dish.id);
     if (cd) {
       const peers = (c.dishes || []).filter((d: CateringDish) => d.type === dish.type).length;

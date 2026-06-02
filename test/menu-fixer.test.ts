@@ -45,7 +45,6 @@ import {
   snapshotBatches,
   stripFutureServices,
   forcedAssignmentPrePass,
-  teamFillBigSlots,
   scoredGreedyAssignment,
   runFallbackLadder,
   getActiveRhythm,
@@ -807,65 +806,25 @@ describe('reachability: no reverse Centraal→West move', () => {
     scoredGreedyAssignment([batch], window, fixedCalcRequired(1), westOnlyGuests, NO_POT_CAPS);
     expect(batch.services.some(s => s.loc === 'west')).toBe(true);
   });
-});
 
-describe('reachability lets the fallback team cover a big Centraal slot', () => {
-  test('Centraal-stranded soups stay available and team up for a high-guest Centraal dinner', () => {
-    // The 222-guest Centraal soup failure (2026-06): the soups that could cover
-    // Centraal had been drained onto West first (a now-illegal reverse move), so
-    // the fallback found them spent and emergency-cooked. With the reachability
-    // gate, those soups can't go West — they stay free, and the fallback team
-    // (which already handles multi-batch coverage) assembles them at Centraal.
+  test('a PARTIAL-split batch is not over-assigned to West beyond its West stock', () => {
+    // The reviewer's High finding: a batch with SOME West stock and the rest at
+    // Centraal passes a naive "zero West stock" gate, but its West-service demand
+    // could still exceed its West stock — the overflow implies a Centraal→West
+    // move. Location-aware capacity caps West-bound demand at West stock.
     const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
-    const bigCentraalDinner = (loc: Location, _iso: string, meal: Meal) =>
-      (loc === 'centraal' && meal === 'dinner') ? 60 : 0;       // 60×0.28 = 16.8L; 3-way share = 5.6L
-    // Three West-cooked soups whose stock now sits only at Centraal (West qty 0):
-    // the reachability gate forbids them from any West slot.
-    const soups = ['A', 'B', 'C'].map(n => makeBatch({
-      type: 'Soup', cookDate: '04/05/2026', name: `Soup ${n}`,
-      inventory: [inv(0, 'west'), inv(8, 'centraal')],
-    }));
-    // None go West; the fallback teams them onto the Centraal dinner.
-    runFallbackLadder(soups, window, fixedCalcRequired(1), bigCentraalDinner);
-    const onCentraalDinner = soups.filter(s => s.services.some(v => v.loc === 'centraal' && v.meal === 'dinner'));
-    expect(onCentraalDinner.length).toBeGreaterThanOrEqual(2);
-    for (const s of soups) expect(s.services.every(v => v.loc === 'centraal')).toBe(true); // never West
-  });
-});
-
-describe('teamFillBigSlots: cover high-guest slots no single batch can seed', () => {
-  afterEach(() => { S.batches = []; S.caterings = []; });
-
-  test('teams cooked batches onto a slot whose guest count exceeds any single batch', () => {
-    // 100-guest Centraal dinner → full-slot demand 28L; neither 16L soup can seed
-    // it alone (the chicken-and-egg). The pre-pass must team them before the
-    // greedy spends them elsewhere. This is the 222-guest Centraal soup case in
-    // miniature — the safe replacement for the dropped capacity relaxation.
-    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
-    const bigCentraalDinner = (loc: Location, _iso: string, meal: Meal) =>
-      (loc === 'centraal' && meal === 'dinner') ? 100 : 0;
-    const a = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'A', inventory: [inv(16, 'centraal')] });
-    const b = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'B', inventory: [inv(16, 'centraal')] });
-    S.batches = [a, b]; S.caterings = [];
-    const calc = (x: Batch) => calcRequiredLive(x, bigCentraalDinner);
-    const res = teamFillBigSlots([a, b], window, calc, bigCentraalDinner);
-    expect(res.committed).toBeGreaterThanOrEqual(2);
-    expect(countTypeInSlot([a, b], 'Soup', 'centraal', '2026-05-05', 'dinner')).toBe(2);
-  });
-
-  test('leaves a normal slot a single batch CAN seed to the greedy (no over-spread)', () => {
-    // 40-guest Centraal dinner → 11.2L; a 50L soup covers it alone, so the
-    // pre-pass must NOT fire here (that distinguishes it from the dropped blanket
-    // capacity relaxation that touched every slot).
-    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
-    const smallCentraalDinner = (loc: Location, _iso: string, meal: Meal) =>
-      (loc === 'centraal' && meal === 'dinner') ? 40 : 0;
-    const a = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Big enough', inventory: [inv(50, 'centraal')] });
-    S.batches = [a]; S.caterings = [];
-    const calc = (x: Batch) => calcRequiredLive(x, smallCentraalDinner);
-    const res = teamFillBigSlots([a], window, calc, smallCentraalDinner);
-    expect(res.committed).toBe(0);
-    expect(a.services).toHaveLength(0);
+    const westDinner10 = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 10 : 0;          // sole peer needs 10×0.28 = 2.8L at West
+    // 1 L West + 30 L Centraal: total (31 L) trivially fits 2.8 L, but West stock is only 1 L.
+    const batch = makeBatch({
+      type: 'Main course', cookDate: '04/05/2026', name: 'Split',
+      inventory: [inv(1, 'west'), inv(30, 'centraal')],
+    });
+    S.batches = [batch]; S.caterings = [];
+    const calc = (b: Batch) => calcRequiredLive(b, westDinner10);
+    scoredGreedyAssignment([batch], window, calc, westDinner10, NO_POT_CAPS);
+    // Old (total-stock) capacity would have placed it on West; location-aware must not.
+    expect(batch.services.some(s => s.loc === 'west')).toBe(false);
   });
 });
 

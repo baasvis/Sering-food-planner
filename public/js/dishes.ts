@@ -1,7 +1,7 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet, todayIso } from './utils';
 import { pushUndo } from './undo';
-import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
+import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, cateringActive, diffStr, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { trackEvent } from './telemetry';
@@ -399,11 +399,11 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
     const cateringLines: string[] = [];
     (S.caterings || []).forEach(c => {
       const cd = (c.dishes || []).find(cd => cd.dishId === d.id);
-      if (cd) {
-        const peers = (c.dishes || []).filter(dd => dd.type === d.type).length;
-        const l = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * ((d.serving || 280) / 1000) * 10) / 10;
-        if (l > 0) cateringLines.push(`${l}L — ${esc(c.name)}`);
-      }
+      if (!cd) return;
+      if (!cateringActive(c)) { cateringLines.push(`✓ ${esc(c.name)} (delivered)`); return; }
+      const peers = (c.dishes || []).filter(dd => dd.type === d.type).length;
+      const l = Math.round(((c.guestCount || 0) / Math.max(peers, 1)) * ((d.serving || 280) / 1000) * 10) / 10;
+      if (l > 0) cateringLines.push(`${l}L — ${esc(c.name)}`);
     });
 
     const renderSvcCol = (lines: SvcLine[]) => lines.length === 0
