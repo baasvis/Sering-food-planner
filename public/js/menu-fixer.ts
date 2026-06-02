@@ -841,23 +841,38 @@ export function forcedAssignmentPrePass(
  * Volume-aware team pre-pass — covers high-demand slots that NO single batch can
  * fill, using a cooked TEAM, BEFORE the greedy spends that stock on smaller slots.
  *
- * The failure it fixes (2026-06): the greedy commits one batch per iteration and
- * the capacity hard-constraint charges the FIRST dish entering an empty slot for
- * the slot's WHOLE guest volume (peerCount=1). A 240-guest Centraal dinner exceeds
- * any single cooked soup, so the greedy can't seed it, drains those soups onto
- * smaller Centraal slots, and the fallback ladder emergency-cooks the dinner even
- * though ~38 L of reachable cooked soup was sitting spare (bench-measured).
+ * The failure it fixes (2026-06, real A2 snapshot): the greedy commits one batch per
+ * iteration and the capacity hard-constraint charges the FIRST dish entering an empty
+ * slot for the slot's WHOLE guest volume (peerCount=1). On the A2 data a 222-guest Tue
+ * Centraal dinner needed ~62 L of soup, but every cooked soup was only 40–45 L — so NO
+ * single batch could seed it. The greedy drained those soups onto smaller slots and the
+ * fallback ladder emergency-cooked the dinner, even though Lithuanian (45 L) + Watermelon
+ * (40 L) could have covered it together. This pass reserves that pair up front → 2 real
+ * soups, 0 emergencies on that slot.
  *
- * CRITICAL: this MUST run before forcedAssignmentPrePass and the greedy, while every
- * slot is still empty. With an empty slot, `scoredHardConstraintsOk` evaluates each
- * candidate at peerCount=1 — i.e. it charges the FULL guest volume — so "does any
- * single batch pass?" reads exactly as "can any single batch (or a reachable fresh-
- * cook placeholder) cover the whole slot alone?". When none can, the slot genuinely
- * needs a team, and findCombinationTeam (the same coverage logic the fallback uses,
- * now location-aware) assembles one and reserves that stock here. (An earlier version
- * ran AFTER the forced pass, where a once-seeded slot's peer-discount made the check
- * lie and the pass became a no-op — the bug this ordering fixes.) Targeted: if a single
- * batch CAN cover the slot, it's left to the scored loop (better scoring + variety).
+ * CRITICAL ordering: this MUST run before forcedAssignmentPrePass and the greedy, while
+ * every slot is still empty. With an empty slot, `scoredHardConstraintsOk` evaluates each
+ * candidate at peerCount=1 — i.e. it charges the FULL guest volume — so "does any single
+ * batch pass?" reads exactly as "can any single batch cover the whole slot alone?". When
+ * none can, the slot genuinely needs a team, and findCombinationTeam (the same coverage
+ * logic the fallback uses) assembles one and reserves that stock here. (An earlier version
+ * ran AFTER the forced pass, where a once-seeded slot's peer-discount made the check lie
+ * and the pass became a no-op — the bug this ordering fixes.) Targeted: if a single batch
+ * CAN cover the slot, it's left to the scored loop (better scoring + variety).
+ *
+ * KNOWN LIMITATION — placeholder-solos. An empty fresh-cook placeholder passes
+ * `scoredHardConstraintsOk`'s capacity check unconditionally (see the placeholder branch
+ * there). So if a high-demand slot has a *reachable* fresh-cook placeholder, `canSolo` is
+ * true and this pass SKIPS it — even when two team-able cooked batches are sitting spare;
+ * the greedy then can't seed the slot with one undersized cooked batch (full-volume gate)
+ * and plants the placeholder, cooking fresh while existing stock goes unused. So this pass
+ * only bites slots with NO reachable placeholder — e.g. a Centraal dinner that a next-
+ * morning-delivery placeholder can't reach same-day, which is exactly why the A2 222-dinner
+ * benefits. Closing the placeholder-solos case needs the deferred global allocator, not
+ * this pass. This is also why team-fill is a no-op on every fmm-bench fixture: each bench
+ * slot carries servable empty placeholders, so `canSolo` is always true there — NOT because
+ * a cooked soup happens to solo. (The regression guard stays green precisely because of
+ * this no-op; a dedicated pipeline test below guards the ordering instead.)
  */
 export function teamFillBigSlots(
   allBatches: Batch[],
@@ -877,6 +892,10 @@ export function teamFillBigSlots(
         const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
         if (filled >= SLOTS_PER_TYPE) continue;
         // Empty-slot peerCount=1 ⇒ this reads as "some single batch can solo-cover".
+        // NB: a servable empty placeholder passes scoredHardConstraintsOk unconditionally,
+        // so a reachable fresh-cook also counts as a "solo" here and suppresses the team
+        // (the placeholder-solos limitation documented above). We only team-fill slots that
+        // neither a cooked batch nor a reachable placeholder can cover alone.
         const canSolo = allBatches.some(b =>
           scoredHardConstraintsOk({ batch: b, slot, day, type }, allBatches, calcReq, getGuestsFn, todayIso));
         if (canSolo) continue;
