@@ -45,6 +45,7 @@ import {
   snapshotBatches,
   stripFutureServices,
   forcedAssignmentPrePass,
+  teamFillBigSlots,
   scoredGreedyAssignment,
   runFallbackLadder,
   getActiveRhythm,
@@ -825,6 +826,85 @@ describe('reachability: no reverse Centraal→West move', () => {
     scoredGreedyAssignment([batch], window, calc, westDinner10, NO_POT_CAPS);
     // Old (total-stock) capacity would have placed it on West; location-aware must not.
     expect(batch.services.some(s => s.loc === 'west')).toBe(false);
+  });
+});
+
+describe('teamFillBigSlots: cover a slot no single batch can fill (runs on EMPTY slots)', () => {
+  afterEach(() => { S.batches = []; S.caterings = []; });
+
+  test('teams cooked batches onto a high-guest slot when no single batch can solo-cover it', () => {
+    // The 222-guest Centraal dinner case (A2): each soup is too small to cover the
+    // whole slot alone, so the greedy can't seed it and the fallback emergency-cooks.
+    // Run FIRST (empty slot ⇒ candidates are charged the FULL guest volume), so the
+    // trigger correctly reads "no single batch can solo" and assembles a team.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const bigCentraalDinner = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'centraal' && meal === 'dinner') ? 100 : 0;       // full = 28L; neither 16L soup solos
+    const a = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'A', inventory: [inv(16, 'centraal')] });
+    const b = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'B', inventory: [inv(16, 'centraal')] });
+    S.batches = [a, b]; S.caterings = [];
+    const calc = (x: Batch) => calcRequiredLive(x, bigCentraalDinner);
+    const res = teamFillBigSlots([a, b], window, calc, bigCentraalDinner);
+    expect(res.teamsFormed).toBeGreaterThanOrEqual(1);
+    expect(countTypeInSlot([a, b], 'Soup', 'centraal', '2026-05-05', 'dinner')).toBe(2);
+  });
+
+  test('does NOT fire when a single batch CAN solo-cover the slot (left to the greedy)', () => {
+    // The bench's versatile-spread case: one 50L soup covers a 40-guest slot alone,
+    // so team-fill must skip it (no over-firing — that distinguishes this from a
+    // blanket capacity relaxation).
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const smallCentraalDinner = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'centraal' && meal === 'dinner') ? 40 : 0;        // full = 11.2L ≤ 50L
+    const a = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Big enough', inventory: [inv(50, 'centraal')] });
+    S.batches = [a]; S.caterings = [];
+    const calc = (x: Batch) => calcRequiredLive(x, smallCentraalDinner);
+    const res = teamFillBigSlots([a], window, calc, smallCentraalDinner);
+    expect(res.teamsFormed).toBe(0);
+    expect(a.services).toHaveLength(0);
+  });
+
+  // ── Ordering guard (the entire premise of the pass) ────────────────────────
+  // The previous two tests call teamFillBigSlots in isolation on empty slots, so
+  // they'd pass no matter WHERE the call sits in the pipeline — they don't guard
+  // the ordering. This one runs the real phase sequence and fails if team-fill is
+  // moved back after the greedy (which would revive the original no-op bug).
+  test('PIPELINE ORDERING: team-fill before the greedy keeps the big slot a team; after it, the greedy strands the stock', () => {
+    // Minimal A2 shape: a 100-guest Centraal dinner (full = 28L) that no single 16L
+    // soup can solo, PLUS a 40-guest Centraal lunch each 16L soup CAN solo (11.2L).
+    //  • team-fill FIRST  → it reserves both soups for the dinner (team 32L ≥ 28L);
+    //    the greedy can no longer reach the lunch with them → 2 real soups on the dinner.
+    //  • team-fill AFTER  → the greedy drains both soups onto the lunch first, so by the
+    //    time team-fill runs the dinner is unseedable and the fallback emergency-cooks it.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const guestsFn = (loc: Location, _iso: string, meal: Meal) =>
+      loc === 'centraal' ? (meal === 'dinner' ? 100 : 40) : 0;
+    const calc = (x: Batch) => calcRequiredLive(x, guestsFn);
+    const onDinner = (b: Batch) =>
+      b.services.some(s => s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'dinner');
+    const twoSoups = () => [
+      makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Lithuanian', inventory: [inv(16, 'centraal')] }),
+      makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Watermelon', inventory: [inv(16, 'centraal')] }),
+    ];
+
+    // Correct order: team-fill → forced → greedy. (S.batches must point at the
+    // working array — calcRequiredLive counts peers from S.batches.)
+    const right = twoSoups();
+    S.batches = right; S.caterings = [];
+    teamFillBigSlots(right, window, calc, guestsFn);
+    forcedAssignmentPrePass(right, window, calc, guestsFn, NO_POT_CAPS);
+    scoredGreedyAssignment(right, window, calc, guestsFn, NO_POT_CAPS);
+    expect(onDinner(right[0]) && onDinner(right[1])).toBe(true);
+    expect(countTypeInSlot(right, 'Soup', 'centraal', '2026-05-05', 'dinner')).toBe(2);
+
+    // Wrong order: forced → greedy → team-fill (the old no-op). The greedy spent both
+    // soups on the lunch, so team-fill can no longer assemble a dinner team.
+    const wrong = twoSoups();
+    S.batches = wrong;
+    forcedAssignmentPrePass(wrong, window, calc, guestsFn, NO_POT_CAPS);
+    scoredGreedyAssignment(wrong, window, calc, guestsFn, NO_POT_CAPS);
+    teamFillBigSlots(wrong, window, calc, guestsFn);
+    expect(onDinner(wrong[0]) && onDinner(wrong[1])).toBe(false);
   });
 });
 
