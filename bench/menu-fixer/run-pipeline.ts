@@ -5,7 +5,7 @@ import {
   buildPlanningWindow, snapshotBatches, stripFutureServices,
   findOrphanPlaceholders, findSpentBatches, findStalePlaceholders,
   generateMissingPlaceholders, allocatePotCaps, forcedAssignmentPrePass,
-  scoredGreedyAssignment, runFallbackLadder,
+  teamFillBigSlots, scoredGreedyAssignment, runFallbackLadder,
 } from '../../public/js/menu-fixer';
 import { S } from '../../public/js/state';
 import { rebuildPlanner, calcRequired, calcRequiredLive, getEffectiveGuests, getToday, dateToIso } from '../../public/js/core';
@@ -40,6 +40,8 @@ export function runFixMyMenu(): { emergencies: number; teams: number; abandoned:
   const calcReqLive = (b: Batch) => calcRequiredLive(b, memoGuests);
   const planBatches = () => S.batches.filter(b => b.cookDate && (b.type === 'Soup' || b.type === 'Main course'));
 
+  teamFillBigSlots(S.batches, planWindow, calcReqLive, memoGuests);
+  rebuildPlanner();
   let potCaps = allocatePotCaps(planBatches(), S.kitchenEquipment, calcRequired);
   forcedAssignmentPrePass(S.batches, planWindow, calcReqLive, memoGuests, potCaps);
   rebuildPlanner();

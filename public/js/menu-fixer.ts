@@ -837,13 +837,60 @@ export function forcedAssignmentPrePass(
   return { committed };
 }
 
-// NOTE (2026-06): a `teamFillBigSlots` pre-pass was prototyped here to cover very
-// large slots (e.g. the 222-guest Centraal dinner) that no single batch can seed.
-// Adversarial review showed its trigger was fragile (it leaned on the peer-share-
-// discounted capacity check, so it was a no-op once a slot held one peer) and the
-// real fix is a proper VOLUME-AWARE coverage/repair pass over the finished greedy
-// solution — tracked as separate work. Deliberately NOT shipped here to avoid
-// half-working machinery; this branch ships only the catering + reachability fixes.
+/**
+ * Volume-aware team pre-pass — covers high-demand slots that NO single batch can
+ * fill, using a cooked TEAM, BEFORE the greedy spends that stock on smaller slots.
+ *
+ * The failure it fixes (2026-06): the greedy commits one batch per iteration and
+ * the capacity hard-constraint charges the FIRST dish entering an empty slot for
+ * the slot's WHOLE guest volume (peerCount=1). A 240-guest Centraal dinner exceeds
+ * any single cooked soup, so the greedy can't seed it, drains those soups onto
+ * smaller Centraal slots, and the fallback ladder emergency-cooks the dinner even
+ * though ~38 L of reachable cooked soup was sitting spare (bench-measured).
+ *
+ * CRITICAL: this MUST run before forcedAssignmentPrePass and the greedy, while every
+ * slot is still empty. With an empty slot, `scoredHardConstraintsOk` evaluates each
+ * candidate at peerCount=1 — i.e. it charges the FULL guest volume — so "does any
+ * single batch pass?" reads exactly as "can any single batch (or a reachable fresh-
+ * cook placeholder) cover the whole slot alone?". When none can, the slot genuinely
+ * needs a team, and findCombinationTeam (the same coverage logic the fallback uses,
+ * now location-aware) assembles one and reserves that stock here. (An earlier version
+ * ran AFTER the forced pass, where a once-seeded slot's peer-discount made the check
+ * lie and the pass became a no-op — the bug this ordering fixes.) Targeted: if a single
+ * batch CAN cover the slot, it's left to the scored loop (better scoring + variety).
+ */
+export function teamFillBigSlots(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+): { committed: number; teamsFormed: number } {
+  const todayIso = window[0]?.isoDate ?? '';
+  let committed = 0;
+  let teamsFormed = 0;
+  for (const day of window) {
+    for (const slot of day.slots) {
+      if (slot.isPast) continue;
+      const guests = getGuestsFn(slot.loc, day.isoDate, slot.meal);
+      if (guests <= 0) continue;
+      for (const type of TYPES_TO_PLAN) {
+        const filled = countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal);
+        if (filled >= SLOTS_PER_TYPE) continue;
+        // Empty-slot peerCount=1 ⇒ this reads as "some single batch can solo-cover".
+        const canSolo = allBatches.some(b =>
+          scoredHardConstraintsOk({ batch: b, slot, day, type }, allBatches, calcReq, getGuestsFn, todayIso));
+        if (canSolo) continue;
+        const team = findCombinationTeam(
+          allBatches, type, slot.loc, day.isoDate, slot.meal, guests, filled, calcReq, getGuestsFn, todayIso);
+        if (team.length === 0) continue;
+        for (const b of team) b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+        committed += team.length;
+        teamsFormed++;
+      }
+    }
+  }
+  return { committed, teamsFormed };
+}
 
 /**
  * Single scored greedy loop. Each iteration scores every (batch, slot, type)
@@ -1191,6 +1238,12 @@ function _fixMyMenuBody(): void {
   // _batchAllocations cache fresh for allocatePotCaps / collectWarnings / render.
   const calcReqLive = (b: Batch): number => calcRequiredLive(b, memoGuests);
 
+  // Team-fill the big slots NO single batch can cover (e.g. a 240-guest Centraal
+  // dinner) FIRST — while every slot is still empty — so a cooked team is reserved
+  // for them before the forced/greedy passes drain that stock onto smaller slots.
+  const phaseTeam = teamFillBigSlots(S.batches, planWindow, calcReqLive, memoGuests);
+  rebuildPlanner();
+
   let potCaps = allocatePotCaps(
     S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type)),
     S.kitchenEquipment, calcRequired,
@@ -1258,10 +1311,10 @@ function _fixMyMenuBody(): void {
   showResultsModal({
     cleaned: orphans.length,
     created: newPlaceholders.length + phaseC.emergenciesCreated,
-    assigned: phaseB0.committed + phaseB.committed,
+    assigned: phaseTeam.committed + phaseB0.committed + phaseB.committed,
     retired: retireIds.size,
     placeholderNames: [...newPlaceholders.map(p => p.name), ...phaseC.emergencyBatches.map(p => p.name)],
-    teamsFormed: phaseC.teamsFormed,
+    teamsFormed: phaseTeam.teamsFormed + phaseC.teamsFormed,
     warnings,
   });
 }
