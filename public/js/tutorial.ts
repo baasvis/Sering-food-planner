@@ -378,6 +378,25 @@ export const TUTORIALS: Record<string, TutStep[]> = {
       body: "Each card shows the type, which screen it came from, and who sent it when. Hit Done once you've handled it — the count at the top tracks what's left.",
     },
   ],
+
+  // ── TEAM (access requests) ───────────────────────────────────────────────
+  team: [
+    {
+      selector: '.team-intro',
+      title: 'Letting people in',
+      body: "When someone taps “Toegang aanvragen” on the login screen, their request lands here. Approving them grants access within seconds — no settings change or redeploy needed.",
+    },
+    {
+      selector: '.team-section',
+      title: 'Pending requests',
+      body: "People waiting for approval show at the top, with the name, email and photo from their Google account. Approve to let them in, or Deny to turn them down.",
+    },
+    {
+      selector: '.team-fold',
+      title: 'Who already has access',
+      body: "Approved people can be revoked here if they leave. The “always allowed” list is fixed in the server config and can’t be changed from this screen — so you can’t lock yourself out.",
+    },
+  ],
 };
 
 // ── State ───────────────────────────────────────────────────────────────────

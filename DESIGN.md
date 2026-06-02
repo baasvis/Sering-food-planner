@@ -82,8 +82,15 @@ update the relevant paragraph; the dated history of how it was built lives
 in git.
 
 - **Access & location** — Google Sign-In against an allowed-email list, with
-  a dev-mode bypass when `GOOGLE_CLIENT_ID` is unset. After login the user
-  picks a kitchen (West / Centraal), which scopes the location-aware screens.
+  a dev-mode bypass when `GOOGLE_CLIENT_ID` is unset. The allow-list is the
+  union of the `ALLOWED_EMAILS` env var (the bootstrap backbone) and
+  database-approved accounts: a new person can request access from the login
+  screen with their Google account, giving their first and last name; a director
+  approves / denies / revokes them (and can edit the name) from the director-only
+  **Team** screen, with a dashboard badge when requests are waiting — no env edit
+  or redeploy. Approving also seeds that person into the Training (competencies)
+  roster. After login the user picks a kitchen (West / Centraal), which scopes
+  the location-aware screens.
 
 - **Dashboard** — the kitchen-floor command center. A Lunch/Dinner toggle
   (auto-set by time of day) filters everything below it: today's menu with
@@ -179,6 +186,7 @@ map — it is kept in sync as features land. Top-level shape:
 | Daily Revenue | date, location, grossRevenue, netRevenue, sales, covers, invoiceCount, syncedAt | DailyRevenue / daily_revenue |
 | Product Revenue | date, location, meal, productName, productCategory, quantity, grossRevenue, netRevenue, syncedAt | ProductRevenue / product_revenue |
 | Session | id, email, name, picture, createdAt, expiresAt | Session / sessions |
+| Access Request | id, email, name, firstName, lastName, picture, status (pending/approved/denied/revoked), requestedAt, decidedAt, decidedBy, personId (linked Training person) | AccessRequest / access_requests |
 | Log | id, timestamp, email, name, action, details | Log / log |
 | Telemetry Event | timestamp, source, type, name, data (JSON), userId, sessionId | TelemetryEvent / telemetry_event |
 | AI Insight | timestamp, category, severity, title, body, data (JSON), status, resolvedAt | AiInsight / ai_insight |
@@ -388,7 +396,7 @@ When you add a new section to a page, add a corresponding step; when you rename 
 - **No vendor lock-in**: Standard technologies, exportable data, no proprietary formats
 - **Backups**: Railway automated PostgreSQL backups
 - **GDPR**: Privacy notice for staff data. Minimal collection. Deletion on request. EU hosting option.
-- **Auth**: Google Sign-In + allowed email list. Session-based. No passwords stored.
+- **Auth**: Google Sign-In + allowed email list (env `ALLOWED_EMAILS` ∪ director-approved accounts in the `access_requests` table). Self-service access requests with director approval/revocation, no redeploy. Session-based. No passwords stored.
 - **Fault isolation**: Modules load independently. One breaking doesn't crash the others.
 
 ---

@@ -34,7 +34,9 @@ lib/
   recipe-ai-prompt.md  — System prompt for the AI recipe assistant (loaded by lib/recipe-ai.ts)
   telemetry-coverage.ts — Discovers trackEvent() features in public/js, mines telemetry sessions for user journeys, surfaces uncovered features for the weekly e2e coverage agent
 routes/
-  auth.ts              — Login, logout, session, requireAuth middleware
+  auth.ts              — Login, logout, session, requireAuth + requireDirector middleware,
+                         POST /auth/request-access (self-service account request),
+                         isEmailAllowed (ALLOWED_EMAILS env ∪ approved access_requests rows)
   data.ts              — GET /api/data (full read) + POST /api/data/patch (targeted merge)
                          POST /api/data returns 410 — superseded by /patch
   batches.ts           — Batch CRUD: GET/POST/PATCH/DELETE /api/batches.
@@ -58,6 +60,8 @@ routes/
   admin.ts             — AI insights & telemetry admin endpoints
   recipe-ai.ts         — Director-only AI recipe assistant: POST /api/recipe-ai/chat (SSE stream)
   coverage.ts          — Bearer-token /api/coverage/snapshot (mounted before requireAuth so the weekly remote agent can fetch without a session cookie)
+  access.ts            — Director-only account-access review: GET /api/access/requests + /pending-count,
+                         POST /api/access/requests/:id/{approve,deny,revoke}
 scripts/
   fix-raw-amounts.ts          — One-off recipe ingredient backfill
   import-standard-inventory.js — CSV → DB importer
@@ -88,6 +92,7 @@ public/
     recipe-editor.css  — Recipe v2 editor styles
     finance.css        — Finance dashboard styles
     feedback.css       — Feedback FAB and form
+    team.css           — Login "request access" affordance, dashboard "waiting for access" banner, Team screen
     tutorial.css       — Tutorial overlay and tooltips
     mobile.css         — All mobile/responsive overrides, bottom nav
   js/
@@ -117,6 +122,7 @@ public/
     finance.ts         — Finance screen (revenue dashboard, sync, week nav)
     feedback.ts        — Feedback form
     feedback-admin.ts  — Feedback admin screen
+    team.ts            — Director-only Team screen: review/approve/deny/revoke account-access requests
     telemetry.ts       — Frontend telemetry collection (errors, screen views, feature usage)
     tutorial.ts        — Guided tutorial system
 test/
@@ -262,6 +268,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Finance: `GET /api/finance/revenue?start=...&end=...&location=...`, `GET /api/finance/products?...`, `POST /api/finance/sync`, `POST /api/finance/sync-cancel`, `GET /api/finance/sync-status`. Status auto-hydrates from telemetry on first call after a restart.
 - Admin: `POST /api/admin/analyze`, `GET /api/admin/insights`, `PATCH /api/admin/insights/:id`, `GET /api/admin/telemetry/summary`
 - Recipe AI: `POST /api/recipe-ai/chat` — director-only SSE chat for the AI recipe assistant (gated by `DIRECTOR_EMAILS`; requires `ANTHROPIC_API_KEY`, else 503)
+- Access requests: `POST /api/auth/request-access` (unauthenticated — verifies a Google token, then records/looks-up a pending request; one row per email). Director-only review: `GET /api/access/requests`, `GET /api/access/pending-count`, `PATCH /api/access/requests/:id` (edit first/last name), `POST /api/access/requests/:id/{approve,deny,revoke}`. The effective login allowlist is `ALLOWED_EMAILS` (env, the bootstrap backbone) ∪ `access_requests` rows with status `approved` — see `isEmailAllowed()` in routes/auth.ts. Approving grants access with no env edit / redeploy; the prod fail-closed boot guard is unchanged. A denied login auto-records a pending request rather than dead-ending. The request form collects first + last name (a director can edit it via PATCH); approving also creates/links a Training (competencies) `Person` — deduped by name — so approved accounts seed the training roster. Stored in the `access_requests` table (`AccessRequest` model). Surfaced by the director-only **Team** screen + a dashboard "waiting for access" badge.
 - Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.ts sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders. Snapshot updates are targeted (only remote items), so unsaved local changes survive incoming patches.
 
 ## Testing

@@ -6,24 +6,15 @@
 // tool-use loop and emits text deltas + state updates as the model writes.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response } from 'express';
 import { asyncHandler, safeErrMsg } from '../lib/config';
-import { isDirectorEmail } from './auth';
+import { requireDirector } from './auth';
 import { loadIngredients } from './ingredients';
 import { addBackendEvent } from './telemetry';
 import { chatStream, loadExemplars } from '../lib/recipe-ai';
 import type { AIChatMessage, AIRecipeState, ChatStreamEvent } from '../lib/recipe-ai';
 
 const router = express.Router();
-
-/** Director-only gate. requireAuth has already populated req.user. */
-function requireDirector(req: Request, res: Response, next: NextFunction): void {
-  if (!isDirectorEmail(req.user?.email)) {
-    res.status(403).json({ error: 'Forbidden' });
-    return;
-  }
-  next();
-}
 
 router.post('/chat', requireDirector, asyncHandler(async (req: Request, res: Response) => {
   if (!process.env.ANTHROPIC_API_KEY) {

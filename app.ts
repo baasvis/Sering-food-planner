@@ -159,6 +159,7 @@ import eventsRouter from './routes/events';
 import healthRouter from './routes/health';
 import competenciesRouter from './routes/competencies';
 import suppliesRouter from './routes/supplies';
+import accessRouter from './routes/access';
 
 app.use('/api/data',              dataRouter);
 app.use('/api/batches',           batchesRouter);
@@ -173,6 +174,7 @@ app.use('/api/events',            eventsRouter);
 app.use('/api/health',            healthRouter);
 app.use('/api/competencies',      competenciesRouter);
 app.use('/api/supplies',          suppliesRouter);
+app.use('/api/access',            accessRouter);
 
 import adminRouter from './routes/admin';
 app.use('/api/admin',             adminRouter);

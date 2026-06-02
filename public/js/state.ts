@@ -84,6 +84,9 @@ export interface NavScreen {
   topLabel: string;
   bottomLabel: string;
   icon: string;
+  /** When true, the screen is only shown to directors (S.user.isDirector).
+   *  buildNav() filters these out for everyone else. */
+  directorOnly?: boolean;
 }
 
 export const NAV_SCREENS: NavScreen[] = [
@@ -105,6 +108,8 @@ export const NAV_SCREENS: NavScreen[] = [
     icon: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>' },
   { id: 'feedback-admin', topLabel: 'Feedback', bottomLabel: 'Feedback',
     icon: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>' },
+  { id: 'team', topLabel: 'Team', bottomLabel: 'Team', directorOnly: true,
+    icon: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/>' },
 ];
 
 // ═══════════════════════════════════════════════════════════════════

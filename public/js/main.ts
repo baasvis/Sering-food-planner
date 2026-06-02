@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, rebuildStorageCategories, getStorageConfigForLoc, getStorageColor, DEFAULT_STORAGE_CONFIG, NAV_SCREENS, ACCOMPANIMENTS, setGlobalLocation, restoreGlobalLocation } from './state';
-import { handleGoogleLogin, devLogin, doLogout, initGoogleSignIn, checkSession, showApp, showLocationChooser, selectLocation } from './auth';
+import { handleGoogleLogin, devLogin, doLogout, initGoogleSignIn, checkSession, showApp, showLocationChooser, selectLocation, toggleAccessForm, submitAccessRequest } from './auth';
 import { newId, apiGet, apiPost, setSaveState, takeSnapshot, computePatch, patchIsEmpty, scheduleSave, doSave, retrySave, loadData, showDataError, hideDataError, retryLoad, loadIngredientDb, loadStorageConfig, saveStorageConfig, loadGuestHistory, loadGuestsNextWeeks, scheduleNextWeeksSave, toast, toastError, connectLiveSync, disconnectLiveSync, applyRemotePatch, todayIso, loadPrepChecklist, schedulePrepSave, saveState, ingredientDbLoaded, ingredientDbError, setOnBatchesChanged, setFlushUndo, setLoadIngredientDbFull, setOnRemotePatchApplied } from './utils';
 import { isBatchCooked, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, rebuildPlanner, renderDishListSplit, sortByCookDate, getGuests, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, diffStr, storageBadge, storageBadgeClass, openServedDialog, openServedDialogForLoc, confirmArchiveWholeBatch, pendingRatings, ratingButtons, setRating, archiveDish, typeBadge, typeBadgeClass, TYPES, cycleType, toggleOrder, chipClass, getToday, dateToStr, strToDate, setRefreshInventoryModal } from './core';
 import { parseCSV, categorizeUploadedFiles, predictGuests, buildFlowDistribution, averageLayers, detectFormat, parseSemicolonCSV, mergeAggregated, categorizeProfitCenterData, categorizeLightspeedData, parseLightspeedMinuteOfDay, parseLightspeedHour, parseLightspeedDate, categorizeTebiData, extractMinuteOfDayFromTebiRow, extractHourFromTebiRow, extractDeviceId, winsorize, percentile, getDayOfWeek, getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, emptyAggregated, AGG_MEALS } from './predictions';
@@ -30,6 +30,7 @@ import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot,
 import { toggleRitualStep, toggleRitualWhy, ritualScrollToArrivals } from './today-panel';
 import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals } from './transport-card';
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
+import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName } from './team';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -46,7 +47,7 @@ Object.assign(window, {
   S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, rebuildStorageCategories, getStorageConfigForLoc, getStorageColor, DEFAULT_STORAGE_CONFIG, NAV_SCREENS, ACCOMPANIMENTS, setGlobalLocation, restoreGlobalLocation,
 
   // auth
-  handleGoogleLogin, devLogin, doLogout, initGoogleSignIn, checkSession, showApp, showLocationChooser, selectLocation,
+  handleGoogleLogin, devLogin, doLogout, initGoogleSignIn, checkSession, showApp, showLocationChooser, selectLocation, toggleAccessForm, submitAccessRequest,
 
   // utils
   newId, apiGet, apiPost, setSaveState, takeSnapshot, computePatch, patchIsEmpty, scheduleSave, doSave, retrySave, loadData, showDataError, hideDataError, retryLoad, loadIngredientDb, loadStorageConfig, saveStorageConfig, loadGuestHistory, loadGuestsNextWeeks, scheduleNextWeeksSave, toast, toastError, connectLiveSync, disconnectLiveSync, applyRemotePatch, todayIso, loadPrepChecklist, schedulePrepSave,
@@ -124,6 +125,9 @@ Object.assign(window, {
 
   // competencies
   renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent,
+
+  // team (access requests)
+  approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName,
 });
 
 // ═══════════════════════════════════════════════════════════════════
