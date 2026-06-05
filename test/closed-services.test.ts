@@ -181,20 +181,28 @@ describe('allocator integration (cached === live; operator scenario)', () => {
   });
 });
 
-describe('SF-1: a roll-target whose cook window has passed retires cleanly', () => {
+describe('SF-1: when the cook-ahead service has passed, demand rolls FORWARD (never lost)', () => {
   // Friday 2026-05-08, 14:00 Amsterdam (12:00Z, CEST=+2): lunch deadline (13:45)
-  // has passed but the dinner deadline (20:15) has not. A closed Fri dinner
-  // resolves to the same-day Fri lunch — which is now served — so the demand
-  // must retire (no phantom rolled badge on the dimmed past lunch cell).
+  // has passed but the dinner deadline (20:15) has not. A closed Fri dinner's
+  // usual backward "cook ahead" slot (same-day Fri lunch) is now served, so its
+  // demand must roll FORWARD onto the next still-cookable open service (Sat
+  // lunch) rather than vanishing — and never land on the already-served past
+  // lunch. (Previously this demand was silently dropped; that lost the guests.)
   beforeAll(() => { jest.setSystemTime(new Date('2026-05-08T12:00:00Z')); });
   afterAll(() => { jest.setSystemTime(new Date('2026-05-04T08:00:00Z')); });
 
-  test('no phantom rolled demand onto an already-served same-day lunch', () => {
+  test('closed Fri dinner rolls onto Sat lunch, not the served Fri lunch', () => {
     S.guests = emptyGuests() as any;
     S.guests.centraal.Fri = { lunch: 30, dinner: 8 } as any;
     S.batches = [mk('Soup', [{ loc: 'centraal', date: '2026-05-08', meal: 'lunch' }], { name: 'L' })];
     S.closedServices = { recurring: { centraal: { Fri: ['dinner'] } } } as any;
     rebuildPlanner();
-    expect(rolledInto('centraal', '2026-05-08', 'lunch')).toBe(0); // target served → demand retires
+    // The served past lunch never absorbs rolled demand (no phantom badge).
+    expect(rolledInto('centraal', '2026-05-08', 'lunch')).toBe(0);
+    // …but the 8 guests are NOT lost — they roll forward to the next open service.
+    expect(previousOpenService('centraal', '2026-05-08', 'dinner'))
+      .toEqual({ loc: 'centraal', date: '2026-05-09', meal: 'lunch' });
+    expect(rolledInto('centraal', '2026-05-09', 'lunch')).toBe(8);
+    expect(getEffectiveGuests('centraal', '2026-05-09', 'lunch')).toBe(8);
   });
 });
