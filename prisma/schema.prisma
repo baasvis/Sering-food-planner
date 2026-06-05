@@ -161,6 +161,33 @@ model Session {
   @@map("sessions")
 }
 
+// Account-access requests + grants. The effective login allowlist is the
+// union of CONFIG.ALLOWED_EMAILS (env, the bootstrap backbone) and the rows
+// here with status="approved". A new person signs in with Google, which
+// records a "pending" row; a director approves it (status -> "approved") and
+// the person can then log in — no env-var edit / redeploy needed. Revoking an
+// approved user flips status to "revoked". Env-listed emails are never stored
+// here and can't be revoked from the UI (so a director can't lock themselves
+// out). See routes/auth.ts (isEmailAllowed) and routes/access.ts.
+model AccessRequest {
+  id          String    @id
+  email       String    @unique
+  name        String // display name = "firstName lastName" (or the Google name on the auto-queue fallback)
+  firstName   String?   @map("first_name")
+  lastName    String?   @map("last_name")
+  picture     String?
+  status      String    @default("pending") // "pending" | "approved" | "denied" | "revoked"
+  requestedAt DateTime  @default(now()) @map("requested_at")
+  decidedAt   DateTime? @map("decided_at")
+  decidedBy   String?   @map("decided_by") // director email who approved/denied/revoked
+  // Training (competencies) person created/linked on approval. Lets the
+  // approved account be the source of that person's name; see routes/access.ts.
+  personId    String?   @map("person_id")
+
+  @@index([status])
+  @@map("access_requests")
+}
+
 model Feedback {
   id        Int     @id @default(autoincrement())
   timestamp String

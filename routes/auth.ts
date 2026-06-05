@@ -14,7 +14,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { CONFIG, cookieOpts, errMsg, asyncHandler } from '../lib/config';
-import { prisma } from '../lib/db';
+import { prisma, dbAppendLog } from '../lib/db';
 import type { AppUser } from '../shared/types';
 
 const router = express.Router();
@@ -26,6 +26,27 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 function generateSessionId(): string {
   return crypto.randomBytes(32).toString('hex');
 }
+
+// Lightweight per-IP throttle for the unauthenticated /request-access endpoint
+// (mirrors routes/telemetry.ts). Single-replica, so an in-memory map is fine.
+const reqAccessRate = new Map<string, { count: number; resetAt: number }>();
+const REQ_ACCESS_LIMIT = 10;       // requests per window per IP
+const REQ_ACCESS_WINDOW = 60_000;  // 1 minute
+function accessRequestRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const entry = reqAccessRate.get(ip);
+  if (!entry || now > entry.resetAt) {
+    reqAccessRate.set(ip, { count: 1, resetAt: now + REQ_ACCESS_WINDOW });
+    return false;
+  }
+  entry.count++;
+  return entry.count > REQ_ACCESS_LIMIT;
+}
+const reqAccessCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of reqAccessRate) if (now > entry.resetAt) reqAccessRate.delete(ip);
+}, 5 * 60_000);
+reqAccessCleanup.unref();
 
 /** Compute whether the given email is on the director allowlist for the
  *  private AI recipe assistant. Exported so routes/recipe-ai.ts and any
@@ -40,6 +61,91 @@ export function isDirectorEmail(email: string | null | undefined): boolean {
 export function isStaffLeadEmail(email: string | null | undefined): boolean {
   if (!email) return false;
   return CONFIG.STAFF_LEAD_EMAILS.includes(email.toLowerCase());
+}
+
+/** Director-only gate for admin endpoints. requireAuth must run first so
+ *  req.user is populated. Shared by routes/access.ts and routes/recipe-ai.ts
+ *  (one source of truth for the director check). */
+export function requireDirector(req: Request, res: Response, next: NextFunction): void {
+  if (!isDirectorEmail(req.user?.email)) {
+    res.status(403).json({ error: 'Forbidden', message: 'Director access required.' });
+    return;
+  }
+  next();
+}
+
+type RequestOutcome = 'pending' | 'approved' | 'denied' | 'revoked';
+
+/** Effective login allowlist = CONFIG.ALLOWED_EMAILS (env — the bootstrap
+ *  backbone) UNION access_requests rows with status="approved". Lets a director
+ *  grant access from the Team screen without an env-var edit or redeploy.
+ *  Purely additive: the env list and the production fail-closed boot guard in
+ *  server.ts are unchanged, so an empty env allowlist in production still
+ *  refuses to boot — DB approvals only ever add to the env backbone. */
+export async function isEmailAllowed(email: string): Promise<boolean> {
+  const e = email.toLowerCase();
+  if (CONFIG.ALLOWED_EMAILS.includes(e)) return true;
+  const row = await prisma.accessRequest.findUnique({ where: { email: e } });
+  return row?.status === 'approved';
+}
+
+/** Record (or look up) an access request for a Google-authenticated email that
+ *  isn't allowed yet. A brand-new email is stored as "pending". An existing
+ *  "denied"/"revoked" row is NOT silently re-opened (a rejected person can't
+ *  spam their way back in) — a director can re-approve it from the Team screen.
+ *  Returns the resulting status so the login screen can show the right message. */
+export async function recordAccessRequest(
+  user: AppUser,
+  names?: { firstName?: string; lastName?: string },
+): Promise<RequestOutcome> {
+  const e = user.email.toLowerCase();
+  // Cap lengths so the unauthenticated request path can't store huge strings
+  // (the only other bound is the global 2 MB JSON body limit).
+  const firstName = names?.firstName?.trim().slice(0, 100) || null;
+  const lastName = names?.lastName?.trim().slice(0, 100) || null;
+  const structured = !!(firstName || lastName);
+  // Explicit "request access" gives a first+last name; the auto-queue fallback
+  // (a denied normal login) has only the Google display name.
+  const fullName = (structured ? [firstName, lastName].filter(Boolean).join(' ') : user.name).slice(0, 200);
+  const existing = await prisma.accessRequest.findUnique({ where: { email: e } });
+  if (!existing) {
+    try {
+      await prisma.accessRequest.create({
+        data: { id: crypto.randomUUID(), email: e, name: fullName, firstName, lastName, picture: user.picture ?? null, status: 'pending' },
+      });
+      await dbAppendLog(e, fullName, 'access_requested', 'New access request');
+      return 'pending';
+    } catch (err: unknown) {
+      // Lost a race with a concurrent first-time request for the same email
+      // (the email UNIQUE constraint, P2002) — treat it as an existing row.
+      if ((err as { code?: string })?.code !== 'P2002') throw err;
+      const row = await prisma.accessRequest.findUnique({ where: { email: e } });
+      return (row?.status ?? 'pending') as RequestOutcome;
+    }
+  }
+  // Refresh a still-pending request: prefer a freshly-supplied structured name;
+  // otherwise only fall back to the Google name if no structured name exists yet
+  // (so a denied re-login can't clobber a name the person already typed).
+  if (existing.status === 'pending') {
+    const data: { picture: string | null; name?: string; firstName?: string | null; lastName?: string | null } = { picture: user.picture ?? null };
+    if (structured) { data.name = fullName; data.firstName = firstName; data.lastName = lastName; }
+    else if (!existing.firstName && !existing.lastName) { data.name = user.name.slice(0, 200); }
+    await prisma.accessRequest.update({ where: { email: e }, data });
+  }
+  return existing.status as RequestOutcome;
+}
+
+/** Login-screen message for each access-request outcome. */
+function accessRequestMessage(status: RequestOutcome): string {
+  switch (status) {
+    case 'pending':
+      return 'Your access request has been sent. Daan will approve it — you can log in as soon as that happens.';
+    case 'approved':
+      return 'You already have access — just sign in with Google.';
+    case 'denied':
+    case 'revoked':
+      return 'Your account does not have access. Ask your team lead to add you.';
+  }
 }
 
 function withDirector(user: AppUser): AppUser {
@@ -125,9 +231,13 @@ router.post('/google', asyncHandler(async (req: Request, res: Response) => {
       }
       // Dev/staging: keep today's behaviour — log a clear warning instead.
       console.warn(`Allowing login for ${user.email} — ALLOWED_EMAILS is empty (dev mode).`);
-    } else if (!CONFIG.ALLOWED_EMAILS.includes(user.email)) {
-      console.warn(`Login denied for ${user.email} — not in ALLOWED_EMAILS`);
-      return res.status(403).json({ error: 'not_allowed', message: 'Je account heeft geen toegang. Vraag je teamleider om je e-mail toe te voegen.' });
+    } else if (!(await isEmailAllowed(user.email))) {
+      // Not on the env allowlist and not DB-approved. Don't dead-end: record a
+      // pending access request (unless a prior deny/revoke decision stands) so a
+      // director can approve from the Team screen, and tell the user what happened.
+      const status = await recordAccessRequest(user);
+      console.warn(`Login denied for ${user.email} — not allowed (access request: ${status})`);
+      return res.status(403).json({ error: 'not_allowed', status, message: accessRequestMessage(status) });
     }
     const userWithRole = withDirector(user);
     const sessionId = await createSession(userWithRole);
@@ -135,6 +245,47 @@ router.post('/google', asyncHandler(async (req: Request, res: Response) => {
     return res.json({ ok: true, user: { email: userWithRole.email, name: userWithRole.name, picture: userWithRole.picture, isDirector: userWithRole.isDirector } });
   } catch (e: unknown) {
     console.error('Auth error:', errMsg(e));
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+}));
+
+// Self-service access request: a Google-authenticated user who isn't on the
+// allowlist asks to be let in. Verifying the Google token first means every
+// request is a real account (no anonymous spam), and the per-email upsert in
+// recordAccessRequest means one account can't flood the table. Mounted under
+// /api/auth (before requireAuth), like /google.
+router.post('/request-access', asyncHandler(async (req: Request, res: Response) => {
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  if (accessRequestRateLimited(ip)) {
+    return res.status(429).json({ error: 'rate_limited', message: 'Too many requests. Please wait a minute and try again.' });
+  }
+  const { idToken, firstName, lastName } = req.body;
+  if (!idToken) return res.status(400).json({ error: 'idToken required' });
+  const fn = typeof firstName === 'string' ? firstName.trim() : '';
+  const ln = typeof lastName === 'string' ? lastName.trim() : '';
+  if (!fn || !ln) {
+    return res.status(400).json({ error: 'name_required', message: 'First and last name are required.' });
+  }
+  const names = { firstName: fn, lastName: ln };
+
+  // Dev mode (no GOOGLE_CLIENT_ID, not production): synthesise a requester so
+  // the flow is exercisable locally without real Google auth.
+  if (!CONFIG.GOOGLE_CLIENT_ID && CONFIG.AUTH_MODE !== 'production') {
+    const devUser: AppUser = { email: 'requester@local', name: `${fn} ${ln}`, picture: null };
+    const status = await recordAccessRequest(devUser, names);
+    return res.json({ ok: true, status, message: accessRequestMessage(status) });
+  }
+
+  try {
+    const user = await verifyGoogleToken(idToken);
+    if (await isEmailAllowed(user.email)) {
+      // Already allowed — nothing to request; point them at the normal login.
+      return res.json({ ok: true, status: 'approved', message: accessRequestMessage('approved') });
+    }
+    const status = await recordAccessRequest(user, names);
+    return res.json({ ok: true, status, message: accessRequestMessage(status) });
+  } catch (e: unknown) {
+    console.error('Access request error:', errMsg(e));
     return res.status(401).json({ error: 'Invalid token' });
   }
 }));

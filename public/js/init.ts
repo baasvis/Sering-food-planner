@@ -93,10 +93,16 @@ export function buildNav() {
   const content = document.getElementById('content')!;
   const bottomNav = document.getElementById('bottom-nav')!;
 
+  // Director-only screens (e.g. Team / access requests) are hidden from
+  // everyone else — both the nav buttons and the screen container. The
+  // matching API endpoints are director-gated server-side too (defence in
+  // depth), so this is purely UX, not the security boundary.
+  const screens = NAV_SCREENS.filter((s: any) => !s.directorOnly || S.user?.isDirector);
+
   // Top bar: title + nav buttons + save indicator + user menu
   topBar.innerHTML = `
     <h1 class="app-title ${S.currentLoc === 'west' ? 'loc-west' : 'loc-centraal'}" id="app-title" onclick="confirmSwitchLocation()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();confirmSwitchLocation();}" title="Switch location" role="button" tabindex="0">${locTitleHtml(S.currentLoc)}</h1>
-    ${NAV_SCREENS.map((s: any, i: any) =>
+    ${screens.map((s: any, i: any) =>
       `<button class="nav-btn${i === 0 ? ' active' : ''}" data-screen="${s.id}" onclick="showScreen('${s.id}')">${s.topLabel}</button>`
     ).join('')}
     <div class="save-indicator" id="save-indicator" role="status" aria-live="polite">
@@ -112,12 +118,12 @@ export function buildNav() {
   `;
 
   // Screen containers
-  content.innerHTML = NAV_SCREENS.map((s: any, i: any) =>
+  content.innerHTML = screens.map((s: any, i: any) =>
     `<div id="screen-${s.id}" class="screen${i === 0 ? ' active' : ''}"></div>`
   ).join('');
 
   // Bottom nav
-  bottomNav.innerHTML = NAV_SCREENS.map((s: any, i: any) =>
+  bottomNav.innerHTML = screens.map((s: any, i: any) =>
     `<button class="bnav-btn${i === 0 ? ' active' : ''}" data-screen="${s.id}" onclick="showScreen('${s.id}')">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${s.icon}</svg>
       <span>${s.bottomLabel}</span>

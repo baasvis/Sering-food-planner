@@ -3,7 +3,7 @@ import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS } from './state';
 
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
 type DashBatch = Batch & { starch?: string | null };
-import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId, formatRelativeTime } from './utils';
+import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId, formatRelativeTime, apiGet } from './utils';
 import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getEffectiveGuests, getToday, dateToStr, chipClass, getStockAt, getPendingFromShipments } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
@@ -416,8 +416,36 @@ export function renderDashboard() {
     </div>
   `;
 
+  void refreshAccessBanner();
   loadDayTodos();
   loadPrepChecklist(loc).then(() => { renderDashboardContent(); });
+}
+
+/** Director-only: show a banner at the top of the dashboard when people are
+ *  waiting for account access, linking to the Team screen. Silent for
+ *  non-directors and on any error. Re-added on every dashboard render since
+ *  renderDashboard() rebuilds the screen container; it sits as a sibling above
+ *  #dash-content so renderDashboardContent()'s updates don't wipe it. */
+async function refreshAccessBanner(): Promise<void> {
+  const screen = document.getElementById('screen-dashboard');
+  if (!screen) return;
+  if (!S.user?.isDirector) { document.getElementById('access-banner')?.remove(); return; }
+  let count = 0;
+  try {
+    const data = await apiGet('/api/access/pending-count');
+    count = Number(data?.count) || 0;
+  } catch (_e) { return; }
+  const existing = document.getElementById('access-banner');
+  if (count <= 0) { existing?.remove(); return; }
+  const label = count === 1 ? '1 person is' : `${count} people are`;
+  const html = `
+    <div id="access-banner" class="access-banner" role="status">
+      <span class="access-banner-icon">&#128075;</span>
+      <span class="access-banner-text"><strong>${label}</strong> waiting for access to the planner.</span>
+      <button class="access-banner-btn" onclick="showScreen('team')">Review</button>
+    </div>`;
+  if (existing) existing.outerHTML = html;
+  else screen.insertAdjacentHTML('afterbegin', html);
 }
 
 // ── Guest Flow Chart ─────────────────────────────────────────

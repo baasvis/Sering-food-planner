@@ -7,7 +7,7 @@
 // where every screen needed dashboard.ts and dashboard.ts needed every screen.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NAV_SCREENS } from './state';
+import { NAV_SCREENS, S } from './state';
 
 type RenderFn = () => void;
 const renderers: Record<string, RenderFn> = {};
@@ -60,7 +60,9 @@ export function rerenderCurrentView() {
  *  unknown values. */
 export function getScreenFromHash(): string {
   const hash = window.location.hash.replace('#', '');
-  const validScreens = NAV_SCREENS.map(s => s.id);
+  // Exclude director-only screens for non-directors so a stale/shared #team URL
+  // resolves to the dashboard instead of a screen with no container.
+  const validScreens = NAV_SCREENS.filter(s => !s.directorOnly || S.user?.isDirector).map(s => s.id);
   return validScreens.includes(hash) ? hash : 'dashboard';
 }
 
@@ -68,6 +70,10 @@ export function getScreenFromHash(): string {
  *  registered renderer. Used to live in dashboard.ts and import every screen
  *  module directly. */
 export function showScreen(name: string, pushState = true) {
+  // Defensive: if the requested screen has no container (e.g. a director-only
+  // screen requested by a non-director via a stale hash), fall back to the
+  // dashboard so we never end up with no active screen / a blank content area.
+  if (!document.getElementById('screen-' + name)) name = 'dashboard';
   if (_onScreenChange) _onScreenChange(name);
   setCurrentScreen(name);
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));

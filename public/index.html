@@ -16,6 +16,7 @@
 <link rel="stylesheet" href="css/supplies.css">
 <link rel="stylesheet" href="css/finance.css">
 <link rel="stylesheet" href="css/competencies.css">
+<link rel="stylesheet" href="css/team.css">
 <link rel="stylesheet" href="css/feedback.css">
 <link rel="stylesheet" href="css/tutorial.css">
 <link rel="stylesheet" href="css/mobile.css">
@@ -26,10 +27,18 @@
 <div id="login-screen" class="login-screen">
   <div class="login-card">
     <h1>De Sering</h1>
-    <p>Food planner — log in om verder te gaan</p>
+    <p>Food planner — log in to continue</p>
     <div id="login-error" class="login-error"></div>
     <div class="g_id_signin" style="display:flex;justify-content:center;"></div>
     <button class="dev-btn" id="dev-login-btn" style="display:none;" onclick="devLogin()">Dev mode login (no auth configured)</button>
+    <div class="login-sep"><span>new here?</span></div>
+    <button class="ask-access-btn" id="ask-access-btn" onclick="toggleAccessForm()">Request access</button>
+    <div id="access-form" class="access-form" style="display:none;">
+      <input type="text" id="access-firstname" class="access-input" placeholder="First name" autocomplete="given-name">
+      <input type="text" id="access-lastname" class="access-input" placeholder="Last name" autocomplete="family-name">
+      <button class="ask-access-submit" id="ask-access-submit" onclick="submitAccessRequest()">Send request</button>
+    </div>
+    <div id="access-msg" class="access-msg" style="display:none;"></div>
   </div>
 </div>
 

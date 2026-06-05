@@ -374,6 +374,23 @@ export interface AppUser {
   isDirector?: boolean;
 }
 
+/** An account-access request / grant, as returned by GET /api/access/requests.
+ *  Mirrors the AccessRequest Prisma model with dates serialised to ISO strings. */
+export interface AccessRequestDTO {
+  id: string;
+  email: string;
+  name: string;
+  firstName: string | null;
+  lastName: string | null;
+  picture: string | null;
+  status: 'pending' | 'approved' | 'denied' | 'revoked';
+  requestedAt: string;
+  decidedAt: string | null;
+  decidedBy: string | null;
+  /** Linked Training (competencies) person id, set on approval. */
+  personId: string | null;
+}
+
 // ── Ratings (for served dialog) ──
 
 export interface BatchRatings {
