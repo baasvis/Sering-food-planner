@@ -1,6 +1,6 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, Supply } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, Supply, PagePermission } from '@shared/types';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -266,6 +266,26 @@ export function restoreGlobalLocation(): boolean {
     return true;
   }
   return false;
+}
+
+// ── Page permissions (role-based guardrails) ────────────────────────────────
+// Resolve the current user's access level for a screen. Directors always get
+// 'edit'. A user with no role (empty/absent permissions map) gets 'edit' too —
+// this preserves full access for env-listed and pre-role accounts. Within a
+// role, a screen missing from the map is treated as 'hidden' (deny by default).
+// The dashboard is never hidden, so a user always has a landing screen.
+export function screenPermission(screenId: string): PagePermission {
+  if (S.user?.isDirector) return 'edit';
+  const perms = S.user?.permissions;
+  if (!perms || Object.keys(perms).length === 0) return 'edit';
+  const level = (perms[screenId] as PagePermission) || 'hidden';
+  if (screenId === 'dashboard' && level === 'hidden') return 'view';
+  return level;
+}
+
+/** True when the current user may edit (not just view) the given screen. */
+export function canEditScreen(screenId: string): boolean {
+  return screenPermission(screenId) === 'edit';
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -12,11 +12,13 @@
 
 import express, { Request, Response } from 'express';
 import crypto from 'crypto';
+import { Prisma } from '@prisma/client';
 import { CONFIG, asyncHandler, AppError } from '../lib/config';
 import { prisma, dbAppendLog, withWriteLock } from '../lib/db';
 import { requireDirector } from './auth';
 import { addBackendEvent } from './telemetry';
-import type { AccessRequestDTO } from '../shared/types';
+import type { AccessRequestDTO, RoleDTO, PagePermission } from '../shared/types';
+import { GATEABLE_SCREENS } from '../shared/types';
 
 const router = express.Router();
 router.use(requireDirector);
@@ -33,6 +35,7 @@ interface AccessRow {
   decidedAt: Date | null;
   decidedBy: string | null;
   personId: string | null;
+  roleId: string | null;
 }
 
 function toDTO(r: AccessRow): AccessRequestDTO {
@@ -48,8 +51,117 @@ function toDTO(r: AccessRow): AccessRequestDTO {
     decidedAt: r.decidedAt ? r.decidedAt.toISOString() : null,
     decidedBy: r.decidedBy,
     personId: r.personId,
+    roleId: r.roleId,
   };
 }
+
+// ── Roles ────────────────────────────────────────────────────────────────────
+
+const VALID_LEVELS = new Set<PagePermission>(['hidden', 'view', 'edit']);
+
+/** Coerce an arbitrary input into a complete map over exactly the gateable
+ *  screens, with valid levels only (unknown screen / level → fallback). */
+function normalizePermissions(input: unknown, fallback: PagePermission = 'view'): Record<string, PagePermission> {
+  const src = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
+  const out: Record<string, PagePermission> = {};
+  for (const s of GATEABLE_SCREENS) {
+    const v = src[s];
+    out[s] = (typeof v === 'string' && VALID_LEVELS.has(v as PagePermission)) ? (v as PagePermission) : fallback;
+  }
+  return out;
+}
+
+interface RoleRow { id: string; name: string; permissions: unknown; isDefault: boolean; }
+function roleToDTO(r: RoleRow): RoleDTO {
+  return { id: r.id, name: r.name, permissions: normalizePermissions(r.permissions), isDefault: r.isDefault };
+}
+
+/** Seed a few sensible roles the first time the table is used. "Full access"
+ *  is the default so newly-approved users keep today's full access until a
+ *  director downgrades them. */
+async function seedRolesIfEmpty(): Promise<void> {
+  if (await prisma.role.count() > 0) return;
+  await withWriteLock(async () => {
+    if (await prisma.role.count() > 0) return; // re-check inside the lock
+    const all = (level: PagePermission) => normalizePermissions({}, level);
+    const kitchen = all('edit'); kitchen['finance'] = 'hidden'; kitchen['feedback-admin'] = 'hidden';
+    const seeds = [
+      { name: 'Full access', permissions: all('edit'), isDefault: true },
+      { name: 'Kitchen', permissions: kitchen, isDefault: false },
+      { name: 'View only', permissions: all('view'), isDefault: false },
+    ];
+    for (const s of seeds) {
+      await prisma.role.create({ data: { id: crypto.randomUUID(), name: s.name, permissions: s.permissions as unknown as Prisma.InputJsonValue, isDefault: s.isDefault } });
+    }
+  });
+}
+
+// GET /api/access/roles — list roles (+ the gateable screen ids), seeding
+// defaults on first use.
+router.get('/roles', asyncHandler(async (_req: Request, res: Response) => {
+  await seedRolesIfEmpty();
+  const roles = await prisma.role.findMany({ orderBy: [{ isDefault: 'desc' }, { name: 'asc' }] });
+  res.json({ roles: roles.map(roleToDTO), screens: GATEABLE_SCREENS });
+}));
+
+// POST /api/access/roles — create a role.
+router.post('/roles', asyncHandler(async (req: Request, res: Response) => {
+  const name = (typeof req.body.name === 'string' ? req.body.name.trim() : '').slice(0, 60);
+  if (!name) return res.status(400).json({ error: 'name_required', message: 'Role name is required.' });
+  const permissions = normalizePermissions(req.body.permissions, 'view') as unknown as Prisma.InputJsonValue;
+  const makeDefault = req.body.isDefault === true;
+  const role = await withWriteLock(() => prisma.$transaction(async (tx) => {
+    if (makeDefault) await tx.role.updateMany({ data: { isDefault: false } });
+    return tx.role.create({ data: { id: crypto.randomUUID(), name, permissions, isDefault: makeDefault } });
+  }));
+  await dbAppendLog(req.user!.email, req.user!.name, 'role_create', name);
+  res.json({ ok: true, role: roleToDTO(role) });
+}));
+
+// PATCH /api/access/roles/:id — rename, update the matrix, and/or set default.
+router.patch('/roles/:id', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  if (!(await prisma.role.findUnique({ where: { id } }))) throw new AppError(404, 'Role not found');
+  const data: { name?: string; permissions?: Prisma.InputJsonValue; isDefault?: boolean } = {};
+  if (typeof req.body.name === 'string' && req.body.name.trim()) data.name = req.body.name.trim().slice(0, 60);
+  if (req.body.permissions && typeof req.body.permissions === 'object') {
+    data.permissions = normalizePermissions(req.body.permissions) as unknown as Prisma.InputJsonValue;
+  }
+  const makeDefault = req.body.isDefault === true;
+  const role = await withWriteLock(() => prisma.$transaction(async (tx) => {
+    if (makeDefault) { await tx.role.updateMany({ data: { isDefault: false } }); data.isDefault = true; }
+    return tx.role.update({ where: { id }, data });
+  }));
+  await dbAppendLog(req.user!.email, req.user!.name, 'role_update', role.name);
+  res.json({ ok: true, role: roleToDTO(role) });
+}));
+
+// DELETE /api/access/roles/:id — refused while any user still has the role.
+router.delete('/roles/:id', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const inUse = await prisma.accessRequest.count({ where: { roleId: id } });
+  if (inUse > 0) {
+    return res.status(409).json({ error: 'role_in_use', message: `${inUse} user(s) still have this role — reassign them first.` });
+  }
+  const role = await prisma.role.findUnique({ where: { id } });
+  if (!role) throw new AppError(404, 'Role not found');
+  await prisma.role.delete({ where: { id } });
+  await dbAppendLog(req.user!.email, req.user!.name, 'role_delete', role.name);
+  res.json({ ok: true });
+}));
+
+// PATCH /api/access/requests/:id/role — assign (or clear, with null) a user's role.
+router.patch('/requests/:id/role', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const raw = req.body.roleId;
+  const roleId = (raw === null || raw === undefined || raw === '') ? null : String(raw);
+  const row = await prisma.accessRequest.findUnique({ where: { id } });
+  if (!row) throw new AppError(404, 'Access request not found');
+  if (roleId && !(await prisma.role.findUnique({ where: { id: roleId } }))) throw new AppError(404, 'Role not found');
+  const updated = await prisma.accessRequest.update({ where: { id }, data: { roleId } });
+  await dbAppendLog(req.user!.email, req.user!.name, 'access_role', `${row.email} → ${roleId ?? 'none'}`);
+  res.json({ ok: true, request: toDTO(updated) });
+}));
 
 // GET /api/access/requests — every request/grant plus the read-only env
 // allowlist (shown as "always allowed" so a director can't lock themselves out
@@ -114,7 +226,11 @@ async function decide(req: Request, res: Response, action: DecisionAction): Prom
           const match = await tx.person.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
           personId = match ? match.id : (await tx.person.create({ data: { id: crypto.randomUUID(), name, location: 'centraal' } })).id;
         }
-        return tx.accessRequest.update({ where: { id }, data: { status, decidedAt: new Date(), decidedBy, personId } });
+        // Assign the default role on first approval (null = full edit anyway,
+        // but linking it makes the Team screen show the role explicitly).
+        let roleId = row.roleId;
+        if (!roleId) roleId = (await tx.role.findFirst({ where: { isDefault: true } }))?.id ?? null;
+        return tx.accessRequest.update({ where: { id }, data: { status, decidedAt: new Date(), decidedBy, personId, roleId } });
       }))
     : await prisma.accessRequest.update({ where: { id }, data: { status, decidedAt: new Date(), decidedBy } });
 

@@ -1,14 +1,14 @@
 // UUID GENERATION
 // ═══════════════════════════════════════════════════════════════════
 
-import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
+import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen } from './state';
 import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
 import { esc } from './modal';
-import { rerenderCurrentView } from './navigate';
+import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { invalidateCategoryCache } from './dashboard';
 
 export function newId(): string {
@@ -55,7 +55,20 @@ export class ApiError extends Error {
   }
 }
 
+// Endpoints that must work regardless of the current screen's edit permission:
+// auth (login/logout), telemetry, the global feedback FAB, and the batched
+// state autosave (gating it could drop a legit edit made on an edit-screen).
+const VIEW_ONLY_EXEMPT = ['/api/auth/', '/api/telemetry', '/api/feedback', '/api/data/patch'];
+
 export async function apiPost(path: string, body: unknown, method: string = 'POST'): Promise<any> {
+  // Role guardrail: block writes issued from a screen the user only has 'view'
+  // on. This is a frontend guardrail, NOT a security boundary — the API still
+  // accepts direct calls; this stops the UI from making them. Reads (GET) and a
+  // small set of cross-cutting endpoints are always allowed.
+  if (method.toUpperCase() !== 'GET' && !VIEW_ONLY_EXEMPT.some(p => path.startsWith(p)) && !canEditScreen(getCurrentScreen())) {
+    toast("View only — you can't make changes on this page");
+    throw new ApiError(403, 'view_only');
+  }
   const r = await fetch(path, { method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
   if (r.status === 401) { doLogout(); throw new ApiError(401, 'Session expired'); }
   if (!r.ok) {

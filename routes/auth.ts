@@ -152,6 +152,19 @@ function withDirector(user: AppUser): AppUser {
   return { ...user, isDirector: isDirectorEmail(user.email) };
 }
 
+/** Resolve a user's per-screen page permissions from their assigned role.
+ *  Empty map = no role = full edit (legacy behavior for env-listed / pre-role
+ *  users). Directors ignore this (the frontend treats them as full edit). Called
+ *  only at login / GET /auth/me — never per-request — so the extra queries are
+ *  cheap. Frontend-only guardrail; nothing here gates server-side writes. */
+export async function resolvePermissions(email: string): Promise<Record<string, string>> {
+  const e = email.toLowerCase();
+  const req = await prisma.accessRequest.findUnique({ where: { email: e }, select: { roleId: true } });
+  if (!req?.roleId) return {};
+  const role = await prisma.role.findUnique({ where: { id: req.roleId }, select: { permissions: true } });
+  return (role?.permissions as Record<string, string>) ?? {};
+}
+
 async function verifyGoogleToken(idToken: string): Promise<AppUser> {
   const ticket = await authClient.verifyIdToken({
     idToken,
@@ -215,7 +228,7 @@ router.post('/google', asyncHandler(async (req: Request, res: Response) => {
     const devUser: AppUser = withDirector({ email: 'dev@local', name: 'Dev Mode', picture: null });
     const sessionId = await createSession(devUser);
     res.cookie('session', sessionId, cookieOpts());
-    return res.json({ ok: true, user: { email: devUser.email, name: devUser.name, isDirector: devUser.isDirector } });
+    return res.json({ ok: true, user: { email: devUser.email, name: devUser.name, isDirector: devUser.isDirector, permissions: await resolvePermissions(devUser.email) } });
   }
 
   try {
@@ -242,7 +255,7 @@ router.post('/google', asyncHandler(async (req: Request, res: Response) => {
     const userWithRole = withDirector(user);
     const sessionId = await createSession(userWithRole);
     res.cookie('session', sessionId, cookieOpts());
-    return res.json({ ok: true, user: { email: userWithRole.email, name: userWithRole.name, picture: userWithRole.picture, isDirector: userWithRole.isDirector } });
+    return res.json({ ok: true, user: { email: userWithRole.email, name: userWithRole.name, picture: userWithRole.picture, isDirector: userWithRole.isDirector, permissions: await resolvePermissions(userWithRole.email) } });
   } catch (e: unknown) {
     console.error('Auth error:', errMsg(e));
     return res.status(401).json({ error: 'Invalid token' });
@@ -303,7 +316,8 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
 router.get('/me', asyncHandler(async (req: Request, res: Response) => {
   const user = await getSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
-  res.json({ user });
+  const permissions = await resolvePermissions(user.email);
+  res.json({ user: { ...user, permissions } });
 }));
 
 // Middleware: protect all /api/* except auth + health
