@@ -737,7 +737,11 @@ export function toRecipeFull(r: NonNullable<RecipeWithIngredients>): RecipeFull 
     storageMethod: r.storageMethod,
     photoUrl: r.photoUrl,
     isComplete: r.isComplete,
-    versions: (r.versions ?? []) as unknown as RecipeVersionSnapshot[],
+    // Ship version METADATA only on the bulk/detail paths — the version panel
+    // shows version/date/changedBy/notes, never the per-version ingredient list.
+    // The heavy snapshots are fetched on demand via GET /recipes/:id/versions
+    // (restore flow). Keeps /api/data + every recipe broadcast small (PERF-5).
+    versions: ((r.versions ?? []) as unknown as RecipeVersionSnapshot[]).map(v => ({ ...v, ingredients: [] })),
     createdBy: r.createdBy,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,

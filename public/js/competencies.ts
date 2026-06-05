@@ -118,7 +118,12 @@ function safeHttpUrl(url: string | null | undefined): string | null {
 export async function renderCompetencies(): Promise<void> {
   const el = document.getElementById('screen-competencies');
   if (!el) return;
-  if (!cLoaded) el.innerHTML = '<div class="comp-loading">Loading…</div>';
+  // Paint from the module cache once loaded (audit ARCH-1): the 60s background
+  // tick and SSE-triggered re-renders must NOT refetch the whole (ever-growing)
+  // teaching-event ledger every minute. Explicit reloads — first screen load and
+  // after a local mutation — go through reloadCompetencies(), which clears cLoaded.
+  if (cLoaded) { paintComp(); return; }
+  el.innerHTML = '<div class="comp-loading">Loading…</div>';
   try {
     const data = await apiGet('/api/competencies');
     cChunks = data.chunks || [];
@@ -131,6 +136,14 @@ export async function renderCompetencies(): Promise<void> {
     return;
   }
   paintComp();
+}
+
+/** Force a fresh fetch of the training data, then repaint. Called after a local
+ *  mutation (log event, add/rename/(de)activate person, sync, delete) so the
+ *  change shows; the plain renderer paints from cache. */
+export async function reloadCompetencies(): Promise<void> {
+  cLoaded = false;
+  return renderCompetencies();
 }
 
 function paintComp(): void {
@@ -454,7 +467,7 @@ export async function submitCompLog(): Promise<void> {
     const chunk = chunkById(logChunkId);
     closeModal();
     toast(`Logged: ${learner ? learner.name : '?'} — ${chunk ? chunk.name : '?'}`);
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not log: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -491,7 +504,7 @@ export async function submitCompAddPerson(): Promise<void> {
     await apiPost('/api/competencies/people', { id: newId(), name });
     closeModal();
     toast(`Added ${name}`);
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not add: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -586,7 +599,7 @@ export async function compSyncNotion(): Promise<void> {
     };
     const total = cLastSync.synced.length + cLastSync.warned.length;
     toast(`Synced ${total} chunk${total === 1 ? '' : 's'}`);
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Sync failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -623,7 +636,7 @@ export async function submitCompRename(): Promise<void> {
     await apiPost('/api/competencies/people/' + renamePersonId, { name }, 'PATCH');
     closeModal();
     toast('Renamed');
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not rename: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -635,7 +648,7 @@ export async function compTogglePersonActive(personId: string): Promise<void> {
   try {
     await apiPost('/api/competencies/people/' + personId, { active: !person.active }, 'PATCH');
     toast(person.active ? `${person.name} deactivated` : `${person.name} reactivated`);
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not update: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -668,7 +681,7 @@ export async function confirmCompDeleteEvent(): Promise<void> {
     pendingDeleteEventId = '';
     closeModal();
     toast('Event deleted');
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }

@@ -83,9 +83,11 @@ export const EXEMPLAR_IDS = [
 ] as const;
 
 let _exemplarCache: RecipeFull[] | null = null;
+let _exemplarCacheAt = 0;
+const EXEMPLAR_TTL_MS = 5 * 60 * 1000; // re-pull every 5 min so an edited exemplar shows without a deploy (ARCH-2)
 
 export async function loadExemplars(): Promise<RecipeFull[]> {
-  if (_exemplarCache) return _exemplarCache;
+  if (_exemplarCache && (Date.now() - _exemplarCacheAt) < EXEMPLAR_TTL_MS) return _exemplarCache;
   try {
     const rows = await prisma.recipe.findMany({
       where: { id: { in: [...EXEMPLAR_IDS] } },
@@ -128,11 +130,13 @@ export async function loadExemplars(): Promise<RecipeFull[]> {
         ingredientName: rir.ingredient?.name || '',
       })),
     }));
+    _exemplarCacheAt = Date.now();
     return _exemplarCache;
   } catch (e: unknown) {
+    // Don't cache the failure — a transient DB hiccup must not pin the assistant
+    // to zero exemplars for the whole process lifetime (audit ARCH-2).
     console.warn('Recipe AI: failed to load exemplars, continuing without:', errMsg(e));
-    _exemplarCache = [];
-    return _exemplarCache;
+    return [];
   }
 }
 
