@@ -403,22 +403,30 @@ function closedSlotDemand(loc: string, dateStr: string, meal: Meal | string): nu
 }
 
 /** The open service a closed slot's demand rolls onto: walk BACKWARD (earlier
- *  meal same day, then prior days latest->earliest), then a forward fallback.
- *  Config-only (ignores whether a batch is assigned). null if all-closed in window. */
+ *  meal same day, then prior days latest->earliest) for a still-cookable
+ *  "cook ahead" service, then a FORWARD fallback to the next open service.
+ *  A target must be open AND not already past: a service whose cook window has
+ *  closed can't take on rolled demand, so we skip it and keep walking. That's
+ *  what lets demand roll FORWARD to the next still-cookable service when the
+ *  usual backward cook-ahead slot has already passed (rather than vanishing).
+ *  Ignores whether a batch is assigned. null only when no non-past open service
+ *  exists within the walk window. */
 export function previousOpenService(loc: string, dateStr: string, meal: Meal): Service | null {
   const base = new Date(dateStr + 'T12:00:00');
   const startIdx = MEAL_ORDER.indexOf(meal);
+  const viable = (iso: string, m: Meal): boolean =>
+    !isServiceClosed(loc, iso, m) && !isServicePast({ loc: loc as Location, date: iso, meal: m });
   for (let off = 0; off <= CLOSED_WALK_DAYS; off++) {
     const d = new Date(base); d.setDate(base.getDate() - off);
     const iso = dateToIso(d);
     const meals = off === 0 ? MEAL_ORDER.slice(0, startIdx).reverse() : MEAL_ORDER.slice().reverse();
-    for (const m of meals) if (!isServiceClosed(loc, iso, m)) return { loc: loc as Location, date: iso, meal: m };
+    for (const m of meals) if (viable(iso, m)) return { loc: loc as Location, date: iso, meal: m };
   }
   for (let off = 0; off <= CLOSED_WALK_DAYS; off++) {
     const d = new Date(base); d.setDate(base.getDate() + off);
     const iso = dateToIso(d);
     const meals = off === 0 ? MEAL_ORDER.slice(startIdx + 1) : MEAL_ORDER.slice();
-    for (const m of meals) if (!isServiceClosed(loc, iso, m)) return { loc: loc as Location, date: iso, meal: m };
+    for (const m of meals) if (viable(iso, m)) return { loc: loc as Location, date: iso, meal: m };
   }
   return null;
 }
@@ -461,13 +469,14 @@ export function buildRollMap(): void {
         if (isServicePast(svc)) continue;
         const amt = closedSlotDemand(loc, iso, meal);
         if (amt <= 0) continue;
+        // previousOpenService skips past services in both directions, so the
+        // target is always a still-cookable open service: if the usual backward
+        // "cook ahead" slot has already passed (e.g. a closed Fri dinner whose
+        // same-day Fri lunch is over by the afternoon), the demand rolls FORWARD
+        // onto the next open service instead of vanishing. Only a genuinely
+        // all-closed/all-past window yields null → a no-target warning.
         const tgt = previousOpenService(loc, iso, meal);
         if (!tgt) { _rollWarn.set(slotKey(svc), { amount: amt, reason: 'no-target' }); continue; }
-        // If the roll-target's cook window has already passed (e.g. a closed Fri
-        // dinner resolving to the same-day Fri lunch, viewed in the afternoon),
-        // the demand can no longer be cooked — it retires like any served
-        // service rather than lingering as a phantom rolled badge on a past slot.
-        if (isServicePast(tgt)) continue;
         const tk = slotKey(tgt);
         _rollMap.set(tk, (_rollMap.get(tk) || 0) + amt);
         let fromSet = _rollFrom.get(tk);
