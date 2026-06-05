@@ -27,6 +27,27 @@ function generateSessionId(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+// Lightweight per-IP throttle for the unauthenticated /request-access endpoint
+// (mirrors routes/telemetry.ts). Single-replica, so an in-memory map is fine.
+const reqAccessRate = new Map<string, { count: number; resetAt: number }>();
+const REQ_ACCESS_LIMIT = 10;       // requests per window per IP
+const REQ_ACCESS_WINDOW = 60_000;  // 1 minute
+function accessRequestRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const entry = reqAccessRate.get(ip);
+  if (!entry || now > entry.resetAt) {
+    reqAccessRate.set(ip, { count: 1, resetAt: now + REQ_ACCESS_WINDOW });
+    return false;
+  }
+  entry.count++;
+  return entry.count > REQ_ACCESS_LIMIT;
+}
+const reqAccessCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of reqAccessRate) if (now > entry.resetAt) reqAccessRate.delete(ip);
+}, 5 * 60_000);
+reqAccessCleanup.unref();
+
 /** Compute whether the given email is on the director allowlist for the
  *  private AI recipe assistant. Exported so routes/recipe-ai.ts and any
  *  future director-gated feature share one source of truth. */
@@ -78,19 +99,29 @@ export async function recordAccessRequest(
   names?: { firstName?: string; lastName?: string },
 ): Promise<RequestOutcome> {
   const e = user.email.toLowerCase();
-  const firstName = names?.firstName?.trim() || null;
-  const lastName = names?.lastName?.trim() || null;
+  // Cap lengths so the unauthenticated request path can't store huge strings
+  // (the only other bound is the global 2 MB JSON body limit).
+  const firstName = names?.firstName?.trim().slice(0, 100) || null;
+  const lastName = names?.lastName?.trim().slice(0, 100) || null;
   const structured = !!(firstName || lastName);
   // Explicit "request access" gives a first+last name; the auto-queue fallback
   // (a denied normal login) has only the Google display name.
-  const fullName = structured ? [firstName, lastName].filter(Boolean).join(' ') : user.name;
+  const fullName = (structured ? [firstName, lastName].filter(Boolean).join(' ') : user.name).slice(0, 200);
   const existing = await prisma.accessRequest.findUnique({ where: { email: e } });
   if (!existing) {
-    await prisma.accessRequest.create({
-      data: { id: crypto.randomUUID(), email: e, name: fullName, firstName, lastName, picture: user.picture ?? null, status: 'pending' },
-    });
-    await dbAppendLog(e, fullName, 'access_requested', 'New access request');
-    return 'pending';
+    try {
+      await prisma.accessRequest.create({
+        data: { id: crypto.randomUUID(), email: e, name: fullName, firstName, lastName, picture: user.picture ?? null, status: 'pending' },
+      });
+      await dbAppendLog(e, fullName, 'access_requested', 'New access request');
+      return 'pending';
+    } catch (err: unknown) {
+      // Lost a race with a concurrent first-time request for the same email
+      // (the email UNIQUE constraint, P2002) — treat it as an existing row.
+      if ((err as { code?: string })?.code !== 'P2002') throw err;
+      const row = await prisma.accessRequest.findUnique({ where: { email: e } });
+      return (row?.status ?? 'pending') as RequestOutcome;
+    }
   }
   // Refresh a still-pending request: prefer a freshly-supplied structured name;
   // otherwise only fall back to the Google name if no structured name exists yet
@@ -98,7 +129,7 @@ export async function recordAccessRequest(
   if (existing.status === 'pending') {
     const data: { picture: string | null; name?: string; firstName?: string | null; lastName?: string | null } = { picture: user.picture ?? null };
     if (structured) { data.name = fullName; data.firstName = firstName; data.lastName = lastName; }
-    else if (!existing.firstName && !existing.lastName) { data.name = user.name; }
+    else if (!existing.firstName && !existing.lastName) { data.name = user.name.slice(0, 200); }
     await prisma.accessRequest.update({ where: { email: e }, data });
   }
   return existing.status as RequestOutcome;
@@ -224,6 +255,10 @@ router.post('/google', asyncHandler(async (req: Request, res: Response) => {
 // recordAccessRequest means one account can't flood the table. Mounted under
 // /api/auth (before requireAuth), like /google.
 router.post('/request-access', asyncHandler(async (req: Request, res: Response) => {
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  if (accessRequestRateLimited(ip)) {
+    return res.status(429).json({ error: 'rate_limited', message: 'Too many requests. Please wait a minute and try again.' });
+  }
   const { idToken, firstName, lastName } = req.body;
   if (!idToken) return res.status(400).json({ error: 'idToken required' });
   const fn = typeof firstName === 'string' ? firstName.trim() : '';

@@ -57,7 +57,7 @@ async function loginWithToken(idToken: any) {
       // already queued a pending request, so show the friendly waiting message
       // instead of a dead-end error.
       if (res.status === 403 && data.status) {
-        showAccessMessage(data.message || 'Toegang aangevraagd.', data.status === 'pending');
+        showAccessMessage(data.message || 'Access requested.', data.status === 'pending');
       } else {
         const errEl = document.getElementById('login-error')!;
         errEl.textContent = data.message || data.error || 'Login failed';

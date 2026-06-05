@@ -253,4 +253,16 @@ describe('rename + Training-person link', () => {
     expect(appr.status).toBe(200);
     expect(appr.body.request.personId).toBe(existing.id);
   });
+
+  it('re-approving a revoked user restores access (Approve anyway)', async () => {
+    const email = T + 'reapprove@sering.test';
+    const row = await prisma.accessRequest.create({ data: { id: T + 're', email, name: 'Re Approve', firstName: 'Re', lastName: 'Approve', picture: null, status: 'revoked' } });
+    expect(await isEmailAllowed(email)).toBe(false);
+    const cookie = await loginDirector();
+    const res = await request(app).post(`/api/access/requests/${row.id}/approve`).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.request.status).toBe('approved');
+    expect(res.body.request.personId).toBeTruthy();
+    expect(await isEmailAllowed(email)).toBe(true);
+  });
 });

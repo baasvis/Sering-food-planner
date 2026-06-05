@@ -384,7 +384,7 @@ export const TUTORIALS: Record<string, TutStep[]> = {
     {
       selector: '.team-intro',
       title: 'Letting people in',
-      body: "When someone taps “Toegang aanvragen” on the login screen, their request lands here. Approving them grants access within seconds — no settings change or redeploy needed.",
+      body: "When someone taps “Request access” on the login screen, their request lands here. Approving them grants access within seconds — no settings change or redeploy needed.",
     },
     {
       selector: '.team-section',
