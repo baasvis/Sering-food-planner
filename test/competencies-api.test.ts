@@ -1,6 +1,7 @@
 // Competencies API — round-trip: add staff names, log a teaching event, read
-// it back through the screen-load endpoint. No validation tests: POST /events
-// is trust-by-default and deliberately accepts any teacher/learner/chunk/date.
+// it back through the screen-load endpoint. Trust-by-default on business logic
+// (any teacher/learner/chunk/date combination), but ids/location/date are
+// charset/format-validated as a security boundary (audit SEC-2 / ARCH-7).
 
 try { require('dotenv').config(); } catch (_e) { /* noop */ }
 const request = require('supertest');
@@ -71,5 +72,32 @@ describe('Competencies API', () => {
     expect(ev.chunkId).toBe(chunkId);
     expect(ev.date).toBe('2099-01-15');
     expect(ev.notes).toBe('round-trip note');
+  });
+});
+
+describe('Competencies API — input validation (audit SEC-2 / ARCH-7)', () => {
+  it('POST /events rejects an id with an invalid charset', async () => {
+    const res = await request(app).post('/api/competencies/events')
+      .set('Cookie', cookie)
+      .send({ id: 'bad id!', chunkId, teacherId, learnerId, date: '2099-01-15' });
+    expect(res.status).toBe(400);
+  });
+  it('POST /events rejects a malformed date', async () => {
+    const res = await request(app).post('/api/competencies/events')
+      .set('Cookie', cookie)
+      .send({ id: T + 'ev-bad', chunkId, teacherId, learnerId, date: '15-01-2099' });
+    expect(res.status).toBe(400);
+  });
+  it('POST /people rejects an invalid location', async () => {
+    const res = await request(app).post('/api/competencies/people')
+      .set('Cookie', cookie)
+      .send({ id: T + 'p-badloc', name: 'X', location: 'mars' });
+    expect(res.status).toBe(400);
+  });
+  it('POST /people rejects an id with an invalid charset', async () => {
+    const res = await request(app).post('/api/competencies/people')
+      .set('Cookie', cookie)
+      .send({ id: 'bad id!', name: 'X' });
+    expect(res.status).toBe(400);
   });
 });

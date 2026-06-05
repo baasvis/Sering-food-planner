@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Client } from '@notionhq/client';
-import { CONFIG, errMsg } from './config';
+import { CONFIG, safeErrMsg } from './config';
 import { prisma, withWriteLock } from './db';
 import { blocksToGuideMarkdown, NotionBlock, RichSpan } from './notion-markdown';
 
@@ -129,7 +129,7 @@ export async function syncChunksFromNotion(): Promise<SyncReport> {
   try {
     pages = await queryAllPages();
   } catch (e: unknown) {
-    return { ok: false, synced: [], warned: [], flagged: [], error: errMsg(e) };
+    return { ok: false, synced: [], warned: [], flagged: [], error: safeErrMsg(e) };
   }
 
   const flagged: { name: string; reason: string }[] = [];
@@ -150,7 +150,7 @@ export async function syncChunksFromNotion(): Promise<SyncReport> {
         fields: chunkFields(page.properties, markdown),
       });
     } catch (e: unknown) {
-      flagged.push({ name, reason: errMsg(e) });
+      flagged.push({ name, reason: safeErrMsg(e) });
     }
   }
 
@@ -172,7 +172,7 @@ export async function syncChunksFromNotion(): Promise<SyncReport> {
       }
     });
   } catch (e: unknown) {
-    return { ok: false, synced, warned, flagged, error: errMsg(e) };
+    return { ok: false, synced, warned, flagged, error: safeErrMsg(e) };
   }
   return { ok: true, synced, warned, flagged };
 }

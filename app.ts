@@ -6,6 +6,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import compression from 'compression';
 import helmet from 'helmet';
+import { safeErrMsg } from './lib/config';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -189,18 +190,21 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   // Only log stack traces for unexpected server errors, not client errors (4xx)
   if (status >= 500) {
     console.error('Unhandled error:', err.stack || err.message);
-    // Track backend errors in telemetry
-    addBackendEvent('error', err.message, {
+    // Track backend errors in telemetry — redact credential-shaped substrings
+    // from the message that gets stored/aggregated (audit ARCH-8). The stack is
+    // server-internal (console + telemetry data) and kept as-is.
+    addBackendEvent('error', safeErrMsg(err), {
       stack: err.stack?.slice(0, 1000),
       status,
       path: _req.path,
       method: _req.method,
     });
   }
-  // In production, don't leak internal error messages for 500s
+  // In production, don't leak internal error messages for 500s; for everything
+  // surfaced to the client, redact credential-shaped substrings (audit ARCH-8).
   const message = status >= 500 && process.env.NODE_ENV === 'production'
     ? 'Internal server error'
-    : err.message;
+    : safeErrMsg(err);
   res.status(status).json({ error: message });
 });
 

@@ -5,6 +5,7 @@
 import express, { Request, Response } from 'express';
 import { prisma, withWriteLock } from '../lib/db';
 import { asyncHandler } from '../lib/config';
+import { requireDirector } from './auth';
 import { generateInsights, aggregateTelemetry } from '../lib/ai-analyzer';
 import type { InsightStatus } from '../shared/types';
 
@@ -14,7 +15,8 @@ const router = express.Router();
 
 let analysisRunning = false;
 
-router.post('/analyze', asyncHandler(async (_req: Request, res: Response) => {
+// requireDirector: /analyze triggers paid Claude API runs — director-only (audit SEC-3).
+router.post('/analyze', requireDirector, asyncHandler(async (_req: Request, res: Response) => {
   if (analysisRunning) {
     res.status(409).json({ error: 'Analysis already running' });
     return;
