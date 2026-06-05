@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma, dbAppendLog, withWriteLock } from '../lib/db';
 import { asyncHandler, AppError } from '../lib/config';
 import { broadcast } from './events';
+import { requireDirector } from './auth';
 
 const router = express.Router();
 
@@ -146,6 +147,59 @@ router.post('/cook-rhythm', asyncHandler(async (req: Request, res: Response) => 
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'cook-rhythm-update', 'Updated Fix My Menu cook rhythm');
   broadcast(user.email, 'patch', { user: user.name, cookRhythm: config });
+  res.json({ ok: true });
+}));
+
+// ── Cost Targets (single-row config; West-tab cost-per-guest steering) ──
+// Director-only edit. Stored in the cook_rhythm table under a separate id to
+// avoid a schema migration (the worktree .env points at prod, so `migrate dev`
+// is unsafe — see reference_prisma_migration_safety). Graduate to its own table
+// later if wanted. config = { soup, main, topping, foodCostPct, revenuePerGuestOverride }
+const COST_TARGETS_ID = 'cost_targets';
+
+router.get('/cost-targets', asyncHandler(async (_req: Request, res: Response) => {
+  const row = await prisma.cookRhythm.findUnique({ where: { id: COST_TARGETS_ID } });
+  res.json(row && row.config ? row.config : null);
+}));
+
+router.post('/cost-targets', requireDirector, asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body || {};
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const fields: Record<string, number> = {};
+  for (const key of ['soup', 'main', 'topping'] as const) {
+    const v = Number(body[key]);
+    if (!Number.isFinite(v) || v < 0 || v > 100) {
+      return res.status(400).json({ error: `${key} target must be a number 0–100 (€/guest)` });
+    }
+    fields[key] = round2(v);
+  }
+  const pct = Number(body.foodCostPct);
+  if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+    return res.status(400).json({ error: 'foodCostPct must be a number 0–100' });
+  }
+  let revenuePerGuestOverride: number | null = null;
+  if (body.revenuePerGuestOverride != null && body.revenuePerGuestOverride !== '') {
+    const r = Number(body.revenuePerGuestOverride);
+    if (!Number.isFinite(r) || r <= 0 || r > 1000) {
+      return res.status(400).json({ error: 'revenuePerGuestOverride must be 0–1000 €/guest or empty' });
+    }
+    revenuePerGuestOverride = round2(r);
+  }
+  const config = {
+    soup: fields.soup, main: fields.main, topping: fields.topping,
+    foodCostPct: round2(pct), revenuePerGuestOverride,
+  };
+  await withWriteLock(async () => {
+    await prisma.cookRhythm.upsert({
+      where: { id: COST_TARGETS_ID },
+      create: { id: COST_TARGETS_ID, config: config as unknown as Prisma.InputJsonValue },
+      update: { config: config as unknown as Prisma.InputJsonValue },
+    });
+  });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  const total = round2(config.soup + config.main + config.topping);
+  dbAppendLog(user.email, user.name, 'cost-targets-update', `Updated cost targets (€${total}/guest, ${config.foodCostPct}% food cost)`);
+  broadcast(user.email, 'patch', { user: user.name, costTargets: config });
   res.json({ ok: true });
 }));
 

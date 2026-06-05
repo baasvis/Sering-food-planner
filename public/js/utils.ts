@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
@@ -440,6 +440,41 @@ export async function saveCookRhythm(): Promise<void> {
   }
 }
 
+export async function loadCostTargets(): Promise<void> {
+  try {
+    const cfg = await apiGet('/api/cost-targets');
+    if (cfg && typeof cfg === 'object'
+        && typeof cfg.soup === 'number' && typeof cfg.main === 'number' && typeof cfg.topping === 'number') {
+      S.costTargets = {
+        soup: cfg.soup, main: cfg.main, topping: cfg.topping,
+        foodCostPct: typeof cfg.foodCostPct === 'number' ? cfg.foodCostPct : 25,
+        revenuePerGuestOverride: typeof cfg.revenuePerGuestOverride === 'number' ? cfg.revenuePerGuestOverride : null,
+      };
+    } else {
+      S.costTargets = null; // no saved config → DEFAULT_COST_TARGETS
+    }
+  } catch (_e: unknown) {
+    S.costTargets = null;
+  }
+}
+
+export async function saveCostTargets(): Promise<void> {
+  try {
+    await apiPost('/api/cost-targets', S.costTargets);
+  } catch (_e: unknown) {
+    toastError('Failed to save cost targets');
+  }
+}
+
+export async function loadRevenuePerGuest(): Promise<void> {
+  try {
+    const data = await apiGet('/api/finance/revenue-per-guest');
+    S.revenuePerGuest = (data && typeof data.revenuePerGuest === 'number') ? data.revenuePerGuest : null;
+  } catch (_e: unknown) {
+    S.revenuePerGuest = null;
+  }
+}
+
 export async function loadClosedServices(): Promise<void> {
   try {
     const cfg = await apiGet('/api/closed-services');
@@ -682,6 +717,7 @@ interface RemotePatchMessage {
   storageConfig?: StorageConfig;
   kitchenEquipment?: KitchenEquipment;
   cookRhythm?: CookRhythmConfig;
+  costTargets?: CostTargets;
   closedServices?: ClosedServicesConfig;
   // Partial slot-keyed
   prepChecklist?: { loc: string; date: string; checked: string[] };
@@ -724,7 +760,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           recipes, deletedRecipes,
           ingredients, deletedIngredients,
           supplies, deletedSupplies,
-          storageConfig, kitchenEquipment, cookRhythm, closedServices,
+          storageConfig, kitchenEquipment, cookRhythm, costTargets, closedServices,
           prepChecklist, inventoryCompletion, ritualCompletion,
           guestsNextWeeks,
           ingredientsBulkReload, guestHistoryReload, recipesReload } = msg;
@@ -828,6 +864,12 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   // Cook rhythm (full-replace) — editable Fix My Menu rules
   if (cookRhythm) {
     S.cookRhythm = cookRhythm;
+    changed = true;
+  }
+
+  // Cost targets (full-replace) — West-tab cost-per-guest steering
+  if (costTargets) {
+    S.costTargets = costTargets;
     changed = true;
   }
 

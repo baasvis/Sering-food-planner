@@ -1,6 +1,6 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, Supply, PagePermission } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, CostTargets, Supply, PagePermission } from '@shared/types';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -53,6 +53,14 @@ export const DEFAULT_COOK_RHYTHM: Record<string, CookRhythmDay> = {
 // unchanged until the operator marks a service closed on the Guests screen).
 // Persisted server-side as S.closedServices; null also means "all open".
 export const DEFAULT_CLOSED_SERVICES: ClosedServicesConfig = { recurring: {} };
+
+// Default cost-per-guest targets (Daan, 2026-06-05): €1.80 total split
+// €0.80 main + €0.50 soup + €0.50 toppings; food cost 25% of revenue.
+// Persisted server-side as S.costTargets; null means "use these defaults".
+// revenuePerGuestOverride null = food-cost-% uses the rolling Tebi auto value.
+export const DEFAULT_COST_TARGETS: CostTargets = {
+  soup: 0.50, main: 0.80, topping: 0.50, foodCostPct: 25, revenuePerGuestOverride: null,
+};
 
 // Mutable — rebuilt from storageConfig when loaded
 export let STORAGE_CATEGORIES: Record<string, string[]> = {};
@@ -185,6 +193,8 @@ export interface AppState {
   storageConfig: StorageConfig | null;
   kitchenEquipment: KitchenEquipment | null;
   cookRhythm: CookRhythmConfig | null;
+  costTargets: CostTargets | null;
+  revenuePerGuest: number | null; // rolling Tebi FOOD €/guest (West+Centraal lunch+dinner) for food-cost-%
   closedServices: ClosedServicesConfig | null;
   financeData: Record<string, unknown>[];
   financeProducts: Record<string, unknown>[];
@@ -241,6 +251,8 @@ export let S: AppState = {
   storageConfig: null,
   kitchenEquipment: null,
   cookRhythm: null,
+  costTargets: null,
+  revenuePerGuest: null,
   closedServices: null,
   financeData: [],
   financeProducts: [],
