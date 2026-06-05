@@ -598,10 +598,36 @@ export async function dbUpsertBatches(batches: Batch[]): Promise<void> {
   }
 }
 
-/** Delete specific batches by ID */
+/**
+ * True when a batch row still holds physical food: settled inventory qty > 0,
+ * or a shipment that has not yet arrived. Mirrors the cannot-delete-with-stock
+ * invariant enforced by DELETE /api/batches/:id (routes/batches.ts).
+ */
+export function batchRowHasStock(row: { inventory: unknown; shipments: unknown }): boolean {
+  const inventory: InventoryEntry[] = Array.isArray(row.inventory) ? (row.inventory as unknown as InventoryEntry[]) : [];
+  const shipments: Shipment[] = Array.isArray(row.shipments) ? (row.shipments as unknown as Shipment[]) : [];
+  const totalQty = inventory.reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0);
+  const pendingQty = shipments.filter(sh => !sh.arrived).reduce((s, sh) => s + (typeof sh.qty === 'number' ? sh.qty : 0), 0);
+  return totalQty > 0 || pendingQty > 0;
+}
+
+/**
+ * Delete specific batches by ID. A batch still holding stock or an in-flight
+ * shipment represents real food and must NOT be deleted — this mirrors the
+ * guard in DELETE /api/batches/:id so the /api/data/patch path can't bypass it
+ * (e.g. an SSE-stale client that didn't see another user cook the batch).
+ * Stock-bearing ids are skipped (not thrown) so the rest of a patch still applies.
+ */
 export async function dbDeleteBatchIds(ids: string[]): Promise<void> {
-  if (ids.length > 0) {
-    await prisma.batch.deleteMany({ where: { id: { in: ids } } });
+  if (ids.length === 0) return;
+  const rows = await prisma.batch.findMany({ where: { id: { in: ids } } });
+  const blockedSet = new Set(rows.filter(batchRowHasStock).map(r => r.id));
+  const safe = ids.filter(id => !blockedSet.has(id));
+  if (blockedSet.size > 0) {
+    console.warn(`[dbDeleteBatchIds] refused to delete ${blockedSet.size} batch(es) still holding stock/shipments: ${[...blockedSet].join(', ')}`);
+  }
+  if (safe.length > 0) {
+    await prisma.batch.deleteMany({ where: { id: { in: safe } } });
   }
 }
 
