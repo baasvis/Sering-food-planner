@@ -32,9 +32,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # No cache: 'npm' — package-lock.json is gitignored in this repo.
+          cache: 'npm'
 
-      - run: npm install
+      - run: npm ci
 
       - name: Typecheck
         run: npm run typecheck

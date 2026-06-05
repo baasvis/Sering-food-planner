@@ -8,8 +8,8 @@
       "port": 5173,
       "autoPort": true,
       "env": {
-        "DATABASE_URL": "postgresql://postgres:QXwFZbYaQhZeeWUqdFUjXCRVhQvEoLgv@shuttle.proxy.rlwy.net:52350/railway",
-        "DIRECTOR_EMAILS": "dev@local,daandorr36@gmail.com"
+        "DATABASE_URL": "postgresql://USER:PASSWORD@HOST:PORT/DATABASE",
+        "DIRECTOR_EMAILS": "dev@local,you@example.com"
       }
     },
     {
@@ -27,8 +27,8 @@
       "autoPort": true,
       "env": {
         "NODE_ENV": "production",
-        "DATABASE_URL": "postgresql://postgres:QXwFZbYaQhZeeWUqdFUjXCRVhQvEoLgv@shuttle.proxy.rlwy.net:52350/railway",
-        "DIRECTOR_EMAILS": "dev@local,daandorr36@gmail.com"
+        "DATABASE_URL": "postgresql://USER:PASSWORD@HOST:PORT/DATABASE",
+        "DIRECTOR_EMAILS": "dev@local,you@example.com"
       }
     }
   ]
