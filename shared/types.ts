@@ -133,6 +133,20 @@ export interface CookRhythmConfig {
   days: Record<string, CookRhythmDay>; // keyed by 'Mon'..'Sun'
 }
 
+// ── Cost-per-guest targets ──
+// Director-set targets the West-tab cost bar steers against. All values are
+// euros per guest except foodCostPct (a percentage). The total €/guest target
+// is derived (soup + main + topping). revenuePerGuestOverride lets a director
+// pin the food-cost-% denominator instead of the rolling Tebi auto value
+// (null = use auto). One set applies to both meals + both locations for now.
+export interface CostTargets {
+  soup: number;                       // € per guest
+  main: number;                       // € per guest
+  topping: number;                    // € per guest (toppings & bread)
+  foodCostPct: number;                // target food cost as % of revenue (e.g. 25)
+  revenuePerGuestOverride: number | null; // € per guest, or null = auto from Tebi
+}
+
 // ── Closed services config ──
 // Marks a service (location + meal) as closed — no seating, but any guest/staff
 // demand registered to it rolls onto the previous open service at the same

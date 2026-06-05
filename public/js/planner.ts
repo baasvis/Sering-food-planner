@@ -5,6 +5,7 @@ import { computeSupplyDemand } from '@shared/supply-demand';
 import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
+import { renderCostBar, renderCostDrilldown, costStatus, dishTypeTarget } from './cost';
 import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, cleanCateringRefs } from './dishes';
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
 import { showModal, closeModal, esc, setOpenInventoryFn } from './modal';
@@ -126,6 +127,14 @@ export function renderLocationPlan(loc: string) {
     ${invBtn}
   </div>
   <div id="split-bar-area"></div>`;
+
+  // Cost-per-guest steering bar — West only (West is the kitchen that cooks +
+  // plans for both sites; Centraal is serve-only). Spans the visible days.
+  if (loc === 'west') {
+    const costDates = new Set(days.map(d => dateToIso(d.date)));
+    html += renderCostBar(costDates);
+    html += renderCostDrilldown(costDates);
+  }
 
   const otherLoc = loc === 'west' ? 'centraal' : 'west';
   const otherLabel = loc === 'west' ? 'Centraal' : 'West';
@@ -992,16 +1001,19 @@ export function renderReplaceModal() {
     </div>`;
   }).join('');
 
+  const typeTarget = dishTypeTarget(old.type);
   const renderRecipeOpts = (recs: RecipeFull[]) => recs.slice(0, 50).map(r => {
     const allAg = [...new Set([...(r.autoAllergens || []), ...(r.extraAllergens || [])])];
     const ags = allAg.slice(0, 3).map(a => `<span class="allergen-pill">${esc(a)}</span>`).join('');
     const meta: string[] = [];
     if (r.structure) meta.push(esc(r.structure));
     if (r.seasonality) meta.push(esc(r.seasonality));
-    if (r.costPerServing != null) meta.push(`€${r.costPerServing.toFixed(2)}/p`);
+    const costBadge = r.costPerServing != null
+      ? `<span class="cost-opt cost-${costStatus(r.costPerServing, typeTarget)}" title="€/guest vs ${esc(old.type)} target €${typeTarget.toFixed(2)}">€${r.costPerServing.toFixed(2)}</span>`
+      : `<span class="cost-opt cost-unknown" title="No recipe cost yet">€?</span>`;
     return `<div class="dish-opt" onclick="replaceWithV2Recipe('${esc(r.id)}')">
       <div style="flex:1;">
-        <div><span style="font-weight:500;">${esc(r.name)}</span></div>
+        <div><span style="font-weight:500;">${esc(r.name)}</span> ${costBadge}</div>
         <div style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:2px;">
           ${ags}
           ${meta.length > 0 ? `<span style="color:var(--text3);">${meta.join(' · ')}</span>` : ''}

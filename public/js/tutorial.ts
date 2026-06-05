@@ -176,6 +176,12 @@ export const TUTORIALS: Record<string, TutStep[]> = {
       before: () => goPlannerTab('west'),
     },
     {
+      selector: '.cost-bar',
+      title: 'Cost per guest',
+      body: "This shows what the food West is cooking costs per guest — split into soups, mains and toppings — against your targets. Green is on track, amber is creeping up, red is over. It covers everything West cooks (including food sent to Centraal) and firms up as placeholders become real dishes. A director can tap ⚙ to set the targets.",
+      before: () => goPlannerTab('west'),
+    },
+    {
       selector: '.catering-layout',
       title: 'Caterings',
       body: "Plan one-off catering jobs here — create the event on the left, then drag dishes onto it from the list on the right.",
