@@ -67,12 +67,14 @@ function when(iso: string): string {
   catch (_e) { return ''; }
 }
 
-/** Role <select> for an approved user. */
-function roleSelect(r: AccessRequestDTO): string {
-  const opts = [`<option value="">No role — full access</option>`]
-    .concat(_roles.map(role => `<option value="${esc(role.id)}" ${role.id === r.roleId ? 'selected' : ''}>${esc(role.name)}</option>`))
+/** Role <select>. For approved users it saves on change (withHandler); for
+ *  pending rows it's just a pre-pick (default role) the Approve action reads. */
+function roleSelect(r: AccessRequestDTO, withHandler: boolean, selectedId: string | null): string {
+  const opts = [`<option value="" ${!selectedId ? 'selected' : ''}>No role — full access</option>`]
+    .concat(_roles.map(role => `<option value="${esc(role.id)}" ${role.id === selectedId ? 'selected' : ''}>${esc(role.name)}</option>`))
     .join('');
-  return `<select class="role-select" onchange="assignUserRole('${esc(r.id)}', this.value)" title="Role">${opts}</select>`;
+  const handler = withHandler ? ` onchange="assignUserRole('${esc(r.id)}', this.value)"` : '';
+  return `<select class="role-select"${handler} title="Role">${opts}</select>`;
 }
 
 function personRow(r: AccessRequestDTO, actions: string, extraClass = ''): string {
@@ -109,6 +111,7 @@ function roleCard(role: RoleDTO): string {
       <div class="role-matrix">${rows}</div>
       <div class="role-card-actions">
         ${role.isDefault ? '' : `<button class="team-btn" onclick="roleSetDefault('${esc(role.id)}')">Make default</button>`}
+        <button class="team-btn" onclick="duplicateRole('${esc(role.id)}')">Duplicate</button>
         <button class="team-btn" onclick="roleRename('${esc(role.id)}')">Rename</button>
         <button class="team-btn team-btn-deny" onclick="roleDelete('${esc(role.id)}')">Delete</button>
       </div>
@@ -123,16 +126,18 @@ function paintTeam(): void {
   const approved = reqs.filter(r => r.status === 'approved');
   const closed = reqs.filter(r => r.status === 'denied' || r.status === 'revoked');
   const env = _data.envEmails || [];
+  const defaultRoleId = _roles.find(r => r.isDefault)?.id ?? null;
 
   const pendingHtml = pending.length
     ? pending.map(r => personRow(r, `
         <span class="team-when">${when(r.requestedAt)}</span>
+        ${roleSelect(r, false, defaultRoleId)}
         <button class="team-btn team-btn-approve" onclick="approveAccess('${esc(r.id)}')">Approve</button>
         <button class="team-btn team-btn-deny" onclick="denyAccess('${esc(r.id)}')">Deny</button>`)).join('')
     : `<p class="team-empty">No pending requests.</p>`;
 
   const approvedHtml = approved.length
-    ? approved.map(r => personRow(r, `${roleSelect(r)}<button class="team-btn team-btn-revoke" onclick="revokeAccess('${esc(r.id)}')">Revoke</button>`)).join('')
+    ? approved.map(r => personRow(r, `${roleSelect(r, true, r.roleId)}<button class="team-btn team-btn-revoke" onclick="revokeAccess('${esc(r.id)}')">Revoke</button>`)).join('')
     : `<p class="team-empty">No one approved in the app yet.</p>`;
 
   const closedHtml = closed.length
@@ -178,9 +183,9 @@ function paintTeam(): void {
     </div>`;
 }
 
-async function decide(id: string, action: 'approve' | 'deny' | 'revoke', okMsg: string): Promise<void> {
+async function decide(id: string, action: 'approve' | 'deny' | 'revoke', okMsg: string, body: Record<string, unknown> = {}): Promise<void> {
   try {
-    await apiPost(`/api/access/requests/${id}/${action}`, {});
+    await apiPost(`/api/access/requests/${id}/${action}`, body);
     toast(okMsg);
     await loadTeam();
   } catch (e: unknown) {
@@ -188,7 +193,11 @@ async function decide(id: string, action: 'approve' | 'deny' | 'revoke', okMsg: 
   }
 }
 
-export function approveAccess(id: string): void { void decide(id, 'approve', 'Approved'); }
+export function approveAccess(id: string): void {
+  // Approve with the role pre-picked in this pending row (empty = the default).
+  const sel = document.querySelector(`#screen-team .team-row[data-id="${id}"] .role-select`) as HTMLSelectElement | null;
+  void decide(id, 'approve', 'Approved', { roleId: sel && sel.value ? sel.value : null });
+}
 export function denyAccess(id: string): void { void decide(id, 'deny', 'Denied'); }
 export function revokeAccess(id: string): void { void decide(id, 'revoke', 'Access revoked'); }
 
@@ -349,6 +358,18 @@ export async function confirmRoleDelete(roleId: string): Promise<void> {
     const msg = e instanceof Error ? e.message : '';
     closeModal();
     toast(/in_use|in use/i.test(msg) ? 'That role is still assigned to someone — reassign them first.' : 'Could not delete role');
+  }
+}
+
+export async function duplicateRole(roleId: string): Promise<void> {
+  const role = _roles.find(r => r.id === roleId);
+  if (!role) return;
+  try {
+    await apiPost('/api/access/roles', { name: `${role.name} copy`, permissions: role.permissions }, 'POST');
+    toast('Role duplicated');
+    await loadTeam();
+  } catch (e: unknown) {
+    toast('Could not duplicate role');
   }
 }
 

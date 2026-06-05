@@ -601,6 +601,14 @@ export function connectLiveSync(): void {
         console.log('Live sync connected (client', msg.clientId + ')');
         return;
       }
+      if (msg.type === 'permissions-changed') {
+        // A director changed this user's role (or their role's matrix). Reload
+        // to pick up fresh permissions — simplest correct refresh, and access
+        // changes are rare. Autosave (1.5s debounce) has flushed by the reload.
+        toast('Your access was updated — refreshing…');
+        setTimeout(() => location.reload(), 1500);
+        return;
+      }
       if (msg.type === 'patch') {
         applyRemotePatch(msg);
       }

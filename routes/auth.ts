@@ -10,7 +10,7 @@
 // the row's `expiresAt`. Stale rows are pruned by a daily cron in server.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { CONFIG, cookieOpts, errMsg, asyncHandler } from '../lib/config';
@@ -163,6 +163,28 @@ export async function resolvePermissions(email: string): Promise<Record<string, 
   if (!req?.roleId) return {};
   const role = await prisma.role.findUnique({ where: { id: req.roleId }, select: { permissions: true } });
   return (role?.permissions as Record<string, string>) ?? {};
+}
+
+/** Middleware: require server-side 'edit' on a screen. Hard-locks the sensitive
+ *  write paths (Finance, ingredient prices) so view-only is a real lock there,
+ *  not just a UI guardrail. Directors and no-role (full-edit) users pass.
+ *  resolvePermissions runs only on these gated endpoints — no hot-path cost. */
+export function requireScreenEdit(screenId: string): RequestHandler {
+  return asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const email = req.user?.email;
+    // No authenticated user → dev-mode anonymous passthrough (in production
+    // requireAuth already 401s before this point). Defer to that rather than
+    // imposing stricter auth here than the rest of the app.
+    if (!email) { next(); return; }
+    if (isDirectorEmail(email)) { next(); return; }
+    const perms = await resolvePermissions(email);
+    const level = Object.keys(perms).length === 0 ? 'edit' : (perms[screenId] || 'hidden');
+    if (level !== 'edit') {
+      res.status(403).json({ error: 'view_only', message: 'You have view-only access to this page.' });
+      return;
+    }
+    next();
+  });
 }
 
 async function verifyGoogleToken(idToken: string): Promise<AppUser> {

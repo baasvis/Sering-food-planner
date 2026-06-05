@@ -147,4 +147,17 @@ describe('user role assignment + resolvePermissions', () => {
     const after = await prisma.accessRequest.findUnique({ where: { id: reqRow.id } });
     if (after?.personId) await prisma.person.deleteMany({ where: { id: after.personId } });
   });
+
+  it('approve honors an explicitly chosen role', async () => {
+    const cookie = await loginDirector();
+    const rolesRes = await request(app).get('/api/access/roles').set('Cookie', cookie);
+    const chosen = rolesRes.body.roles.find((r: { isDefault: boolean }) => !r.isDefault) || rolesRes.body.roles[0];
+    const email = T + 'approverole@sering.test';
+    const reqRow = await prisma.accessRequest.create({ data: { id: T + 'apr', email, name: 'Approve Role', firstName: 'Ap', lastName: 'Role', picture: null, status: 'pending' } });
+    const res = await request(app).post(`/api/access/requests/${reqRow.id}/approve`).set('Cookie', cookie).send({ roleId: chosen.id });
+    expect(res.status).toBe(200);
+    expect(res.body.request.roleId).toBe(chosen.id);
+    const after = await prisma.accessRequest.findUnique({ where: { id: reqRow.id } });
+    if (after?.personId) await prisma.person.deleteMany({ where: { id: after.personId } });
+  });
 });

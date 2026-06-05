@@ -6,6 +6,7 @@ import express, { Request, Response } from 'express';
 import { prisma } from '../lib/db';
 import { asyncHandler } from '../lib/config';
 import { runTebiSync, cancelSync, getStatus, isSyncing } from '../lib/tebi-sync';
+import { requireScreenEdit } from './auth';
 import type { Prisma } from '@prisma/client';
 
 const router = express.Router();
@@ -65,7 +66,7 @@ router.get('/products', asyncHandler(async (req: Request, res: Response) => {
   res.json(rows);
 }));
 
-router.post('/sync', (req: Request, res: Response) => {
+router.post('/sync', requireScreenEdit('finance'), (req: Request, res: Response) => {
   if (isSyncing()) {
     return res.status(409).json({ error: 'Sync already in progress' });
   }
@@ -91,7 +92,7 @@ router.post('/sync', (req: Request, res: Response) => {
   res.json({ status: 'syncing', startDate: start, endDate: end });
 });
 
-router.post('/sync-cancel', (_req: Request, res: Response) => {
+router.post('/sync-cancel', requireScreenEdit('finance'), (_req: Request, res: Response) => {
   const cancelled = cancelSync('Sync cancelled by user');
   res.json({ status: cancelled ? 'cancelled' : 'not-running' });
 });

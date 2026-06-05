@@ -58,3 +58,14 @@ if (testUrl) {
   );
   process.exit(1);
 }
+
+// Cap the Prisma connection pool for tests. Jest runs many workers in parallel
+// (≈ CPUs−1), each with its own Prisma client whose default pool is ~2*CPUs+1 —
+// on a high-core machine that's hundreds of connections and a lot of concurrent
+// query pressure against the shared test DB, which makes the suite flake. A
+// small per-worker cap keeps total connections and load modest. Append only if
+// the URL doesn't already specify one (so a developer can still override).
+if (process.env.DATABASE_URL && !/[?&]connection_limit=/.test(process.env.DATABASE_URL)) {
+  const u = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = u + (u.includes('?') ? '&' : '?') + 'connection_limit=8&pool_timeout=30';
+}

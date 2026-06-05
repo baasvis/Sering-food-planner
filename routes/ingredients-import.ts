@@ -3,6 +3,7 @@ import multer from 'multer';
 import XLSX from 'xlsx';
 import { errMsg, AppError } from '../lib/config';
 import { parseHanosQuantityGrams } from '../lib/hanos-parser';
+import { requireScreenEdit } from './auth';
 
 const router = express.Router();
 
@@ -33,7 +34,7 @@ const upload = multer({
 // Sync handler: thrown errors bubble to the Express error middleware natively
 // (no asyncHandler needed). AppError(400) for user-input errors, so the user
 // sees a 400 (not 500) for malformed uploads.
-router.post('/upload-supplier', upload.single('file'), (req: Request, res: Response) => {
+router.post('/upload-supplier', requireScreenEdit('orders'), upload.single('file'), (req: Request, res: Response) => {
   const file = (req as any).file;
   if (!file) throw new AppError(400, 'No file uploaded');
 

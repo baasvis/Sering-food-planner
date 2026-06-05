@@ -17,6 +17,7 @@ import { CONFIG, asyncHandler, AppError } from '../lib/config';
 import { prisma, dbAppendLog, withWriteLock } from '../lib/db';
 import { requireDirector } from './auth';
 import { addBackendEvent } from './telemetry';
+import { sendToEmails } from './events';
 import type { AccessRequestDTO, RoleDTO, PagePermission } from '../shared/types';
 import { GATEABLE_SCREENS } from '../shared/types';
 
@@ -133,6 +134,11 @@ router.patch('/roles/:id', asyncHandler(async (req: Request, res: Response) => {
     return tx.role.update({ where: { id }, data });
   }));
   await dbAppendLog(req.user!.email, req.user!.name, 'role_update', role.name);
+  if (data.permissions) {
+    // A matrix change affects everyone with this role — refresh their tabs.
+    const members = await prisma.accessRequest.findMany({ where: { roleId: id }, select: { email: true } });
+    if (members.length) sendToEmails(members.map(m => m.email), 'permissions-changed');
+  }
   res.json({ ok: true, role: roleToDTO(role) });
 }));
 
@@ -160,6 +166,7 @@ router.patch('/requests/:id/role', asyncHandler(async (req: Request, res: Respon
   if (roleId && !(await prisma.role.findUnique({ where: { id: roleId } }))) throw new AppError(404, 'Role not found');
   const updated = await prisma.accessRequest.update({ where: { id }, data: { roleId } });
   await dbAppendLog(req.user!.email, req.user!.name, 'access_role', `${row.email} → ${roleId ?? 'none'}`);
+  sendToEmails([row.email], 'permissions-changed'); // live-refresh the user's tab
   res.json({ ok: true, request: toDTO(updated) });
 }));
 
@@ -226,10 +233,12 @@ async function decide(req: Request, res: Response, action: DecisionAction): Prom
           const match = await tx.person.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
           personId = match ? match.id : (await tx.person.create({ data: { id: crypto.randomUUID(), name, location: 'centraal' } })).id;
         }
-        // Assign the default role on first approval (null = full edit anyway,
-        // but linking it makes the Team screen show the role explicitly).
+        // Role: an explicit choice passed with the approve action wins;
+        // otherwise keep any existing role, else fall back to the default.
         let roleId = row.roleId;
-        if (!roleId) roleId = (await tx.role.findFirst({ where: { isDefault: true } }))?.id ?? null;
+        const requestedRole = typeof req.body?.roleId === 'string' && req.body.roleId ? req.body.roleId : null;
+        if (requestedRole && (await tx.role.findUnique({ where: { id: requestedRole } }))) roleId = requestedRole;
+        else if (!roleId) roleId = (await tx.role.findFirst({ where: { isDefault: true } }))?.id ?? null;
         return tx.accessRequest.update({ where: { id }, data: { status, decidedAt: new Date(), decidedBy, personId, roleId } });
       }))
     : await prisma.accessRequest.update({ where: { id }, data: { status, decidedAt: new Date(), decidedBy } });
