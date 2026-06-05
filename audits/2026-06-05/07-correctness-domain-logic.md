@@ -42,6 +42,8 @@ This pass audited domain-logic correctness across batch deletion/stock invariant
 
 ### CORR-2 — Ingredient stock can be double-deducted: stockDeducted is written but never read as a guard
 
+**STATUS: FIXED 2026-06-05 — new pure `resolveStockDeduction()` in public/js/recipe-editor.ts (used by brSave): deduct only when `batch.stockDeducted` is not already set; `stockDeducted` is now sticky (never regresses to false on an unticked save); the deduct checkbox is disabled + relabelled once a batch is deducted. Tests: test/data-integrity-pr1.test.ts.**
+
 - **Severity**: Medium
 - **Location**: public/js/recipe-editor.ts:1672-1675 (brToggleDeduct), 1684-1762 (brSave), 1704/1726 (stockDeducted set, never checked)
 - **What**: brSave() deducts ingredient stock whenever br.deductStock is true, with no check of batch.stockDeducted, so re-opening an already-cooked batch's recipe (openPostCookRecording/openResolveFlexible) and re-ticking 'deduct stock' subtracts the full recipe amount from ingredient stock a second time.

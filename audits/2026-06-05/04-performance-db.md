@@ -8,6 +8,8 @@ This pass focused on database access patterns and payload sizing across the unif
 
 ### PERF-1 — Unified-batch inventory/shipments lost-update via /api/data/patch
 
+**STATUS: FIXED 2026-06-05 — but NOT via the "Suggested fix" below, which is UNSAFE.** Stripping inventory/shipments in `dbUpsertBatches` would silently drop the manual inventory editor's edits (`openInventoryEditor`/`updateInventoryField` in dishes.ts persist `batch.inventory` through `/api/data/patch` → `scheduleSave`). Correct fix applied instead: `computePatch` (public/js/utils.ts) omits inventory/shipments only when *they* are unchanged vs the last snapshot; `applyRemotePatch` field-merges batches so an omitting patch doesn't strip them on other clients over SSE; `validateBatch` (lib/db.ts) tolerates absent inventory/shipments (strict when present). Tests: test/data-integrity-pr1.test.ts.
+
 - **Severity**: Medium
 - **Location**: lib/db.ts:587-598 (dbUpsertBatches), public/js/utils.ts:127-130 (computePatch), public/js/dishes.ts:555-566 (inlineEdit)
 - **What**: Any batch field edit (e.g. name/note via inlineEdit) resends the whole batch including inventory[]/shipments[], and dbUpsertBatches merges `{...mapBatchRow(existing), ...b}` where `b` ALWAYS carries inventory/shipments, so a stale client array silently overwrites stock/shipment state changed concurrently by /ship,/transfer,/arrived.
