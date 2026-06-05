@@ -126,7 +126,18 @@ export function computePatch(): PatchRequest {
   const curBatchIds = new Set(S.batches.map((d: Batch) => d.id));
   for (const d of S.batches) {
     const prev = _lastSaved.batches.get(d.id);
-    if (!prev || prev !== JSON.stringify(d)) patch.batches!.push(d);
+    const cur = JSON.stringify(d);
+    if (prev === cur) continue;                          // unchanged
+    if (!prev) { patch.batches!.push(d); continue; }     // new batch — send full
+    // Existing batch changed. Omit inventory[]/shipments[] when THEY are
+    // unchanged, so an unrelated edit (name/note/services) can't round-trip a
+    // stale stock array and revert a concurrent ship/transfer/cook (audit
+    // PERF-1). The inventory editor changes them for real, so those ride along.
+    const prevObj = JSON.parse(prev) as Batch;
+    const toSend: Record<string, unknown> = { ...d };
+    if (JSON.stringify(prevObj.inventory ?? null) === JSON.stringify(d.inventory ?? null)) delete toSend.inventory;
+    if (JSON.stringify(prevObj.shipments ?? null) === JSON.stringify(d.shipments ?? null)) delete toSend.shipments;
+    patch.batches!.push(toSend as unknown as Batch);
   }
   for (const [id] of _lastSaved.batches) {
     if (!curBatchIds.has(id)) patch.deletedBatches!.push(id);
@@ -714,7 +725,12 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
     const batchMap = new Map(S.batches.map((b: Batch) => [b.id, b]));
     if (deletedBatches) deletedBatches.forEach((id: string) => batchMap.delete(id));
-    if (batches) batches.forEach((b: Batch) => batchMap.set(b.id, b));
+    // Field-merge so a patch that omits unchanged inventory[]/shipments[]
+    // (audit PERF-1) doesn't strip them from our local copy.
+    if (batches) batches.forEach((b: Batch) => {
+      const existing = batchMap.get(b.id);
+      batchMap.set(b.id, existing ? { ...existing, ...b } : b);
+    });
     S.batches = [...batchMap.values()];
     // Reset batch ingredient toggles so they re-read from updated orderFor
     if (_onBatchesChanged) _onBatchesChanged();

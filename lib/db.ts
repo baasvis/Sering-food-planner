@@ -63,33 +63,39 @@ export function validateBatch(b: Batch, prefix = ''): string | null {
     if (!svc.date || typeof svc.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(svc.date)) return `${p}invalid service date (expected YYYY-MM-DD)`;
     if (!VALID_MEALS.includes(svc.meal)) return `${p}invalid service meal`;
   }
-  // Unified-batch model (Task A): inventory + shipments are required arrays.
-  // Per-entry shape checks mirror validateBatch's domain-set discipline so a
-  // bad payload is rejected at the API boundary instead of corrupting JSON.
-  if (!Array.isArray(b.inventory)) return `${p}inventory must be an array`;
-  if (b.inventory.length > 100) return `${p}too many inventory entries (max 100)`;
-  for (let i = 0; i < b.inventory.length; i++) {
-    const e = b.inventory[i] as InventoryEntry;
-    if (!e || typeof e !== 'object') return `${p}inventory[${i}]: must be an object`;
-    if (!VALID_LOCATIONS.includes(e.loc)) return `${p}inventory[${i}]: invalid loc`;
-    if (!VALID_STORAGE.includes(e.storage)) return `${p}inventory[${i}]: invalid storage`;
-    if (typeof e.qty !== 'number' || !Number.isFinite(e.qty) || e.qty < 0 || e.qty > 99999) return `${p}inventory[${i}]: invalid qty`;
-    if (typeof e.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(e.cookDate)) return `${p}inventory[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
+  // Unified-batch model: inventory[] and shipments[] are validated strictly when
+  // PRESENT. They may be absent on a /api/data/patch batch — computePatch omits
+  // them when unchanged so an unrelated edit can't round-trip stale stock over a
+  // concurrent ship/transfer (audit PERF-1); dbUpsertBatches preserves the DB
+  // copy when they're absent. The create and PATCH /:id paths always send them.
+  if (b.inventory !== undefined) {
+    if (!Array.isArray(b.inventory)) return `${p}inventory must be an array`;
+    if (b.inventory.length > 100) return `${p}too many inventory entries (max 100)`;
+    for (let i = 0; i < b.inventory.length; i++) {
+      const e = b.inventory[i] as InventoryEntry;
+      if (!e || typeof e !== 'object') return `${p}inventory[${i}]: must be an object`;
+      if (!VALID_LOCATIONS.includes(e.loc)) return `${p}inventory[${i}]: invalid loc`;
+      if (!VALID_STORAGE.includes(e.storage)) return `${p}inventory[${i}]: invalid storage`;
+      if (typeof e.qty !== 'number' || !Number.isFinite(e.qty) || e.qty < 0 || e.qty > 99999) return `${p}inventory[${i}]: invalid qty`;
+      if (typeof e.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(e.cookDate)) return `${p}inventory[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
+    }
   }
-  if (!Array.isArray(b.shipments)) return `${p}shipments must be an array`;
-  if (b.shipments.length > 50) return `${p}too many shipments (max 50)`;
-  for (let i = 0; i < b.shipments.length; i++) {
-    const s = b.shipments[i] as Shipment;
-    if (!s || typeof s !== 'object') return `${p}shipments[${i}]: must be an object`;
-    if (typeof s.id !== 'string' || !VALID_ID_PATTERN.test(s.id)) return `${p}shipments[${i}]: invalid id`;
-    if (!VALID_LOCATIONS.includes(s.fromLoc)) return `${p}shipments[${i}]: invalid fromLoc`;
-    if (!VALID_LOCATIONS.includes(s.toLoc)) return `${p}shipments[${i}]: invalid toLoc`;
-    if (!VALID_STORAGE.includes(s.storage)) return `${p}shipments[${i}]: invalid storage`;
-    if (typeof s.qty !== 'number' || !Number.isFinite(s.qty) || s.qty < 0 || s.qty > 99999) return `${p}shipments[${i}]: invalid qty`;
-    if (typeof s.sentAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.sentAt)) return `${p}shipments[${i}]: invalid sentAt (expected ISO 8601)`;
-    if (typeof s.arrived !== 'boolean') return `${p}shipments[${i}]: arrived must be boolean`;
-    if (s.arrivedAt !== undefined && (typeof s.arrivedAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.arrivedAt))) return `${p}shipments[${i}]: invalid arrivedAt (expected ISO 8601)`;
-    if (typeof s.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(s.cookDate)) return `${p}shipments[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
+  if (b.shipments !== undefined) {
+    if (!Array.isArray(b.shipments)) return `${p}shipments must be an array`;
+    if (b.shipments.length > 50) return `${p}too many shipments (max 50)`;
+    for (let i = 0; i < b.shipments.length; i++) {
+      const s = b.shipments[i] as Shipment;
+      if (!s || typeof s !== 'object') return `${p}shipments[${i}]: must be an object`;
+      if (typeof s.id !== 'string' || !VALID_ID_PATTERN.test(s.id)) return `${p}shipments[${i}]: invalid id`;
+      if (!VALID_LOCATIONS.includes(s.fromLoc)) return `${p}shipments[${i}]: invalid fromLoc`;
+      if (!VALID_LOCATIONS.includes(s.toLoc)) return `${p}shipments[${i}]: invalid toLoc`;
+      if (!VALID_STORAGE.includes(s.storage)) return `${p}shipments[${i}]: invalid storage`;
+      if (typeof s.qty !== 'number' || !Number.isFinite(s.qty) || s.qty < 0 || s.qty > 99999) return `${p}shipments[${i}]: invalid qty`;
+      if (typeof s.sentAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.sentAt)) return `${p}shipments[${i}]: invalid sentAt (expected ISO 8601)`;
+      if (typeof s.arrived !== 'boolean') return `${p}shipments[${i}]: arrived must be boolean`;
+      if (s.arrivedAt !== undefined && (typeof s.arrivedAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.arrivedAt))) return `${p}shipments[${i}]: invalid arrivedAt (expected ISO 8601)`;
+      if (typeof s.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(s.cookDate)) return `${p}shipments[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
+    }
   }
   return null;
 }
