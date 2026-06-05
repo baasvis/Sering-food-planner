@@ -197,7 +197,6 @@ export interface AppState {
   _addModalState?: { loc: string; date: string; meal: string; existing: string[]; typeFilter: string; tab: string; locFilter: string } | null;
   _replaceState?: { oldBatchId: string; searchQuery: string; tab: string } | null;
   _inventoryLoc?: string | null;
-  deletedBatches?: string[];
 }
 
 export let S: AppState = {

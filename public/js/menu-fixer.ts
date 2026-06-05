@@ -1199,8 +1199,6 @@ function _fixMyMenuBody(): void {
   if (orphans.length > 0) {
     const orphanIds = new Set(orphans.map(b => b.id));
     S.batches = S.batches.filter(b => !orphanIds.has(b.id));
-    if (!S.deletedBatches) S.deletedBatches = [];
-    for (const id of orphanIds) S.deletedBatches.push(id);
     // A retired placeholder may still be pinned to a catering — drop those
     // dangling refs so the catering's demand doesn't vanish onto a dead id.
     droppedFromCaterings = dropRetiredDishesFromCaterings(S.caterings || [], orphanIds);
@@ -1218,8 +1216,6 @@ function _fixMyMenuBody(): void {
   ].map(b => b.id));
   if (retireIds.size > 0) {
     S.batches = S.batches.filter(b => !retireIds.has(b.id));
-    if (!S.deletedBatches) S.deletedBatches = [];
-    for (const id of retireIds) S.deletedBatches.push(id);
     for (const c of (S.caterings || [])) {
       if (c.dishes && c.dishes.length > 0) {
         c.dishes = c.dishes.filter(d => !retireIds.has(d.dishId));

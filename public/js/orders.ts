@@ -631,12 +631,19 @@ function ensureBatchTogglesInitialized(loc: string) {
 async function persistBatchOrderFor(batchId: string, orderFor: boolean) {
   // Update local state immediately
   const batch = S.batches.find(b => b.id === batchId);
+  const prev = batch ? batch.orderFor : undefined;
   if (batch) batch.orderFor = orderFor;
   // Save to server
   try {
     await apiPost(`/api/batches/${batchId}`, { orderFor }, 'PATCH');
   } catch (e) {
-    console.warn('Failed to save batch orderFor:', e);
+    // Don't fail silently — the toggle showed the new state but the server
+    // didn't save it. Revert local state + UI so the cook sees the truth (TEST-1).
+    if (batch && prev !== undefined) batch.orderFor = prev;
+    batchIngredientToggles[batchId] = !!prev;
+    const container = document.getElementById('batch-ingredients-table');
+    if (container) container.innerHTML = renderBatchIngredientTable();
+    toastError('Couldn’t save the batch toggle: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 

@@ -1091,8 +1091,6 @@ export function confirmReplaceBatch(newBatchId: string) {
   // Delete old batch
   const oldName = old.name;
   S.batches = S.batches.filter(d => d.id !== old.id);
-  if (!S.deletedBatches) S.deletedBatches = [];
-  S.deletedBatches.push(old.id);
 
   closeModal();
   rebuildPlanner();
@@ -1143,7 +1141,7 @@ export function replaceWithV2Recipe(recipeId: string) {
     allergens: allAllergens,
     extraAllergens: [],
     orderFor: false,
-    cookDate: old.cookDate || null,
+    cookDate: null,  // fresh, never-cooked replacement — the cook sets the date at Mark-Cooked (audit CORR-8)
     note: '',
     services: [...(old.services || [])],
     createdAt: new Date().toISOString(),
@@ -1163,8 +1161,6 @@ export function replaceWithV2Recipe(recipeId: string) {
 
   const oldName = old.name;
   S.batches = S.batches.filter(d => d.id !== old.id);
-  if (!S.deletedBatches) S.deletedBatches = [];
-  S.deletedBatches.push(old.id);
 
   closeModal();
   rebuildPlanner();
