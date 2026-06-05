@@ -372,6 +372,30 @@ export interface AppUser {
    *  director-only features like the private AI recipe assistant. Computed
    *  at session-issue / session-restore time and sent down with /auth/me. */
   isDirector?: boolean;
+  /** Per-screen page permissions resolved from the user's role, sent down with
+   *  login / GET /auth/me. An empty/absent map = no role = full edit (legacy).
+   *  Directors ignore this (always full edit). Frontend-only guardrail. */
+  permissions?: Record<string, PagePermission>;
+}
+
+/** Per-page access level for the role-based guardrails. */
+export type PagePermission = 'hidden' | 'view' | 'edit';
+
+/** Screens whose access a role can gate. 'team' is director-only and is
+ *  deliberately excluded (managing roles/access is a director power). Keep in
+ *  sync with NAV_SCREENS ids in public/js/state.ts. */
+export const GATEABLE_SCREENS = [
+  'dashboard', 'guests', 'planner', 'recipe-index', 'orders',
+  'competencies', 'supplies', 'finance', 'feedback-admin',
+] as const;
+export type GateableScreen = typeof GATEABLE_SCREENS[number];
+
+/** A role as returned by GET /api/access/roles. */
+export interface RoleDTO {
+  id: string;
+  name: string;
+  permissions: Record<string, PagePermission>;
+  isDefault: boolean;
 }
 
 /** An account-access request / grant, as returned by GET /api/access/requests.
@@ -389,6 +413,8 @@ export interface AccessRequestDTO {
   decidedBy: string | null;
   /** Linked Training (competencies) person id, set on approval. */
   personId: string | null;
+  /** Assigned role id (null = no role = full edit). */
+  roleId: string | null;
 }
 
 // ── Ratings (for served dialog) ──

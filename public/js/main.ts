@@ -30,7 +30,7 @@ import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot,
 import { toggleRitualStep, toggleRitualWhy, ritualScrollToArrivals } from './today-panel';
 import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals } from './transport-card';
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
-import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName } from './team';
+import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName, assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole } from './team';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -126,8 +126,9 @@ Object.assign(window, {
   // competencies
   renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent,
 
-  // team (access requests)
+  // team (access requests + roles)
   approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName,
+  assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole,
 });
 
 // ═══════════════════════════════════════════════════════════════════

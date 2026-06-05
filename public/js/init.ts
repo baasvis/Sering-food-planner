@@ -1,4 +1,4 @@
-import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories, restoreGlobalLocation } from './state';
+import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories, restoreGlobalLocation, screenPermission } from './state';
 import type { Location } from '@shared/types';
 import { loadData, connectLiveSync, saveState,
          loadIngredientDb, loadStorageConfig, loadKitchenEquipment, loadCookRhythm, loadClosedServices,
@@ -97,7 +97,7 @@ export function buildNav() {
   // everyone else — both the nav buttons and the screen container. The
   // matching API endpoints are director-gated server-side too (defence in
   // depth), so this is purely UX, not the security boundary.
-  const screens = NAV_SCREENS.filter((s: any) => !s.directorOnly || S.user?.isDirector);
+  const screens = NAV_SCREENS.filter((s: any) => (!s.directorOnly || S.user?.isDirector) && screenPermission(s.id) !== 'hidden');
 
   // Top bar: title + nav buttons + save indicator + user menu
   topBar.innerHTML = `

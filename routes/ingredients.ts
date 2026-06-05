@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, recalcAllRecipeCosts, withWriteLock, checkId, validateIngredients } from '../lib/db';
 import { addBackendEvent } from './telemetry';
 import { broadcast } from './events';
+import { requireScreenEdit } from './auth';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
@@ -176,7 +177,7 @@ function ingredientUpsertValues(ing: Ingredient): unknown[] {
 // existing rows in place (UPDATE never fires the SET NULL trigger). Rows
 // the frontend has removed are still pruned by a targeted deleteMany —
 // SET NULL fires only for those, which is correct (they're truly gone).
-router.post('/', asyncHandler(async (req: Request, res: Response) => {
+router.post('/', requireScreenEdit('orders'), asyncHandler(async (req: Request, res: Response) => {
   const ingredients = req.body;
   // Audit T20: per-row validation (length caps, types[] bounds, JSON
   // shapes) — was previously only "is it an array?" plus a checkId loop
@@ -263,7 +264,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
 // Update target stock for a single ingredient at one location.
 // withWriteLock prevents the read-modify-write on the JSON targetStock column
 // from racing with a concurrent edit.
-router.post('/target-stock', asyncHandler(async (req: Request, res: Response) => {
+router.post('/target-stock', requireScreenEdit('orders'), asyncHandler(async (req: Request, res: Response) => {
   const { ingredientId, location, amount } = req.body;
   if (!ingredientId || !location) return res.status(400).json({ error: 'ingredientId and location required' });
   const result = await withWriteLock(async () => {
@@ -291,7 +292,7 @@ router.post('/target-stock', asyncHandler(async (req: Request, res: Response) =>
 // withWriteLock prevents two concurrent stock edits from clobbering each other
 // when both read the JSON `stock` column at the same time. Was the lost-update
 // bug from audit §3.1.
-router.post('/stock', asyncHandler(async (req: Request, res: Response) => {
+router.post('/stock', requireScreenEdit('orders'), asyncHandler(async (req: Request, res: Response) => {
   const { ingredientId, location, amount } = req.body;
   if (!ingredientId || !location) return res.status(400).json({ error: 'ingredientId and location required' });
   const result = await withWriteLock(async () => {
@@ -313,7 +314,7 @@ router.post('/stock', asyncHandler(async (req: Request, res: Response) => {
 
 // Bulk stock update (for stocktake). Per-row read-modify-write inside a
 // transaction; withWriteLock ensures two stocktake submissions don't race.
-router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
+router.post('/stock/bulk', requireScreenEdit('orders'), asyncHandler(async (req: Request, res: Response) => {
   const updates = req.body;
   if (!Array.isArray(updates)) return res.status(400).json({ error: 'Expected array' });
   await withWriteLock(async () => {
@@ -344,7 +345,7 @@ router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 // Save single ingredient (create or update) — must be after specific routes
-router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
+router.post('/:id', requireScreenEdit('orders'), asyncHandler(async (req: Request, res: Response) => {
   const ingredient = req.body;
   if (!ingredient || !ingredient.name) return res.status(400).json({ error: 'name required' });
   const idErr = checkId(req.params.id, 'id');
@@ -407,7 +408,7 @@ router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 // Delete ingredient
-router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:id', requireScreenEdit('orders'), asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
   await withWriteLock(async () => {
     await prisma.ingredient.delete({ where: { id } });

@@ -7,7 +7,7 @@
 // where every screen needed dashboard.ts and dashboard.ts needed every screen.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NAV_SCREENS, S } from './state';
+import { NAV_SCREENS, S, screenPermission } from './state';
 
 type RenderFn = () => void;
 const renderers: Record<string, RenderFn> = {};
@@ -44,9 +44,19 @@ export function setCurrentScreen(screen: string) {
   _currentScreen = screen;
 }
 
+/** Toggle the view-only treatment on a screen's container from the user's role.
+ *  The banner + disabled inputs are pure CSS keyed off the `screen--view-only`
+ *  class (see team.css), so they survive async re-renders; the hard "no writes
+ *  persist" guarantee lives in apiPost (utils.ts). Directors / edit users: no-op. */
+function applyScreenPermission(name: string): void {
+  const el = document.getElementById('screen-' + name);
+  if (el) el.classList.toggle('screen--view-only', screenPermission(name) === 'view');
+}
+
 export function rerenderCurrentView() {
   const fn = renderers[_currentScreen];
   if (fn) fn();
+  applyScreenPermission(_currentScreen);
   // Every data-driven re-render (local edits, undo, incoming live-sync
   // patches) flows through here, so it's the single choke point for keeping a
   // backgrounded dashboard's passive cards fresh without waiting for the user
@@ -60,9 +70,12 @@ export function rerenderCurrentView() {
  *  unknown values. */
 export function getScreenFromHash(): string {
   const hash = window.location.hash.replace('#', '');
-  // Exclude director-only screens for non-directors so a stale/shared #team URL
-  // resolves to the dashboard instead of a screen with no container.
-  const validScreens = NAV_SCREENS.filter(s => !s.directorOnly || S.user?.isDirector).map(s => s.id);
+  // Exclude director-only screens for non-directors, and any screen hidden by
+  // the user's role, so a stale/shared #hash resolves to the dashboard instead
+  // of a screen with no container.
+  const validScreens = NAV_SCREENS
+    .filter(s => (!s.directorOnly || S.user?.isDirector) && screenPermission(s.id) !== 'hidden')
+    .map(s => s.id);
   return validScreens.includes(hash) ? hash : 'dashboard';
 }
 
@@ -92,4 +105,5 @@ export function showScreen(name: string, pushState = true) {
   // planner / orders; that side-effect now lives inside those render fns.
   const fn = renderers[name];
   if (fn) fn();
+  applyScreenPermission(name);
 }
