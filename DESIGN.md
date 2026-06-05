@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-05-15*
+*Last updated: 2026-06-05*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -134,6 +134,39 @@ in git.
   Tebi POS, with weekly/monthly views and service-period breakdowns. The
   Tebi integration is fragile and is documented in full in `TEBI.md`.
 
+- **Toppings & bread (Supplies)** — the standard accompaniments that go with
+  every service: toppings, breads, ferments, pickles, sauces. A supply is
+  either *standard* (a per-guest ratio plus a prep horizon, so the app says
+  how much to make ahead) or a *one-off* that drip-feeds a fixed amount per
+  service until its stock hits zero and it auto-archives. Each can link to a
+  recipe for an automatic per-unit cost and price-per-guest. Stock is tracked
+  per location, prep is logged from the prep checklist, and the screen shows
+  upcoming demand. Soups, mains and desserts stay in the batch/recipe world;
+  this module covers everything else on the plate.
+
+- **Training (Competencies)** — a peer-teaching tracker built on a kiosk,
+  trust-by-default model. The home view is a people × chunks grid, where a
+  *chunk* is one teachable unit and a cell shows when a person was last taught
+  it, shaded by recency. Anyone signed in can add a name or log a teaching
+  event (teacher taught learner this chunk on this date); competence is
+  *derived* from that public ledger — there is deliberately no stored
+  "is competent" flag, and mistakes are corrected socially. The chunk library
+  (goals, prerequisites, teaching guides) is authored in Notion and pulled in
+  one-way on a daily cron and on demand. Roster editing, event deletion and
+  the Notion sync are reserved for a staff-lead role (`STAFF_LEAD_EMAILS`),
+  separate from the director gate. Approving an access request seeds that
+  person into the roster.
+
+- **Today / ritual panel** — an always-on guidance panel at the top of the
+  dashboard that renders the day's operational flow as a phase-grouped
+  checklist (morning prep → lunch → afternoon → dinner → close). Each step's
+  done-ness is *derived* from real domain state wherever a signal exists
+  (inventory completions, batch cook dates, shipments, placeholder
+  replacement); only the signal-less steps persist a tick. The current phase
+  is emphasised, overdue close-steps turn red, and every actionable step
+  deep-links to where it's done. It re-renders on a 60s tick so status flips
+  appear without a reload.
+
 - **Cross-cutting** — live multi-user sync over Server-Sent Events;
   database-backed sessions; an undo window for destructive actions; an
   activity log; in-app feedback with an admin view; an AI monitoring system
@@ -190,6 +223,13 @@ map — it is kept in sync as features land. Top-level shape:
 | Log | id, timestamp, email, name, action, details | Log / log |
 | Telemetry Event | timestamp, source, type, name, data (JSON), userId, sessionId | TelemetryEvent / telemetry_event |
 | AI Insight | timestamp, category, severity, title, body, data (JSON), status, resolvedAt | AiInsight / ai_insight |
+| Supply | id, name, kind ('standard'/'oneoff'), unit, recipeId, guestsPerUnit, prepHorizonDays, prepMode, oneoffLocation, unitsPerService, oneoffStartDate, stock (JSON, per-location), costPerUnit, preservationMethod, archived, createdAt, updatedAt | Supply / supplies |
+| Ritual Completion | id, loc, date, completed (JSON array of done step-keys), updatedAt | RitualCompletion / ritual_completions (one row per (loc, date)) |
+| Cook Rhythm | id (always "default"), config (JSON — `{ days: { Mon: {soup,main,chefs}, ... } }`, editable Fix-My-Menu rules) | CookRhythm / cook_rhythm |
+| Closed Services | id (always "default"), config (JSON — recurring weekday rules + per-date overrides of closed services) | ClosedServices / closed_services |
+| Person (Training) | id, name, location, active, createdAt | Person / people |
+| Chunk (Training) | id, name, station, locations, type ('practical'/'sit-down'), goal, prerequisites (chunk ids), requiredFor, deeperLink, teachingGuide (markdown), sortOrder, createdAt, updatedAt | Chunk / chunks |
+| Teaching Event | id, chunkId, teacherId, learnerId, date, notes, createdAt, createdByEmail, createdByName | TeachingEvent / teaching_events |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -214,7 +254,7 @@ Rather than building each module to completion before starting the next, we buil
 The food planner is live and working. Current priorities to expand it:
 
 - [x] **Caterings module**: name, date, guest count, pickup/delivery/on-location, auto-calculated dish requirements, logistics notes. Integrated as sub-tab in Week Plan.
-- [ ] **Toppings/sides/bread**: currently only soups, mains, desserts. Need to handle the standard accompaniments (bread, aioli, toppings, dips) that go with every service.
+- [x] **Toppings/sides/bread**: shipped as the **Toppings & bread (Supplies)** module — standard (per-guest ratio + prep horizon) and one-off (drip-feed-until-depleted, auto-archive) supplies for bread, aioli, toppings, dips, ferments, with per-location stock and recipe-linked cost. See Section 3.
 - [ ] **Basic budgeting per service**: simple cost indicator per meal service — how much are we spending on ingredients for this lunch vs how many guests are paying.
 - [ ] Import all existing recipes from old spreadsheet
 - [x] Standard inventory items (always-in-stock list separate from per-dish ingredients)
