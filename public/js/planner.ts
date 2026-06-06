@@ -2,7 +2,7 @@ import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, M
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, todayIso } from './utils';
 import { computeSupplyDemand } from '@shared/supply-demand';
-import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory } from './core';
+import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, getEffectiveGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory, consolidateInventory } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, cleanCateringRefs } from './dishes';
@@ -1382,7 +1382,7 @@ function renderSuppliesInvSection(loc: string): string {
     const shown = pending !== undefined ? pending : current;
     let hint = '';
     if (s.kind === 'standard') {
-      const d = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+      const d = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
       const need = s.prepMode === 'centralized' ? d.west : (loc === 'centraal' ? d.centraal : d.west);
       if (need > 0) hint = `<span style="font-size:11px;color:var(--text2);">need ~${Math.ceil(need)}</span>`;
     }
@@ -1686,6 +1686,10 @@ export function cycleInventoryStorageAt(id: string, loc: string, fromStorage: st
     e.storage = next;
     if (resetsCookDate) e.cookDate = today;
   }
+  // A storage/cookDate change can make an entry share its (loc,storage,cookDate)
+  // key with another row — fold them so the array stays canonical and the
+  // power-view's index editing routes to the right entry (audit CORR-5).
+  consolidateInventory(d);
   scheduleSave();
   renderInventoryModal(loc);
 }
@@ -1704,6 +1708,7 @@ export function cycleEntryStorageAt(id: string, idx: number, loc: string) {
     (e.storage === 'Frozen' && next === 'Gastro');
   e.storage = next;
   if (resetsCookDate) e.cookDate = today;
+  consolidateInventory(d);  // fold any now-duplicate (loc,storage,cookDate) row (audit CORR-5)
   scheduleSave();
   renderInventoryModal(loc);
 }
@@ -1765,6 +1770,7 @@ export function cycleInventoryStorage(id: string, loc: string) {
     target.storage = next;
     if (resetsCookDate) target.cookDate = today;
   }
+  consolidateInventory(d);  // fold any now-duplicate (loc,storage,cookDate) row (audit CORR-5)
   scheduleSave();
   renderInventoryModal(loc);
 }

@@ -66,6 +66,7 @@ export function computeSupplyDemand(
   guests: GuestsData,
   caterings: Catering[],
   today: string,
+  effectiveGuests?: (loc: string, iso: string, meal: 'lunch' | 'dinner') => number,
 ): SupplyDemand {
   const result: SupplyDemand = { west: 0, centraal: 0 };
   if (supply.archived) return result;
@@ -82,10 +83,23 @@ export function computeSupplyDemand(
     const dn = dayName(d);
 
     for (const loc of LOCATIONS) {
-      const g = guests[loc]?.[dn];
-      if (!g) continue;
-      const total = (g.lunch || 0) + (g.dinner || 0);
-      result[loc] += total / supply.guestsPerUnit;
+      let lunch: number;
+      let dinner: number;
+      if (effectiveGuests) {
+        // Closed-service aware (audit CORR-3): a closed slot rolls its eaters
+        // onto an open one, and those eaters still need toppings/bread — so
+        // mirror the batch demand engine (core.getEffectiveGuests: closed -> 0,
+        // open -> raw + rolled-in). Demand is conserved, not dropped.
+        lunch = effectiveGuests(loc, iso, 'lunch');
+        dinner = effectiveGuests(loc, iso, 'dinner');
+      } else {
+        // Default (3-arg callers / tests): raw registered guests, unchanged.
+        const g = guests[loc]?.[dn];
+        if (!g) continue;
+        lunch = g.lunch || 0;
+        dinner = g.dinner || 0;
+      }
+      result[loc] += (lunch + dinner) / supply.guestsPerUnit;
     }
 
     for (const c of caterings) {

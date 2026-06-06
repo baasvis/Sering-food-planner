@@ -971,7 +971,7 @@ function renderSuppliesCard(loc: Location, todayStr: string): string {
     const stockHere = s.stock?.[loc]?.amount ?? 0;
     const lastMake = s.stock?.[loc]?.lastMakeDate;
     if (s.kind === 'standard') {
-      const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+      const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
       const need = loc === 'west' ? demand.west : demand.centraal;
       // Centralized supplies only prep at West; show West demand at both locations
       // so cooks can see "we need 5kg aioli" regardless of which dashboard they're on
@@ -1230,7 +1230,7 @@ function computeSupplyPrepTasks(loc: Location, todayStr: string): SupplyPrepTask
   for (const s of (S.supplies || [])) {
     if (s.archived || s.kind !== 'standard') continue;
     if (s.prepMode === 'centralized' && loc !== 'west') continue;
-    const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+    const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
     const need = s.prepMode === 'centralized'
       ? demand.west
       : (loc === 'centraal' ? demand.centraal : demand.west);

@@ -226,3 +226,43 @@ describe('supplyPricePerGuest', () => {
     expect(supplyPricePerGuest(makeStandardSupply({ costPerUnit: 0, guestsPerUnit: 10 }))).toBe(0);
   });
 });
+
+// ── computeSupplyDemand: closed-service roll (audit CORR-3) ──
+
+describe('computeSupplyDemand: closed-service roll (audit CORR-3)', () => {
+  // The accessor mirrors core.getEffectiveGuests: a closed slot -> 0, and its
+  // eaters roll onto an open slot (raw + rolled). 2026-05-11 is a Monday; the
+  // 4-day horizon is Mon–Thu (all weekdays, west 100 lunch / 110 dinner).
+  const raw = (guests: GuestsData) => (loc: string, iso: string, meal: 'lunch' | 'dinner') =>
+    (guests[loc]?.[dayName(isoToDate(iso))]?.[meal]) || 0;
+
+  it('rolls a closed meal’s demand onto the open target — total conserved, not dropped', () => {
+    const supply = makeStandardSupply({ prepMode: 'per-location', guestsPerUnit: 10, prepHorizonDays: 4 });
+    const guests = makeGuests();
+    const r = raw(guests);
+    // West Monday lunch (100) is closed and rolls onto West Monday dinner.
+    const eff = (loc: string, iso: string, meal: 'lunch' | 'dinner') => {
+      if (loc === 'west' && iso === '2026-05-11' && meal === 'lunch') return 0;
+      if (loc === 'west' && iso === '2026-05-11' && meal === 'dinner') return r(loc, iso, 'dinner') + 100;
+      return r(loc, iso, meal);
+    };
+    const baseline = computeSupplyDemand(supply, guests, [], '2026-05-11').west;
+    const rolled = computeSupplyDemand(supply, guests, [], '2026-05-11', eff).west;
+    expect(rolled).toBeCloseTo(baseline, 5); // conserved — the closed lunch's eaters still need toppings
+  });
+
+  it('a fully-closed horizon (effective 0 everywhere) contributes zero', () => {
+    const supply = makeStandardSupply({ prepMode: 'per-location', guestsPerUnit: 10, prepHorizonDays: 4 });
+    const guests = makeGuests();
+    const d = computeSupplyDemand(supply, guests, [], '2026-05-11', () => 0);
+    expect(d.west).toBe(0);
+    expect(d.centraal).toBe(0);
+  });
+
+  it('omitting the accessor is unchanged (default = raw guests)', () => {
+    const supply = makeStandardSupply({ prepMode: 'per-location' });
+    const guests = makeGuests();
+    expect(computeSupplyDemand(supply, guests, [], '2026-05-11'))
+      .toEqual(computeSupplyDemand(supply, guests, [], '2026-05-11', raw(guests)));
+  });
+});

@@ -4,6 +4,7 @@ import { apiGet, apiPost, toast, toastError, todayIso, newId } from './utils';
 import { showModal, closeModal, esc } from './modal';
 import { registerRenderer, rerenderCurrentView } from './navigate';
 import { computeSupplyDemand, supplyPricePerGuest } from '@shared/supply-demand';
+import { getEffectiveGuests } from './core';
 
 /** The linked recipe's computed per-unit cost. For count recipes
  *  costPerServing IS cost per output unit; for volume recipes it's per
@@ -137,7 +138,7 @@ function renderSupplyTable(label: string, list: Supply[], todayStr: string): str
 function renderSupplyRow(s: Supply, todayStr: string): string {
   const stockWest = s.stock?.west?.amount ?? 0;
   const stockCentraal = s.stock?.centraal?.amount ?? 0;
-  const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+  const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
   let demandCell = '';
   if (s.kind === 'standard') {
     const dWest = Math.round(demand.west);

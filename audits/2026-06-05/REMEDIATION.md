@@ -17,7 +17,7 @@ Last updated: 2026-06-05 (remediation in progress).
 - **SEC-1 (rotation + history scrub)** — rotate prod + staging Postgres passwords on Railway; scrub git history. External + destructive.
 - **DEP-6** — `googleapis` 128→173 is a breaking major bump touching Google Sheets recipe import + Google auth. I can prep it on a branch, but bumping the auth lib on live prod needs your timing/testing call. (This is the only source of the last 4 moderate `npm audit` advisories.)
 - **PERF-2** — duplicate migration-timestamp prefixes. The affected migrations are already applied on prod; renaming them would corrupt `_prisma_migrations`. Latent ordering fragility only — accept, or adopt a "unique timestamp" rule going forward. Your call.
-- _(may grow after investigation — e.g. CORR-7 if piece-unit handling needs a domain decision)_
+- **CORR-7** — recipe cost/nutrition treats piece/count-unit ingredients as grams (`toGrams` passes pieces through). Currently UNREACHABLE: the recipe editor offers only weight/volume units and no recipe/ingredient uses piece units (verified against the editor's unit list + the ingredient seed). A correct fix needs a per-ingredient **grams-per-piece** weight only you can supply (and the overloaded `orderUnitSize` shouldn't be reused for it). **Decision needed:** do you want piece/count-unit ingredient support? If not, it's a non-issue (the editor already prevents it).
 
 ## ✓ Verified — no fix needed
 - **SEC-7** — the AI recipe-assistant tool-use loop is sandboxed to in-memory wire state; the finding itself is a verification, not a defect.
@@ -25,6 +25,7 @@ Last updated: 2026-06-05 (remediation in progress).
 - **ARCH-4** — addressed by the ARCH-3 guard; the two 60s ticks (dashboard freshness vs non-dashboard refresh) are an intentional split, each now a singleton.
 - **PERF-6** — `dbUpsertCaterings`/`dbUpsertTransportItems` do one upsert per row inside the lock; row counts are tiny (a handful per save), so a raw ON-CONFLICT bulk upsert (T19a pattern) isn't justified for the negligible gain.
 - **PERF-9** — the ritual-completions prune `deleteMany` runs on a tiny, few-day table; the unindexed scan is negligible (nit).
+- **CORR-6** — NOT a real bug. The audit claimed `calcRequiredAtLocLive`'s West gate disagrees with `scoredHardConstraintsOk` on catering, but catering CANCELS in `totalDemand − nonWestDemand` (it depends only on dish id/type/serving, unchanged by filtering West services off), so both gates exclude catering from the West charge — they agree (incl. rounding). Applying the audit's suggested fix would INTRODUCE a real inconsistency. Verified by a deep read + the analysis agent; the `calcRequiredAtLocLive` docstring is already correct. No change.
 
 ## 🔧 To fix — grouped into tested PRs (risk-ordered)
 - **PR-A — backend hardening** ✅ DONE: SEC-2 / ARCH-7 / TEST-5 (competencies id+location+date validation), SEC-3 (admin/analyze → requireDirector), SEC-4 (ritual-completions validation), ARCH-6 (notion safeErrMsg), ARCH-8 (global error handler redaction). +4 validation tests; full suite 32/595 green.
