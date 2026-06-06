@@ -171,6 +171,27 @@ in git.
   deep-links to where it's done. It re-renders on a 60s tick so status flips
   appear without a reload.
 
+- **Drinks** — a unified drinks module across locations (West / Centraal, with
+  TestTafel as an assortment on the Mediamatic stock pool). One Drinks screen
+  with tabs: a **catalogue** of bought drinks (beer, wine, spirits, soft, coffee
+  & tea) with per-location pars, stock and prices; **recipe-mode** drinks
+  (cocktails, homemade non-alc, building-block syrups & super-juices) with a
+  recursive cost rollup over nested building blocks, labour amortisation,
+  automatic BTW (21% / 9% from ABV), and a suggested price from a per-category
+  markup target with a traffic-light; **supplier-cycle stocktakes** counted in
+  supplier units per storage area; **ordering** per supplier (par − stock, with
+  deposits and a guest-demand nudge) through a draft → ordered → received
+  lifecycle that updates stock; **production** logging (premix bottles up,
+  building blocks down) with shelf-life freshness and reason-coded **write-offs**;
+  a bartender **service-card** mode; and per-location **assortments** feeding a
+  printable A4 **menu designer**. Money fields, supplier data and menu publishing
+  are manager-gated (`MANAGER_EMAILS`, plus directors); counts, production,
+  write-offs and recipe drafts are open to all. Phase 1 — no Tebi sales
+  reconciliation yet, but the model (premix two-stage stock, fractional serving
+  formats, reason-coded write-offs, `tebiProductNames`) is built so Phase 2 is a
+  reporting feature. Costing logic is shared with the frontend live preview in
+  `shared/drink-cost.ts`; the full domain spec lives in `DRINKS_DOMAIN.md`.
+
 - **Cross-cutting** — live multi-user sync over Server-Sent Events;
   database-backed sessions; an undo window for destructive actions; an
   activity log; in-app feedback with an admin view; an AI monitoring system
@@ -234,6 +255,16 @@ map — it is kept in sync as features land. Top-level shape:
 | Person (Training) | id, name, location, active, createdAt | Person / people |
 | Chunk (Training) | id, name, station, locations, type ('practical'/'sit-down'), goal, prerequisites (chunk ids), requiredFor, deeperLink, teachingGuide (markdown), sortOrder, createdAt, updatedAt | Chunk / chunks |
 | Teaching Event | id, chunkId, teacherId, learnerId, date, notes, createdAt, createdByEmail, createdByName | TeachingEvent / teaching_events |
+| Drink | id, name, mode (catalogue/recipe), category, subtype, abv, btwRate, status, archived, sellable, supplier, orderUnit, orderUnitMl, deposit, costPrice, formats (JSON), locations (JSON), info (JSON), tebiProductNames, recipe fields (serveVolumeMl, glass, characteristics, garnish, prepSteps JSON, batch JSON, prepTime JSON, shelfLifeDays), costPerServe, suggestedPrice | Drink / drinks |
+| Drink Ingredient Row | drinkId, sortOrder, refKind (ingredient/drink), ingredientId (loose), refDrinkId (building-block self-FK), amount, unit | DrinkIngredientRow / drink_ingredient_rows |
+| Drink Supplier | name, products, orderDays, orderDaysNote, deliveryWindow, contact (JSON), minimumOrder, priceListRef | DrinkSupplier / drink_suppliers |
+| Drink Stock | drinkId, location, area, qty, countedBy, countedAt (per-area; pool = Σ areas) | DrinkStock / drink_stock |
+| Drink Order / Line | location, supplier, status, orderedBy/At, expectedDelivery, receivedBy/At; lines: drinkId/ingredientId, orderedQty, orderUnit, receivedQty, substitutedBy, deposit | DrinkOrder / drink_orders, DrinkOrderLine / drink_order_lines |
+| Drink Production Log | drinkId, location, batchesMade, volumeMl, bottlesYielded, madeBy, madeOn, expiresOn, status (fresh/expired/discarded) | DrinkProductionLog / drink_production_logs |
+| Drink Write-Off | refKind, drinkId/ingredientId, location, qty, unit, reason, note, who | DrinkWriteOff / drink_write_offs |
+| Assortment | name, location, serviceContext, description, entries (JSON: drinkId + formats) | Assortment / assortments |
+| Drink Menu | name, assortmentId, location, sections (JSON), layout (JSON: columns/sectionStyle/typeScale), published | DrinkMenu / drink_menus |
+| Drink Config | id="default", config (JSON: labourRatePerMin, priceRounding, btwRule, markupTargets, demandNudgeThresholdPct, defaultShelfLifeDays) | DrinkConfig / drink_config |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -265,7 +296,10 @@ The food planner is live and working. Current priorities to expand it:
 - [ ] TestTafel menu planning variant (7-course format, cost/labour per course, portion sizing, collective planning)
 
 ### Next: Drinks System
-A unified drinks system across all locations.
+A unified drinks system across all locations. **Phase 1 shipped** — see the
+Drinks paragraph in Section 3 for what's built. The sketch below is the original
+v1/deepen plan, now largely delivered; Phase 2 is Tebi sales reconciliation &
+loss reporting.
 
 **Start simple (v1)**:
 - A list: name, type (wine/beer/spirit/cocktail/non-alcoholic/homemade), supplier, cost price, selling price, stock per location

@@ -1,6 +1,7 @@
 import { S } from './state';
 import { setPlannerSubTab } from './planner';
 import { switchOrdersTab, getOrdersTab } from './orders';
+import { drinksSetTab } from './drinks';
 
 // ── TUTORIAL SYSTEM ─────────────────────────────────────────────────────────
 // The "?" button (bottom-right, "How does this page work?") runs a step-by-step
@@ -20,8 +21,8 @@ import { switchOrdersTab, getOrdersTab } from './orders';
 // ⚠️  MAINTENANCE RULE (see DESIGN.md §6):
 //     Any time a feature is added or changed, update that screen's steps below to
 //     match. Keys must equal the screen id (the part after `screen-`):
-//     dashboard, guests, planner, recipe-index, orders, competencies, supplies,
-//     finance, feedback-admin.
+//     dashboard, guests, planner, recipe-index, orders, drinks, competencies,
+//     supplies, finance, feedback-admin, team.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface TutStep {
@@ -38,6 +39,7 @@ export interface TutStep {
 // steps on the same tab doesn't re-render (and flash) the screen each time.
 function goPlannerTab(tab: string) { if (S.plannerSubTab !== tab) setPlannerSubTab(tab); }
 function goOrdersTab(tab: string)  { if (getOrdersTab() !== tab) switchOrdersTab(tab); }
+function goDrinksTab(tab: string)  { if (S.drinksSubTab !== tab) drinksSetTab(tab); }
 
 export const TUTORIALS: Record<string, TutStep[]> = {
 
@@ -403,6 +405,57 @@ export const TUTORIALS: Record<string, TutStep[]> = {
       body: "Approved people can be revoked here if they leave. The “always allowed” list is fixed in the server config and can’t be changed from this screen — so you can’t lock yourself out.",
     },
   ],
+
+  // ── DRINKS ───────────────────────────────────────────────────────────────────
+  drinks: [
+    {
+      selector: '.drinks-tabs',
+      title: 'The drinks module',
+      body: "Everything drinks lives here, split into tabs across the top. This tour walks through each one.",
+    },
+    {
+      selector: '[data-testid="drinks-tab-catalogue"]',
+      before: () => goDrinksTab('catalogue'),
+      title: 'Catalogue',
+      body: "Every bought drink — supplier, ABV, BTW (auto from ABV), per-location par & stock, and prices. Managers add and edit; search and the category chips narrow the list.",
+    },
+    {
+      selector: '[data-testid="drinks-tab-bar"]',
+      before: () => goDrinksTab('bar'),
+      title: 'Bar — service cards',
+      body: "Bartender mode: tap any published drink for a full build card — glass, serve size, build steps and garnish. Big type, made for during service.",
+    },
+    {
+      selector: '[data-testid="drinks-tab-recipes"]',
+      before: () => goDrinksTab('recipes'),
+      title: 'Recipes',
+      body: "Homemade drinks, cocktails and building blocks (syrups, super-juices). The editor shows live cost and a suggested price as you build, with a markup traffic-light.",
+    },
+    {
+      selector: '[data-testid="drinks-tab-stocktake"]',
+      before: () => goDrinksTab('stocktake'),
+      title: 'Stocktake',
+      body: "Count stock by supplier (today's delivery surfaced first) or by storage area. Big inputs in order units, sticky save — count in supplier units like the sheet.",
+    },
+    {
+      selector: '[data-testid="drinks-tab-orders"]',
+      before: () => goDrinksTab('orders'),
+      title: 'Orders',
+      body: "Pick a supplier and it suggests an order from par − stock, with deposits and a nudge when upcoming guest counts are high. Mark it ordered, then receive line-by-line.",
+    },
+    {
+      selector: '[data-testid="drinks-tab-production"]',
+      before: () => goDrinksTab('production'),
+      title: 'Production',
+      body: "A to-make list for homemade drinks below par. Log a batch (premix stock goes up, building blocks down) or write off breakage, spillage, expired or comps.",
+    },
+    {
+      selector: '[data-testid="drinks-tab-menus"]',
+      before: () => goDrinksTab('menus'),
+      title: 'Assortments & menus',
+      body: "Curate which drinks each location offers, then design a printable A4 drinks menu with live prices.",
+    },
+  ],
 };
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -425,6 +478,7 @@ export function startTutorial() {
   _tutRestore = null;
   if (name === 'planner') { const t = S.plannerSubTab; _tutRestore = () => goPlannerTab(t); }
   else if (name === 'orders') { const t = getOrdersTab(); _tutRestore = () => goOrdersTab(t); }
+  else if (name === 'drinks') { const t = S.drinksSubTab; _tutRestore = () => goDrinksTab(t); }
   _tutAdvance();
 }
 

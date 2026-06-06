@@ -189,3 +189,21 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
   territory); reads + the print view are open to all.
 - **[m8] No e2e** — not in the GOAL §4 e2e list; verified via preview (menu
   create + print route returns grouped A4 HTML).
+
+## M9 — hardening
+
+- **[m9] Tutorial** — one `drinks` tour added to public/js/tutorial.ts that walks
+  the sub-tabs via idempotent `before: () => goDrinksTab(tab)` hooks (mirroring
+  the orders/planner tours), with the original sub-tab restored on tour end. The
+  maintenance-rule comment now lists `drinks` (and `team`).
+- **[m9] DESIGN.md** — Section 3 gained a "Drinks" paragraph (description of the
+  system as built) and the data-model table gained the 11 drink tables; Section 4
+  marks the Drinks System as Phase-1 shipped. Per the DESIGN.md maintenance rule.
+- **[m9] MANAGER_EMAILS gating verified**: `isManagerEmail` (director ∪
+  MANAGER_EMAILS) + inline `assertManager` gate catalogue CRUD, supplier/config
+  writes, ordering, assortment/menu CRUD; the frontend hides those affordances
+  unless `S.user.isManager`. Exercised by the catalogue-CRUD e2e (dev@local is a
+  manager via the worktree .env + playwright webServer env).
+- **[m9] Seed idempotency re-verified** — a second `prisma db seed` skips every
+  drinks section (suppliers/catalogue/config/recipes/assortments); counts stable
+  (95 drinks, 11 suppliers, 3 assortments).
