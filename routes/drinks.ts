@@ -457,6 +457,179 @@ router.post('/write-offs', asyncHandler(async (req: Request, res: Response) => {
   res.json({ ok: true });
 }));
 
+// ─── Assortments & menus (M8) ───────────────────────────────────────────────
+// CRUD is manager-gated (curating an assortment + publishing menus is manager
+// territory, §5); reads + the print view are open to all.
+
+function toAssortment(r: Prisma.AssortmentGetPayload<object>) {
+  return { id: r.id, name: r.name, location: r.location, serviceContext: r.serviceContext, description: r.description, entries: Array.isArray(r.entries) ? r.entries : [], archived: r.archived, createdAt: r.createdAt.toISOString(), updatedAt: r.updatedAt.toISOString() };
+}
+function toDrinkMenu(r: Prisma.DrinkMenuGetPayload<object>) {
+  return { id: r.id, name: r.name, assortmentId: r.assortmentId, location: r.location, sections: Array.isArray(r.sections) ? r.sections : [], layout: (r.layout && typeof r.layout === 'object' ? r.layout : {}), published: r.published, createdAt: r.createdAt.toISOString(), updatedAt: r.updatedAt.toISOString() };
+}
+
+interface AssortmentInput { id?: string; name?: string; location?: string; serviceContext?: string; description?: string; entries?: unknown }
+
+router.get('/assortments', asyncHandler(async (_req: Request, res: Response) => {
+  const rows = await prisma.assortment.findMany({ where: { archived: false }, orderBy: { name: 'asc' } });
+  res.json(rows.map(toAssortment));
+}));
+
+router.post('/assortments', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const input = req.body as AssortmentInput;
+  const idErr = checkId(input.id, 'id'); if (idErr) throw new AppError(400, idErr);
+  if (typeof input.name !== 'string' || !input.name) throw new AppError(400, 'invalid name');
+  if (typeof input.location !== 'string' || !VALID_LOCATIONS.includes(input.location)) throw new AppError(400, 'invalid location');
+  const created = await withWriteLock(() => prisma.assortment.create({ data: {
+    id: input.id as string, name: input.name as string, location: input.location as string,
+    serviceContext: typeof input.serviceContext === 'string' ? input.serviceContext : '',
+    description: typeof input.description === 'string' ? input.description.slice(0, 2000) : '',
+    entries: (Array.isArray(input.entries) ? input.entries : []) as Prisma.InputJsonValue,
+  } }));
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-assortment-create', `created assortment ${input.name}`);
+  res.json(toAssortment(created));
+}));
+
+router.patch('/assortments/:id', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const id = req.params.id as string; const idErr = checkId(id, 'id'); if (idErr) throw new AppError(400, idErr);
+  const input = req.body as AssortmentInput;
+  const data: Prisma.AssortmentUncheckedUpdateInput = {};
+  if (typeof input.name === 'string') data.name = input.name;
+  if (typeof input.location === 'string' && VALID_LOCATIONS.includes(input.location)) data.location = input.location;
+  if (typeof input.serviceContext === 'string') data.serviceContext = input.serviceContext;
+  if (typeof input.description === 'string') data.description = input.description.slice(0, 2000);
+  if (Array.isArray(input.entries)) data.entries = input.entries as Prisma.InputJsonValue;
+  const updated = await withWriteLock(async () => { const e = await prisma.assortment.findUnique({ where: { id } }); if (!e) return null; return prisma.assortment.update({ where: { id }, data }); });
+  if (!updated) throw new AppError(404, 'Assortment not found');
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-assortment-update', `updated assortment ${id}`);
+  res.json(toAssortment(updated));
+}));
+
+router.delete('/assortments/:id', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const id = req.params.id as string; const idErr = checkId(id, 'id'); if (idErr) throw new AppError(400, idErr);
+  const r = await withWriteLock(async () => { const e = await prisma.assortment.findUnique({ where: { id } }); if (!e) return null; await prisma.assortment.delete({ where: { id } }); return e; });
+  if (!r) throw new AppError(404, 'Assortment not found');
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-assortment-delete', `deleted assortment ${id}`);
+  res.json({ ok: true });
+}));
+
+interface MenuInput { id?: string; name?: string; assortmentId?: string; location?: string; sections?: unknown; layout?: unknown; published?: boolean }
+
+router.get('/menus', asyncHandler(async (_req: Request, res: Response) => {
+  const rows = await prisma.drinkMenu.findMany({ orderBy: { name: 'asc' } });
+  res.json(rows.map(toDrinkMenu));
+}));
+
+router.post('/menus', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const input = req.body as MenuInput;
+  const idErr = checkId(input.id, 'id'); if (idErr) throw new AppError(400, idErr);
+  if (typeof input.name !== 'string' || !input.name) throw new AppError(400, 'invalid name');
+  if (typeof input.assortmentId !== 'string') throw new AppError(400, 'invalid assortmentId');
+  const created = await withWriteLock(() => prisma.drinkMenu.create({ data: {
+    id: input.id as string, name: input.name as string, assortmentId: input.assortmentId as string,
+    location: typeof input.location === 'string' ? input.location : 'west',
+    sections: (Array.isArray(input.sections) ? input.sections : []) as Prisma.InputJsonValue,
+    layout: (input.layout && typeof input.layout === 'object' ? input.layout : {}) as Prisma.InputJsonValue,
+    published: !!input.published,
+  } }));
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-menu-create', `created menu ${input.name}`);
+  res.json(toDrinkMenu(created));
+}));
+
+router.patch('/menus/:id', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const id = req.params.id as string; const idErr = checkId(id, 'id'); if (idErr) throw new AppError(400, idErr);
+  const input = req.body as MenuInput;
+  const data: Prisma.DrinkMenuUncheckedUpdateInput = {};
+  if (typeof input.name === 'string') data.name = input.name;
+  if (typeof input.assortmentId === 'string') data.assortmentId = input.assortmentId;
+  if (typeof input.location === 'string') data.location = input.location;
+  if (Array.isArray(input.sections)) data.sections = input.sections as Prisma.InputJsonValue;
+  if (input.layout && typeof input.layout === 'object') data.layout = input.layout as Prisma.InputJsonValue;
+  if (typeof input.published === 'boolean') data.published = input.published;
+  const updated = await withWriteLock(async () => { const e = await prisma.drinkMenu.findUnique({ where: { id } }); if (!e) return null; return prisma.drinkMenu.update({ where: { id }, data }); });
+  if (!updated) throw new AppError(404, 'Menu not found');
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-menu-update', `updated menu ${id}`);
+  res.json(toDrinkMenu(updated));
+}));
+
+router.delete('/menus/:id', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const id = req.params.id as string; const idErr = checkId(id, 'id'); if (idErr) throw new AppError(400, idErr);
+  const r = await withWriteLock(async () => { const e = await prisma.drinkMenu.findUnique({ where: { id } }); if (!e) return null; await prisma.drinkMenu.delete({ where: { id } }); return e; });
+  if (!r) throw new AppError(404, 'Menu not found');
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-menu-delete', `deleted menu ${id}`);
+  res.json({ ok: true });
+}));
+
+const MENU_CAT_LABELS: Record<string, string> = {
+  beer: 'Beer', wine: 'Wine', spirits: 'Spirits', soft: 'Soft drinks', 'coffee-tea-stock': 'Coffee & tea',
+  cocktail: 'Cocktails', 'homemade-na': 'Homemade non-alcoholic', 'coffee-drink': 'Coffee & tea',
+  'building-block': 'Building blocks', consumables: 'Consumables', glassware: 'Glassware',
+};
+function escHtml(s: string): string { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+router.get('/menus/:id/print', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string; const idErr = checkId(id, 'id'); if (idErr) throw new AppError(400, idErr);
+  const menuRow = await prisma.drinkMenu.findUnique({ where: { id } });
+  if (!menuRow) throw new AppError(404, 'Menu not found');
+  const menu = toDrinkMenu(menuRow);
+  const assortmentRow = await prisma.assortment.findUnique({ where: { id: menu.assortmentId } });
+  const entries = assortmentRow && Array.isArray(assortmentRow.entries) ? (assortmentRow.entries as Array<{ drinkId?: string }>) : [];
+  const drinkIds = entries.map(e => e.drinkId).filter((x): x is string => !!x);
+  const drinkRows = drinkIds.length ? await prisma.drink.findMany({ where: { id: { in: drinkIds } } }) : [];
+  const byId = new Map(drinkRows.map(d => [d.id, d]));
+  const loc = menu.location;
+  const layout = (menu.layout || {}) as { columns?: number; typeScale?: string };
+  const scale = layout.typeScale === 'large' ? 1.25 : layout.typeScale === 'compact' ? 0.85 : 1;
+  const cols = layout.columns === 2 ? 2 : 1;
+  // Group by category, preserving the assortment's entry order.
+  const byCat: Record<string, typeof drinkRows> = {};
+  for (const id2 of drinkIds) {
+    const d = byId.get(id2);
+    if (!d || d.archived) continue;
+    (byCat[d.category] = byCat[d.category] || []).push(d);
+  }
+  const priceOf = (d: typeof drinkRows[number]): string => {
+    const fmts = Array.isArray(d.formats) ? (d.formats as Array<{ price?: Record<string, number | null> }>) : [];
+    const f = fmts.find(x => x.price?.[loc] != null) || fmts[0];
+    const p = f?.price?.[loc];
+    return p != null ? `€${p.toFixed(2)}` : '';
+  };
+  const sections = Object.entries(byCat).map(([cat, ds]) =>
+    `<section><h2>${escHtml(MENU_CAT_LABELS[cat] || cat)}</h2>${ds.map(d =>
+      `<div class="item"><span class="nm">${escHtml(d.name)}${d.subtype ? ` <em>${escHtml(d.subtype)}</em>` : ''}</span><span class="pr">${priceOf(d)}</span></div>`).join('')}</section>`).join('');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(menu.name)}</title><style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: Georgia, 'Times New Roman', serif; color:#1a1a1a; font-size:${14 * scale}px; }
+    h1 { text-align:center; font-size:${26 * scale}px; margin:0 0 4px; }
+    .sub { text-align:center; color:#777; margin:0 0 22px; font-style:italic; }
+    .cols { column-count:${cols}; column-gap:30px; }
+    section { break-inside:avoid; margin-bottom:18px; }
+    h2 { font-size:${15 * scale}px; text-transform:uppercase; letter-spacing:.08em; border-bottom:1px solid #bbb; padding-bottom:3px; }
+    .item { display:flex; justify-content:space-between; gap:14px; margin:5px 0; }
+    .nm em { color:#999; font-size:.85em; }
+    .pr { white-space:nowrap; font-variant-numeric:tabular-nums; }
+    @media screen { body { max-width:760px; margin:24px auto; padding:0 16px; } }
+  </style></head><body>
+    <h1>${escHtml(menu.name)}</h1>
+    <p class="sub">${escHtml(assortmentRow?.name || '')}${assortmentRow?.location ? ` · ${escHtml(assortmentRow.location)}` : ''}</p>
+    <div class="cols">${sections || '<p class="sub">No drinks in this assortment yet.</p>'}</div>
+    <script>window.onload=function(){setTimeout(function(){try{window.print()}catch(e){}},350)}</script>
+  </body></html>`);
+}));
+
 // ─── Suppliers ──────────────────────────────────────────────────────────────
 
 router.get('/suppliers', asyncHandler(async (_req: Request, res: Response) => {

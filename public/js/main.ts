@@ -38,6 +38,7 @@ import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBa
 import { drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive } from './drinks-order';
 import { openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog } from './drinks-production';
 import { drinksBarSearch, drinksBarCategory, openServiceCard } from './drinks-service';
+import { openAssortmentEdit, saveAssortmentEdit, openMenuForm, saveMenuForm, printDrinkMenu, deleteDrinkMenu } from './drinks-menu';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -155,6 +156,9 @@ Object.assign(window, {
 
   // drinks — bar / service cards
   drinksBarSearch, drinksBarCategory, openServiceCard,
+
+  // drinks — assortments & menus
+  openAssortmentEdit, saveAssortmentEdit, openMenuForm, saveMenuForm, printDrinkMenu, deleteDrinkMenu,
 });
 
 // ═══════════════════════════════════════════════════════════════════

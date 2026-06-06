@@ -297,6 +297,11 @@
 .svc-chip { background: var(--chip-bg, #f0eee8); border-radius: 999px; padding: 3px 12px; font-size: 13px; }
 .svc-card-close { width: 100%; margin-top: 16px; padding: 12px; font-size: 16px; }
 
+/* ── Assortment editor ── */
+.am-list { max-height: 50vh; overflow-y: auto; border: 1px solid var(--border, #e0ded7); border-radius: 8px; padding: 8px 12px; }
+.am-cat { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2, #888); margin: 10px 0 3px; font-weight: 700; }
+.am-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 14px; }
+
 @media (max-width: 640px) {
   .df-grid { grid-template-columns: 1fr; }
   .df-format-row { grid-template-columns: 1fr 1fr; }

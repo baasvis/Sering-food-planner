@@ -79,6 +79,7 @@ async function main() {
   await seedDrinkCatalogue();
   await seedDrinkConfig();
   await seedDrinkRecipes();
+  await seedAssortments();
 }
 
 // ── Drinks seeding helpers ──
@@ -444,6 +445,30 @@ async function computeDrinkCostsAndTargets() {
     await prisma.drink.update({ where: { id: d.id }, data: { costPerServe: tc, suggestedPrice: Math.round(sugg * 100) / 100 } });
   }
   console.log('Computed drink costs + reverse-engineered markup targets:', JSON.stringify(markupTargets));
+}
+
+async function seedAssortments() {
+  const file = path.join(__dirname, '..', 'seeds', 'drinks-assortments.json');
+  if (!fs.existsSync(file)) return;
+  const count = await prisma.assortment.count();
+  if (count > 0) { console.log(`Assortments already exist (${count} rows) — skipping`); return; }
+  const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const drinks = await prisma.drink.findMany({ select: { id: true, name: true } });
+  const byName = new Map(drinks.map((d) => [d.name.toLowerCase().trim(), d.id]));
+  const rows = (json.assortments || []).map((a) => ({
+    id: slugId('asrt', `${a.name}-${a.serviceContext || a.location}`),
+    name: a.name,
+    location: a.location || 'west',
+    serviceContext: a.serviceContext || '',
+    description: a.description || '',
+    entries: (a.entries || [])
+      .map((name) => { const id = byName.get(String(name).toLowerCase().trim()); return id ? { drinkId: id } : null; })
+      .filter(Boolean),
+    archived: false,
+    updatedAt: new Date(),
+  }));
+  if (rows.length) await prisma.assortment.createMany({ data: rows });
+  console.log(`Seeded ${rows.length} assortments`);
 }
 
 main()

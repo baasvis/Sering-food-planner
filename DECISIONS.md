@@ -172,3 +172,20 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
   garnish, profile, price), large type, dark-mode friendly via theme vars.
 - **[m7] Bar tab placed second** (after Catalogue) for floor-staff prominence;
   the default sub-tab stays Catalogue. Verified in preview (66 tiles, build card).
+
+## M8 — assortments & menu designer
+
+- **[m8] Assortments seeded** (West Bar / Sering Centraal / TestTafel); entries
+  resolve drink names → ids by name. TestTafel = an assortment on `centraal`
+  location with `serviceContext: 'testtafel'` (shares Mediamatic stock).
+- **[m8] Menu print is server-rendered A4 HTML** (`GET /api/drinks/menus/:id/print`,
+  mirroring the recipe print route): drinks grouped by category in the
+  assortment's order, live per-location prices, layout presets (1–2 columns,
+  type scale), auto-print on load. Print-CSS is inline (helmet CSP is off).
+- **[m8] Menu sections auto-group by category** from the assortment entry order;
+  fully custom drag-ordered sections are a future enhancement (the `sections`
+  JSON column already supports them).
+- **[m8] Assortment + menu CRUD manager-gated** (curating/publishing is manager
+  territory); reads + the print view are open to all.
+- **[m8] No e2e** — not in the GOAL §4 e2e list; verified via preview (menu
+  create + print route returns grouped A4 HTML).
