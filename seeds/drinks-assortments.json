@@ -1,0 +1,69 @@
+{
+  "_comment": "Assortments (service contexts) + module pricing config. testtafel draws on the centraal/Mediamatic stock pool — it is an assortment, not a stock location. Entries reference drink names from drinks-catalogue.json / drinks-recipes.json.",
+  "config": {
+    "labourRatePerMin": 0.29,
+    "labourRateNote": "€17.30/h from the wine form enums; older cocktail calculator used €0.27/min. Manager-editable.",
+    "priceRounding": 0.1,
+    "btwRule": { "alcoholicAbvThreshold": 0.5, "alcoholic": 21, "nonAlcoholic": 9 },
+    "markupTargets": {
+      "_note": "REVERSE-ENGINEER at seed time: per category, compute median(price_exBTW / totalCost) over seeded drinks where both are known; fall back to default where cost unknown.",
+      "defaultMultiple": 4.0,
+      "beer": null,
+      "wine": null,
+      "spirits": null,
+      "soft": null,
+      "cocktail": null,
+      "homemade-na": null,
+      "coffee-drink": null
+    },
+    "demandNudgeThresholdPct": 25,
+    "defaultShelfLifeDays": 7,
+    "storageAreasPlaceholders": {
+      "centraal": ["Bar fridge", "Cellar", "Dry storage", "Wine storage"],
+      "note": "West areas are real and live in the catalogue items' storage fields / storage config; Mediamatic areas are placeholders for staff to rename."
+    }
+  },
+  "assortments": [
+    {
+      "name": "West Bar",
+      "location": "west",
+      "description": "Full program at Sering West: tap + can beer, house wines, premix cocktails, classic mixed drinks, homemade non-alc, sodas, coffee & tea.",
+      "entries": [
+        "Premium Pilsner (Holy Gunter)", "Funky Falcon", "Green Bullet", "White Mamba", "Sering Blonde", "Bon Chef (NEIPA can)", "Funky Falcon 0.2%", "Erdinger Weissbier 0.0%",
+        "House Red — Tule Nero d'Avola", "House White — Tule Bianco (keg)", "House Rosé — Mas d'Intras", "Orange — Citizen Wine Ginja Ninja", "Bubbles — Tonello Marachelle Petnat", "Cider — Cidre AOC Pays d'Auge '22",
+        "Mezcal Margarita", "Espresso Martini", "Earl Grey Sour", "Lavender Lemon Drop", "Yuzu Sake Spritz",
+        "Gin & Tonic", "Vodka Tonic / Soda", "Moscow Mule", "Mexican Mule", "Dark & Stormy",
+        "Salmari", "Vodka", "Gin", "Tequila", "Rum (dark)", "Mezcal", "Bourbon",
+        "Fizzy White Iced Tea", "Kombucha", "Ginger Lemonade",
+        "Fritz Cola", "Fritz Cola Zero", "Fritz Limo", "Fritz Apfelschorle", "Fritz Anjola", "Fritz Rhubarb",
+        "Three Cents Ginger Beer", "Three Cents Grapefruit Soda", "Three Cents Mandarin & Bergamot", "Three Cents Tonic",
+        "Club Mate", "Apple Juice (Schulp)", "Orange Juice (Schulp)", "Sparkling Water Bottles (selling)",
+        "Espresso", "Cappuccino", "Oat Latte", "Filter Coffee", "Chai Latte", "Darjeeling Tea (pot)"
+      ]
+    },
+    {
+      "name": "Sering Centraal",
+      "location": "centraal",
+      "description": "PLACEHOLDER assortment — terrace + community kitchen drinks at Mediamatic. Start as a subset of West; staff curate in-app.",
+      "todo": "Confirm actual Centraal range + pars; stock pool is shared with TestTafel.",
+      "entries": [
+        "Premium Pilsner (Holy Gunter)", "Funky Falcon 0.2%", "Erdinger Weissbier 0.0%",
+        "House Red — Tule Nero d'Avola", "House White — Tule Bianco (keg)", "Cider — Cidre AOC Pays d'Auge '22",
+        "Kombucha", "Ginger Lemonade",
+        "Fritz Cola", "Fritz Cola Zero", "Club Mate", "Apple Juice (Schulp)", "Orange Juice (Schulp)",
+        "Espresso", "Cappuccino", "Oat Latte", "Filter Coffee", "Chai Latte"
+      ]
+    },
+    {
+      "name": "TestTafel",
+      "location": "centraal",
+      "serviceContext": "testtafel",
+      "description": "Fine-dining pairing program: natural wines by glass/bottle + homemade non-alcoholic pairings. Draws on the Mediamatic stock pool (location centraal).",
+      "todo": "Wine list rotates — seed the house wines + Ginja Ninja; head waiter curates the rest in-app (wine-form fields: producer, region, soil, grapes, profile, notes).",
+      "entries": [
+        "House White — Tule Bianco (keg)", "House Red — Tule Nero d'Avola", "Orange — Citizen Wine Ginja Ninja", "Bubbles — Tonello Marachelle Petnat", "Cider — Cidre AOC Pays d'Auge '22", "Chardonnay 0.0% — Bio Opia Sparkling",
+        "Fizzy White Iced Tea", "Kombucha", "Spritz (Spectre/Kamille)"
+      ]
+    }
+  ]
+}

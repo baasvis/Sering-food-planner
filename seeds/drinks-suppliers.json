@@ -1,0 +1,119 @@
+{
+  "_comment": "Drinks suppliers for De Sering. Extracted June 2026 from the live inventory sheet + wine form + supplier email threads (Mar-May 2026). NO CREDENTIALS here by design — portal logins belong in env/secret storage.",
+  "suppliers": [
+    {
+      "name": "Two Chefs Brewing",
+      "products": "Draft kegs + cans: Premium Pilsner (Holy Gunter), Funky Falcon, Green Bullet, White Mamba, Sering Blonde, Bon Chef, Funky Falcon 0.2%",
+      "orderDays": ["Tuesday", "Wednesday"],
+      "orderDaysNote": "Weekdays possible, Tue/Wed best",
+      "deliveryWindow": "1-2 days",
+      "contact": { "name": "Jasper", "phone": "+31 614769588" },
+      "minimumOrder": null,
+      "notes": "More Holy Gunter needed on weeks with a large party."
+    },
+    {
+      "name": "Kweker",
+      "products": "Erdinger 0.0%, juices, sparkling water, spirits, glasswash, ice bags; backup for Fritz/Club Mate",
+      "orderDays": ["Monday", "Tuesday", "Thursday"],
+      "orderDaysNote": "Sheet 2026: beer Tue+Thu (next day 7am); soft/spirits Mon+Thu (deliver Wed & Fri). Older wine form said Wed+Sat — sheet wins.",
+      "deliveryWindow": "Next day 7am (beer) / Wed & Fri (rest)",
+      "contact": { "url": "https://www.dekweker.nl" },
+      "minimumOrder": null,
+      "notes": "Order before 23:00."
+    },
+    {
+      "name": "Troppo Giovane",
+      "products": "House Red (Tule Nero d'Avola, boxes of 6), House White (Tule Bianco, keg), Troppo Macerato orange",
+      "orderDays": ["Monday"],
+      "orderDaysNote": "Monday best (older note: Tuesday before 11:00)",
+      "deliveryWindow": "Wednesday–Friday (email 4/2026); typically 1-2 days after order",
+      "contact": { "email": "wine@troppogiovane.nl", "phone": "+31 6 49431630 (theo)", "admin": "admin@troppogiovane.nl" },
+      "minimumOrder": "Free delivery above €500 ex VAT in Amsterdam (≈72 house-wine bottles); below that a delivery fee may apply",
+      "notes": "IMPORTANT process rule from supplier: write a NEW email for every order — reusing old threads causes delays. Price list: 'Troppo_Horeca_March_2026.pdf' (email 1/4/2026) — see pricelists note in DRINKS_DOMAIN §8.",
+      "priceListRef": "Troppo_Horeca_March_2026.pdf (email from wine@troppogiovane.nl, 2026-04-01)"
+    },
+    {
+      "name": "Daxivin",
+      "products": "House Rosé (Mas d'Intras), Orange (Ginja Ninja), Bubbles (Tonello Marachelle petnat), Chardonnay 0.0% (Bio Opia)",
+      "orderDays": ["Tuesday"],
+      "orderDaysNote": "Weekdays + Saturday possible, Tuesday best",
+      "deliveryWindow": "1 day",
+      "contact": { "name": "Marnix Rombaut", "email": "marnix@daxivin.nl", "phone": "+31625032032", "also": "niels@daxivin.nl" },
+      "minimumOrder": "Horeca pricing requires whole boxes of 6 bottles",
+      "notes": "Other wines vary — see wine forms. Affordable rosé bag-in-box coming (not yet on list). Price list: 'HORECA MRT 2026.pdf' (email 27/3/2026).",
+      "priceListRef": "HORECA MRT 2026.pdf (email from marnix@daxivin.nl, 2026-03-27)"
+    },
+    {
+      "name": "Pomme d'Or",
+      "products": "Cider: Cidre AOC Pays d'Auge '22 + Giard Cider — cases of 6 bottles",
+      "orderDays": ["Monday", "Tuesday"],
+      "orderDaysNote": "In practice next-day or same-week delivery on email orders (Mar–May 2026 threads)",
+      "deliveryWindow": "Wednesday (often next-day)",
+      "contact": { "name": "Martijn de Wal", "email": "info@pommedor.nl", "also": "martijn.dewal@pommedor.nl" },
+      "minimumOrder": null,
+      "notes": "Typical orders 36 bottles (6 cases). Price list: 'Prijslijst Pomme dOr februari2026 Cider horeca def.pdf' (email 27/3/2026).",
+      "priceListRef": "Prijslijst Pomme dOr februari2026 Cider horeca def.pdf (email from info@pommedor.nl, 2026-03-27)"
+    },
+    {
+      "name": "Dorstlust",
+      "products": "Club Mate, Fritz sodas, Three Cents sodas/tonic/ginger beer",
+      "orderDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+      "orderDaysNote": "Choose delivery day Tue/Wed/Fri",
+      "deliveryWindow": "1-2 days",
+      "contact": { "url": "https://dorstlust.nl" },
+      "minimumOrder": "€200 minimum order",
+      "notes": "If unavailable, fall back to Kweker or Hanos (mind the sizes)."
+    },
+    {
+      "name": "Hanos",
+      "products": "ROA oat milk, teas, chai, backup for sodas/spirits, fresh mint/ginger, bar consumables",
+      "orderDays": ["Monday", "Thursday"],
+      "orderDaysNote": "",
+      "deliveryWindow": "Tuesdays & Fridays (next day 10am for some categories)",
+      "contact": { "url": "https://www.hanos.nl/nl/" },
+      "minimumOrder": null,
+      "notes": "Emergency replacement source; compare prices vs Kweker. Login lives in env/secrets, not here."
+    },
+    {
+      "name": "Yoigokochi",
+      "products": "Yuzu Sake (supply gaps happen — was out of stock Mar 2026, restocked Apr)",
+      "orderDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+      "orderDaysNote": "",
+      "deliveryWindow": "Two days later",
+      "contact": { "name": "Froukje Betten", "email": "sake@yoigokochi.eu", "phone": "+31 513 610724 / +31 6 18435300", "also": "robert@yoigokochi.eu, dick.stegewerns@yoigokochi.eu" },
+      "minimumOrder": "€21 flat delivery fee regardless of size — order a lot (typical order: 30 bottles)",
+      "notes": "Prices ex VAT. Price list: 'Yoigokochi product list 2024 HORECA 20240915.pdf' — 2024 list confirmed still valid April 2026.",
+      "priceListRef": "Yoigokochi product list 2024 HORECA 20240915.pdf (email from sake@yoigokochi.eu, 2026-04-07)"
+    },
+    {
+      "name": "Friedhats",
+      "products": "Coffee beans (2kg bags)",
+      "orderDays": ["Monday"],
+      "orderDaysNote": "Order before Monday 11:00",
+      "deliveryWindow": "Next Thursday",
+      "contact": { "url": "https://friedhatswholesale.shipsbeans.com/" },
+      "minimumOrder": null,
+      "notes": "Login lives in env/secrets, not here."
+    },
+    {
+      "name": "Vleck Wijnen",
+      "products": "Occasional/special wines",
+      "orderDays": [],
+      "orderDaysNote": "PLACEHOLDER — confirm order rhythm",
+      "deliveryWindow": null,
+      "contact": {},
+      "minimumOrder": null,
+      "notes": "Appears in the 2024 wine form supplier list; confirm if still active."
+    },
+    {
+      "name": "Homemade",
+      "products": "All recipe-mode drinks (cocktail premixes, syrups, super juices, kombucha, ice teas)",
+      "orderDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+      "orderDaysNote": "Production, not ordering — appears on the to-make list instead of order lists",
+      "deliveryWindow": null,
+      "contact": {},
+      "minimumOrder": null,
+      "notes": "Try to input recipes far ahead."
+    }
+  ]
+}
