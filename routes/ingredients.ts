@@ -414,7 +414,10 @@ router.post('/:id', asyncHandler(async (req: Request, res: Response) => {
   // Audit T5: failures previously only hit stderr (same shape as the 31-day
   // silent finance-sync incident). Surface via addBackendEvent so the AI
   // insights cron / telemetry summary picks up sustained failure.
-  recalcRecipeCostsForIngredient(req.params.id as string).catch((e: unknown) => {
+  // Serialize the recalc's recipe.update writes with other writers so they can't
+  // clobber a concurrent recipe-editor cost write (audit PERF-7 pt2). Still
+  // fire-and-forget — the response doesn't await it, so saves stay fast.
+  withWriteLock(() => recalcRecipeCostsForIngredient(req.params.id as string)).catch((e: unknown) => {
     const message = e instanceof Error ? e.message : 'Unknown error';
     console.error(`Failed to recalculate recipe costs for ingredient ${req.params.id}:`, message);
     addBackendEvent('error', 'recipe_cost_recalc_failed', {

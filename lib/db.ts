@@ -1072,52 +1072,14 @@ export function validateRecipe(r: {
   return null;
 }
 
-/** Recalculate cost for all recipes that use a specific ingredient */
-export async function recalcRecipeCostsForIngredient(ingredientId: string): Promise<number> {
-  const rows = await prisma.recipeIngredientRow.findMany({
-    where: { ingredientId },
-    select: { recipeId: true },
-  });
-  const recipeIds = [...new Set(rows.map(r => r.recipeId))];
-  if (recipeIds.length === 0) return 0;
-
-  const recipes = await prisma.recipe.findMany({
-    where: { id: { in: recipeIds } },
-    include: { ingredients: true },
-  });
-
-  let updated = 0;
-  for (const r of recipes) {
-    const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume, r.yieldType, r.outputCount);
-    if (cost !== r.costPerServing) {
-      await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
-      updated++;
-    }
-  }
-  return updated;
-}
-
 /**
- * Recalculate cost for EVERY recipe in one pass. Used after a bulk ingredient
- * write (supplier-XLSX import / POST /api/ingredients) where pricePer100 may
- * have changed for many rows at once. Audit T19 — calling
- * recalcRecipeCostsForIngredient per row would be ~2N queries; this helper
- * is two reads plus N writes (one per recipe whose cost actually changed).
- *
- * Becomes meaningful only with T19a's FK-preserving bulk POST in place.
- * Pre-T19a the bulk POST wiped recipe→ingredient links so the recalc found
- * zero linked rows for every recipe and produced null. Post-T19a (PR #33)
- * the FKs survive and the recalc produces real numbers.
+ * Recompute costPerServing for the given recipes off a SINGLE batched price-map
+ * fetch (no per-recipe calcRecipeCost findMany — kills the N+1), updating only
+ * rows whose cost actually changed. Shared by recalcRecipeCostsForIngredient
+ * (scoped to one ingredient's recipes) and recalcAllRecipeCosts (audit PERF-7 / P2).
  */
-export async function recalcAllRecipeCosts(): Promise<number> {
-  const recipes = await prisma.recipe.findMany({
-    include: { ingredients: true },
-  });
+async function recalcCostsForRecipes(recipes: NonNullable<RecipeWithIngredients>[]): Promise<number> {
   if (recipes.length === 0) return 0;
-
-  // Pull every linked ingredient's pricePer100 in one query, then reproduce
-  // calcRecipeCost's math in memory — sharing the price map across recipes
-  // avoids the N findManys that calling calcRecipeCost per recipe would do.
   const allIngredientIds = [...new Set(
     recipes.flatMap(r => r.ingredients.filter(i => i.ingredientId && !i.isFlexible).map(i => i.ingredientId as string)),
   )];
@@ -1142,8 +1104,7 @@ export async function recalcAllRecipeCosts(): Promise<number> {
             continue;
           }
           if (!ing.ingredientId) continue;
-          const pricePer100 = priceMap.get(ing.ingredientId) || 0;
-          totalCost += (amountGrams / 100) * pricePer100;
+          totalCost += (amountGrams / 100) * (priceMap.get(ing.ingredientId) || 0);
         }
         newCost = Math.round((totalCost / baseServings) * 100) / 100;
       }
@@ -1154,4 +1115,35 @@ export async function recalcAllRecipeCosts(): Promise<number> {
     }
   }
   return updated;
+}
+
+export async function recalcRecipeCostsForIngredient(ingredientId: string): Promise<number> {
+  const rows = await prisma.recipeIngredientRow.findMany({
+    where: { ingredientId },
+    select: { recipeId: true },
+  });
+  const recipeIds = [...new Set(rows.map(r => r.recipeId))];
+  if (recipeIds.length === 0) return 0;
+  const recipes = await prisma.recipe.findMany({
+    where: { id: { in: recipeIds } },
+    include: { ingredients: true },
+  });
+  return recalcCostsForRecipes(recipes);
+}
+
+/**
+ * Recalculate cost for EVERY recipe in one pass. Used after a bulk ingredient
+ * write (supplier-XLSX import / POST /api/ingredients) where pricePer100 may
+ * have changed for many rows at once. Audit T19 — calling
+ * recalcRecipeCostsForIngredient per row would be ~2N queries; this helper
+ * is two reads plus N writes (one per recipe whose cost actually changed).
+ *
+ * Becomes meaningful only with T19a's FK-preserving bulk POST in place.
+ * Pre-T19a the bulk POST wiped recipe→ingredient links so the recalc found
+ * zero linked rows for every recipe and produced null. Post-T19a (PR #33)
+ * the FKs survive and the recalc produces real numbers.
+ */
+export async function recalcAllRecipeCosts(): Promise<number> {
+  const recipes = await prisma.recipe.findMany({ include: { ingredients: true } });
+  return recalcCostsForRecipes(recipes);
 }

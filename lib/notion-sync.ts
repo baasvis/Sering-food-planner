@@ -9,7 +9,7 @@
 
 import { Client } from '@notionhq/client';
 import { CONFIG, safeErrMsg } from './config';
-import { prisma, withWriteLock } from './db';
+import { prisma } from './db';
 import { blocksToGuideMarkdown, NotionBlock, RichSpan } from './notion-markdown';
 
 export interface SyncReport {
@@ -154,23 +154,25 @@ export async function syncChunksFromNotion(): Promise<SyncReport> {
     }
   }
 
-  // Phase 2 — upsert. The write lock is held only for the DB writes. A chunk
-  // that converted with warnings (an unknown block was skipped) still imports
-  // — it lands in `warned`, not `synced`, so the sync report surfaces it.
+  // Phase 2 — upsert (no global write lock; see the note in the loop below). A
+  // chunk that converted with warnings (an unknown block was skipped) still
+  // imports — it lands in `warned`, not `synced`, so the sync report surfaces it.
   const synced: string[] = [];
   const warned: { name: string; warnings: string[] }[] = [];
   try {
-    await withWriteLock(async () => {
-      for (const c of ready) {
-        await prisma.chunk.upsert({
-          where: { id: c.id },
-          create: { id: c.id, ...c.fields },
-          update: c.fields,
-        });
-        if (c.warnings.length) warned.push({ name: c.name, warnings: c.warnings });
-        else synced.push(c.name);
-      }
-    });
+    // Chunk upserts are independent, idempotent per-row writes on a standalone
+    // table — they don't touch the JSON read-modify-write paths the global write
+    // lock serializes. Running them outside the lock keeps a sync (cron or
+    // manual) from blocking kitchen saves app-wide (audit PERF-4).
+    for (const c of ready) {
+      await prisma.chunk.upsert({
+        where: { id: c.id },
+        create: { id: c.id, ...c.fields },
+        update: c.fields,
+      });
+      if (c.warnings.length) warned.push({ name: c.name, warnings: c.warnings });
+      else synced.push(c.name);
+    }
   } catch (e: unknown) {
     return { ok: false, synced, warned, flagged, error: safeErrMsg(e) };
   }
