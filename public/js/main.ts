@@ -36,6 +36,7 @@ import { renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, o
 import { drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost } from './drinks-recipe';
 import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave } from './drinks-stocktake';
 import { drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive } from './drinks-order';
+import { openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog } from './drinks-production';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -147,6 +148,9 @@ Object.assign(window, {
 
   // drinks — orders
   drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive,
+
+  // drinks — production & write-offs
+  openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog,
 });
 
 // ═══════════════════════════════════════════════════════════════════

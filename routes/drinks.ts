@@ -22,12 +22,14 @@ import {
   normalizeFormats, VALID_LOCATIONS, DrinkInput,
 } from '../lib/drinks';
 import { receivedStockDeltas } from '../shared/drink-order';
+import { producedUnits, consumedBuildingBlocks, expiryDate } from '../shared/drink-production';
 
 // Pseudo storage areas the stocktake reconciles away when a real count lands:
-// the seed pre-stocktake bootstrap and the order-receiving intake. Receiving
-// adds to RECEIVING_AREA; a real count of the drink consumes both.
-const BOOTSTRAP_AREAS = ['Uncounted (pre-stocktake)', 'Delivery intake'];
+// seed bootstrap, order-receiving intake, and fresh production. A real count of
+// the drink consumes all three.
+const BOOTSTRAP_AREAS = ['Uncounted (pre-stocktake)', 'Delivery intake', 'Made (fresh)'];
 const RECEIVING_AREA = 'Delivery intake';
+const PRODUCTION_AREA = 'Made (fresh)';
 
 const router = express.Router();
 
@@ -315,6 +317,143 @@ router.delete('/orders/:id', asyncHandler(async (req: Request, res: Response) =>
   if ('notDraft' in result) throw new AppError(400, 'Only draft orders can be deleted.');
   const user = actor(req);
   dbAppendLog(user.email, user.name, 'drink-order-delete', `deleted order ${id}`);
+  res.json({ ok: true });
+}));
+
+// ─── Production & write-offs (corrections) ──────────────────────────────────
+// Open to all authed users (§5). Production: premix/building-block stock ↑ +
+// consumed building blocks ↓. Shared Ingredient-DB stock is NOT auto-deducted
+// in Phase 1 (read-only touch-point — see DECISIONS.md [m6]). Write-offs reduce
+// drink stock by a reason.
+
+/** Reduce a drink's pool by `amount` (largest area first, clamped at 0). */
+async function decrementDrinkStock(txc: Prisma.TransactionClient, drinkId: string, location: string, amount: number): Promise<void> {
+  if (amount <= 0) return;
+  const rows = await txc.drinkStock.findMany({ where: { drinkId, location }, orderBy: { qty: 'desc' } });
+  let remaining = amount;
+  for (const r of rows) {
+    if (remaining <= 0) break;
+    const take = Math.min(r.qty, remaining);
+    await txc.drinkStock.update({ where: { id: r.id }, data: { qty: Math.max(0, r.qty - take) } });
+    remaining -= take;
+  }
+}
+
+/** Add `qty` to a drink's stock in a pseudo-area (production / receiving). */
+async function incrementDrinkStock(txc: Prisma.TransactionClient, drinkId: string, location: string, area: string, qty: number): Promise<void> {
+  if (qty <= 0) return;
+  const areaKey = area.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'area';
+  await txc.drinkStock.upsert({
+    where: { drinkId_location_area: { drinkId, location, area } },
+    create: { id: `${drinkId}-${location}-${areaKey}`, drinkId, location, area, qty, countedBy: 'production', countedAt: new Date() },
+    update: { qty: { increment: qty }, countedAt: new Date() },
+  });
+}
+
+router.get('/production', asyncHandler(async (req: Request, res: Response) => {
+  const location = String(req.query.location || '');
+  const rows = await prisma.drinkProductionLog.findMany({ where: location ? { location } : {}, orderBy: { createdAt: 'desc' }, take: 100 });
+  res.json(rows.map(r => ({ id: r.id, drinkId: r.drinkId, location: r.location, batchesMade: r.batchesMade, volumeMl: r.volumeMl, bottlesYielded: r.bottlesYielded, madeBy: r.madeBy, madeOn: r.madeOn, expiresOn: r.expiresOn, status: r.status, note: r.note, createdAt: r.createdAt.toISOString() })));
+}));
+
+interface ProductionInput { id?: string; drinkId?: string; location?: string; batches?: number; madeBy?: string; madeOn?: string }
+
+router.post('/production', asyncHandler(async (req: Request, res: Response) => {
+  const input = req.body as ProductionInput;
+  const idErr = checkId(input.id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  if (typeof input.drinkId !== 'string') throw new AppError(400, 'invalid drinkId');
+  if (typeof input.location !== 'string' || !VALID_LOCATIONS.includes(input.location)) throw new AppError(400, 'invalid location');
+  const batches = Number(input.batches);
+  if (!Number.isFinite(batches) || batches <= 0 || batches > 10000) throw new AppError(400, 'invalid batches');
+  const drinkRow = await prisma.drink.findUnique({ where: { id: input.drinkId }, include: { ingredientRows: true } });
+  if (!drinkRow) throw new AppError(404, 'Drink not found');
+  const drink = toDrink(drinkRow);
+  const made = producedUnits(drink, batches);
+  const consumed = consumedBuildingBlocks(drink, batches);
+  const madeOn = typeof input.madeOn === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.madeOn) ? input.madeOn : new Date().toISOString().slice(0, 10);
+  const expiresOn = expiryDate(madeOn, drink.shelfLifeDays);
+  await withWriteLock(async () => {
+    await prisma.$transaction(async (txc) => {
+      await incrementDrinkStock(txc, drink.id, input.location as string, PRODUCTION_AREA, made.qty);
+      for (const c of consumed) await decrementDrinkStock(txc, c.drinkId, input.location as string, c.liters);
+      await txc.drinkProductionLog.create({ data: {
+        id: input.id as string, drinkId: drink.id, location: input.location as string, batchesMade: batches,
+        volumeMl: batches * (drink.batch?.volumeMl || 0), bottlesYielded: made.unit === 'bottle' ? made.qty : 0,
+        madeBy: typeof input.madeBy === 'string' ? input.madeBy.slice(0, 200) : '', madeOn, expiresOn, status: 'fresh',
+      } });
+    });
+  });
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-production', `made ${batches}× ${drink.name} @ ${input.location}`);
+  broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
+  res.json({ ok: true, made });
+}));
+
+router.post('/production/:id/discard', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const idErr = checkId(id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  const user = actor(req);
+  const result = await withWriteLock(async () => {
+    const log = await prisma.drinkProductionLog.findUnique({ where: { id } });
+    if (!log) return null;
+    const amt = log.bottlesYielded || (log.volumeMl / 1000);
+    await prisma.$transaction(async (txc) => {
+      await decrementDrinkStock(txc, log.drinkId, log.location, amt);
+      await txc.drinkWriteOff.create({ data: { id: `${id}-wo`, refKind: 'drink', drinkId: log.drinkId, name: '', location: log.location, qty: amt, unit: log.bottlesYielded ? 'bottle' : 'liter', reason: 'expired', note: `discarded production ${id}`, who: user.email } });
+      await txc.drinkProductionLog.update({ where: { id }, data: { status: 'discarded' } });
+    });
+    return log;
+  });
+  if (!result) throw new AppError(404, 'Production log not found');
+  dbAppendLog(user.email, user.name, 'drink-discard', `discarded production ${id}`);
+  broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
+  res.json({ ok: true });
+}));
+
+router.get('/write-offs', asyncHandler(async (req: Request, res: Response) => {
+  const location = String(req.query.location || '');
+  const rows = await prisma.drinkWriteOff.findMany({ where: location ? { location } : {}, orderBy: { createdAt: 'desc' }, take: 100 });
+  res.json(rows.map(r => ({ id: r.id, refKind: r.refKind, drinkId: r.drinkId, ingredientId: r.ingredientId, name: r.name, location: r.location, qty: r.qty, unit: r.unit, reason: r.reason, note: r.note, who: r.who, createdAt: r.createdAt.toISOString() })));
+}));
+
+interface WriteOffInput { id?: string; refKind?: string; drinkId?: string; ingredientId?: string; name?: string; location?: string; qty?: number; unit?: string; reason?: string; note?: string }
+const VALID_WO_REASONS = ['breakage', 'spillage', 'expired', 'staff-drink', 'comp', 'other'];
+
+router.post('/write-offs', asyncHandler(async (req: Request, res: Response) => {
+  const input = req.body as WriteOffInput;
+  const idErr = checkId(input.id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  if (input.refKind !== 'drink' && input.refKind !== 'ingredient') throw new AppError(400, 'invalid refKind');
+  if (typeof input.location !== 'string' || !VALID_LOCATIONS.includes(input.location)) throw new AppError(400, 'invalid location');
+  const qty = Number(input.qty);
+  if (!Number.isFinite(qty) || qty <= 0 || qty > 1_000_000) throw new AppError(400, 'invalid qty');
+  if (typeof input.reason !== 'string' || !VALID_WO_REASONS.includes(input.reason)) throw new AppError(400, 'invalid reason');
+  const user = actor(req);
+  // Capture validated values as consts — TS loses property narrowing inside the
+  // transaction closure below.
+  const id = input.id as string;
+  const refKind = input.refKind;
+  const location = input.location;
+  const reason = input.reason;
+  const drinkId = typeof input.drinkId === 'string' ? input.drinkId : null;
+  const ingredientId = typeof input.ingredientId === 'string' ? input.ingredientId : null;
+  const name = typeof input.name === 'string' ? input.name.slice(0, 200) : '';
+  const unit = typeof input.unit === 'string' ? input.unit.slice(0, 50) : '';
+  const note = typeof input.note === 'string' ? input.note.slice(0, 500) : '';
+  await withWriteLock(async () => {
+    await prisma.$transaction(async (txc) => {
+      // Phase 1: only DRINK stock is auto-deducted; ingredient write-offs are
+      // recorded but don't touch the shared Ingredient DB (read-only touch-point).
+      if (refKind === 'drink' && drinkId) {
+        await decrementDrinkStock(txc, drinkId, location, qty);
+      }
+      await txc.drinkWriteOff.create({ data: { id, refKind, drinkId, ingredientId, name, location, qty, unit, reason, note, who: user.email } });
+    });
+  });
+  dbAppendLog(user.email, user.name, 'drink-write-off', `${qty} ${name} (${reason}) @ ${location}`);
+  broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
   res.json({ ok: true });
 }));
 

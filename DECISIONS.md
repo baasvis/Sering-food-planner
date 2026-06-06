@@ -144,3 +144,21 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
   auto-change to par/quantities.
 - **[m5] Order e2e receives qty 0** so the lifecycle (draft→ordered→received) is
   exercised without permanently mutating staging stock.
+
+## M6 — production & corrections
+
+- **[m6] Production increments the made drink** in a "Made (fresh)" pseudo-area
+  (reconciled by the next stocktake, like receiving's "Delivery intake") and
+  decrements consumed building blocks (drinks-internal). **Shared Ingredient-DB
+  stock is NOT auto-deducted** — it conflicts with the read-only Ingredient
+  touch-point; consumption is recorded on the production log/recipe instead. A
+  future toggle could enable real ingredient deduction.
+- **[m6] Write-offs decrement the drink pool** largest-area-first (clamped ≥ 0)
+  and record a reason. Ingredient write-offs are recorded but don't touch the
+  Ingredient DB (same read-only reasoning).
+- **[m6] Throw-out** of an expired production log creates an `expired` write-off,
+  decrements the made stock, and marks the log `discarded`.
+- **[m6] Production + write-offs are open to all users** (§5: counts, production,
+  write-offs are all-user actions).
+- **[m6] No e2e** — M6 isn't in the GOAL §4 e2e list; covered by the
+  production/write-off unit tests (test/drink-production.test.ts) + typecheck.
