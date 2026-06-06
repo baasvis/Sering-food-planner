@@ -235,3 +235,52 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
   default `toBeVisible` timeout racing the staging DB while 20 specs ran), passed
   in isolation (18.2s). Not a regression: the drinks branch touches none of the
   orders/stocktake/inventory code.
+
+## Feedback redesign — 2026-06-06 (Daan's first review of the live module)
+
+Tab-by-tab UI rework after the first walkthrough. Two commits: `drinks(catalogue)`
+and `drinks(bar/stocktake/orders/suppliers/photo)`.
+
+- **Catalogue columns** — split "Par/Stock" into **Needed** (the par target,
+  renamed: "par" read as jargon) + **Stock**; dropped the Deposit column (kept in
+  the form); "ABV" → "Alcohol %"; added a **Cost %** column (cost ÷ ex-BTW price)
+  flagged red when it beats the category target. Cost-% target is *derived* from
+  the existing per-category markup target (1/markup) — single source of truth, no
+  new config (confirmed with Daan).
+- **Per-location Active** — surfaced the already-existing `DrinkLocationInfo.active`
+  as an inline catalogue tickbox + a focused `PATCH /api/drinks/:id/active`
+  (avoids re-validating/round-tripping the whole drink). Per Daan: "Needed" = the
+  target level (not the order shortfall — that lives on Orders).
+- **Location toggle** — West/Centraal toggle on the Catalogue scoping the
+  Needed/Stock/Price/Cost columns and hiding drinks inactive there. Tension with
+  the Active tickbox (hiding inactive ⇒ can't re-activate) resolved with a **Show
+  inactive** checkbox (off by default → clean view; on → re-activate). Note: the
+  seed defaulted every drink active at *both* locations, so staff will deactivate
+  the ones not used at Centraal.
+- **Type-specific forms** — `buildDrinkFormHtml` now renders only the fields a
+  category needs (wine: producer/region/country/grapes/soil/natural-bio/tasting
+  notes; beer/spirits: alcohol %; soft: pairing notes; coffee-tea/consumables/
+  glassware: minimal). The data model already had every field — this is purely
+  presentation. Category change re-renders the section block.
+- **Bar tab** — regrouped by category in service order, each type's info shown
+  **inline** (wine: origin/grape/tasting; soft: serve-with; cocktail/coffee:
+  how-to-serve / how-to-make) instead of a tap-only tile. Cocktails/coffee keep a
+  "Build card ↗" for the full-screen view.
+- **Final-product photo** — new `DrinkPhoto` table + `drinks.photo_url` (additive
+  migration `20260606140000_drink_photos`, applied to staging), `POST/GET/DELETE
+  /api/drinks/:id/photo` mirroring recipe photos (2 MB, mime-whitelist, bytes in
+  DB). Open to any signed-in user (a bartender snapping the finished drink).
+- **Stocktake** — landing is now a **stock-list overview** per location (toggle),
+  grouped by category like the ingredient list; a **Start stocktake** button
+  enters the by-area count flow, with **storage-area** now the default count mode
+  (was supplier) per "the usual way".
+- **Orders** — the tab now **auto-lists everything short, grouped per supplier**
+  with that supplier's order instructions on top and an editable qty → one-tap
+  **Place order** (creates + marks ordered in one go). No "+ new order" click for
+  the common case; the manual ad-hoc order is kept as a secondary "order something
+  else" (also preserves the existing e2e). Shortfall reuses `buildOrderSuggestions`
+  (already active-at-loc aware, short-only).
+- **Suppliers** — added the missing **+ Add supplier** + per-card Edit/Delete
+  wired to the existing `POST/PATCH/DELETE /api/drinks/suppliers`.
+- **e2e** — `drinks-stocktake.spec.ts` updated for the overview→Start→area flow;
+  catalogue + order specs unchanged (manual order button retained).
