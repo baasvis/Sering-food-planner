@@ -778,6 +778,7 @@ interface RemotePatchMessage {
   drinkSuppliers?: DrinkSupplier[];
   deletedDrinkSuppliers?: string[];
   drinkConfig?: DrinkConfig;
+  drinksReload?: true;
   // Full-replace resources
   storageConfig?: StorageConfig;
   kitchenEquipment?: KitchenEquipment;
@@ -825,7 +826,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           recipes, deletedRecipes,
           ingredients, deletedIngredients,
           supplies, deletedSupplies,
-          drinks, deletedDrinks, drinkSuppliers, deletedDrinkSuppliers, drinkConfig,
+          drinks, deletedDrinks, drinkSuppliers, deletedDrinkSuppliers, drinkConfig, drinksReload,
           storageConfig, kitchenEquipment, cookRhythm, costTargets, closedServices,
           prepChecklist, inventoryCompletion, ritualCompletion,
           guestsNextWeeks,
@@ -1032,6 +1033,11 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   }
   if (guestHistoryReload) {
     loadGuestHistory();
+    changed = true;
+  }
+  // Drinks bulk reload (after a cost recalc) — refetch the catalogue + recipes.
+  if (drinksReload) {
+    loadDrinks().then(() => rerenderCurrentView()).catch(() => { /* logged in loader */ });
     changed = true;
   }
 

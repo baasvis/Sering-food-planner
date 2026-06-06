@@ -12,6 +12,8 @@ import type {
   DrinkBatchDef, DrinkPrepTime, DrinkIngredientRow, DrinkRefKind, DrinkSupplier,
   DrinkConfig, DrinkSupplierContact,
 } from '../shared/types';
+import { makeCostContext, drinkTotalCostExBtw, suggestedPriceInclBtw, targetMarkupFor, effectiveBtw } from '../shared/drink-cost';
+export { effectiveBtw };
 
 export const VALID_LOCATIONS = ['west', 'centraal'];
 export const VALID_DRINK_MODES: DrinkMode[] = ['catalogue', 'recipe'];
@@ -223,12 +225,6 @@ export async function stockByLocationFor(drinkId: string): Promise<Record<string
 
 // ── BTW + config ──
 
-/** Effective BTW rate for a drink: explicit override wins, else auto from ABV. */
-export function effectiveBtw(abv: number, btwRate: number | null, cfg: DrinkConfig): number {
-  if (btwRate != null) return btwRate;
-  return abv >= cfg.btwRule.alcoholicAbvThreshold ? cfg.btwRule.alcoholic : cfg.btwRule.nonAlcoholic;
-}
-
 /** Read the DrinkConfig singleton, merged over defaults. */
 export async function getDrinkConfig(): Promise<DrinkConfig> {
   const row = await prisma.drinkConfig.findUnique({ where: { id: 'default' } });
@@ -298,6 +294,7 @@ export interface DrinkInput {
   batch?: unknown;
   prepTime?: unknown;
   shelfLifeDays?: number | null;
+  ingredientRows?: unknown[];
 }
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,200}$/;
@@ -351,6 +348,66 @@ export function validateDrinkInput(input: DrinkInput, requireId = false): void {
   if (input.garnish != null && (!Array.isArray(input.garnish) || input.garnish.length > 20)) throw new AppError(400, 'invalid garnish');
   if (input.tebiProductNames != null && (!Array.isArray(input.tebiProductNames) || input.tebiProductNames.length > 50)) throw new AppError(400, 'invalid tebiProductNames');
   if (input.prepSteps != null && !Array.isArray(input.prepSteps)) throw new AppError(400, 'prepSteps must be an array');
+  if (input.ingredientRows != null) {
+    if (!Array.isArray(input.ingredientRows)) throw new AppError(400, 'ingredientRows must be an array');
+    if (input.ingredientRows.length > 60) throw new AppError(400, 'too many ingredient rows (max 60)');
+    for (const r of input.ingredientRows) {
+      const rr = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+      if (rr.refKind !== 'ingredient' && rr.refKind !== 'drink') throw new AppError(400, 'invalid row refKind');
+      if (rr.refKind === 'ingredient' && rr.ingredientId != null && !ID_RE.test(String(rr.ingredientId))) throw new AppError(400, 'invalid row ingredientId');
+      if (rr.refKind === 'drink' && rr.refDrinkId != null && !ID_RE.test(String(rr.refDrinkId))) throw new AppError(400, 'invalid row refDrinkId');
+      if (rr.amount != null && (typeof rr.amount !== 'number' || !Number.isFinite(rr.amount) || rr.amount < 0 || rr.amount > 1_000_000)) throw new AppError(400, 'invalid row amount');
+      if (rr.unit != null && !VALID_UNITS.includes(String(rr.unit))) throw new AppError(400, 'invalid row unit');
+    }
+  }
+}
+
+/** Build DrinkIngredientRow create-data from a validated input row array. Rows
+ *  are replaced wholesale on every save, so ids are deterministic per index. */
+export function buildRowData(rows: unknown[] | undefined, drinkId: string) {
+  return (rows || []).map((r, i) => {
+    const rr = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+    const refKind: DrinkRefKind = rr.refKind === 'drink' ? 'drink' : 'ingredient';
+    return {
+      id: `${drinkId}-row-${i}`,
+      drinkId,
+      sortOrder: i,
+      refKind,
+      ingredientId: refKind === 'ingredient' && typeof rr.ingredientId === 'string' ? rr.ingredientId : null,
+      refDrinkId: refKind === 'drink' && typeof rr.refDrinkId === 'string' ? rr.refDrinkId : null,
+      amount: typeof rr.amount === 'number' && Number.isFinite(rr.amount) ? rr.amount : null,
+      unit: typeof rr.unit === 'string' ? rr.unit : 'ml',
+      note: typeof rr.note === 'string' ? rr.note.slice(0, 500) : '',
+    };
+  });
+}
+
+function round2(n: number): number { return Math.round(n * 100) / 100; }
+
+/** Recompute costPerServe (ex-BTW) + suggestedPrice (incl-BTW) for every
+ *  recipe-mode drink, using the full drink + ingredient graph so building-block
+ *  changes propagate to dependents. Returns the number of rows updated. */
+export async function recalcAllDrinkCosts(): Promise<number> {
+  const cfg = await getDrinkConfig();
+  const [drinkRows, ingRows] = await Promise.all([
+    prisma.drink.findMany({ include: { ingredientRows: { orderBy: { sortOrder: 'asc' } } } }),
+    prisma.ingredient.findMany({ select: { id: true, pricePer100: true } }),
+  ]);
+  const drinks = drinkRows.map(r => toDrink(r));
+  const ctx = makeCostContext(drinks, ingRows.map(i => ({ id: i.id, pricePer100: i.pricePer100 || 0 })), cfg);
+  let updated = 0;
+  for (const drink of drinks) {
+    if (drink.mode !== 'recipe') continue; // catalogue cost is derived on read, not stored
+    const totalCost = round2(drinkTotalCostExBtw(drink, ctx));
+    const btw = effectiveBtw(drink.abv, drink.btwRate, cfg);
+    const target = targetMarkupFor(drink.category, cfg);
+    const suggested = suggestedPriceInclBtw(drinkTotalCostExBtw(drink, ctx), btw, target, cfg);
+    if (totalCost !== drink.costPerServe || suggested !== drink.suggestedPrice) {
+      await prisma.drink.update({ where: { id: drink.id }, data: { costPerServe: totalCost, suggestedPrice: suggested } });
+      updated++;
+    }
+  }
+  return updated;
 }
 
 /** Build the Prisma create/update data object from a validated input. Omits

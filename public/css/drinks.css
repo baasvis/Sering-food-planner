@@ -170,7 +170,70 @@
 }
 .df-loc-block strong { display: block; margin-bottom: 6px; }
 
+/* ── Recipe form rows ── */
+.rf-row {
+  display: grid;
+  grid-template-columns: 1.1fr 2fr 0.7fr 0.7fr auto;
+  gap: 6px;
+  align-items: start;
+  margin-bottom: 6px;
+}
+.rf-row select, .rf-row input {
+  padding: 6px 8px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--input-bg, #fff);
+  color: var(--text, #222);
+  width: 100%;
+}
+.rf-pick { position: relative; }
+.rf-sug {
+  position: absolute;
+  z-index: 30;
+  left: 0; right: 0;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 0 0 7px 7px;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 6px 18px rgba(0,0,0,.12);
+}
+.rf-sug-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+.rf-sug-item:hover { background: var(--chip-bg, #f0eee8); }
+.rf-prep-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.rf-prep-row input { flex: 1; padding: 6px 8px; border: 1px solid var(--border, #ccc); border-radius: 6px; background: var(--input-bg, #fff); color: var(--text, #222); }
+.rf-prep-n { color: var(--text2, #888); font-size: 12px; width: 18px; }
+
+/* ── Live cost preview ── */
+.recipe-cost-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-radius: 9px;
+  background: var(--chip-bg, #f6f5f0);
+  font-size: 14px;
+}
+.recipe-cost-preview .muted { color: var(--text2, #888); }
+
+/* Markup traffic-light */
+.ml-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-left: 4px; }
+.ml-green { color: #2e9e5b; } .ml-dot.ml-green { background: #2e9e5b; }
+.ml-amber { color: #c98a00; } .ml-dot.ml-amber { background: #e0a200; }
+.ml-red   { color: #d23f3f; } .ml-dot.ml-red   { background: #d23f3f; }
+.ml-none, .ml-dot.ml-none { color: #999; background: #bbb; }
+
 @media (max-width: 640px) {
   .df-grid { grid-template-columns: 1fr; }
   .df-format-row { grid-template-columns: 1fr 1fr; }
+  .rf-row { grid-template-columns: 1fr 1fr; }
 }

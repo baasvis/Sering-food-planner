@@ -18,7 +18,8 @@ import { isManagerEmail } from './auth';
 import { broadcast } from './events';
 import {
   toDrink, toDrinkSupplier, buildStockMap, stockByLocationFor, getDrinkConfig,
-  mergeConfig, validateDrinkInput, buildDrinkData, DrinkInput,
+  mergeConfig, validateDrinkInput, buildDrinkData, buildRowData, recalcAllDrinkCosts,
+  normalizeFormats, DrinkInput,
 } from '../lib/drinks';
 
 const router = express.Router();
@@ -31,6 +32,35 @@ function actor(req: Request): { email: string; name: string } {
 function assertManager(req: Request): void {
   if (!isManagerEmail(req.user?.email)) {
     throw new AppError(403, 'Manager access required.');
+  }
+}
+
+/** Load a drink with rows + per-location pool stock, mapped to the shared shape. */
+async function fetchDrinkShape(id: string) {
+  const row = await prisma.drink.findUnique({
+    where: { id },
+    include: { ingredientRows: { orderBy: { sortOrder: 'asc' } } },
+  });
+  if (!row) return null;
+  const stock = await stockByLocationFor(id);
+  return toDrink(row, stock);
+}
+
+/** Non-managers may draft/edit recipe drinks but not set money fields. Keep the
+ *  manager-set costPrice + per-format prices (or empty on create). */
+function gateMoneyFields(
+  data: Prisma.DrinkUncheckedUpdateInput,
+  input: DrinkInput,
+  existing: { costPrice: number | null; formats: Prisma.JsonValue } | null,
+  mgr: boolean,
+): void {
+  if (mgr) return;
+  data.costPrice = existing?.costPrice ?? null;
+  if (input.formats !== undefined) {
+    const existingFmts = existing ? normalizeFormats(existing.formats) : [];
+    const priceByName = new Map(existingFmts.map(f => [f.name, f.price]));
+    const incoming = (Array.isArray(input.formats) ? input.formats : []) as Array<{ name?: string; volumeMl?: number; glass?: string }>;
+    data.formats = incoming.map(f => ({ ...f, price: priceByName.get(String(f.name)) ?? {} })) as unknown as Prisma.InputJsonValue;
   }
 }
 
@@ -73,6 +103,16 @@ router.post('/config', asyncHandler(async (req: Request, res: Response) => {
   dbAppendLog(user.email, user.name, 'drink-config-save', 'updated drinks module config');
   broadcast(user.email, 'patch', { user: user.name, drinkConfig: merged });
   res.json(merged);
+}));
+
+/** Recompute costPerServe + suggestedPrice for every recipe drink. Idempotent;
+ *  open to all authed users (recompute is harmless). Broadcasts a drinks reload. */
+router.post('/recalculate-costs', asyncHandler(async (req: Request, res: Response) => {
+  const updated = await withWriteLock(() => recalcAllDrinkCosts());
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-recalc-costs', `recomputed ${updated} drink costs`);
+  broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
+  res.json({ updated });
 }));
 
 // ─── Suppliers ──────────────────────────────────────────────────────────────
@@ -182,48 +222,66 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
-  // M2: catalogue CRUD is manager-gated. (M3 relaxes recipe-mode drafting for
-  // all users with field-level price gating.)
-  assertManager(req);
   const input = req.body as DrinkInput;
+  const mgr = isManagerEmail(req.user?.email);
+  // Catalogue (bought) drinks are manager-gated; recipe drinks are open to all
+  // (with money fields gated below). See DECISIONS.md [m2]/[m3].
+  if (input.mode === 'catalogue' && !mgr) throw new AppError(403, 'Manager access required.');
   validateDrinkInput(input, true);
+  const id = input.id as string;
   const data = buildDrinkData(input);
-  const created = await withWriteLock(async () =>
-    prisma.drink.create({
-      data: { ...(data as Prisma.DrinkUncheckedCreateInput), id: input.id as string, archived: false },
-      include: { ingredientRows: true },
-    }),
-  );
+  gateMoneyFields(data, input, null, mgr);
+  const shape = await withWriteLock(async () => {
+    await prisma.$transaction(async (txc) => {
+      await txc.drink.create({ data: { ...(data as Prisma.DrinkUncheckedCreateInput), id, archived: false } });
+      if (input.mode === 'recipe') {
+        const rowData = buildRowData(input.ingredientRows, id);
+        if (rowData.length) await txc.drinkIngredientRow.createMany({ data: rowData });
+      }
+    });
+    await recalcAllDrinkCosts();
+    return fetchDrinkShape(id);
+  });
+  if (!shape) throw new AppError(500, 'Create failed');
   const user = actor(req);
   dbAppendLog(user.email, user.name, 'drink-create', `created drink "${input.name}" (${input.mode})`);
-  const shape = toDrink(created, {});
   broadcast(user.email, 'patch', { user: user.name, drinks: [shape] });
   res.json(shape);
 }));
 
 router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
-  assertManager(req);
-  const idErr = checkId(req.params.id as string, 'id');
+  const id = req.params.id as string;
+  const idErr = checkId(id, 'id');
   if (idErr) throw new AppError(400, idErr);
   const input = req.body as DrinkInput;
+  const mgr = isManagerEmail(req.user?.email);
+  if (input.mode === 'catalogue' && !mgr) throw new AppError(403, 'Manager access required.');
   validateDrinkInput(input, false);
-  const data = buildDrinkData(input);
-  const updated = await withWriteLock(async () => {
-    const existing = await prisma.drink.findUnique({ where: { id: req.params.id as string } });
+  const result = await withWriteLock(async () => {
+    const existing = await prisma.drink.findUnique({ where: { id } });
     if (!existing) return null;
-    return prisma.drink.update({
-      where: { id: req.params.id as string },
-      data,
-      include: { ingredientRows: { orderBy: { sortOrder: 'asc' } } },
+    // Block non-managers from editing an existing catalogue drink even if the
+    // payload claims a different mode.
+    if (existing.mode === 'catalogue' && !mgr) throw new AppError(403, 'Manager access required.');
+    const data = buildDrinkData(input);
+    gateMoneyFields(data, input, existing, mgr);
+    await prisma.$transaction(async (txc) => {
+      await txc.drink.update({ where: { id }, data });
+      const effectiveMode = input.mode || existing.mode;
+      if (effectiveMode === 'recipe' && input.ingredientRows !== undefined) {
+        await txc.drinkIngredientRow.deleteMany({ where: { drinkId: id } });
+        const rowData = buildRowData(input.ingredientRows, id);
+        if (rowData.length) await txc.drinkIngredientRow.createMany({ data: rowData });
+      }
     });
+    await recalcAllDrinkCosts();
+    return fetchDrinkShape(id);
   });
-  if (!updated) throw new AppError(404, 'Drink not found');
-  const stock = await stockByLocationFor(updated.id);
+  if (!result) throw new AppError(404, 'Drink not found');
   const user = actor(req);
   dbAppendLog(user.email, user.name, 'drink-update', `updated drink "${input.name}"`);
-  const shape = toDrink(updated, stock);
-  broadcast(user.email, 'patch', { user: user.name, drinks: [shape] });
-  res.json(shape);
+  broadcast(user.email, 'patch', { user: user.name, drinks: [result] });
+  res.json(result);
 }));
 
 router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {

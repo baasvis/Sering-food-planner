@@ -80,3 +80,29 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
 - **[m2] `isManager` on AppUser** (director ∪ MANAGER_EMAILS), stamped with
   `isDirector`. `dev@local` is in `MANAGER_EMAILS` (worktree `.env`) so the
   dev/e2e user can drive manager-gated catalogue CRUD.
+
+## M3 — recipes + costing
+
+- **[m3] Cost engine lives in `shared/drink-cost.ts`** (dual-use, mirroring
+  `shared/recipe-cost.ts`) so the backend recalc and the frontend live preview
+  run the *same* code. Unit-tested directly (test/drink-cost.test.ts).
+- **[m3] Recipe CRUD is open to all users; money fields are manager-gated.**
+  Anyone can draft/edit/publish a recipe drink (the head-waiter use case from
+  DESIGN.md); price + costPrice are preserved from the existing row for
+  non-managers (`gateMoneyFields`) so they can't set/wipe prices.
+- **[m3] Labour yield derivation.** When a recipe omits `prebatchYieldServings`,
+  labour amortises over `batch.volumeMl ÷ serveVolumeMl` (else 1) — without this
+  a 4 L iced-tea batch booked 20 min of labour *per glass* (€6/serve). Pinned by
+  a unit test.
+- **[m3] Building-block `costPerServe` stores €/L** (cost per litre) since blocks
+  aren't served; served recipes store €/serve.
+- **[m3] Seed cost computation is a compact JS port of `shared/drink-cost.ts`**
+  (seed.js is plain JS, can't import the TS engine). The app recomputes on every
+  save via the TS engine (the source of truth), so any drift self-heals.
+- **[m3] Reverse-engineered markup targets are best-effort.** Per-category median
+  of `priceExBTW ÷ cost`, sampling only drinks with a real ingredient cost and
+  capping markups at 12× (a higher value means missing `costPrice`, not a real
+  margin). Many catalogue spirits lack `costPrice`, so targets (e.g. cocktail
+  ~6.6×) are rough starting points — spec-sanctioned ("fall back to default") and
+  manager-editable. Suggested prices flag genuinely low-margin drinks (e.g.
+  Mezcal Margarita at €9.50 shows red vs the category target).

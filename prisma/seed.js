@@ -78,6 +78,7 @@ async function main() {
   await seedDrinkSuppliers();
   await seedDrinkCatalogue();
   await seedDrinkConfig();
+  await seedDrinkRecipes();
 }
 
 // ── Drinks seeding helpers ──
@@ -224,6 +225,225 @@ async function seedDrinkConfig() {
     update: { config: cfg },
   });
   console.log('Seeded drink config');
+}
+
+function priceMap(p) {
+  const out = {};
+  if (p && typeof p === 'object') {
+    for (const [k, v] of Object.entries(p)) {
+      if (k.startsWith('_')) continue;
+      out[k] = typeof v === 'number' ? v : null;
+    }
+  }
+  return out;
+}
+
+// One recipe-mode Drink row from a drinks-recipes.json entry.
+function recipeToDrinkRow(d) {
+  const id = slugId('drink', d.name);
+  const isBlock = d._category === 'building-block';
+  const formats = [];
+  if (!isBlock) {
+    formats.push({ name: 'serve', volumeMl: d.serveVolumeMl || 0, glass: d.glass || undefined, price: priceMap(d.price) });
+  }
+  const locations = {};
+  for (const [loc, info] of Object.entries(d.par || {})) {
+    locations[loc] = { par: info && typeof info.amount === 'number' ? info.amount : null, active: true };
+  }
+  return {
+    id,
+    name: d.name,
+    mode: 'recipe',
+    category: d._category,
+    subtype: d.subtype || '',
+    abv: typeof d.abv === 'number' ? d.abv : 0,
+    btwRate: typeof d.btw === 'number' ? d.btw : null,
+    status: d.status === 'draft' ? 'draft' : 'published',
+    archived: false,
+    sellable: !isBlock,
+    supplier: 'Homemade',
+    orderUnit: '', orderUnitMl: null, packNote: '', itemId: null, deposit: 0, costPrice: null, costNote: '',
+    formats,
+    locations,
+    info: {},
+    tebiProductNames: Array.isArray(d.tebiProductNames) ? d.tebiProductNames : [],
+    serveVolumeMl: d.serveVolumeMl || null,
+    glass: d.glass || '',
+    glassVolumeMl: d.glassVolumeMl || null,
+    servingTemp: d.temp || '',
+    characteristics: Array.isArray(d.characteristics) ? d.characteristics : [],
+    garnish: Array.isArray(d.garnish) ? d.garnish : [],
+    seasonality: '',
+    serviceInstructions: d.serviceInstructions || '',
+    prepSteps: Array.isArray(d.prepSteps) ? d.prepSteps : [],
+    batch: d.batch || {},
+    prepTime: d.prepTime || {},
+    shelfLifeDays: typeof d.shelfLifeDays === 'number' ? d.shelfLifeDays : null,
+    costPerServe: null, suggestedPrice: null,
+    updatedAt: new Date(),
+  };
+}
+
+async function seedDrinkRecipes() {
+  const file = path.join(__dirname, '..', 'seeds', 'drinks-recipes.json');
+  if (!fs.existsSync(file)) return;
+  const count = await prisma.drink.count({ where: { mode: 'recipe' } });
+  if (count > 0) { console.log(`Recipe drinks already exist (${count} rows) — skipping`); return; }
+  const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const sections = [
+    ['buildingBlocks', 'building-block'],
+    ['cocktails', 'cocktail'],
+    ['homemadeNA', 'homemade-na'],
+    ['coffeeDrinks', 'coffee-drink'],
+  ];
+  const recipeDefs = [];
+  for (const [key, defaultCat] of sections) {
+    for (const d of (json[key] || [])) recipeDefs.push({ ...d, _category: d.category || defaultCat });
+  }
+
+  // 1) Insert the drink rows first so refDrinkId FKs resolve when rows go in.
+  await prisma.drink.createMany({ data: recipeDefs.map(recipeToDrinkRow) });
+
+  // 2) Initial homemade stock (litres/bottles) → DrinkStock pool rows.
+  const stockRows = [];
+  for (const d of recipeDefs) {
+    const id = slugId('drink', d.name);
+    for (const [loc, qty] of Object.entries(d.stock || {})) {
+      if (typeof qty === 'number' && qty > 0) {
+        stockRows.push({ id: slugId('dstk', `${d.name}-${loc}`), drinkId: id, location: loc, area: 'Uncounted (pre-stocktake)', qty, countedBy: 'seed', countedAt: null, updatedAt: new Date() });
+      }
+    }
+  }
+  if (stockRows.length) await prisma.drinkStock.createMany({ data: stockRows });
+
+  // 3) Ingredient rows — resolve "ingredient:Name" → Ingredient id (loose),
+  //    "drink:Name" → drink slug id (only if that drink exists). Unresolved
+  //    refs keep the original name in `note` so the editor can surface them.
+  const allDrinks = await prisma.drink.findMany({ select: { id: true } });
+  const allIds = new Set(allDrinks.map(x => x.id));
+  const ings = await prisma.ingredient.findMany({ select: { id: true, name: true } });
+  const ingByName = new Map(ings.map(i => [i.name.toLowerCase().trim(), i.id]));
+
+  const rowRows = [];
+  for (const d of recipeDefs) {
+    const drinkId = slugId('drink', d.name);
+    (d.ingredients || []).forEach((ing, i) => {
+      const ref = String(ing.ref || '');
+      let refKind = 'ingredient', ingredientId = null, refDrinkId = null;
+      let note = ing.note || '';
+      if (ref.startsWith('drink:')) {
+        const refName = ref.slice(6).trim();
+        const rid = slugId('drink', refName);
+        if (allIds.has(rid)) { refKind = 'drink'; refDrinkId = rid; }
+        else { note = note ? `${note}; unresolved drink: ${refName}` : `unresolved drink: ${refName}`; }
+      } else {
+        const refName = ref.replace(/^ingredient:/, '').trim();
+        const id = ingByName.get(refName.toLowerCase());
+        if (id) ingredientId = id;
+        else note = note ? `${note}; unlinked: ${refName}` : `unlinked: ${refName}`;
+      }
+      rowRows.push({
+        id: `${drinkId}-row-${i}`, drinkId, sortOrder: i, refKind, ingredientId, refDrinkId,
+        amount: typeof ing.amount === 'number' ? ing.amount : null,
+        unit: ing.unit || 'ml', note: String(note).slice(0, 500),
+      });
+    });
+  }
+  if (rowRows.length) await prisma.drinkIngredientRow.createMany({ data: rowRows });
+  console.log(`Seeded ${recipeDefs.length} recipe drinks + ${rowRows.length} ingredient rows`);
+
+  // 4) Compute costs + reverse-engineer per-category markup targets. This is a
+  //    compact port of shared/drink-cost.ts (the runtime source of truth, which
+  //    recomputes on every save) so a fresh `prisma db seed` ships rich demo data.
+  await computeDrinkCostsAndTargets();
+}
+
+async function getSeedDrinkConfig() {
+  const def = { labourRatePerMin: 0.29, priceRounding: 0.1, btwRule: { alcoholicAbvThreshold: 0.5, alcoholic: 21, nonAlcoholic: 9 }, markupTargets: { defaultMultiple: 4.0 }, demandNudgeThresholdPct: 25, defaultShelfLifeDays: 7 };
+  const row = await prisma.drinkConfig.findUnique({ where: { id: 'default' } });
+  const c = (row && row.config) || {};
+  return { ...def, ...c, btwRule: { ...def.btwRule, ...(c.btwRule || {}) }, markupTargets: { ...def.markupTargets, ...(c.markupTargets || {}) } };
+}
+
+async function computeDrinkCostsAndTargets() {
+  const cfg = await getSeedDrinkConfig();
+  const drinks = await prisma.drink.findMany({ include: { ingredientRows: true } });
+  const ings = await prisma.ingredient.findMany({ select: { id: true, pricePer100: true } });
+  const drinkById = new Map(drinks.map(d => [d.id, d]));
+  const priceById = new Map(ings.map(i => [i.id, i.pricePer100 || 0]));
+  const memo = new Map();
+  const toG = (amt, unit) => {
+    const u = (unit || '').toLowerCase();
+    if (['kg', 'kilo', 'kilos', 'l', 'liter', 'liters', 'litre', 'litres'].includes(u)) return amt * 1000;
+    return amt;
+  };
+  function rowsCost(rows, visiting) {
+    let t = 0;
+    for (const r of rows || []) {
+      if (r.amount == null) continue;
+      if (r.refKind === 'drink' && r.refDrinkId) { const ref = drinkById.get(r.refDrinkId); if (ref) t += r.amount * perMl(ref, visiting); }
+      else if (r.refKind === 'ingredient' && r.ingredientId) { t += (toG(r.amount, r.unit) / 100) * (priceById.get(r.ingredientId) || 0); }
+    }
+    return t;
+  }
+  function perMl(d, visiting = new Set()) {
+    if (memo.has(d.id)) return memo.get(d.id);
+    if (visiting.has(d.id)) return 0;
+    visiting.add(d.id);
+    let v = 0;
+    if (d.mode === 'catalogue') v = (d.costPrice != null && d.orderUnitMl > 0) ? d.costPrice / d.orderUnitMl : 0;
+    else { const isB = d.category === 'building-block'; const uv = isB ? ((d.batch && d.batch.volumeMl) || 0) : (d.serveVolumeMl || 0); v = uv > 0 ? rowsCost(d.ingredientRows, visiting) / uv : 0; }
+    visiting.delete(d.id); memo.set(d.id, v); return v;
+  }
+  function prebatchYield(d) {
+    const pt = d.prepTime || {};
+    if (pt.prebatchYieldServings > 0) return pt.prebatchYieldServings;
+    const bv = (d.batch && d.batch.volumeMl) || 0; const sv = d.serveVolumeMl || 0;
+    return (bv > 0 && sv > 0) ? bv / sv : 1;
+  }
+  function labour(d) { const pt = d.prepTime || {}; return ((pt.prebatchMin || 0) / prebatchYield(d) + (pt.perServeMin || 0)) * cfg.labourRatePerMin; }
+  function btwOf(d) { return d.btwRate != null ? d.btwRate : (d.abv >= cfg.btwRule.alcoholicAbvThreshold ? cfg.btwRule.alcoholic : cfg.btwRule.nonAlcoholic); }
+  function totalCost(d) {
+    if (d.mode === 'catalogue') { const f = (d.formats || []).find(x => x.price && x.price.west != null) || (d.formats || [])[0]; return perMl(d) * ((f && f.volumeMl) || 0); }
+    if (d.category === 'building-block') return perMl(d) * 1000;
+    return rowsCost(d.ingredientRows, new Set()) + labour(d);
+  }
+  function servePrice(d) { const f = (d.formats || []).find(x => x.price && typeof x.price.west === 'number') || (d.formats || [])[0]; return f && f.price && typeof f.price.west === 'number' ? f.price.west : null; }
+
+  // 1) Reverse-engineer per-category markup targets FIRST (so suggested prices
+  //    below use the final targets). Only sample drinks with a real ingredient
+  //    cost — a drink whose ingredients lack costPrice (cost ≈ 0) would yield a
+  //    huge, meaningless markup and skew the median.
+  const byCat = {};
+  for (const d of drinks) {
+    const price = servePrice(d);
+    if (price == null || price <= 0) continue;
+    const tc = totalCost(d);
+    if (!(tc > 0)) continue;
+    const ingCost = d.mode === 'catalogue' ? perMl(d) : rowsCost(d.ingredientRows, new Set());
+    if (!(ingCost > 0)) continue; // incomplete cost data → don't let it skew the target
+    const markup = (price / (1 + btwOf(d) / 100)) / tc;
+    if (!Number.isFinite(markup) || markup <= 0 || markup > 12) continue; // >12× ⇒ missing cost data, not a real margin
+    (byCat[d.category] = byCat[d.category] || []).push(markup);
+  }
+  const markupTargets = { ...cfg.markupTargets };
+  for (const [cat, arr] of Object.entries(byCat)) {
+    arr.sort((a, b) => a - b);
+    const mid = Math.floor(arr.length / 2);
+    markupTargets[cat] = Math.round((arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2) * 10) / 10;
+  }
+  await prisma.drinkConfig.update({ where: { id: 'default' }, data: { config: { ...cfg, markupTargets } } });
+
+  // 2) Store each recipe drink's cost + suggested price using the final targets.
+  for (const d of drinks) {
+    if (d.mode !== 'recipe') continue;
+    const tc = Math.round(totalCost(d) * 100) / 100;
+    const btw = btwOf(d);
+    const target = markupTargets[d.category] > 0 ? markupTargets[d.category] : markupTargets.defaultMultiple;
+    const sugg = tc > 0 ? Math.round((tc * target * (1 + btw / 100)) / cfg.priceRounding) * cfg.priceRounding : 0;
+    await prisma.drink.update({ where: { id: d.id }, data: { costPerServe: tc, suggestedPrice: Math.round(sugg * 100) / 100 } });
+  }
+  console.log('Computed drink costs + reverse-engineered markup targets:', JSON.stringify(markupTargets));
 }
 
 main()
