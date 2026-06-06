@@ -950,6 +950,16 @@ function _startFreshnessTick() {
   setInterval(() => {
     const screen = document.getElementById('screen-dashboard');
     if (screen && screen.style.display !== 'none' && screen.offsetParent !== null) {
+      // Don't rebuild #dash-content out from under a user who is typing in it
+      // (audit UIUX-1): the Team To-Do input only reads on Enter/Add, so a tick
+      // mid-type would wipe the half-typed text. Skip this tick; the next one
+      // (or the user's own re-render) catches up the "X min ago" counters.
+      const active = document.activeElement as HTMLElement | null;
+      const content = document.getElementById('dash-content');
+      if (active && content && content.contains(active) &&
+          (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+        return;
+      }
       renderDashboardContent();
     }
   }, 60_000);
@@ -971,7 +981,7 @@ function renderSuppliesCard(loc: Location, todayStr: string): string {
     const stockHere = s.stock?.[loc]?.amount ?? 0;
     const lastMake = s.stock?.[loc]?.lastMakeDate;
     if (s.kind === 'standard') {
-      const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+      const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
       const need = loc === 'west' ? demand.west : demand.centraal;
       // Centralized supplies only prep at West; show West demand at both locations
       // so cooks can see "we need 5kg aioli" regardless of which dashboard they're on
@@ -1230,7 +1240,7 @@ function computeSupplyPrepTasks(loc: Location, todayStr: string): SupplyPrepTask
   for (const s of (S.supplies || [])) {
     if (s.archived || s.kind !== 'standard') continue;
     if (s.prepMode === 'centralized' && loc !== 'west') continue;
-    const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr);
+    const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
     const need = s.prepMode === 'centralized'
       ? demand.west
       : (loc === 'centraal' ? demand.centraal : demand.west);

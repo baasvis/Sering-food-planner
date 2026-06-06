@@ -37,13 +37,22 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          # No `cache: 'npm'` — package-lock.json is gitignored in this repo,
-          # and the action errors out when it can't find a lock file.
+          node-version-file: .nvmrc
+          cache: 'npm'
 
-      # `npm install` (not `npm ci`) for the same reason — `npm ci` requires
-      # a committed lock file. Slower by ~10s but reliable.
-      - run: npm install
+      - run: npm ci
+
+      # Cache the Playwright browser download keyed on the lockfile (which pins
+      # the playwright version). On a hit the install step below still runs but
+      # only re-installs OS-level --with-deps system packages (not cached),
+      # skipping the ~300MB Chromium download. Cache miss → full install.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

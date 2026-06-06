@@ -118,7 +118,19 @@ function safeHttpUrl(url: string | null | undefined): string | null {
 export async function renderCompetencies(): Promise<void> {
   const el = document.getElementById('screen-competencies');
   if (!el) return;
-  if (!cLoaded) el.innerHTML = '<div class="comp-loading">Loading…</div>';
+  // Paint from the module cache once loaded (audit ARCH-1): the 60s background
+  // tick and SSE-triggered re-renders must NOT refetch the whole (ever-growing)
+  // teaching-event ledger every minute. Explicit reloads — first screen load and
+  // after a local mutation — go through reloadCompetencies(), which clears cLoaded.
+  if (cLoaded) {
+    // Repaint from cache (ARCH-1, no refetch) but preserve open teaching-guide
+    // foldouts across the repaint (#93), same as the fetch path below.
+    const reopen = openGuideHeadings();
+    paintComp();
+    restoreGuideHeadings(reopen);
+    return;
+  }
+  el.innerHTML = '<div class="comp-loading">Loading…</div>';
   try {
     const data = await apiGet('/api/competencies');
     cChunks = data.chunks || [];
@@ -158,6 +170,14 @@ function restoreGuideHeadings(headings: Set<string>): void {
       const summary = d.querySelector('summary');
       if (summary && summary.textContent && headings.has(summary.textContent)) d.open = true;
     });
+}
+
+/** Force a fresh fetch of the training data, then repaint. Called after a local
+ *  mutation (log event, add/rename/(de)activate person, sync, delete) so the
+ *  change shows; the plain renderer paints from cache. */
+export async function reloadCompetencies(): Promise<void> {
+  cLoaded = false;
+  return renderCompetencies();
 }
 
 function paintComp(): void {
@@ -207,17 +227,20 @@ function buildGridHtml(visibleChunks: CChunk[]): string {
   if (people.length === 0) {
     return '<div class="comp-empty">No staff added yet. Tap <strong>+ Add a name</strong> to add the first person, then tap a grid cell to log a teaching.</div>';
   }
+  // Keyboard access (audit UIUX-3): the click-only header/cell controls get
+  // role="button" + tabindex="0" + an onkeydown that fires the same handler on
+  // Enter/Space, mirroring .dash-arrival-block in transport-card.ts.
   const head = visibleChunks.map(c =>
-    `<th class="comp-chunkhead" data-testid="comp-chunkhead" data-chunk="${esc(c.id)}" title="${esc(c.name)} — ${esc(c.station)}" onclick="openCompChunk(this.dataset.chunk)">${esc(c.name)}</th>`
+    `<th class="comp-chunkhead" data-testid="comp-chunkhead" data-chunk="${esc(c.id)}" role="button" tabindex="0" title="${esc(c.name)} — ${esc(c.station)}" onclick="openCompChunk(this.dataset.chunk)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompChunk(this.dataset.chunk);}">${esc(c.name)}</th>`
   ).join('');
   const rows = people.map(p => {
     const cells = visibleChunks.map(c => {
       const last = lastTaught(p.id, c.id);
       const cls = recencyClass(last);
       const label = last ? esc(fmtDate(last)) : '&mdash;';
-      return `<td class="comp-cell ${cls}" data-testid="comp-cell" data-learner="${esc(p.id)}" data-chunk="${esc(c.id)}" title="${esc(p.name)} — ${esc(c.name)}" onclick="openCompLogModal(this.dataset.learner, this.dataset.chunk)">${label}</td>`;
+      return `<td class="comp-cell ${cls}" data-testid="comp-cell" data-learner="${esc(p.id)}" data-chunk="${esc(c.id)}" role="button" tabindex="0" title="${esc(p.name)} — ${esc(c.name)}" onclick="openCompLogModal(this.dataset.learner, this.dataset.chunk)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompLogModal(this.dataset.learner, this.dataset.chunk);}">${label}</td>`;
     }).join('');
-    return `<tr><th class="comp-rowhead" data-person="${esc(p.id)}" title="See ${esc(p.name)}'s history" onclick="openCompPerson(this.dataset.person)">${esc(p.name)}</th>${cells}</tr>`;
+    return `<tr><th class="comp-rowhead" data-person="${esc(p.id)}" role="button" tabindex="0" title="See ${esc(p.name)}'s history" onclick="openCompPerson(this.dataset.person)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompPerson(this.dataset.person);}">${esc(p.name)}</th>${cells}</tr>`;
   }).join('');
   return `
     <div class="comp-grid-wrap">
@@ -481,7 +504,7 @@ export async function submitCompLog(): Promise<void> {
     const chunk = chunkById(logChunkId);
     closeModal();
     toast(`Logged: ${learner ? learner.name : '?'} — ${chunk ? chunk.name : '?'}`);
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not log: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -518,7 +541,7 @@ export async function submitCompAddPerson(): Promise<void> {
     await apiPost('/api/competencies/people', { id: newId(), name });
     closeModal();
     toast(`Added ${name}`);
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not add: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -613,7 +636,7 @@ export async function compSyncNotion(): Promise<void> {
     };
     const total = cLastSync.synced.length + cLastSync.warned.length;
     toast(`Synced ${total} chunk${total === 1 ? '' : 's'}`);
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Sync failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -650,7 +673,7 @@ export async function submitCompRename(): Promise<void> {
     await apiPost('/api/competencies/people/' + renamePersonId, { name }, 'PATCH');
     closeModal();
     toast('Renamed');
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not rename: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -662,7 +685,7 @@ export async function compTogglePersonActive(personId: string): Promise<void> {
   try {
     await apiPost('/api/competencies/people/' + personId, { active: !person.active }, 'PATCH');
     toast(person.active ? `${person.name} deactivated` : `${person.name} reactivated`);
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not update: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -695,7 +718,7 @@ export async function confirmCompDeleteEvent(): Promise<void> {
     pendingDeleteEventId = '';
     closeModal();
     toast('Event deleted');
-    await renderCompetencies();
+    await reloadCompetencies();
   } catch (e: unknown) {
     toast('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }

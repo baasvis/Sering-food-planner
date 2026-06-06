@@ -1,0 +1,40 @@
+# Remediation Tracker — 2026-06-05 Review
+
+Disposition of every finding. Legend: ✅ fixed (committed) · 🔧 to fix · 🙋 needs Daan's explicit call · ✓ verified no-fix-needed.
+
+Last updated: 2026-06-05 — **remediation complete**: every finding is now fixed (+tested), verified no-fix-needed, or on the "needs Daan's call" list below. 7 remediation PRs (A–G) committed on `claude/serene-almeida-60b9b7`; full suite 33 suites / 602 tests green; nothing pushed.
+
+## ✅ Already fixed (committed this session)
+| ID | Commit |
+|---|---|
+| SEC-1 (code-side) | e8f4ae7 (rotation+history still 🙋) |
+| DEP-1, DEP-2, DEP-5, DEP-9 | e8f4ae7 |
+| CORR-1 | c9842bd |
+| PERF-1, CORR-2 | 4b462b5 |
+| DOC-1 … DOC-11 | 791c367 |
+
+## 🙋 Needs Daan's explicit call (will NOT touch without go-ahead)
+- **SEC-1 (rotation + history scrub)** — rotate prod + staging Postgres passwords on Railway; scrub git history. External + destructive.
+- **DEP-6** — `googleapis` 128→173 is a breaking major bump touching Google Sheets recipe import + Google auth. I can prep it on a branch, but bumping the auth lib on live prod needs your timing/testing call. (This is the only source of the last 4 moderate `npm audit` advisories.)
+- **PERF-2** — duplicate migration-timestamp prefixes. The affected migrations are already applied on prod; renaming them would corrupt `_prisma_migrations`. Latent ordering fragility only — accept, or adopt a "unique timestamp" rule going forward. Your call.
+- **CORR-7** — recipe cost/nutrition treats piece/count-unit ingredients as grams (`toGrams` passes pieces through). Currently UNREACHABLE: the recipe editor offers only weight/volume units and no recipe/ingredient uses piece units (verified against the editor's unit list + the ingredient seed). A correct fix needs a per-ingredient **grams-per-piece** weight only you can supply (and the overloaded `orderUnitSize` shouldn't be reused for it). **Decision needed:** do you want piece/count-unit ingredient support? If not, it's a non-issue (the editor already prevents it).
+
+## ✓ Verified — no fix needed
+- **SEC-7** — the AI recipe-assistant tool-use loop is sandboxed to in-memory wire state; the finding itself is a verification, not a defect.
+- **ARCH-10** — the module-level write-lock is the documented single-replica concurrency model (CLAUDE.md "single dyno today"); intentional, not a defect.
+- **ARCH-4** — addressed by the ARCH-3 guard; the two 60s ticks (dashboard freshness vs non-dashboard refresh) are an intentional split, each now a singleton.
+- **PERF-6** — `dbUpsertCaterings`/`dbUpsertTransportItems` do one upsert per row inside the lock; row counts are tiny (a handful per save), so a raw ON-CONFLICT bulk upsert (T19a pattern) isn't justified for the negligible gain.
+- **PERF-9** — the ritual-completions prune `deleteMany` runs on a tiny, few-day table; the unindexed scan is negligible (nit).
+- **CORR-6** — NOT a real bug. The audit claimed `calcRequiredAtLocLive`'s West gate disagrees with `scoredHardConstraintsOk` on catering, but catering CANCELS in `totalDemand − nonWestDemand` (it depends only on dish id/type/serving, unchanged by filtering West services off), so both gates exclude catering from the West charge — they agree (incl. rounding). Applying the audit's suggested fix would INTRODUCE a real inconsistency. Verified by a deep read + the analysis agent; the `calcRequiredAtLocLive` docstring is already correct. No change.
+- **SEC-6** — account/status enumeration via the auth + access-request responses. This is an internal tool with a small, known-staff allowlist, and the self-service access-request flow *intentionally* tells a user their status ("pending"/"approved") — that transparency is the feature. Enumeration risk is low and directly at odds with the intended UX; left as-is.
+
+## 🔧 To fix — grouped into tested PRs (risk-ordered)
+- **PR-A — backend hardening** ✅ DONE: SEC-2 / ARCH-7 / TEST-5 (competencies id+location+date validation), SEC-3 (admin/analyze → requireDirector), SEC-4 (ritual-completions validation), ARCH-6 (notion safeErrMsg), ARCH-8 (global error handler redaction). +4 validation tests; full suite 32/595 green.
+- **PR-B — reliability + contained correctness** ✅ DONE: TEST-1 (orderFor revert+toast), ARCH-3 (guarded the auto-refresh interval), CORR-4 (removed dead `S.deletedBatches`), CORR-8 (replacement `cookDate: null`). ARCH-5 + ARCH-9 → moved to PR-F (supplies dataflow). ARCH-4 + ARCH-10 → see "no fix needed". Full suite 32/595 green.
+- **PR-C — read-path performance** ✅ DONE: PERF-5 (toRecipeFull ships version metadata only; restore uses the dedicated endpoint), PERF-8 (split loadIngredients slim-select vs loadIngredientsFull for /full), ARCH-1 (competencies paints from cache + reloadCompetencies on mutation), ARCH-2 (recipe-AI exemplar TTL cache, no error-caching). PERF-3 → mitigated by ARCH-1 (ledger no longer refetched every 60s; deliberately NOT capped, to preserve competence-derivation correctness). Typecheck + suite green.
+- **PR-D — write-path perf / concurrency** ✅ DONE: PERF-7 (batched `recalcCostsForRecipes` kills the N+1; the fire-and-forget recalc is wrapped in `withWriteLock` so its recipe.update writes serialize — both halves of the finding), PERF-4 (Notion chunk upserts no longer hold the global write lock). Adversarially reviewed — cost math proven identical. PERF-6 + PERF-9 → see "no fix needed". Typecheck + suite green.
+- **PR-E — correctness / demand** ✅ DONE: CORR-3 (supply demand mirrors the batch engine via `getEffectiveGuests` — a closed service's eaters roll onto the open day, conserved not dropped; adversarial review caught a half-fix, corrected + 3 conservation tests), CORR-5 (`consolidateInventory` after all three storage-cycle handlers). CORR-6 → no-fix (not a real bug — see above). CORR-7 → Needs-Daan (see above). Typecheck + suite (598) green.
+- **PR-F — UI/UX** ✅ DONE (verified live on the staging preview): UIUX-1 (dashboard tick skips rebuild when an input has focus), UIUX-2 (ritual toggle repaints the Today panel in place — no dashboard flash), UIUX-3 (grid cells keyboard-accessible: tabindex/role/onkeydown — verified live), UIUX-4 (supplies table horizontal-scroll wrap), UIUX-5 (supplies alert/confirm → toastError/pushUndo), UIUX-6 (ingredient search split-container — caret preserved + input not replaced, verified live), UIUX-7 (error toasts assertive — verified live), UIUX-8 (AI chat textarea aria-label), ARCH-5 + ARCH-9 (supplies render from the cached, archived-inclusive S.supplies; archived toggle client-side). SEC-6 → no-fix (see above). Typecheck + vite build + suite 32/598 green; no console errors across screens.
+- **PR-G — tests + CI** ✅ DONE: TEST-2 + TEST-7 (e2e nav + smoke for Supplies/Team/Recipe-AI; playwright.config director env), TEST-3 (bench calls the real `runFixMyMenuCore`, extracted from `_fixMyMenuBody` — behavior-preserving, suite-verified), TEST-6 (fmm floor 22000→24000, set against the measured ~25.7k mean), TEST-4 (new DB-free ingredients-import parse test driving the real parser), DEP-3 (CI `npm audit --audit-level=high` gate), DEP-7 (.nvmrc + .node-version + CI node-version-file), DEP-8 (Playwright browser cache). DEP-4 → resolved by the committed lockfile (xlsx CDN tarball pinned with integrity). SEC-5 (parseCookie no longer builds a RegExp from the name). Typecheck + suite 33/602 green; e2e runs in CI.
+
+Each PR: implement → typecheck → targeted tests → full suite (pre-commit hook) → adversarial review on prod-critical diffs → commit. Nothing pushed.

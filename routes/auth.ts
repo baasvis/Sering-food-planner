@@ -200,9 +200,30 @@ async function verifyGoogleToken(idToken: string): Promise<AppUser> {
   };
 }
 
+// Split-based cookie parser — deliberately does NOT build a RegExp from `name`
+// (prior SEC-5/S14): interpolating a caller-supplied name into `new RegExp(...)`
+// is a latent ReDoS / mis-match footgun.
+//
+// Behaviour matches the old `(?:^|;\s*)name=([^;]+)` regex on every real input
+// (`name` is only ever the literal 'session', and `cookieHeader` is always
+// `req.headers.cookie`, which per RFC 6265 is `a=1; b=2` with no leading
+// whitespace before the first cookie): find the first cookie whose name equals
+// `name`, return its value, or null when the cookie is absent or has an empty
+// value. The one intentional difference is that this is slightly more lenient —
+// it also trims whitespace before the *first* cookie name (the old regex only
+// trimmed after a `;`), which the standard library cookie parsers do too and
+// which never occurs on a real Cookie header.
 function parseCookie(cookieHeader: string, name: string): string | null {
-  const match = cookieHeader.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)'));
-  return match ? match[1] : null;
+  for (const part of cookieHeader.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== name) continue;
+    const value = part.slice(eq + 1);
+    // The old regex captured `([^;]+)` (one-or-more), so an empty value
+    // (`session=`) did not match — preserve that by returning null.
+    return value.length > 0 ? value : null;
+  }
+  return null;
 }
 
 /** Resolve a request's session cookie to a user record, or null if the

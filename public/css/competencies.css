@@ -22,6 +22,8 @@
 .comp-cell{font-size:13px;text-align:center;padding:14px 8px;min-width:96px;cursor:pointer;transition:filter .1s;}
 .comp-cell:hover{filter:brightness(0.96);}
 .comp-cell:active{transform:scale(.97);}
+/* Visible keyboard focus for the now keyboard-reachable grid controls (UIUX-3) */
+.comp-chunkhead:focus-visible,.comp-rowhead:focus-visible,.comp-cell:focus-visible{outline:2px solid var(--purple);outline-offset:-2px;}
 .rc-recent{background:var(--green-bg);color:var(--green);font-weight:600;}
 .rc-mid{background:var(--amber-bg);color:var(--amber);font-weight:600;}
 .rc-old{background:var(--gray-bg);color:var(--gray-text);}

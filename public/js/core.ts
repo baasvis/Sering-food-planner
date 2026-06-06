@@ -1002,7 +1002,17 @@ export function archiveDish(id: string, withRating: boolean, locScope?: Location
             .catch((e: unknown) => console.error('Failed to update recipe ratings:', e));
         }
       }
-      scheduleSave();
+      // The archived batch is leaving the DB. A served batch's food is consumed,
+      // so its stock record is meaningless now — drain the server row BEFORE the
+      // delete lands. Otherwise the cannot-delete-with-stock guard (CORR-1,
+      // dbDeleteBatchIds) refuses the archive and the batch lingers with its old
+      // stock. The guard still blocks ACCIDENTAL stock-bearing deletes (those
+      // never drain first). .finally() runs the delete save whether or not the
+      // drain succeeded: on a drain failure the guard simply skips the delete and
+      // the batch survives — safe, no silent stock loss. (e2e: inventory-served-disappear)
+      apiPost(`/api/batches/${id}`, { inventory: [], shipments: [] }, 'PATCH')
+        .catch((e: unknown) => console.error('Failed to drain archived batch stock before delete:', e))
+        .finally(() => scheduleSave());
     },
   });
 }

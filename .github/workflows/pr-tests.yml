@@ -31,16 +31,34 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          # No cache: 'npm' — package-lock.json is gitignored in this repo.
+          node-version-file: .nvmrc
+          cache: 'npm'
 
-      - run: npm install
+      - run: npm ci
+
+      # Non-blocking-by-design at the moderate tier: fails ONLY on High/Critical
+      # advisories. The 4 known moderate advisories (googleapis → uuid, DEP-6)
+      # are deferred and won't trip this; a newly-landed High/Critical will.
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
 
       - name: Typecheck
         run: npm run typecheck
 
       - name: Jest API tests
         run: npm test
+
+      # Cache the Playwright browser download keyed on the lockfile (which pins
+      # the playwright version). On a hit the install step below still runs but
+      # only re-installs OS-level --with-deps system packages (not cached),
+      # skipping the ~300MB Chromium download. Cache miss → full install.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

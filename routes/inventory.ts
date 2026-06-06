@@ -337,7 +337,14 @@ router.get('/ritual-completions', asyncHandler(async (req: Request, res: Respons
 router.post('/ritual-completions', asyncHandler(async (req: Request, res: Response) => {
   const { loc, date, completed } = req.body;
   if (!loc || !date) return res.status(400).json({ error: 'loc and date required' });
-  const completedArr: string[] = Array.isArray(completed) ? completed : [];
+  if (loc !== 'west' && loc !== 'centraal') return res.status(400).json({ error: 'invalid loc' });
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'invalid date (expected YYYY-MM-DD)' });
+  }
+  // Only string step-keys, capped — this array is overwritten wholesale (audit SEC-4).
+  const completedArr: string[] = Array.isArray(completed)
+    ? completed.filter((s: unknown): s is string => typeof s === 'string' && s.length <= 100).slice(0, 200)
+    : [];
   await withWriteLock(async () => {
     await prisma.ritualCompletion.upsert({
       where: { loc_date: { loc, date } },

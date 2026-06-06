@@ -4,8 +4,16 @@
 
 const { PrismaClient } = require('@prisma/client');
 
-const PROD_URL = 'postgresql://postgres:dsGlThBYmipITDtgfAVDsBljhbvptouX@centerbeam.proxy.rlwy.net:20242/railway';
-const STAGING_URL = 'postgresql://postgres:QXwFZbYaQhZeeWUqdFUjXCRVhQvEoLgv@shuttle.proxy.rlwy.net:52350/railway';
+// Credentials come from the environment — never commit them (audit S1 / SEC-1).
+// PROD access is read-only by intent; STAGING is wiped and replaced.
+const PROD_URL = process.env.PROD_DATABASE_URL;
+const STAGING_URL = process.env.STAGING_DATABASE_URL;
+
+if (!PROD_URL || !STAGING_URL) {
+  console.error('Set PROD_DATABASE_URL and STAGING_DATABASE_URL before running this script.');
+  console.error('e.g.  PROD_DATABASE_URL="postgresql://..." STAGING_DATABASE_URL="postgresql://..." node scripts/sync-prod-to-staging.js');
+  process.exit(1);
+}
 
 async function main() {
   const prod = new PrismaClient({ datasources: { db: { url: PROD_URL } } });

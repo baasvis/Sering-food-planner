@@ -56,14 +56,13 @@ export let ingredientDbPage = 0;        // current page for pagination
 export const INGREDIENTS_PER_PAGE = 50;
 
 export function updateIngredientSearch(el: HTMLInputElement) {
-  const pos = el.selectionStart;
   ingredientDbSearch = el.value;
   ingredientDbPage = 0;
-  renderOrders();
-  requestAnimationFrame(() => {
-    const input = document.getElementById('ing-db-search') as HTMLInputElement | null;
-    if (input) { input.focus(); input.setSelectionRange(pos, pos); }
-  });
+  // Split-container rule (audit UIUX-6): update only the results container, never
+  // the search input itself, so the caret never jumps and we skip a full
+  // Orders-screen rebuild on every keystroke. The caret-restore rAF workaround
+  // the old code needed is gone with it.
+  updateIngredientDbResults();
 }
 
 export async function loadIngredientDbFull() {
@@ -214,9 +213,16 @@ export function renderIngredientDbTab() {
     ...availableCats.map(c => '<option value="' + esc(c) + '"' + (ingredientDbCatFilter === c ? ' selected' : '') + '>' + esc(c) + '</option>')
   ].join('');
 
+  // Split-container (CLAUDE.md Search/Filter rule, audit UIUX-6): the search
+  // input is rendered ONCE here and never replaced; keystrokes update only
+  // #ingredient-db-results via updateIngredientSearch → updateIngredientDbResults.
+  // The non-text filter controls (type pills, category/status/sort selects,
+  // pagination) still call renderOrders() — they carry no caret to lose and the
+  // category dropdown options depend on the type filter, so a full re-render is
+  // the correct, low-risk path for those.
   let html = `<div>
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <span>Ingredient Database (${S.ingredientDb.length} total, ${filtered.length} shown)</span>
+      <span>Ingredient Database (${S.ingredientDb.length} total, <span id="ing-db-count">${filtered.length}</span> shown)</span>
       <div style="display:flex;gap:8px;align-items:center;">
         <button class="btn btn-sm" onclick="openAddIngredientModal()">+ Add ingredient</button>
         <button class="btn btn-sm" onclick="openStorageLocationsModal()">Storage locations</button>
@@ -250,7 +256,19 @@ export function renderIngredientDbTab() {
         <option value="category"${ingredientDbSort === 'category' ? ' selected' : ''}>Sort: Category</option>
         <option value="supplier"${ingredientDbSort === 'supplier' ? ' selected' : ''}>Sort: Supplier</option>
       </select>
-    </div>`;
+    </div>
+    <div id="ingredient-db-results">${renderIngredientDbResults(filtered)}</div>
+  </div>`;
+  return html;
+}
+
+/** Render only the supplier-import panel + ingredient table + pagination — the
+ *  portion that lives inside #ingredient-db-results. Kept separate from the
+ *  filter bar so a search keystroke can update results without replacing the
+ *  search input (split-container rule, audit UIUX-6). The caller may pass a
+ *  precomputed filtered list to avoid filtering twice on the initial render. */
+function renderIngredientDbResults(filtered: Ingredient[] = getFilteredIngredients()): string {
+  let html = '';
 
   if (supplierUploadData) {
     html += renderSupplierImportPanel();
@@ -323,8 +341,19 @@ export function renderIngredientDbTab() {
     }
   }
 
-  html += '</div>';
   return html;
+}
+
+/** Update ONLY the results container + the "shown" count — never the search
+ *  input (split-container rule, audit UIUX-6). No-op if the ingredient-db tab
+ *  isn't currently mounted. */
+export function updateIngredientDbResults(): void {
+  const el = document.getElementById('ingredient-db-results');
+  if (!el) return;
+  const filtered = getFilteredIngredients();
+  el.innerHTML = renderIngredientDbResults(filtered);
+  const count = document.getElementById('ing-db-count');
+  if (count) count.textContent = String(filtered.length);
 }
 
 export function renderIngredientEditRow(ing: Ingredient) {

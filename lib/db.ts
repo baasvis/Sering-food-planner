@@ -63,33 +63,39 @@ export function validateBatch(b: Batch, prefix = ''): string | null {
     if (!svc.date || typeof svc.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(svc.date)) return `${p}invalid service date (expected YYYY-MM-DD)`;
     if (!VALID_MEALS.includes(svc.meal)) return `${p}invalid service meal`;
   }
-  // Unified-batch model (Task A): inventory + shipments are required arrays.
-  // Per-entry shape checks mirror validateBatch's domain-set discipline so a
-  // bad payload is rejected at the API boundary instead of corrupting JSON.
-  if (!Array.isArray(b.inventory)) return `${p}inventory must be an array`;
-  if (b.inventory.length > 100) return `${p}too many inventory entries (max 100)`;
-  for (let i = 0; i < b.inventory.length; i++) {
-    const e = b.inventory[i] as InventoryEntry;
-    if (!e || typeof e !== 'object') return `${p}inventory[${i}]: must be an object`;
-    if (!VALID_LOCATIONS.includes(e.loc)) return `${p}inventory[${i}]: invalid loc`;
-    if (!VALID_STORAGE.includes(e.storage)) return `${p}inventory[${i}]: invalid storage`;
-    if (typeof e.qty !== 'number' || !Number.isFinite(e.qty) || e.qty < 0 || e.qty > 99999) return `${p}inventory[${i}]: invalid qty`;
-    if (typeof e.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(e.cookDate)) return `${p}inventory[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
+  // Unified-batch model: inventory[] and shipments[] are validated strictly when
+  // PRESENT. They may be absent on a /api/data/patch batch — computePatch omits
+  // them when unchanged so an unrelated edit can't round-trip stale stock over a
+  // concurrent ship/transfer (audit PERF-1); dbUpsertBatches preserves the DB
+  // copy when they're absent. The create and PATCH /:id paths always send them.
+  if (b.inventory !== undefined) {
+    if (!Array.isArray(b.inventory)) return `${p}inventory must be an array`;
+    if (b.inventory.length > 100) return `${p}too many inventory entries (max 100)`;
+    for (let i = 0; i < b.inventory.length; i++) {
+      const e = b.inventory[i] as InventoryEntry;
+      if (!e || typeof e !== 'object') return `${p}inventory[${i}]: must be an object`;
+      if (!VALID_LOCATIONS.includes(e.loc)) return `${p}inventory[${i}]: invalid loc`;
+      if (!VALID_STORAGE.includes(e.storage)) return `${p}inventory[${i}]: invalid storage`;
+      if (typeof e.qty !== 'number' || !Number.isFinite(e.qty) || e.qty < 0 || e.qty > 99999) return `${p}inventory[${i}]: invalid qty`;
+      if (typeof e.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(e.cookDate)) return `${p}inventory[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
+    }
   }
-  if (!Array.isArray(b.shipments)) return `${p}shipments must be an array`;
-  if (b.shipments.length > 50) return `${p}too many shipments (max 50)`;
-  for (let i = 0; i < b.shipments.length; i++) {
-    const s = b.shipments[i] as Shipment;
-    if (!s || typeof s !== 'object') return `${p}shipments[${i}]: must be an object`;
-    if (typeof s.id !== 'string' || !VALID_ID_PATTERN.test(s.id)) return `${p}shipments[${i}]: invalid id`;
-    if (!VALID_LOCATIONS.includes(s.fromLoc)) return `${p}shipments[${i}]: invalid fromLoc`;
-    if (!VALID_LOCATIONS.includes(s.toLoc)) return `${p}shipments[${i}]: invalid toLoc`;
-    if (!VALID_STORAGE.includes(s.storage)) return `${p}shipments[${i}]: invalid storage`;
-    if (typeof s.qty !== 'number' || !Number.isFinite(s.qty) || s.qty < 0 || s.qty > 99999) return `${p}shipments[${i}]: invalid qty`;
-    if (typeof s.sentAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.sentAt)) return `${p}shipments[${i}]: invalid sentAt (expected ISO 8601)`;
-    if (typeof s.arrived !== 'boolean') return `${p}shipments[${i}]: arrived must be boolean`;
-    if (s.arrivedAt !== undefined && (typeof s.arrivedAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.arrivedAt))) return `${p}shipments[${i}]: invalid arrivedAt (expected ISO 8601)`;
-    if (typeof s.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(s.cookDate)) return `${p}shipments[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
+  if (b.shipments !== undefined) {
+    if (!Array.isArray(b.shipments)) return `${p}shipments must be an array`;
+    if (b.shipments.length > 50) return `${p}too many shipments (max 50)`;
+    for (let i = 0; i < b.shipments.length; i++) {
+      const s = b.shipments[i] as Shipment;
+      if (!s || typeof s !== 'object') return `${p}shipments[${i}]: must be an object`;
+      if (typeof s.id !== 'string' || !VALID_ID_PATTERN.test(s.id)) return `${p}shipments[${i}]: invalid id`;
+      if (!VALID_LOCATIONS.includes(s.fromLoc)) return `${p}shipments[${i}]: invalid fromLoc`;
+      if (!VALID_LOCATIONS.includes(s.toLoc)) return `${p}shipments[${i}]: invalid toLoc`;
+      if (!VALID_STORAGE.includes(s.storage)) return `${p}shipments[${i}]: invalid storage`;
+      if (typeof s.qty !== 'number' || !Number.isFinite(s.qty) || s.qty < 0 || s.qty > 99999) return `${p}shipments[${i}]: invalid qty`;
+      if (typeof s.sentAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.sentAt)) return `${p}shipments[${i}]: invalid sentAt (expected ISO 8601)`;
+      if (typeof s.arrived !== 'boolean') return `${p}shipments[${i}]: arrived must be boolean`;
+      if (s.arrivedAt !== undefined && (typeof s.arrivedAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.arrivedAt))) return `${p}shipments[${i}]: invalid arrivedAt (expected ISO 8601)`;
+      if (typeof s.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(s.cookDate)) return `${p}shipments[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
+    }
   }
   return null;
 }
@@ -598,10 +604,36 @@ export async function dbUpsertBatches(batches: Batch[]): Promise<void> {
   }
 }
 
-/** Delete specific batches by ID */
+/**
+ * True when a batch row still holds physical food: settled inventory qty > 0,
+ * or a shipment that has not yet arrived. Mirrors the cannot-delete-with-stock
+ * invariant enforced by DELETE /api/batches/:id (routes/batches.ts).
+ */
+export function batchRowHasStock(row: { inventory: unknown; shipments: unknown }): boolean {
+  const inventory: InventoryEntry[] = Array.isArray(row.inventory) ? (row.inventory as unknown as InventoryEntry[]) : [];
+  const shipments: Shipment[] = Array.isArray(row.shipments) ? (row.shipments as unknown as Shipment[]) : [];
+  const totalQty = inventory.reduce((s, e) => s + (typeof e.qty === 'number' ? e.qty : 0), 0);
+  const pendingQty = shipments.filter(sh => !sh.arrived).reduce((s, sh) => s + (typeof sh.qty === 'number' ? sh.qty : 0), 0);
+  return totalQty > 0 || pendingQty > 0;
+}
+
+/**
+ * Delete specific batches by ID. A batch still holding stock or an in-flight
+ * shipment represents real food and must NOT be deleted — this mirrors the
+ * guard in DELETE /api/batches/:id so the /api/data/patch path can't bypass it
+ * (e.g. an SSE-stale client that didn't see another user cook the batch).
+ * Stock-bearing ids are skipped (not thrown) so the rest of a patch still applies.
+ */
 export async function dbDeleteBatchIds(ids: string[]): Promise<void> {
-  if (ids.length > 0) {
-    await prisma.batch.deleteMany({ where: { id: { in: ids } } });
+  if (ids.length === 0) return;
+  const rows = await prisma.batch.findMany({ where: { id: { in: ids } } });
+  const blockedSet = new Set(rows.filter(batchRowHasStock).map(r => r.id));
+  const safe = ids.filter(id => !blockedSet.has(id));
+  if (blockedSet.size > 0) {
+    console.warn(`[dbDeleteBatchIds] refused to delete ${blockedSet.size} batch(es) still holding stock/shipments: ${[...blockedSet].join(', ')}`);
+  }
+  if (safe.length > 0) {
+    await prisma.batch.deleteMany({ where: { id: { in: safe } } });
   }
 }
 
@@ -705,7 +737,11 @@ export function toRecipeFull(r: NonNullable<RecipeWithIngredients>): RecipeFull 
     storageMethod: r.storageMethod,
     photoUrl: r.photoUrl,
     isComplete: r.isComplete,
-    versions: (r.versions ?? []) as unknown as RecipeVersionSnapshot[],
+    // Ship version METADATA only on the bulk/detail paths — the version panel
+    // shows version/date/changedBy/notes, never the per-version ingredient list.
+    // The heavy snapshots are fetched on demand via GET /recipes/:id/versions
+    // (restore flow). Keeps /api/data + every recipe broadcast small (PERF-5).
+    versions: ((r.versions ?? []) as unknown as RecipeVersionSnapshot[]).map(v => ({ ...v, ingredients: [] })),
     createdBy: r.createdBy,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
@@ -1036,52 +1072,14 @@ export function validateRecipe(r: {
   return null;
 }
 
-/** Recalculate cost for all recipes that use a specific ingredient */
-export async function recalcRecipeCostsForIngredient(ingredientId: string): Promise<number> {
-  const rows = await prisma.recipeIngredientRow.findMany({
-    where: { ingredientId },
-    select: { recipeId: true },
-  });
-  const recipeIds = [...new Set(rows.map(r => r.recipeId))];
-  if (recipeIds.length === 0) return 0;
-
-  const recipes = await prisma.recipe.findMany({
-    where: { id: { in: recipeIds } },
-    include: { ingredients: true },
-  });
-
-  let updated = 0;
-  for (const r of recipes) {
-    const cost = await calcRecipeCost(r.ingredients, r.servingSize, r.recipeVolume, r.yieldType, r.outputCount);
-    if (cost !== r.costPerServing) {
-      await prisma.recipe.update({ where: { id: r.id }, data: { costPerServing: cost } });
-      updated++;
-    }
-  }
-  return updated;
-}
-
 /**
- * Recalculate cost for EVERY recipe in one pass. Used after a bulk ingredient
- * write (supplier-XLSX import / POST /api/ingredients) where pricePer100 may
- * have changed for many rows at once. Audit T19 — calling
- * recalcRecipeCostsForIngredient per row would be ~2N queries; this helper
- * is two reads plus N writes (one per recipe whose cost actually changed).
- *
- * Becomes meaningful only with T19a's FK-preserving bulk POST in place.
- * Pre-T19a the bulk POST wiped recipe→ingredient links so the recalc found
- * zero linked rows for every recipe and produced null. Post-T19a (PR #33)
- * the FKs survive and the recalc produces real numbers.
+ * Recompute costPerServing for the given recipes off a SINGLE batched price-map
+ * fetch (no per-recipe calcRecipeCost findMany — kills the N+1), updating only
+ * rows whose cost actually changed. Shared by recalcRecipeCostsForIngredient
+ * (scoped to one ingredient's recipes) and recalcAllRecipeCosts (audit PERF-7 / P2).
  */
-export async function recalcAllRecipeCosts(): Promise<number> {
-  const recipes = await prisma.recipe.findMany({
-    include: { ingredients: true },
-  });
+async function recalcCostsForRecipes(recipes: NonNullable<RecipeWithIngredients>[]): Promise<number> {
   if (recipes.length === 0) return 0;
-
-  // Pull every linked ingredient's pricePer100 in one query, then reproduce
-  // calcRecipeCost's math in memory — sharing the price map across recipes
-  // avoids the N findManys that calling calcRecipeCost per recipe would do.
   const allIngredientIds = [...new Set(
     recipes.flatMap(r => r.ingredients.filter(i => i.ingredientId && !i.isFlexible).map(i => i.ingredientId as string)),
   )];
@@ -1106,8 +1104,7 @@ export async function recalcAllRecipeCosts(): Promise<number> {
             continue;
           }
           if (!ing.ingredientId) continue;
-          const pricePer100 = priceMap.get(ing.ingredientId) || 0;
-          totalCost += (amountGrams / 100) * pricePer100;
+          totalCost += (amountGrams / 100) * (priceMap.get(ing.ingredientId) || 0);
         }
         newCost = Math.round((totalCost / baseServings) * 100) / 100;
       }
@@ -1118,4 +1115,35 @@ export async function recalcAllRecipeCosts(): Promise<number> {
     }
   }
   return updated;
+}
+
+export async function recalcRecipeCostsForIngredient(ingredientId: string): Promise<number> {
+  const rows = await prisma.recipeIngredientRow.findMany({
+    where: { ingredientId },
+    select: { recipeId: true },
+  });
+  const recipeIds = [...new Set(rows.map(r => r.recipeId))];
+  if (recipeIds.length === 0) return 0;
+  const recipes = await prisma.recipe.findMany({
+    where: { id: { in: recipeIds } },
+    include: { ingredients: true },
+  });
+  return recalcCostsForRecipes(recipes);
+}
+
+/**
+ * Recalculate cost for EVERY recipe in one pass. Used after a bulk ingredient
+ * write (supplier-XLSX import / POST /api/ingredients) where pricePer100 may
+ * have changed for many rows at once. Audit T19 — calling
+ * recalcRecipeCostsForIngredient per row would be ~2N queries; this helper
+ * is two reads plus N writes (one per recipe whose cost actually changed).
+ *
+ * Becomes meaningful only with T19a's FK-preserving bulk POST in place.
+ * Pre-T19a the bulk POST wiped recipe→ingredient links so the recalc found
+ * zero linked rows for every recipe and produced null. Post-T19a (PR #33)
+ * the FKs survive and the recalc produces real numbers.
+ */
+export async function recalcAllRecipeCosts(): Promise<number> {
+  const recipes = await prisma.recipe.findMany({ include: { ingredients: true } });
+  return recalcCostsForRecipes(recipes);
 }

@@ -34,8 +34,12 @@ Create `.env` in the repo root. The file is gitignored.
 | `AUTH_MODE` | **Set on production deploys** | `dev` (default) or `production`. When `production`: server.ts refuses to boot if `GOOGLE_CLIENT_ID` or `ALLOWED_EMAILS` is empty, and `routes/auth.ts` disables the dev-mode bypass. Decoupled from `NODE_ENV` so local `npm run preview` (which sets `NODE_ENV=production` to serve `dist/client`) keeps using dev login. **Set `AUTH_MODE=production` in the Railway env** to enable the boot guard there. |
 | `ANTHROPIC_API_KEY` | Optional | Enables the AI insights cron (data-quality checks summarised by Claude) and the director-only AI recipe assistant. |
 | `DIRECTOR_EMAILS` | Optional | Comma-separated emails that get director-only features (the AI recipe assistant). Defaults to Daan's email if unset; set explicitly in production. |
+| `STAFF_LEAD_EMAILS` | Optional | Comma-separated emails that get the **staff-lead** role — gates the Competencies admin actions (chunk sync, teaching-event deletion, person rename/(de)activate). Distinct from `DIRECTOR_EMAILS`; empty by default (no one has it). |
 | `AI_ANALYSIS_CRON` | Optional | Default `0 7 * * *` (daily 07:00). Standard cron syntax. |
 | `AI_ANALYSIS_MODEL` | Optional | Default `claude-sonnet-4-6`. |
+| `NOTION_TOKEN` | Optional | Notion integration token for the Competencies chunk-library sync. Required together with `NOTION_CHUNKS_DATA_SOURCE_ID`; if either is missing the sync silently no-ops. |
+| `NOTION_CHUNKS_DATA_SOURCE_ID` | Optional | Notion data source (database) ID holding the competency chunks. Paired with `NOTION_TOKEN`. |
+| `COMPETENCY_SYNC_CRON` | Optional | Default `0 5 * * *` (daily 05:00). Schedules the Notion → Postgres chunk pull. Only runs when `NOTION_TOKEN` + `NOTION_CHUNKS_DATA_SOURCE_ID` are set. |
 | `TEBI_EMAIL` / `TEBI_PASSWORD` | Optional | Credentials for ledger 1 (Sering West, default ledger ID 723192). |
 | `TEBI_LEDGER_ID` | Optional | Defaults to 723192 if not set. |
 | `TEBI_LEDGER_ID_2` | Optional | Set to 724466 to also scrape the second ledger (TestTafel + Centraal). |
@@ -133,7 +137,7 @@ npm start
 npm test
 ```
 
-Runs Jest with `@swc/jest` against `DATABASE_URL_TEST`. The setup at `test/setup-env.ts` will refuse to start if you accidentally point it at a production host. The suite spans 13 files in `test/` (unit + API tests).
+Runs Jest with `@swc/jest` against `DATABASE_URL_TEST`. The setup at `test/setup-env.ts` will refuse to start if you accidentally point it at a production host. The suite spans 31 files in `test/` (unit + API tests).
 
 ### End-to-end tests (Playwright)
 
@@ -153,7 +157,7 @@ The e2e suite runs in CI on every PR to main (`.github/workflows/pr-tests.yml`) 
 npm run typecheck
 ```
 
-Runs `tsc --noEmit` on the backend.
+Runs `tsc --noEmit` on both the backend (`typecheck:server`, `tsconfig.server.json`) and the frontend (`typecheck:client`, `tsconfig.json`). Run a single side with `npm run typecheck:server` or `npm run typecheck:client`.
 
 ---
 

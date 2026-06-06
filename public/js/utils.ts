@@ -139,7 +139,18 @@ export function computePatch(): PatchRequest {
   const curBatchIds = new Set(S.batches.map((d: Batch) => d.id));
   for (const d of S.batches) {
     const prev = _lastSaved.batches.get(d.id);
-    if (!prev || prev !== JSON.stringify(d)) patch.batches!.push(d);
+    const cur = JSON.stringify(d);
+    if (prev === cur) continue;                          // unchanged
+    if (!prev) { patch.batches!.push(d); continue; }     // new batch — send full
+    // Existing batch changed. Omit inventory[]/shipments[] when THEY are
+    // unchanged, so an unrelated edit (name/note/services) can't round-trip a
+    // stale stock array and revert a concurrent ship/transfer/cook (audit
+    // PERF-1). The inventory editor changes them for real, so those ride along.
+    const prevObj = JSON.parse(prev) as Batch;
+    const toSend: Record<string, unknown> = { ...d };
+    if (JSON.stringify(prevObj.inventory ?? null) === JSON.stringify(d.inventory ?? null)) delete toSend.inventory;
+    if (JSON.stringify(prevObj.shipments ?? null) === JSON.stringify(d.shipments ?? null)) delete toSend.shipments;
+    patch.batches!.push(toSend as unknown as Batch);
   }
   for (const [id] of _lastSaved.batches) {
     if (!curBatchIds.has(id)) patch.deletedBatches!.push(id);
@@ -198,7 +209,17 @@ export async function doSave(): Promise<void> {
   // while this save is in flight stays dirty and is sent on the next save.
   // (The old code ran takeSnapshot() AFTER the await, rebuilding the snapshot
   // from live state and silently absorbing mid-save edits.)
-  const sentBatches = (patch.batches || []).map(b => [b.id, JSON.stringify(b)] as const);
+  // Record the FULL live batch (not the trimmed wire payload) into the save
+  // snapshot. computePatch() may omit unchanged inventory[]/shipments[] from the
+  // patch (PERF-1), but the server merges those from the existing DB row, so the
+  // post-save state is the full local batch. Storing the trimmed payload would
+  // leave a phantom diff (live batch has the field, snapshot doesn't) and the
+  // save indicator would stick on "Unsaved" forever, re-sending every save
+  // (regression caught by e2e/batch-assign-modal).
+  const sentBatches = (patch.batches || []).map(b => {
+    const full = S.batches.find((x: Batch) => x.id === b.id);
+    return [b.id, JSON.stringify(full ?? b)] as const;
+  });
   const sentDeletedBatches = [...(patch.deletedBatches || [])];
   const sentGuests = patch.guests ? JSON.stringify(patch.guests) : null;
   const sentCaterings = (patch.caterings || []).map(c => [c.id, JSON.stringify(c)] as const);
@@ -537,9 +558,20 @@ export function scheduleNextWeeksSave(): void {
   }, 1500);
 }
 
+// The single #toast region defaults to polite (role="status"). Toggle it to
+// assertive (role="alert") for errors so a screen reader interrupts to announce
+// a save/transport failure (audit UIUX-7), and back to polite for plain toasts.
+function setToastPoliteness(assertive: boolean): void {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.setAttribute('role', assertive ? 'alert' : 'status');
+  t.setAttribute('aria-live', assertive ? 'assertive' : 'polite');
+}
+
 export function toast(msg: string): void {
   const t = document.getElementById('toast');
   if (!t) return;
+  setToastPoliteness(false);
   t.textContent = msg;
   t.className = 'toast show';
   setTimeout(() => t.className = 'toast', 2200);
@@ -548,6 +580,7 @@ export function toast(msg: string): void {
 export function toastError(msg: string): void {
   const t = document.getElementById('toast');
   if (!t) return;
+  setToastPoliteness(true);
   t.textContent = msg;
   t.className = 'toast error show';
   setTimeout(() => t.className = 'toast', 4000);
@@ -556,6 +589,7 @@ export function toastError(msg: string): void {
 export function showUndoToast(msg: string, onUndo: () => void): void {
   const t = document.getElementById('toast');
   if (!t) return;
+  setToastPoliteness(false);
   t.innerHTML = `<span>${msg}</span><button class="toast-undo-btn" type="button">Undo</button>`;
   t.querySelector('.toast-undo-btn')!.addEventListener('click', onUndo);
   t.className = 'toast undo show';
@@ -771,7 +805,12 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   if ((batches && batches.length) || (deletedBatches && deletedBatches.length)) {
     const batchMap = new Map(S.batches.map((b: Batch) => [b.id, b]));
     if (deletedBatches) deletedBatches.forEach((id: string) => batchMap.delete(id));
-    if (batches) batches.forEach((b: Batch) => batchMap.set(b.id, b));
+    // Field-merge so a patch that omits unchanged inventory[]/shipments[]
+    // (audit PERF-1) doesn't strip them from our local copy.
+    if (batches) batches.forEach((b: Batch) => {
+      const existing = batchMap.get(b.id);
+      batchMap.set(b.id, existing ? { ...existing, ...b } : b);
+    });
     S.batches = [...batchMap.values()];
     // Reset batch ingredient toggles so they re-read from updated orderFor
     if (_onBatchesChanged) _onBatchesChanged();
@@ -965,8 +1004,14 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
 // Preserves local diffs so pending saves still detect unsaved changes.
 function updateSnapshotForRemote(msg: RemotePatchMessage): void {
   if (msg.batches) {
+    // Store the MERGED batch (from S.batches after the field-merge in
+    // applyRemotePatch), not the raw remote payload. A remote patch may omit
+    // unchanged inventory[]/shipments[] (PERF-1); storing the trimmed payload
+    // here would leave a phantom diff vs the merged local batch and peg the
+    // receiving client on "Unsaved", re-sending the batch on its next save.
     for (const b of msg.batches) {
-      _lastSaved.batches.set(b.id, JSON.stringify(b));
+      const merged = S.batches.find((x: Batch) => x.id === b.id);
+      _lastSaved.batches.set(b.id, JSON.stringify(merged ?? b));
     }
   }
   if (msg.deletedBatches) {

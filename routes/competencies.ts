@@ -12,7 +12,7 @@
 
 import express, { Request, Response } from 'express';
 import { asyncHandler } from '../lib/config';
-import { prisma, dbAppendLog, withWriteLock } from '../lib/db';
+import { prisma, dbAppendLog, withWriteLock, checkId } from '../lib/db';
 import { addBackendEvent } from './telemetry';
 import { isStaffLeadEmail } from './auth';
 import { syncChunksFromNotion } from '../lib/notion-sync';
@@ -39,6 +39,18 @@ router.post('/events', asyncHandler(async (req: Request, res: Response) => {
   const { id, chunkId, teacherId, learnerId, date, notes } = req.body;
   if (!id || !chunkId || !teacherId || !learnerId || !date) {
     return res.status(400).json({ error: 'id, chunkId, teacherId, learnerId and date are required' });
+  }
+  // Defence-in-depth: ids are client-supplied keys. Kiosk "trust by default" is
+  // about business logic (no teacher!=learner check), not letting arbitrary
+  // strings into the data layer — validate the charset (audit SEC-2/ARCH-7).
+  const idErr = checkId(id, 'id') || checkId(chunkId, 'chunkId')
+    || checkId(teacherId, 'teacherId') || checkId(learnerId, 'learnerId');
+  if (idErr) return res.status(400).json({ error: idErr });
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'invalid date (expected YYYY-MM-DD)' });
+  }
+  if (notes !== undefined && (typeof notes !== 'string' || notes.length > 2000)) {
+    return res.status(400).json({ error: 'invalid notes' });
   }
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   const event = await withWriteLock(() => prisma.teachingEvent.create({
@@ -75,9 +87,16 @@ router.post('/people', asyncHandler(async (req: Request, res: Response) => {
   if (!id || !name || !String(name).trim()) {
     return res.status(400).json({ error: 'id and name are required' });
   }
+  const idErr = checkId(id, 'id');
+  if (idErr) return res.status(400).json({ error: idErr });
+  const personName = String(name).trim();
+  if (personName.length > 100) return res.status(400).json({ error: 'name too long (max 100)' });
+  if (location !== undefined && location !== 'west' && location !== 'centraal') {
+    return res.status(400).json({ error: 'invalid location' });
+  }
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   const person = await withWriteLock(() => prisma.person.create({
-    data: { id, name: String(name).trim(), location: location || 'centraal' },
+    data: { id, name: personName, location: location || 'centraal' },
   }));
   dbAppendLog(user.email, user.name, 'competency-person', `added "${person.name}"`);
   res.json(person);
@@ -93,7 +112,11 @@ router.patch('/people/:id', asyncHandler(async (req: Request, res: Response) => 
   }
   const { name, active } = req.body;
   const data: { name?: string; active?: boolean } = {};
-  if (typeof name === 'string' && name.trim()) data.name = name.trim();
+  if (typeof name === 'string' && name.trim()) {
+    const nm = name.trim();
+    if (nm.length > 100) return res.status(400).json({ error: 'name too long (max 100)' });
+    data.name = nm;
+  }
   if (typeof active === 'boolean') data.active = active;
   if (Object.keys(data).length === 0) {
     return res.status(400).json({ error: 'name or active is required' });

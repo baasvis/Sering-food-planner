@@ -33,6 +33,8 @@ lib/
   recipe-ai.ts         — Claude tool-use loop for the director-only AI recipe assistant (chatStream, exemplar loading)
   recipe-ai-prompt.md  — System prompt for the AI recipe assistant (loaded by lib/recipe-ai.ts)
   telemetry-coverage.ts — Discovers trackEvent() features in public/js, mines telemetry sessions for user journeys, surfaces uncovered features for the weekly e2e coverage agent
+  notion-sync.ts       — One-way sync of the competency chunk library from Notion → Postgres (notionConfigured, syncChunksFromNotion); upsert-only, never deletes
+  notion-markdown.ts   — Pure converter: Notion chunk page block tree → canonical `## `-delimited teaching-guide markdown (unit-testable, no I/O)
 routes/
   auth.ts              — Login, logout, session, requireAuth + requireDirector middleware,
                          POST /auth/request-access (self-service account request),
@@ -50,7 +52,7 @@ routes/
   ingredients.ts       — Ingredient CRUD + stock/target-stock + bulk-stock
   ingredients-import.ts — Hanos XLSX upload (POST /api/ingredients/upload-supplier) + CSV migration
   guests.ts            — Guest history + next-weeks predictions
-  inventory.ts         — Standard inventory (per-location) + storage config + kitchen equipment + prep checklist + activity log
+  inventory.ts         — Standard inventory (per-location) + storage config + kitchen equipment + prep checklist + activity log + cook-rhythm + ritual-completions
   feedback.ts          — User feedback POST/PATCH/list
   events.ts            — SSE live sync: client registry, broadcast to other users on save
   health.ts            — Health check endpoint
@@ -62,6 +64,11 @@ routes/
   coverage.ts          — Bearer-token /api/coverage/snapshot (mounted before requireAuth so the weekly remote agent can fetch without a session cookie)
   access.ts            — Director-only account-access review: GET /api/access/requests + /pending-count,
                          POST /api/access/requests/:id/{approve,deny,revoke}
+  competencies.ts      — Peer-teaching tracker: chunks, people, teaching-event ledger.
+                         GET /api/competencies + POST /events, /people, PATCH /people/:id,
+                         DELETE /events/:id, POST /sync-chunks (admin actions staff-lead gated)
+  supplies.ts          — Toppings/bread/ferment supplies CRUD: GET/POST/PATCH/DELETE /api/supplies,
+                         plus /:id/prep and /:id/stock stock moves (standard ratio + one-off drip-feed)
 scripts/
   fix-raw-amounts.ts          — One-off recipe ingredient backfill
   import-standard-inventory.js — CSV → DB importer
@@ -123,18 +130,41 @@ public/
     feedback.ts        — Feedback form
     feedback-admin.ts  — Feedback admin screen
     team.ts            — Director-only Team screen: review/approve/deny/revoke account-access requests
+    competencies.ts    — Training screen: people × chunks teaching grid, log-event modal, public ledger
+    chunk-guide.ts     — Pure helper: split a chunk's teaching-guide markdown into `## ` sections (shared by competencies.ts)
+    supplies.ts        — "Toppings & bread" screen: standard/one-off supplies editor, per-guest demand + price
+    ritual.ts          — Pure daily-ritual model: per-location step list with derived done(ctx) predicates + clock/phase logic
+    today-panel.ts     — Always-on dashboard "Today" panel: renders ritual.ts as a phase-grouped, deep-linked checklist
     telemetry.ts       — Frontend telemetry collection (errors, screen views, feature usage)
     tutorial.ts        — Guided tutorial system
-test/
+test/                  — 31 *.test.ts files (run `ls test/*.test.ts`). Grouped below by area; keep new tests here.
   api.test.ts          — API integration tests (Jest + @swc/jest)
   batch-recipe-stock-deduct.test.ts — Batch recipe editor stock-deduction logic
+  batch-construction.test.ts — Guard: UI-built Batch literals match the canonical shape
+  batch-delete-guard.test.ts — Regression (CORR-1): /api/data/patch delete-guard
   inventory-helpers.test.ts — Unified-batch inventory/shipment helper functions
+  inventory-disappear-investigation.test.ts — Regression: batches surviving "Do inventory"
+  inventory-modal-stale-index.test.ts — Regression: Do-inventory modal stale-index routing
+  cook-confirm.test.ts — Inventory cook-confirm dish-filter unit tests
   shipment-flow.test.ts — Batch ship / arrive / transfer / cancel flow
   migration.test.ts    — Unified-batch data-migration script
   maintenance.test.ts  — MAINTENANCE_MODE write-gate
   menu-fixer.test.ts   — "Fix My Menu" placeholder algorithm
+  core-demand.test.ts  — Fix-My-Menu demand-calc equivalence guard
+  fmm-bench.test.ts    — Fix-My-Menu scored-engine regression bench
+  planner-pool.test.ts — getPoolBatches location-tab visibility unit tests
+  catering-demand.test.ts — Catering demand-retirement logic
+  closed-services.test.ts — Closed-services demand roll-back
+  guests-carryforward.test.ts — Week-specific guest-count carry-forward
   transport-card.test.ts — Transport card component
   recipe-ai-apply-tool.test.ts — Recipe-AI tool-use apply logic
+  access-request.test.ts — Account-access request + director approval flow
+  competencies-api.test.ts — Competencies API round-trip (people, events, screen-load)
+  chunk-guide.test.ts  — Teaching-guide markdown `## `-section splitter
+  notion-markdown.test.ts — Notion block tree → teaching-guide markdown converter
+  ritual.test.ts       — Daily-ritual model (public/js/ritual.ts) unit tests
+  supplies.test.ts     — Supplies API CRUD + stock-move smoke test
+  supply-demand.test.ts — Supply per-guest demand / price helpers
   location-state.test.ts — Frontend setGlobalLocation / restoreGlobalLocation unit tests
   stock-location.test.ts — Frontend getDbStockForLoc / hasDbStockEntryForLoc unit tests
   redact-secrets.test.ts — lib/config redactSecrets / safeErrMsg unit tests
@@ -166,7 +196,7 @@ npm run dev            # Vite on :5173 (frontend HMR) + tsx on :3000 (backend)
 npm run build          # Vite build + tsc backend → dist/
 npm run preview        # Build + serve on :3000 (single port, for Claude preview)
 npm start              # node dist/server/server.js (production)
-npm test               # Jest with @swc/jest. Unit + API tests (13 files in test/).
+npm test               # Jest with @swc/jest. Unit + API tests (31 files in test/).
                        # Requires DATABASE_URL_TEST pointing at a scratch DB —
                        # test/setup-env.ts refuses to run against production.
                        # See "Testing" section below.
@@ -190,6 +220,7 @@ Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`). `ANTHROPIC_API_KEY` also powers the director-only AI recipe assistant — `DIRECTOR_EMAILS` (comma-separated; defaults to Daan's email) controls who can use it.
 Optional: `MAINTENANCE_MODE=1` puts the app in read-only mode (writes return 503, reads/SSE keep working) for deploy windows — see `prisma/migrations/DEPLOY.md`.
 Optional: `COVERAGE_API_KEY` for the weekly e2e coverage agent — required for `GET /api/coverage/snapshot` (returns 503 if unset). The endpoint is mounted before `requireAuth` so a remote agent can fetch with a `Bearer <key>` header instead of a session cookie.
+Optional (Competencies): `STAFF_LEAD_EMAILS` (comma-separated) gates the Competencies admin actions — chunk sync, teaching-event deletion, person rename/(de)activate. This is the staff-lead role, distinct from and independent of `DIRECTOR_EMAILS`; both default to no one having the role until set. The Notion chunk-library sync needs `NOTION_TOKEN` + `NOTION_CHUNKS_DATA_SOURCE_ID` (both required — `notionConfigured()` is false and the sync silently no-ops if either is missing); `COMPETENCY_SYNC_CRON` (default `0 5 * * *`) schedules the daily pull.
 Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Ledger 1 (Sering West, default ledger `723192`). For the second account/ledger (TestTafel + Centraal, `724466`), set `TEBI_LEDGER_ID_2=724466` and `TEBI_EMAIL_2` + `TEBI_PASSWORD_2`.
 Note on the `_2` env vars: only `scripts/tebi-sync-worker.js` reads them. The app-level `tebiConfigured` check (`lib/tebi-sync.ts`) and `runTebiSync` refusal logic look at the primary `TEBI_EMAIL`/`TEBI_PASSWORD` only. If `TEBI_LEDGER_ID_2` is set but the `_2` credentials are not, the worker silently falls back to primary creds — only valid if one Tebi account spans both ledgers (no longer the case as of 2026-04-26). Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` to bypass discovery if needed.
 
@@ -263,11 +294,15 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Prep checklist: `GET/POST /api/prep-checklist?loc=west&date=YYYY-MM-DD`
 - Kitchen equipment: `GET/POST /api/kitchen-equipment` — pots, gas/induction burners, big-burner threshold (single JSON row)
 - Closed services: `GET/POST /api/closed-services` — per-location open/closed service schedule (recurring weekday rules + per-date overrides, single JSON row). A service can be marked closed (no seating) while the guest/staff demand registered to it still gets cooked: its demand rolls onto the previous open service at the same location. Implemented as a once-per-rebuild roll-map in `public/js/core.ts` (`buildRollMap`/`getEffectiveGuests`/`previousOpenService`) that all demand consumers read; edited inline on the Guests screen (per-cell open/closed control), and closed slots render greyed with a red "Closed" label on the week planner.
+- Cook rhythm: `GET/POST /api/cook-rhythm` — single JSON row of editable Fix-My-Menu per-weekday rules (`{ days: { Mon: {soup,main,chefs}, ... } }`); the frontend merges it over built-in defaults
+- Ritual completions: `GET/POST /api/ritual-completions?loc=west&date=YYYY-MM-DD` — per-(location,date) array of done step-keys for the dashboard "Today" panel; only signal-less steps are stored (the rest are derived). Modelled on prep-checklist; rows pruned after a few days
 - Activity log: `GET /api/log` (last 50 actions, oldest first)
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
 - Finance: `GET /api/finance/revenue?start=...&end=...&location=...`, `GET /api/finance/products?...`, `POST /api/finance/sync`, `POST /api/finance/sync-cancel`, `GET /api/finance/sync-status`. Status auto-hydrates from telemetry on first call after a restart.
 - Admin: `POST /api/admin/analyze`, `GET /api/admin/insights`, `PATCH /api/admin/insights/:id`, `GET /api/admin/telemetry/summary`
 - Recipe AI: `POST /api/recipe-ai/chat` — director-only SSE chat for the AI recipe assistant (gated by `DIRECTOR_EMAILS`; requires `ANTHROPIC_API_KEY`, else 503)
+- Competencies (Training): `GET /api/competencies` (chunks + people + events + `isStaffLead`), `POST /api/competencies/events`, `POST /api/competencies/people` (both open to any signed-in user — kiosk model), `PATCH /api/competencies/people/:id`, `DELETE /api/competencies/events/:id`, `POST /api/competencies/sync-chunks` (last three staff-lead gated via `STAFF_LEAD_EMAILS`). Chunk content pulls one-way from Notion (`lib/notion-sync.ts`)
+- Supplies (Toppings & bread): `GET/POST /api/supplies`, `PATCH/DELETE /api/supplies/:id`, `POST /api/supplies/:id/prep` (add to pool + stamp lastMakeDate), `POST /api/supplies/:id/stock` (set absolute; zeroing a one-off auto-archives it). `kind` is `standard` (per-guest ratio + prep horizon) or `oneoff` (drip-feed per service)
 - Access requests: `POST /api/auth/request-access` (unauthenticated — verifies a Google token, then records/looks-up a pending request; one row per email). Director-only review: `GET /api/access/requests`, `GET /api/access/pending-count`, `PATCH /api/access/requests/:id` (edit first/last name), `POST /api/access/requests/:id/{approve,deny,revoke}`. The effective login allowlist is `ALLOWED_EMAILS` (env, the bootstrap backbone) ∪ `access_requests` rows with status `approved` — see `isEmailAllowed()` in routes/auth.ts. Approving grants access with no env edit / redeploy; the prod fail-closed boot guard is unchanged. A denied login auto-records a pending request rather than dead-ending. The request form collects first + last name (a director can edit it via PATCH); approving also creates/links a Training (competencies) `Person` — deduped by name — so approved accounts seed the training roster. Stored in the `access_requests` table (`AccessRequest` model). Surfaced by the director-only **Team** screen + a dashboard "waiting for access" badge.
 - Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.ts sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders. Snapshot updates are targeted (only remote items), so unsaved local changes survive incoming patches.
 

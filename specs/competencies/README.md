@@ -13,7 +13,6 @@ If you're new to this:
 3. **`2026-05-15-sering-dictionary-v0.md`** — the seed phrase dictionary. Three phrases. Constitutional content.
 
 4. **The chunk drafts** — examples of what the module's content actually looks like:
-   - `2026-05-15-chunk-dishpit-running.md` — practical chunk (taught at a workstation)
    - `2026-05-15-chunk-hospitality.md` — sit-down chunk, original general version
    - `2026-05-15-chunk-hospitality-sering.md` — sit-down chunk, recalibrated to Sering's register
 
@@ -38,4 +37,9 @@ These documents are expected to evolve. When updating:
 ## Status
 
 **Date of this snapshot:** 2026-05-15
-**Module status:** Pre-implementation. Design complete, awaiting first build.
+**Module status:** Implemented (v1 + Notion sync). The module shipped — the
+implementation lives in `routes/competencies.ts`, `public/js/competencies.ts`,
+the `Person` / `Chunk` / `TeachingEvent` Prisma models, and the Notion chunk
+sync in `lib/notion-sync.ts`. This folder remains the source of truth for the
+*intent* (spec, content principles, dictionary); the design docs below predate
+the build.

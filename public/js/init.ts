@@ -215,17 +215,26 @@ export async function initApp() {
   // Start live sync so other users' changes appear instantly
   connectLiveSync();
   // Auto-refresh every 60s so the UI updates when a service deadline passes (13:45 / 20:15)
-  // Only rebuild planner data silently; re-render only non-dashboard views to avoid flash
-  setInterval(() => {
-    rebuildPlanner();
-    const active = document.querySelector('.screen.active');
-    if (active && active.id !== 'screen-dashboard') {
-      const scrollY = window.scrollY;
-      rerenderCurrentView();
-      requestAnimationFrame(() => window.scrollTo(0, scrollY));
-    }
-  }, 60000);
+  // Only rebuild planner data silently; re-render only non-dashboard views to avoid flash.
+  // Guarded so repeated logout→login in one tab doesn't stack timers (audit ARCH-3).
+  if (!_autoRefreshStarted) {
+    _autoRefreshStarted = true;
+    setInterval(() => {
+      rebuildPlanner();
+      const active = document.querySelector('.screen.active');
+      if (active && active.id !== 'screen-dashboard') {
+        const scrollY = window.scrollY;
+        rerenderCurrentView();
+        requestAnimationFrame(() => window.scrollTo(0, scrollY));
+      }
+    }, 60000);
+  }
 }
+
+// Guard: initApp() runs on every login and doLogout doesn't reload the page,
+// so without this module-level flag each logout→login would stack another 60s
+// auto-refresh timer (audit ARCH-3).
+let _autoRefreshStarted = false;
 
 // On page load: build nav, then check for existing session or show login
 export async function bootstrap() {

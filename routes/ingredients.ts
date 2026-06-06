@@ -42,8 +42,34 @@ const router = express.Router();
 // Mount import sub-router (upload-supplier)
 router.use('/', ingredientsImportRouter);
 
-// Helper: load ingredients from Postgres or fall back to seed file
+// Helper: load ingredients (SLIM shape) from Postgres or fall back to seed file.
+// Drops the heavy priceHistory/nutrition JSON columns the slim wire endpoints
+// (GET /api/ingredients + the AI catalog) never return (audit PERF-8). The DB
+// editor uses loadIngredientsFull() below.
 export async function loadIngredients(): Promise<Ingredient[]> {
+  try {
+    const rows = await prisma.ingredient.findMany({
+      select: {
+        id: true, name: true, supplierName: true, types: true, category: true,
+        measureMode: true, unit: true, supplier: true, orderCode: true, orderUnit: true,
+        orderPrice: true, orderUnitSize: true, priceLevel: true, pricePer100: true,
+        priceAlert: true, storageLocations: true, stock: true, targetStock: true,
+        allergens: true, notes: true, active: true,
+      },
+    });
+    if (rows.length > 0) return rows as unknown as Ingredient[];
+  } catch (e: unknown) {
+    console.error('DB ingredient load error:', e instanceof Error ? e.message : 'Unknown error');
+  }
+  if (fs.existsSync(INGREDIENTS_SEED)) {
+    return JSON.parse(fs.readFileSync(INGREDIENTS_SEED, 'utf8'));
+  }
+  return [];
+}
+
+// Full ingredient rows (all columns incl priceHistory/nutrition) — for the
+// ingredient-DB editor (GET /api/ingredients/full) only.
+export async function loadIngredientsFull(): Promise<Ingredient[]> {
   try {
     const rows = await prisma.ingredient.findMany();
     if (rows.length > 0) return rows as unknown as Ingredient[];
@@ -85,7 +111,7 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
 
 // Full ingredient list (for the ingredient DB editor tab)
 router.get('/full', asyncHandler(async (_req: Request, res: Response) => {
-  const ingredients = await loadIngredients();
+  const ingredients = await loadIngredientsFull();
   // ~2100 rows, large JSON payload, changes rarely — the DB editor screen
   // is the only consumer. 1424ms avg (AI insight #31) was transfer-dominated
   // even after gzip. 30s browser cache eliminates repeat fetches when
@@ -389,7 +415,10 @@ router.post('/:id', requireScreenEdit('orders'), asyncHandler(async (req: Reques
   // Audit T5: failures previously only hit stderr (same shape as the 31-day
   // silent finance-sync incident). Surface via addBackendEvent so the AI
   // insights cron / telemetry summary picks up sustained failure.
-  recalcRecipeCostsForIngredient(req.params.id as string).catch((e: unknown) => {
+  // Serialize the recalc's recipe.update writes with other writers so they can't
+  // clobber a concurrent recipe-editor cost write (audit PERF-7 pt2). Still
+  // fire-and-forget — the response doesn't await it, so saves stay fast.
+  withWriteLock(() => recalcRecipeCostsForIngredient(req.params.id as string)).catch((e: unknown) => {
     const message = e instanceof Error ? e.message : 'Unknown error';
     console.error(`Failed to recalculate recipe costs for ingredient ${req.params.id}:`, message);
     addBackendEvent('error', 'recipe_cost_recalc_failed', {

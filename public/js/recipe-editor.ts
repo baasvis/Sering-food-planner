@@ -1536,8 +1536,8 @@ function buildBatchRecipeHTML(br: BatchRecipeState, batch: Batch): string {
       </div>
 
       <label class="br-deduct-row">
-        <input type="checkbox" ${br.deductStock ? 'checked' : ''} onchange="brToggleDeduct(this.checked)" />
-        Deduct ingredients from stock after saving
+        <input type="checkbox" ${batch.stockDeducted ? 'checked disabled' : (br.deductStock ? 'checked' : '')} onchange="brToggleDeduct(this.checked)" />
+        ${batch.stockDeducted ? 'Stock already deducted for this batch' : 'Deduct ingredients from stock after saving'}
       </label>
 
       <div class="modal-actions">
@@ -1681,11 +1681,19 @@ export function brClose() {
   closeModal();
 }
 
+/** Decide stock deduction on a batch-recipe save. Once a batch's ingredient
+ *  stock has been deducted, never deduct again, and never let the flag regress
+ *  to false on a later save that leaves the box unticked (audit CORR-2). */
+export function resolveStockDeduction(alreadyDeducted: boolean, deductChecked: boolean): { willDeduct: boolean; nextFlag: boolean } {
+  return { willDeduct: deductChecked && !alreadyDeducted, nextFlag: alreadyDeducted || deductChecked };
+}
+
 export async function brSave() {
   if (!_brState) return;
   const br = _brState;
   const batch = S.batches.find(b => b.id === br.batchId);
   if (!batch) return;
+  const { willDeduct, nextFlag } = resolveStockDeduction(!!batch.stockDeducted, br.deductStock);
 
   const actualIngredients = br.ingredients
     .filter(i => !i.removed && i.resolved && i.ingredientId)
@@ -1701,7 +1709,7 @@ export async function brSave() {
   const patch: Record<string, unknown> = {
     actualIngredients,
     cookNotes: br.cookNotes,
-    stockDeducted: br.deductStock,
+    stockDeducted: nextFlag,
   };
   let cookedInventory: InventoryEntry[] | null = null;
   if (cookingNow) {
@@ -1723,13 +1731,13 @@ export async function brSave() {
 
     batch.actualIngredients = actualIngredients;
     batch.cookNotes = br.cookNotes;
-    batch.stockDeducted = br.deductStock;
+    batch.stockDeducted = nextFlag;
     if (cookingNow) {
       batch.cookDate = patch.cookDate as string;
       if (cookedInventory) batch.inventory = cookedInventory;
     }
 
-    if (br.deductStock) {
+    if (willDeduct) {
       // /api/ingredients/stock/bulk SETS absolute stock per ingredient (it's
       // the stocktake endpoint), so we read current stock locally, subtract
       // the cooked amount, and send the new absolute value. (T18 fix.)

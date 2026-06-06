@@ -67,6 +67,10 @@ export default defineConfig({
       // Make the dev-mode user (dev@local) a staff-lead so the Competencies
       // admin view is reachable in e2e/competencies.spec.ts.
       STAFF_LEAD_EMAILS: 'dev@local',
+      // Make the dev-mode user a director too, so the director-only screens
+      // (Team / access review, and the Recipe-AI "AI helper" entry) build into
+      // the nav and are reachable in e2e/navigation.spec.ts.
+      DIRECTOR_EMAILS: 'dev@local',
       PORT: String(PORT),
       // The compiled server reads static files from dist/client/ when
       // NODE_ENV === 'production' (see app.ts). We're running the production

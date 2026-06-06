@@ -3,12 +3,27 @@
    guests-served-per-unit + horizon; one-offs drip-feed unitsPerService until
    depleted. See plan + public/js/supplies.ts. */
 
+/* Horizontal-scroll wrapper so the 9-column table doesn't squish/clip on
+   phones (audit UIUX-4). Mirrors competencies.css's .comp-grid-wrap. */
+#screen-supplies .supplies-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 #screen-supplies .supplies-table th {
   font-weight: 500;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   padding: 6px 4px;
+}
+
+/* On narrow screens the 9 columns can't compress past readability; give the
+   table a sensible min-width and let .supplies-table-wrap scroll it. */
+@media (max-width: 600px) {
+  #screen-supplies .supplies-table {
+    min-width: 720px;
+  }
 }
 
 #screen-supplies .supplies-table td {
