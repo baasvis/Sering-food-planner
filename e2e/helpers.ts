@@ -69,3 +69,20 @@ export async function deleteRecipesByNamePrefix(page: Page, prefix: string): Pro
     );
   }, prefix);
 }
+
+/**
+ * Deletes any drinks created by e2e tests (name starts with the given prefix).
+ * Mirrors deleteRecipesByNamePrefix. Best-effort cleanup.
+ */
+export async function deleteDrinksByNamePrefix(page: Page, prefix: string): Promise<void> {
+  if (!page.url().startsWith('http')) return;
+  await page.evaluate(async (p) => {
+    const res = await fetch('/api/drinks?includeArchived=1');
+    if (!res.ok) return;
+    const all = (await res.json()) as Array<{ id: string; name: string }>;
+    const matches = all.filter((d) => d.name && d.name.startsWith(p));
+    await Promise.all(
+      matches.map((d) => fetch(`/api/drinks/${d.id}`, { method: 'DELETE' })),
+    );
+  }, prefix);
+}

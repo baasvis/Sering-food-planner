@@ -19,8 +19,10 @@ import { broadcast } from './events';
 import {
   toDrink, toDrinkSupplier, buildStockMap, stockByLocationFor, getDrinkConfig,
   mergeConfig, validateDrinkInput, buildDrinkData, buildRowData, recalcAllDrinkCosts,
-  normalizeFormats, DrinkInput,
+  normalizeFormats, VALID_LOCATIONS, DrinkInput,
 } from '../lib/drinks';
+
+const SEED_BOOTSTRAP_AREA = 'Uncounted (pre-stocktake)';
 
 const router = express.Router();
 
@@ -113,6 +115,61 @@ router.post('/recalculate-costs', asyncHandler(async (req: Request, res: Respons
   dbAppendLog(user.email, user.name, 'drink-recalc-costs', `recomputed ${updated} drink costs`);
   broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
   res.json({ updated });
+}));
+
+// ─── Stock (per-area counts; pool per location = Σ areas) ───────────────────
+// Reads + counts are open to all authed users (GOAL §5). Defined BEFORE /:id so
+// the param route doesn't shadow /stock.
+
+router.get('/stock', asyncHandler(async (req: Request, res: Response) => {
+  const location = String(req.query.location || '');
+  const rows = await prisma.drinkStock.findMany({
+    where: location ? { location } : {},
+    orderBy: [{ drinkId: 'asc' }, { area: 'asc' }],
+  });
+  res.json(rows.map(r => ({
+    id: r.id, drinkId: r.drinkId, location: r.location, area: r.area, qty: r.qty,
+    countedBy: r.countedBy, countedAt: r.countedAt ? r.countedAt.toISOString() : null,
+  })));
+}));
+
+interface StockBulkInput { location?: string; area?: string; items?: Array<{ drinkId?: string; qty?: number }> }
+
+/** Bulk stocktake save: set each counted drink's qty for (location, area).
+ *  Consumes the seed "Uncounted" bootstrap row for that drink+location so the
+ *  pool isn't double-counted on the first real count. */
+router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
+  const { location, area, items } = (req.body || {}) as StockBulkInput;
+  if (typeof location !== 'string' || !VALID_LOCATIONS.includes(location)) throw new AppError(400, 'invalid location');
+  if (typeof area !== 'string' || !area || area.length > 100) throw new AppError(400, 'invalid area');
+  if (!Array.isArray(items) || items.length === 0) throw new AppError(400, 'no items to save');
+  if (items.length > 500) throw new AppError(400, 'too many items (max 500)');
+  const user = actor(req);
+  const now = new Date();
+  const areaKey = area.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'area';
+  let saved = 0;
+  await withWriteLock(async () => {
+    await prisma.$transaction(async (txc) => {
+      for (const it of items) {
+        const id = it.drinkId;
+        if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(id)) continue;
+        const qty = Number(it.qty);
+        if (!Number.isFinite(qty) || qty < 0 || qty > 1_000_000) continue;
+        await txc.drinkStock.upsert({
+          where: { drinkId_location_area: { drinkId: id, location, area } },
+          create: { id: `${id}-${location}-${areaKey}`, drinkId: id, location, area, qty, countedBy: user.email, countedAt: now },
+          update: { qty, countedBy: user.email, countedAt: now },
+        });
+        if (area !== SEED_BOOTSTRAP_AREA) {
+          await txc.drinkStock.deleteMany({ where: { drinkId: id, location, area: SEED_BOOTSTRAP_AREA } });
+        }
+        saved++;
+      }
+    });
+  });
+  dbAppendLog(user.email, user.name, 'drink-stocktake', `${saved} counts @ ${location}/${area}`);
+  broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
+  res.json({ saved });
 }));
 
 // ─── Suppliers ──────────────────────────────────────────────────────────────

@@ -71,6 +71,11 @@ export default defineConfig({
       // (Team / access review, and the Recipe-AI "AI helper" entry) build into
       // the nav and are reachable in e2e/navigation.spec.ts.
       DIRECTOR_EMAILS: 'dev@local',
+      // …and a drinks manager so the drinks e2e specs can drive the
+      // manager-gated catalogue CRUD / stocktake flows. (Director already
+      // implies manager via isManagerEmail; this is belt-and-suspenders and
+      // documents the intent.)
+      MANAGER_EMAILS: 'dev@local',
       PORT: String(PORT),
       // The compiled server reads static files from dist/client/ when
       // NODE_ENV === 'production' (see app.ts). We're running the production

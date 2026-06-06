@@ -75,6 +75,20 @@ export const DRINK_RECIPE_CATEGORIES: DrinkCategoryDef[] = [
  *  service cards). */
 export const NON_SELLABLE_CATEGORIES = new Set(['consumables', 'glassware', 'coffee-tea-stock', 'building-block']);
 
+/** Drink storage areas per location (DRINKS_DOMAIN §3). West areas are the real
+ *  ones from the inventory sheet (condensed); Mediamatic/centraal are
+ *  placeholders staff rename. Kept as a constant (not in the food storage-config)
+ *  so drink areas don't pollute the food storage picker — see DECISIONS.md [m4]. */
+export const DRINK_STORAGE_AREAS: Record<string, string[]> = {
+  west: ['Keg Storage', 'Drinks Storage', 'Tea & Liquor Shelf', 'Shelf Under Bar', 'Walk-In FoH', 'Freezer', 'Kitchen Back Storage', 'Wine Lowboy'],
+  centraal: ['Bar fridge', 'Cellar', 'Dry storage', 'Wine storage'],
+};
+
+/** Areas for a location (falls back to west). */
+export function drinkAreasFor(loc: string): string[] {
+  return DRINK_STORAGE_AREAS[loc] || DRINK_STORAGE_AREAS.west;
+}
+
 /** Look up a category label across catalogue + recipe definitions. */
 export function drinkCategoryLabel(key: string): string {
   const all = [...DRINK_CATALOGUE_CATEGORIES, ...DRINK_RECIPE_CATEGORIES];

@@ -232,6 +232,29 @@
 .ml-red   { color: #d23f3f; } .ml-dot.ml-red   { background: #d23f3f; }
 .ml-none, .ml-dot.ml-none { color: #999; background: #bbb; }
 
+/* ── Stocktake ── */
+.stk-mode { display: flex; gap: 6px; margin-bottom: 8px; }
+.stk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+.stk-pick {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 14px 16px; font-size: 15px; text-align: left;
+  border: 1px solid var(--border, #ddd); border-radius: 10px;
+  background: var(--card, #fff); color: var(--text, #222); cursor: pointer;
+}
+.stk-pick:hover { border-color: var(--loc-accent, #7c3aed); }
+.stk-due { background: var(--loc-accent, #7c3aed); color: #fff; font-size: 10px; padding: 1px 6px; border-radius: 999px; margin-left: 6px; }
+.stk-count-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.stk-count-head h3 { margin: 0; }
+.stk-area-sel { margin-left: auto; font-size: 12px; color: var(--text2, #777); display: flex; flex-direction: column; gap: 2px; }
+.stk-area-sel select { padding: 6px 8px; border: 1px solid var(--border, #ccc); border-radius: 7px; background: var(--input-bg, #fff); color: var(--text, #222); }
+.stk-rows { margin: 10px 0; }
+.stk-row { display: flex; align-items: center; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--border, #eee); }
+.stk-row-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.stk-row-name > span:first-child { font-weight: 500; }
+.stk-input { width: 72px; font-size: 18px; text-align: center; padding: 8px; border: 1px solid var(--border, #ccc); border-radius: 8px; background: var(--input-bg, #fff); color: var(--text, #222); }
+.stk-savebar { position: sticky; bottom: 0; background: var(--bg, #fff); padding: 14px 0; border-top: 2px solid var(--border, #e0ded7); }
+.stk-savebar .btn { width: 100%; padding: 12px; font-size: 15px; }
+
 @media (max-width: 640px) {
   .df-grid { grid-template-columns: 1fr; }
   .df-format-row { grid-template-columns: 1fr 1fr; }

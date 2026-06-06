@@ -16,6 +16,7 @@ import {
   DRINK_LOCATIONS, DRINK_GLASS_TYPES, DRINK_CATALOGUE_CATEGORIES, drinkCategoryLabel,
 } from './drinks-constants';
 import { renderRecipesTab } from './drinks-recipe';
+import { renderDrinksStocktakeTab } from './drinks-stocktake';
 import type { Drink, DrinkServingFormat, DrinkSupplier } from '@shared/types';
 
 function isManager(): boolean { return !!S.user?.isManager; }
@@ -25,6 +26,7 @@ function drinkTabs(): { key: string; label: string }[] {
   return [
     { key: 'catalogue', label: 'Catalogue' },
     { key: 'recipes', label: 'Recipes' },
+    { key: 'stocktake', label: 'Stocktake' },
     { key: 'suppliers', label: 'Suppliers' },
   ];
 }
@@ -56,6 +58,7 @@ function renderDrinkTabBody(): void {
   const body = document.getElementById('drinks-tab-body');
   if (!body) return;
   if (S.drinksSubTab === 'recipes') { renderRecipesTab(); return; }
+  if (S.drinksSubTab === 'stocktake') { renderDrinksStocktakeTab(); return; }
   if (S.drinksSubTab === 'suppliers') { body.innerHTML = suppliersHtml(); return; }
   body.innerHTML = catalogueShellHtml();
   updateCatalogueResults();

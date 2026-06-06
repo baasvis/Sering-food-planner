@@ -106,3 +106,22 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
   ~6.6×) are rough starting points — spec-sanctioned ("fall back to default") and
   manager-editable. Suggested prices flag genuinely low-margin drinks (e.g.
   Mezcal Margarita at €9.50 shows red vs the category target).
+
+## M4 — stocktake
+
+- **[m4] Drink storage areas are a constant** (`DRINK_STORAGE_AREAS` in
+  drinks-constants.ts), per location, NOT added to the food storage-config —
+  adding kegs/wine-lowboy to the food storage picker would pollute it. §9's
+  "reuse storage-config" touch-point is optional; revisit if staff want to edit
+  drink areas in-app.
+- **[m4] Stocktake consumes the seed bootstrap row.** Counts are stored per
+  (drink, location, area); on the first real count of a drink+location the seed
+  `"Uncounted (pre-stocktake)"` row is deleted so the pool isn't double-counted.
+  Pool = Σ area rows.
+- **[m4] Stocktake save is open to all** (counts are an all-user action, §5);
+  `POST /api/drinks/stock/bulk` takes `{location, area, items:[{drinkId,qty}]}`.
+- **[m4] playwright.config sets `MANAGER_EMAILS: 'dev@local'`** on the e2e
+  webServer (mirroring the existing `STAFF_LEAD_EMAILS`) so the dev/e2e user can
+  drive manager-gated catalogue CRUD + stocktake.
+- **[m4] Catalogue-CRUD e2e written here** (deferred from M2 per the GOAL "e2e
+  from M4 on" rule), alongside the stocktake spec. 3 specs green.
