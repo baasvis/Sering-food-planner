@@ -319,3 +319,27 @@ and `drinks(bar/stocktake/orders/suppliers/photo)`.
   design tokens so light/dark + per-location accent still apply.
 - **Menu print formats (deferred)** — page-size/template options await Daan
   re-sending the bar menu as a PNG/JPG (the PDF couldn't be rendered in-sandbox).
+
+## Feedback round 3 — 2026-06-06 (.docx menu + stocktake bugs)
+
+- **Stocktake — set area inline** — added a per-row storage-area `<select>` on the
+  overview (`PATCH /api/drinks/:id/area`; the existing `/active` toggle was also
+  fixed to *preserve* `area`, which it had been dropping). Changing it re-groups
+  the row.
+- **Stocktake — count-by-area bug** — `countList()` in area mode returned
+  `allStockableDrinks()` (every drink in every area); now `drinksForArea()` filters
+  to drinks whose home area at the location matches the picked area.
+- **Stocktake — auto-save** — removed the bottom "Save counts" button; each
+  In-stock cell saves on change (`drinkStkSaveOne` → `/stock/bulk` for that drink's
+  area) with a brief green flash.
+- **Menu formats** — read the attached `.docx` (PowerShell zip extract): it's an
+  **A5, monospace Inconsolata** bar menu — section headers, `Name  €glass | €bottle`,
+  italic notes, social footer. Also searched Daan's Drive (Drive MCP) and found the
+  same A5 style ("Menu a5 - week 30/12") plus a distinct two-column style
+  ("Drinks_Menu_Two_Column_Large.pdf"). Implemented in the menu designer:
+  **page size A4/A5**, **template Classic (serif) / Bar (monospace=Inconsolata via
+  Google Fonts)**, an optional **footer** line, and the print route now joins all
+  per-format prices (`€x | €y`). Two-column-large left as a possible future template.
+- **e2e** — `drinks-stocktake.spec` rewritten to seed a drink with a home area and
+  assert the overview auto-save (the by-area-filter fix made the old "pick first
+  area" assumption empty). `drinks-order` already self-seeds (round 2).
