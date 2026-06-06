@@ -189,6 +189,23 @@
 }
 .df-section legend { font-size: 12px; font-weight: 700; color: var(--text2, #777); padding: 0 6px; text-transform: uppercase; letter-spacing: .03em; }
 
+/* Collapsible foldout sections (Supplier & ordering, Serving) for easier oversight */
+.df-fold > summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--text2, #777); text-transform: uppercase; letter-spacing: .03em; list-style: none; display: flex; align-items: center; gap: 6px; }
+.df-fold > summary::-webkit-details-marker { display: none; }
+.df-fold > summary::before { content: '▸'; transition: transform .15s; font-size: 11px; }
+.df-fold[open] > summary::before { transform: rotate(90deg); }
+.df-fold[open] > summary { margin-bottom: 10px; }
+.df-formats-wrap { margin-top: 10px; }
+.df-sub-label { display: block; font-size: 12px; color: var(--text2, #888); margin: 0 0 6px; font-weight: 600; }
+
+/* + Add drink type chooser */
+.add-choose-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0 4px; }
+.add-choose { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; padding: 16px; border: 1px solid var(--border, #ddd); border-radius: 12px; background: var(--card, #fff); cursor: pointer; }
+.add-choose:hover { border-color: var(--loc-accent, #7c3aed); }
+.add-choose-emoji { font-size: 26px; }
+.add-choose strong { font-size: 15px; color: var(--text, #222); }
+@media (max-width: 560px) { .add-choose-grid { grid-template-columns: 1fr; } }
+
 .df-format-row {
   display: grid;
   grid-template-columns: 1.4fr 0.7fr 1.2fr repeat(2, 0.9fr) auto;
@@ -395,3 +412,50 @@
   .df-format-row { grid-template-columns: 1fr 1fr; }
   .rf-row { grid-template-columns: 1fr 1fr; }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   VISUAL POLISH — on-brand pass: per-category accents, depth, section headers.
+   Uses the app's design tokens so it follows light/dark + per-location accent.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Per-category accent colour, surfaced wherever an element carries [data-cat]. */
+[data-cat]                    { --cat: var(--text2, #888); }
+[data-cat="beer"]             { --cat: #c98a1b; }
+[data-cat="wine"]             { --cat: #9a2d43; }
+[data-cat="spirits"]          { --cat: #6d28d9; }
+[data-cat="cocktail"]         { --cat: #be185d; }
+[data-cat="soft"]             { --cat: #0e7fa6; }
+[data-cat="homemade-na"]      { --cat: #0f9d6b; }
+[data-cat="coffee-drink"]     { --cat: #8a5a2b; }
+[data-cat="coffee-tea-stock"] { --cat: #8a5a2b; }
+[data-cat="building-block"]   { --cat: #6a8f1e; }
+[data-cat="consumables"]      { --cat: #6b7280; }
+[data-cat="glassware"]        { --cat: #6b7280; }
+
+/* Sub-tab bar: a touch more presence + hover affordance. */
+.drinks-tab { border-radius: 8px 8px 0 0; transition: background .15s, color .15s; }
+.drinks-tab:hover:not(.on) { background: var(--bg2, #f7f6f3); color: var(--text, #222); }
+.drinks-tab.on { background: var(--loc-accent-bg, rgba(0,0,0,.04)); }
+
+/* Bar: category-tinted group titles, card top-accent + depth. */
+.bar-group-title { color: var(--cat); border-bottom-color: color-mix(in srgb, var(--cat) 35%, var(--border, #ddd)); }
+.bar-card { border-top: 3px solid var(--cat); box-shadow: 0 1px 2px rgba(0,0,0,.05); transition: box-shadow .15s; }
+.bar-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.09); }
+.bar-card-price { color: var(--cat); }
+
+/* Cards across tabs get subtle depth + a hover lift. */
+.ord-card, .drink-supplier-card, .ord-shortfall, .stk-area-group { box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.drink-supplier-card, .ord-shortfall { transition: box-shadow .15s; }
+.drink-supplier-card:hover, .ord-shortfall:hover { box-shadow: 0 4px 12px rgba(0,0,0,.08); }
+
+/* Section headers (Open orders / To make / Assortments …) get an accent tick. */
+.ord-h { display: flex; align-items: center; gap: 8px; }
+.ord-h::before { content: ''; width: 4px; height: 14px; border-radius: 2px; background: var(--loc-accent, #7c3aed); display: inline-block; flex: none; }
+
+/* Catalogue + overview tables: row hover for scannability. */
+.drinks-table tbody tr:hover { background: var(--bg2, #f7f6f3); }
+
+/* AI PDF import modal */
+.drink-import .imp-upload { display: flex; gap: 10px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+.imp-table input:not([type=checkbox]), .imp-table select { width: 100%; padding: 5px 7px; border: 1px solid var(--border, #ccc); border-radius: 6px; background: var(--input-bg, #fff); color: var(--text, #222); }
+.imp-table .imp-name { min-width: 150px; }

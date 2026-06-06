@@ -12,8 +12,10 @@ test.describe('Drinks catalogue', () => {
     await loginAsDev(page);
     await page.locator('.nav-btn[data-screen="drinks"]').click();
 
-    // Catalogue is the default sub-tab. Open the add form (manager-only button).
+    // Catalogue is the default sub-tab. "+ Add drink" first asks which kind;
+    // choose "Bought drink" to reach the catalogue form.
     await page.getByTestId('drink-add-btn').click();
+    await page.getByTestId('add-choose-catalogue').click();
     await expect(page.getByTestId('drink-form')).toBeVisible();
 
     const name = `${PREFIX}${Date.now()}`;

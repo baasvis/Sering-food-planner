@@ -98,7 +98,8 @@ function catalogueShellHtml(): string {
   const cats = catalogueCategoriesPresent();
   return `
     <div class="drinks-toolbar">
-      ${isManager() ? `<button class="btn btn-primary" data-testid="drink-add-btn" onclick="openDrinkForm()">+ Add drink</button>` : ''}
+      ${isManager() ? `<button class="btn btn-primary" data-testid="drink-add-btn" onclick="openAddDrinkChooser()">+ Add drink</button>` : ''}
+      ${isManager() ? `<button class="btn" data-testid="drink-import-btn" onclick="openDrinkImport()">📄 Import PDF</button>` : ''}
       <input class="drinks-search" id="drinks-cat-search" data-testid="drinks-search" placeholder="Search drinks…" value="${esc(S.drinksSearch)}" oninput="drinksSetCatSearch(this.value)">
       <div class="drinks-loc-toggle" data-testid="drinks-loc-toggle">
         ${DRINK_LOCATIONS.map(l => `<button class="lc ${f.location === l.key ? 'on' : ''}" data-loc="${l.key}" onclick="drinksSetCatLocation('${l.key}')">${esc(l.label)}</button>`).join('')}
@@ -432,6 +433,29 @@ export function deleteSupplier(id: string): void {
 interface DrinkFormState { id: string; isNew: boolean; formats: DrinkServingFormat[] }
 let _form: DrinkFormState | null = null;
 
+/** "+ Add drink" now asks which kind, so cocktails / recipe drinks can be added
+ *  here too (not only from the Recipes tab). Routes to the matching form. */
+export function openAddDrinkChooser(): void {
+  if (!isManager()) { toastError('Manager access required.'); return; }
+  showModal(`<div class="drink-form drink-add-chooser" data-testid="drink-add-chooser">
+    <h3>Add a drink</h3>
+    <p class="muted small">What kind of drink is it?</p>
+    <div class="add-choose-grid">
+      <button class="add-choose" type="button" data-testid="add-choose-catalogue" onclick="closeModal(); openDrinkForm()">
+        <span class="add-choose-emoji">🍺</span>
+        <strong>Bought drink</strong>
+        <span class="muted small">Beer, wine, spirits, soft, coffee &amp; tea — has a supplier and an order unit.</span>
+      </button>
+      <button class="add-choose" type="button" data-testid="add-choose-recipe" onclick="closeModal(); openDrinkRecipeForm()">
+        <span class="add-choose-emoji">🍸</span>
+        <strong>Recipe drink</strong>
+        <span class="muted small">Cocktail, homemade non-alc, coffee drink, or a building-block syrup — made from ingredients.</span>
+      </button>
+    </div>
+    <div class="modal-actions"><button class="btn" type="button" onclick="closeModal()">Cancel</button></div>
+  </div>`);
+}
+
 export function openDrinkForm(id?: string): void {
   if (!isManager()) { toastError('Manager access required to edit the catalogue.'); return; }
   const existing = id ? (S.drinks || []).find(d => d.id === id) : null;
@@ -518,10 +542,10 @@ function dynamicSectionsHtml(cat: string, d: Drink | null): string {
     out.push(`<input id="df-abv" type="hidden" value="${d ? v(d.abv) : '0'}"><input id="df-btw" type="hidden" value="${v(d?.btwRate)}">`);
   }
 
-  // Supplier & ordering — everything is bought, so always shown.
+  // Supplier & ordering — everything is bought, so always shown (foldout).
   out.push(`
-    <fieldset class="df-section">
-      <legend>Supplier &amp; ordering</legend>
+    <details class="df-section df-fold">
+      <summary>Supplier &amp; ordering</summary>
       <div class="df-grid">
         <label class="df-field">Supplier
           <input id="df-supplier" list="df-supplier-list" value="${v(d?.supplier)}">
@@ -549,7 +573,7 @@ function dynamicSectionsHtml(cat: string, d: Drink | null): string {
           <input id="df-costNote" value="${v(d?.costNote)}">
         </label>
       </div>
-    </fieldset>`);
+    </details>`);
 
   // Wine info — only for wine (origin + grapes + tasting notes).
   if (isWine) {
@@ -578,8 +602,8 @@ function dynamicSectionsHtml(cat: string, d: Drink | null): string {
       ? 'e.g. tall glass over ice with lime — pairs with spicy or fried dishes'
       : 'e.g. chilled, no ice, in a stemmed glass';
     out.push(`
-    <fieldset class="df-section">
-      <legend>Serving</legend>
+    <details class="df-section df-fold" open>
+      <summary>Serving &amp; prices</summary>
       <div class="df-grid">
         <label class="df-field">Serve temperature
           <select id="df-servingTemp">
@@ -591,12 +615,12 @@ function dynamicSectionsHtml(cat: string, d: Drink | null): string {
           <textarea id="df-serviceInstructions" rows="2" placeholder="${placeholder}">${v(d?.serviceInstructions)}</textarea>
         </label>
       </div>
-    </fieldset>
-    <fieldset class="df-section">
-      <legend>Serving formats &amp; prices</legend>
-      <div id="df-formats"></div>
-      <button class="btn btn-sm" type="button" onclick="drinkFormAddFormat()">+ Add format</button>
-    </fieldset>`);
+      <div class="df-formats-wrap">
+        <span class="df-sub-label">Serving formats &amp; prices</span>
+        <div id="df-formats"></div>
+        <button class="btn btn-sm" type="button" onclick="drinkFormAddFormat()">+ Add format</button>
+      </div>
+    </details>`);
   }
 
   // Per-location stock target ("Needed") + availability — always.
@@ -796,6 +820,96 @@ export function deleteDrink(id: string): void {
       }
     },
   });
+}
+
+// ── AI PDF import (manager only): scan a menu/price-list → review → bulk add ───
+
+interface ImportRow { name: string; category: string; subtype?: string; abv?: number | null; price?: number | null }
+let _importItems: ImportRow[] = [];
+
+export function openDrinkImport(): void {
+  if (!isManager()) { toastError('Manager access required.'); return; }
+  _importItems = [];
+  showModal(`<div class="drink-form drink-import" data-testid="drink-import">
+    <h3>Import drinks from a PDF</h3>
+    <p class="muted small">Upload a menu or supplier price-list PDF — it's scanned for products &amp; prices; review and tick what to add to the catalogue.</p>
+    <div class="imp-upload">
+      <input type="file" id="imp-file" accept="application/pdf" data-testid="imp-file">
+      <button class="btn btn-primary" type="button" data-testid="imp-scan" onclick="drinkImportScan()">Scan PDF</button>
+    </div>
+    <div id="imp-results"></div>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="closeModal()">Close</button>
+      <button class="btn btn-primary" type="button" id="imp-commit-btn" data-testid="imp-commit" style="display:none;" onclick="drinkImportCommit()">Add selected</button>
+    </div>
+  </div>`);
+}
+
+export async function drinkImportScan(): Promise<void> {
+  const fileEl = document.getElementById('imp-file') as HTMLInputElement | null;
+  const file = fileEl?.files?.[0];
+  if (!file) { toastError('Choose a PDF first.'); return; }
+  const results = document.getElementById('imp-results');
+  if (results) results.innerHTML = '<div class="muted small" style="padding:10px;">Scanning the PDF… this can take a few seconds.</div>';
+  try {
+    const fd = new FormData();
+    fd.append('pdf', file);
+    const r = await fetch('/api/drinks/import/scan', { method: 'POST', body: fd, credentials: 'include' });
+    if (r.status === 503) throw new Error('AI import isn’t set up on this server yet (no Anthropic API key).');
+    if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || 'scan failed');
+    const data = await r.json() as { items: ImportRow[] };
+    _importItems = Array.isArray(data.items) ? data.items : [];
+    renderImportResults();
+  } catch (e: unknown) {
+    if (results) results.innerHTML = '';
+    toastError('Scan failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+function renderImportResults(): void {
+  const results = document.getElementById('imp-results');
+  const commitBtn = document.getElementById('imp-commit-btn');
+  if (!results) return;
+  if (_importItems.length === 0) {
+    results.innerHTML = '<div class="drinks-empty">No products found in that PDF.</div>';
+    if (commitBtn) commitBtn.style.display = 'none';
+    return;
+  }
+  results.innerHTML = `
+    <p class="muted small">${_importItems.length} found — untick any you don't want, fix the name / category / price, then add.</p>
+    <div class="drinks-table-wrap"><table class="drinks-table imp-table">
+      <thead><tr><th></th><th>Name</th><th>Category</th><th class="num">Price €</th></tr></thead>
+      <tbody>${_importItems.map((it, i) => `<tr>
+        <td><input type="checkbox" class="imp-cb" data-i="${i}" checked></td>
+        <td><input class="imp-name" data-i="${i}" value="${esc(it.name)}"></td>
+        <td><select class="imp-cat" data-i="${i}">${DRINK_CATALOGUE_CATEGORIES.map(c => `<option value="${c.key}" ${c.key === it.category ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select></td>
+        <td class="num"><input class="imp-price" data-i="${i}" type="number" step="0.01" min="0" value="${it.price != null ? it.price : ''}" style="width:80px;text-align:right;"></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  if (commitBtn) commitBtn.style.display = '';
+}
+
+export async function drinkImportCommit(): Promise<void> {
+  const items: ImportRow[] = [];
+  for (const cb of Array.from(document.querySelectorAll<HTMLInputElement>('.imp-cb'))) {
+    if (!cb.checked) continue;
+    const i = cb.dataset.i;
+    const name = (document.querySelector(`.imp-name[data-i="${i}"]`) as HTMLInputElement)?.value.trim();
+    if (!name) continue;
+    const category = (document.querySelector(`.imp-cat[data-i="${i}"]`) as HTMLSelectElement)?.value || 'soft';
+    const priceStr = (document.querySelector(`.imp-price[data-i="${i}"]`) as HTMLInputElement)?.value;
+    items.push({ name, category, price: priceStr === '' || priceStr == null ? null : Number(priceStr) });
+  }
+  if (items.length === 0) { toastError('Nothing selected.'); return; }
+  try {
+    const res = await apiPost('/api/drinks/import/commit', { items }) as { created: number };
+    toast(`${res.created} drink${res.created === 1 ? '' : 's'} added`);
+    closeModal();
+    await loadDrinks();
+    renderDrinkTabBody();
+  } catch (e: unknown) {
+    toastError('Could not add: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
 }
 
 // Self-register so navigate.ts can dispatch without importing this module.

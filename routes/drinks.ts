@@ -24,6 +24,7 @@ import {
 } from '../lib/drinks';
 import { receivedStockDeltas } from '../shared/drink-order';
 import { producedUnits, consumedBuildingBlocks, expiryDate } from '../shared/drink-production';
+import { scanMenuPdf, importConfigured, ImportItem } from '../lib/drinks-import';
 
 // Pseudo storage areas the stocktake reconciles away when a real count lands:
 // seed bootstrap, order-receiving intake, and fresh production. A real count of
@@ -34,6 +35,7 @@ const PRODUCTION_AREA = 'Made (fresh)';
 
 const router = express.Router();
 const upload = multer({ limits: { fileSize: 2 * 1024 * 1024 } }); // 2MB max, mirrors recipe photos
+const pdfUpload = multer({ limits: { fileSize: 15 * 1024 * 1024 } }); // menus / price-list PDFs for AI import
 
 // Final-product photo mimetypes (audit S8: whitelist — no SVG, which can carry script).
 const DRINK_PHOTO_MIME: Record<string, string> = {
@@ -773,6 +775,55 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   dbAppendLog(user.email, user.name, 'drink-create', `created drink "${input.name}" (${input.mode})`);
   broadcast(user.email, 'patch', { user: user.name, drinks: [shape] });
   res.json(shape);
+}));
+
+// ── AI menu/price-list import: scan a PDF → reviewable product list ───────────
+router.post('/import/scan', pdfUpload.single('pdf'), asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  if (!importConfigured()) throw new AppError(503, 'AI import is not configured (ANTHROPIC_API_KEY unset).');
+  const file = (req as Request & { file?: { mimetype: string; buffer: Buffer } }).file;
+  if (!file) throw new AppError(400, 'No PDF uploaded');
+  if ((file.mimetype || '').toLowerCase() !== 'application/pdf') throw new AppError(400, 'Please upload a PDF.');
+  const items = await scanMenuPdf(Buffer.from(file.buffer).toString('base64'));
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-import-scan', `scanned a PDF — ${items.length} products found`);
+  res.json({ items });
+}));
+
+// Bulk-create the reviewed/edited items as catalogue drinks (one recalc at the end).
+router.post('/import/commit', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const body = req.body as { items?: ImportItem[] };
+  const items = Array.isArray(body.items) ? body.items.filter(i => i && typeof i.name === 'string' && i.name.trim()) : [];
+  if (items.length === 0) throw new AppError(400, 'No items to add.');
+  if (items.length > 200) throw new AppError(400, 'Too many items in one import (max 200).');
+  const created = await withWriteLock(async () => {
+    const ids: string[] = [];
+    await prisma.$transaction(async (txc) => {
+      for (const it of items) {
+        const id = 'drink-' + crypto.randomUUID();
+        const price = typeof it.price === 'number' ? it.price : null;
+        const input: DrinkInput = {
+          id, mode: 'catalogue', name: it.name.trim(), category: typeof it.category === 'string' ? it.category : 'soft',
+          subtype: typeof it.subtype === 'string' ? it.subtype : '', abv: typeof it.abv === 'number' ? it.abv : 0,
+          btwRate: null, status: 'draft', sellable: true, supplier: '', orderUnit: '', orderUnitMl: null,
+          packNote: '', itemId: null, deposit: 0, costPrice: null, costNote: '',
+          formats: price != null ? [{ name: 'serve', volumeMl: 0, price: { west: price, centraal: price } }] : [],
+          locations: {}, info: {}, tebiProductNames: [],
+        };
+        validateDrinkInput(input, true);
+        const data = buildDrinkData(input);
+        await txc.drink.create({ data: { ...(data as Prisma.DrinkUncheckedCreateInput), id, archived: false } });
+        ids.push(id);
+      }
+    });
+    await recalcAllDrinkCosts();
+    return ids;
+  });
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-import-commit', `imported ${created.length} drinks from a PDF`);
+  broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
+  res.json({ created: created.length });
 }));
 
 // ── Final-product photo (mirrors recipe photos): bytes in DB, served by URL ───

@@ -76,7 +76,7 @@ function updateBarResults(): void {
   });
   wrap.innerHTML = cats.map(cat => {
     const items = (groups.get(cat) || []).sort((a, b) => a.name.localeCompare(b.name));
-    return `<section class="bar-group">
+    return `<section class="bar-group" data-cat="${esc(cat)}">
       <h3 class="bar-group-title">${esc(drinkCategoryLabel(cat))} <span class="bar-group-count">${items.length}</span></h3>
       <div class="bar-cards">${items.map(barCardHtml).join('')}</div>
     </section>`;
@@ -120,7 +120,7 @@ function barCardHtml(d: Drink): string {
     row('Notes', d.serviceInstructions);
   }
 
-  return `<div class="bar-card" data-testid="bar-card" data-id="${esc(d.id)}">
+  return `<div class="bar-card" data-testid="bar-card" data-cat="${esc(cat)}" data-id="${esc(d.id)}">
     ${d.photoUrl ? `<img class="bar-card-photo" src="${esc(d.photoUrl)}" alt="${esc(d.name)}" loading="lazy">` : ''}
     <div class="bar-card-head">
       <div class="bar-card-name">${esc(d.name)}${d.subtype ? `<span class="bar-card-sub">${esc(d.subtype)}</span>` : ''}</div>
