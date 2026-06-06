@@ -13,8 +13,13 @@ import { showModal, closeModal, esc } from './modal';
 import { pushUndo } from './undo';
 import { registerRenderer } from './navigate';
 import {
-  DRINK_LOCATIONS, DRINK_GLASS_TYPES, DRINK_CATALOGUE_CATEGORIES, drinkCategoryLabel,
+  DRINK_LOCATIONS, DRINK_GLASS_TYPES, DRINK_SERVING_TEMPS, DRINK_CATALOGUE_CATEGORIES,
+  NON_SELLABLE_CATEGORIES, drinkCategoryLabel,
 } from './drinks-constants';
+import {
+  makeCostContext, drinkTotalCostExBtw, effectiveBtw, targetMarkupFor, actualMarkup,
+} from '@shared/drink-cost';
+import type { CostContext } from '@shared/drink-cost';
 import { renderRecipesTab } from './drinks-recipe';
 import { renderDrinksStocktakeTab } from './drinks-stocktake';
 import { renderDrinksOrdersTab } from './drinks-order';
@@ -84,6 +89,10 @@ function catalogueCategoriesPresent(): { key: string; label: string }[] {
   return DRINK_CATALOGUE_CATEGORIES.filter(c => present.has(c.key)).map(c => ({ key: c.key, label: c.label }));
 }
 
+/** Show inactive-at-location drinks too (off by default so the location view is
+ *  clean; on so a manager can re-activate a hidden drink — see catalogue #7). */
+let _showInactive = false;
+
 function catalogueShellHtml(): string {
   const f = S.drinksFilters;
   const cats = catalogueCategoriesPresent();
@@ -91,6 +100,10 @@ function catalogueShellHtml(): string {
     <div class="drinks-toolbar">
       ${isManager() ? `<button class="btn btn-primary" data-testid="drink-add-btn" onclick="openDrinkForm()">+ Add drink</button>` : ''}
       <input class="drinks-search" id="drinks-cat-search" data-testid="drinks-search" placeholder="Search drinks…" value="${esc(S.drinksSearch)}" oninput="drinksSetCatSearch(this.value)">
+      <div class="drinks-loc-toggle" data-testid="drinks-loc-toggle">
+        ${DRINK_LOCATIONS.map(l => `<button class="lc ${f.location === l.key ? 'on' : ''}" data-loc="${l.key}" onclick="drinksSetCatLocation('${l.key}')">${esc(l.label)}</button>`).join('')}
+      </div>
+      <label class="drinks-show-inactive"><input type="checkbox" ${_showInactive ? 'checked' : ''} onchange="drinksToggleShowInactive(this.checked)"> Show inactive</label>
     </div>
     <div class="drinks-filter-bar">
       <button class="fc ${f.category === 'all' ? 'on' : ''}" onclick="drinksSetCatCategory('all')">All</button>
@@ -114,6 +127,27 @@ export function drinksSetCatCategory(cat: string): void {
   updateCatalogueResults();
 }
 
+/** West/Centraal toggle: scope the Needed/Stock/Price/Cost columns to one
+ *  location and hide drinks not active there. Updates only the toggle highlight
+ *  + results (search input stays put per the Search/Filter rule). */
+export function drinksSetCatLocation(loc: string): void {
+  S.drinksFilters.location = loc;
+  document.querySelectorAll('.drinks-loc-toggle .lc').forEach(b => {
+    b.classList.toggle('on', (b as HTMLElement).dataset.loc === loc);
+  });
+  updateCatalogueResults();
+}
+
+export function drinksToggleShowInactive(on: boolean): void {
+  _showInactive = on;
+  updateCatalogueResults();
+}
+
+/** Active at a location: explicit `active:false` hides it; missing entry = active. */
+function activeAtLoc(d: Drink, loc: string): boolean {
+  return d.locations?.[loc]?.active !== false;
+}
+
 /** Price summary for a drink at the current location: "glass €5.50 · bottle €30". */
 function formatPriceSummary(d: Drink, loc: string): string {
   const parts = (d.formats || [])
@@ -128,9 +162,11 @@ function formatPriceSummary(d: Drink, loc: string): string {
 export function updateCatalogueResults(): void {
   const container = document.getElementById('drinks-cat-results');
   if (!container) return;
-  const loc = S.currentLoc || 'west';
+  const loc = S.drinksFilters.location || 'west';
+  const mgr = isManager();
   let list = (S.drinks || []).filter(d => d.mode === 'catalogue');
   if (S.drinksFilters.category !== 'all') list = list.filter(d => d.category === S.drinksFilters.category);
+  if (!_showInactive) list = list.filter(d => activeAtLoc(d, loc));
   const q = S.drinksSearch.trim().toLowerCase();
   if (q) {
     list = list.filter(d =>
@@ -140,26 +176,35 @@ export function updateCatalogueResults(): void {
   }
   list = [...list].sort((a, b) => a.category === b.category ? a.name.localeCompare(b.name) : a.category.localeCompare(b.category));
 
+  const locLabel = DRINK_LOCATIONS.find(l => l.key === loc)?.label || loc;
+
   if (list.length === 0) {
-    container.innerHTML = `<div class="drinks-empty">No drinks${q ? ' match your search' : ''}.</div>`;
+    container.innerHTML = `<div class="drinks-empty">No drinks${q ? ' match your search' : (_showInactive ? '' : ` active at ${esc(locLabel)}`)}.</div>`;
     return;
   }
 
-  const mgr = isManager();
+  const ctx = S.drinkConfig ? makeCostContext(S.drinks || [], [], S.drinkConfig) : null;
+
   const rows = list.map(d => {
     const stock = d.stockByLocation?.[loc];
     const par = d.locations?.[loc]?.par;
-    const parStock = `${par != null ? par : '–'} / ${stock != null ? round1(stock) : '–'}`;
+    const active = activeAtLoc(d, loc);
     const btw = effBtw(d);
-    return `<tr data-testid="drink-row" data-id="${esc(d.id)}">
+    const cp = ctx ? catalogueCostPct(d, loc, ctx) : null;
+    const costCell = cp
+      ? `<span class="${cp.over ? 'cost-over' : 'cost-ok'}" title="cost as % of price — target ≤ ${cp.targetPct.toFixed(0)}%">${cp.pct.toFixed(0)}%</span>`
+      : '<span class="muted">—</span>';
+    return `<tr data-testid="drink-row" data-id="${esc(d.id)}" class="${active ? '' : 'drink-inactive'}">
       <td class="drink-name">${esc(d.name)}${d.status === 'published' ? ' <span class="drink-pub" title="Published">●</span>' : ''}${d.subtype ? `<div class="muted small">${esc(d.subtype)}</div>` : ''}</td>
       <td>${esc(drinkCategoryLabel(d.category))}</td>
       <td>${esc(d.supplier || '—')}</td>
-      <td class="num">${d.abv ? d.abv + '%' : '—'}</td>
+      <td class="num">${d.abv ? round1(d.abv) + '%' : '—'}</td>
       <td class="num" title="BTW">${btw}%</td>
-      <td class="num" title="par / stock @ ${esc(loc)}">${parStock}</td>
+      <td class="num" title="target level (par) @ ${esc(locLabel)}">${par != null ? round1(par) : '<span class="muted">–</span>'}</td>
+      <td class="num" title="in stock @ ${esc(locLabel)}">${stock != null ? round1(stock) : '<span class="muted">–</span>'}</td>
       <td>${formatPriceSummary(d, loc)}</td>
-      <td class="num">${d.deposit ? '€' + d.deposit.toFixed(2) : '—'}</td>
+      <td class="num">${costCell}</td>
+      <td class="num"><input type="checkbox" class="drink-active-cb" data-testid="drink-active-cb" ${active ? 'checked' : ''} ${mgr ? '' : 'disabled'} onchange="drinkToggleActive('${esc(d.id)}')" title="Active at ${esc(locLabel)}"></td>
       ${mgr ? `<td class="drink-actions">
         <button class="btn btn-sm" data-testid="drink-edit-btn" onclick="openDrinkForm('${esc(d.id)}')">Edit</button>
         <button class="btn btn-sm btn-danger" onclick="deleteDrink('${esc(d.id)}')">✕</button>
@@ -171,13 +216,57 @@ export function updateCatalogueResults(): void {
     <div class="drinks-table-wrap">
       <table class="drinks-table" data-testid="drinks-catalogue-table">
         <thead><tr>
-          <th>Name</th><th>Category</th><th>Supplier</th><th class="num">ABV</th>
-          <th class="num">BTW</th><th class="num">Par/Stock</th><th>Price (${esc(loc)})</th><th class="num">Deposit</th>
+          <th>Name</th><th>Category</th><th>Supplier</th><th class="num">Alcohol %</th>
+          <th class="num">BTW</th><th class="num" title="target level to keep on hand">Needed</th>
+          <th class="num">Stock</th><th>Price (${esc(locLabel)})</th>
+          <th class="num" title="cost as % of sales price">Cost %</th><th class="num">Active</th>
           ${mgr ? '<th></th>' : ''}
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
+}
+
+/** Cost as % of (ex-BTW) sales price for a catalogue drink at loc, with the
+ *  category target % and whether we're over it (cost too high → red). Uses the
+ *  same serve format the cost engine picks. Null when not derivable. */
+function catalogueCostPct(d: Drink, loc: string, ctx: CostContext): { pct: number; targetPct: number; over: boolean } | null {
+  const cfg = S.drinkConfig;
+  if (!cfg) return null;
+  const costExBtw = drinkTotalCostExBtw(d, ctx, loc);
+  if (!(costExBtw > 0)) return null;
+  const fmts = d.formats || [];
+  const priced = fmts.find(f => f.price?.[loc] != null) || fmts[0];
+  const priceInclBtw = priced?.price?.[loc];
+  if (priceInclBtw == null) return null;
+  const btw = effectiveBtw(d.abv, d.btwRate, cfg);
+  const mk = actualMarkup(priceInclBtw, btw, costExBtw);
+  if (mk == null || mk <= 0) return null;
+  const pct = 100 / mk;
+  const target = targetMarkupFor(d.category, cfg);
+  const targetPct = target > 0 ? 100 / target : 100;
+  return { pct, targetPct, over: pct > targetPct + 0.5 };
+}
+
+/** Inline catalogue tickbox: flip a drink's active flag at the current toggle
+ *  location and persist via the focused endpoint (manager-gated). Optimistic. */
+export async function drinkToggleActive(id: string): Promise<void> {
+  if (!isManager()) { toastError('Manager access required.'); return; }
+  const loc = S.drinksFilters.location || 'west';
+  const d = (S.drinks || []).find(x => x.id === id);
+  if (!d) return;
+  const cur = activeAtLoc(d, loc);
+  const next = !cur;
+  const par = d.locations?.[loc]?.par ?? null;
+  d.locations = { ...(d.locations || {}), [loc]: { par, active: next } };
+  updateCatalogueResults();
+  try {
+    await apiPost(`/api/drinks/${id}/active`, { location: loc, active: next }, 'PATCH');
+  } catch (e: unknown) {
+    d.locations = { ...(d.locations || {}), [loc]: { par, active: cur } };
+    updateCatalogueResults();
+    toastError('Could not update: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
 }
 
 function round1(n: number): number { return Math.round(n * 10) / 10; }
@@ -239,7 +328,6 @@ export function openDrinkForm(id?: string): void {
 function buildDrinkFormHtml(d: Drink | null): string {
   const cat = d?.category || 'beer';
   const catDef = DRINK_CATALOGUE_CATEGORIES.find(c => c.key === cat) || DRINK_CATALOGUE_CATEGORIES[0];
-  const info = d?.info || {};
   const v = (x: string | number | null | undefined) => x == null ? '' : esc(String(x));
   return `
   <div class="drink-form" data-testid="drink-form">
@@ -258,13 +346,6 @@ function buildDrinkFormHtml(d: Drink | null): string {
         <input id="df-subtype" list="df-subtype-list" value="${v(d?.subtype)}">
         <datalist id="df-subtype-list">${catDef.subtypes.map(s => `<option value="${esc(s)}">`).join('')}</datalist>
       </label>
-      <label class="df-field">ABV %
-        <input id="df-abv" type="number" step="0.1" min="0" max="100" value="${d ? v(d.abv) : '5'}" oninput="drinkFormBtwHint()">
-      </label>
-      <label class="df-field">BTW %
-        <input id="df-btw" type="number" step="1" min="0" max="100" value="${v(d?.btwRate)}" placeholder="auto">
-        <span class="df-hint" id="df-btw-hint"></span>
-      </label>
       <label class="df-field df-check">
         <input id="df-sellable" type="checkbox" ${d ? (d.sellable ? 'checked' : '') : 'checked'}> Sellable
       </label>
@@ -273,6 +354,51 @@ function buildDrinkFormHtml(d: Drink | null): string {
       </label>
     </div>
 
+    <div id="df-dynamic">${dynamicSectionsHtml(cat, d)}</div>
+
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" data-testid="drink-save-btn" type="button" onclick="saveDrinkForm()">${d ? 'Save changes' : 'Add drink'}</button>
+    </div>
+  </div>`;
+}
+
+/** The fields shown depend on the category, so a beer doesn't drown in wine
+ *  fields and a wine surfaces origin + tasting notes (catalogue #2). Hidden
+ *  inputs keep the save path uniform for fields a type doesn't show. */
+function dynamicSectionsHtml(cat: string, d: Drink | null): string {
+  const info = d?.info || {};
+  const v = (x: string | number | null | undefined) => x == null ? '' : esc(String(x));
+  const isAlcoholic = cat === 'beer' || cat === 'wine' || cat === 'spirits';
+  const isWine = cat === 'wine';
+  const isSoft = cat === 'soft';
+  const sellable = !NON_SELLABLE_CATEGORIES.has(cat);
+  const out: string[] = [];
+
+  // Basics: alcohol % (alcoholic types) + BTW (sellable types). Non-shown values
+  // ride along as hidden inputs so saveDrinkForm reads a consistent set.
+  if (sellable) {
+    out.push(`
+    <fieldset class="df-section">
+      <legend>Basics</legend>
+      <div class="df-grid">
+        ${isAlcoholic
+          ? `<label class="df-field">Alcohol %
+              <input id="df-abv" type="number" step="0.1" min="0" max="100" value="${d ? v(d.abv) : (cat === 'spirits' ? '40' : '5')}" oninput="drinkFormBtwHint()">
+            </label>`
+          : `<input id="df-abv" type="hidden" value="${d ? v(d.abv) : '0'}">`}
+        <label class="df-field">BTW %
+          <input id="df-btw" type="number" step="1" min="0" max="100" value="${v(d?.btwRate)}" placeholder="auto">
+          <span class="df-hint" id="df-btw-hint"></span>
+        </label>
+      </div>
+    </fieldset>`);
+  } else {
+    out.push(`<input id="df-abv" type="hidden" value="${d ? v(d.abv) : '0'}"><input id="df-btw" type="hidden" value="${v(d?.btwRate)}">`);
+  }
+
+  // Supplier & ordering — everything is bought, so always shown.
+  out.push(`
     <fieldset class="df-section">
       <legend>Supplier &amp; ordering</legend>
       <div class="df-grid">
@@ -302,59 +428,96 @@ function buildDrinkFormHtml(d: Drink | null): string {
           <input id="df-costNote" value="${v(d?.costNote)}">
         </label>
       </div>
-    </fieldset>
+    </fieldset>`);
 
+  // Wine info — only for wine (origin + grapes + tasting notes).
+  if (isWine) {
+    out.push(`
     <fieldset class="df-section">
-      <legend>Info (wine &amp; specialty)</legend>
+      <legend>Wine info</legend>
       <div class="df-grid">
         <label class="df-field">Producer / winery <input id="df-producer" value="${v(info.producer)}"></label>
-        <label class="df-field">Region / country <input id="df-region" value="${v(info.region)}"></label>
+        <label class="df-field">Region <input id="df-region" value="${v(info.region)}"></label>
+        <label class="df-field">Country <input id="df-country" value="${v(info.country)}"></label>
         <label class="df-field">Vintage <input id="df-vintage" value="${v(info.vintage)}"></label>
-        <label class="df-field">Soil <input id="df-soil" value="${v(info.soil)}"></label>
         <label class="df-field">Grape(s) <input id="df-grapes" value="${v(info.grapes)}"></label>
+        <label class="df-field">Soil <input id="df-soil" value="${v(info.soil)}"></label>
         <label class="df-field df-check"><input id="df-natural" type="checkbox" ${info.natural ? 'checked' : ''}> Natural</label>
         <label class="df-field df-check"><input id="df-bio" type="checkbox" ${info.bio ? 'checked' : ''}> Bio / organic</label>
-        <label class="df-field df-col2">Flavour profile <input id="df-profile" value="${v(info.profile)}"></label>
-        <label class="df-field df-col2">Tasting notes <input id="df-notes" value="${v(info.notes)}"></label>
+        <label class="df-field df-col2">Flavour profile <input id="df-profile" value="${v(info.profile)}" placeholder="e.g. dry, mineral, citrus"></label>
+        <label class="df-field df-col2">Tasting notes <textarea id="df-notes" rows="2">${v(info.notes)}</textarea></label>
+      </div>
+    </fieldset>`);
+  }
+
+  // Serving — sellable types: temperature, how-to-serve / pairing, and formats.
+  if (sellable) {
+    const serveLabel = isSoft ? 'Serving &amp; pairing notes' : 'How to serve';
+    const placeholder = isSoft
+      ? 'e.g. tall glass over ice with lime — pairs with spicy or fried dishes'
+      : 'e.g. chilled, no ice, in a stemmed glass';
+    out.push(`
+    <fieldset class="df-section">
+      <legend>Serving</legend>
+      <div class="df-grid">
+        <label class="df-field">Serve temperature
+          <select id="df-servingTemp">
+            <option value="">—</option>
+            ${DRINK_SERVING_TEMPS.map(t => `<option value="${esc(t)}" ${d?.servingTemp === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="df-field df-col2">${serveLabel}
+          <textarea id="df-serviceInstructions" rows="2" placeholder="${placeholder}">${v(d?.serviceInstructions)}</textarea>
+        </label>
       </div>
     </fieldset>
-
     <fieldset class="df-section">
       <legend>Serving formats &amp; prices</legend>
       <div id="df-formats"></div>
       <button class="btn btn-sm" type="button" onclick="drinkFormAddFormat()">+ Add format</button>
-    </fieldset>
+    </fieldset>`);
+  }
 
+  // Per-location stock target ("Needed") + availability — always.
+  out.push(`
     <fieldset class="df-section">
-      <legend>Per-location par &amp; availability</legend>
+      <legend>Per-location stock target &amp; availability</legend>
       <div class="df-grid">
         ${DRINK_LOCATIONS.map(l => {
           const li = d?.locations?.[l.key];
           return `<div class="df-loc-block">
             <strong>${esc(l.label)}</strong>
-            <label class="df-field">Par (order units) <input id="df-par-${l.key}" type="number" step="0.5" min="0" value="${li?.par != null ? esc(String(li.par)) : ''}"></label>
+            <label class="df-field">Needed / target (order units) <input id="df-par-${l.key}" type="number" step="0.5" min="0" value="${li?.par != null ? esc(String(li.par)) : ''}"></label>
             <label class="df-field df-check"><input id="df-active-${l.key}" type="checkbox" ${!li || li.active !== false ? 'checked' : ''}> Active here</label>
           </div>`;
         }).join('')}
       </div>
-    </fieldset>
+    </fieldset>`);
 
+  // Tebi sales link — sellable only.
+  if (sellable) {
+    out.push(`
     <label class="df-field df-col2">Tebi product names (comma-separated — Phase-2 sales link)
       <input id="df-tebi" value="${d?.tebiProductNames?.length ? esc(d.tebiProductNames.join(', ')) : ''}">
-    </label>
+    </label>`);
+  }
 
-    <div class="modal-actions">
-      <button class="btn" type="button" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" data-testid="drink-save-btn" type="button" onclick="saveDrinkForm()">${d ? 'Save changes' : 'Add drink'}</button>
-    </div>
-  </div>`;
+  return out.join('\n');
 }
 
-/** Update the subtype datalist when the category dropdown changes. */
+/** Category change: refresh the subtype datalist and re-render the type-specific
+ *  sections (category-independent fields repopulate from the saved drink). */
 export function drinkFormCategoryChange(catKey: string): void {
   const def = DRINK_CATALOGUE_CATEGORIES.find(c => c.key === catKey);
   const dl = document.getElementById('df-subtype-list');
   if (dl && def) dl.innerHTML = def.subtypes.map(s => `<option value="${esc(s)}">`).join('');
+  const dyn = document.getElementById('df-dynamic');
+  if (dyn) {
+    const existing = _form && !_form.isNew ? (S.drinks || []).find(x => x.id === _form!.id) || null : null;
+    dyn.innerHTML = dynamicSectionsHtml(catKey, existing);
+    renderFormatRows();
+    drinkFormBtwHint();
+  }
 }
 
 /** Live "auto = N%" hint next to the BTW override input. */
@@ -432,7 +595,7 @@ export async function saveDrinkForm(): Promise<void> {
   const category = strVal('df-category');
 
   const info: Record<string, unknown> = {};
-  for (const [id, key] of [['df-producer', 'producer'], ['df-region', 'region'], ['df-vintage', 'vintage'], ['df-soil', 'soil'], ['df-grapes', 'grapes'], ['df-profile', 'profile'], ['df-notes', 'notes']] as const) {
+  for (const [id, key] of [['df-producer', 'producer'], ['df-region', 'region'], ['df-country', 'country'], ['df-vintage', 'vintage'], ['df-soil', 'soil'], ['df-grapes', 'grapes'], ['df-profile', 'profile'], ['df-notes', 'notes']] as const) {
     const val = strVal(id);
     if (val) info[key] = val;
   }
@@ -464,6 +627,8 @@ export async function saveDrinkForm(): Promise<void> {
     deposit: numVal('df-deposit') ?? 0,
     costPrice: numVal('df-costPrice'),
     costNote: strVal('df-costNote'),
+    servingTemp: strVal('df-servingTemp'),
+    serviceInstructions: strVal('df-serviceInstructions'),
     info,
     formats: _form.formats.filter(f => f.name || f.volumeMl),
     locations,

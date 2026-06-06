@@ -764,6 +764,34 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   res.json(shape);
 }));
 
+// Flip a drink's per-location `active` flag (catalogue tickbox). Focused so the
+// inline toggle doesn't round-trip — or re-validate — the whole drink payload.
+// Manager-gated like the rest of catalogue editing; no cost recalc needed.
+router.patch('/:id/active', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const id = req.params.id as string;
+  const idErr = checkId(id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  const { location, active } = req.body as { location?: string; active?: boolean };
+  if (!location || !VALID_LOCATIONS.includes(location)) throw new AppError(400, 'Valid location required.');
+  if (typeof active !== 'boolean') throw new AppError(400, 'active (boolean) required.');
+  const result = await withWriteLock(async () => {
+    const existing = await prisma.drink.findUnique({ where: { id } });
+    if (!existing) return null;
+    if (existing.mode === 'catalogue' && !isManagerEmail(req.user?.email)) throw new AppError(403, 'Manager access required.');
+    const locations = (existing.locations as Record<string, { par: number | null; active: boolean }> | null) || {};
+    const cur = locations[location] || { par: null, active: true };
+    locations[location] = { par: cur.par ?? null, active };
+    await prisma.drink.update({ where: { id }, data: { locations: locations as unknown as Prisma.InputJsonValue } });
+    return fetchDrinkShape(id);
+  });
+  if (!result) throw new AppError(404, 'Drink not found');
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-active', `set "${result.name}" active=${active} @ ${location}`);
+  broadcast(user.email, 'patch', { user: user.name, drinks: [result] });
+  res.json(result);
+}));
+
 router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
   const idErr = checkId(id, 'id');

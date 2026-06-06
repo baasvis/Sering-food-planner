@@ -212,7 +212,7 @@ export interface AppState {
   assortments: Assortment[];
   drinkMenus: DrinkMenu[];
   drinksSubTab: string;
-  drinksFilters: { mode: string; category: string };
+  drinksFilters: { mode: string; category: string; location: string };
   drinksSearch: string;
   archive?: Array<Record<string, unknown>>;
   openBatchPools?: Set<string>;
@@ -278,7 +278,7 @@ export let S: AppState = {
   assortments: [],
   drinkMenus: [],
   drinksSubTab: 'catalogue',
-  drinksFilters: { mode: 'all', category: 'all' },
+  drinksFilters: { mode: 'all', category: 'all', location: 'west' },
   drinksSearch: '',
 };
 

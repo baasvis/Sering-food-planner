@@ -66,6 +66,37 @@
   color: #fff;
 }
 
+/* Location toggle (West / Centraal) + show-inactive */
+.drinks-loc-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.drinks-loc-toggle .lc {
+  background: var(--card, #fff);
+  border: none;
+  border-left: 1px solid var(--border, #ddd);
+  padding: 5px 14px;
+  font-size: 13px;
+  color: var(--text2, #666);
+  cursor: pointer;
+}
+.drinks-loc-toggle .lc:first-child { border-left: none; }
+.drinks-loc-toggle .lc.on {
+  background: var(--loc-accent, #7c3aed);
+  color: #fff;
+}
+.drinks-show-inactive {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text2, #666);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 /* Catalogue table */
 .drinks-table-wrap { overflow-x: auto; }
 .drinks-table {
@@ -87,6 +118,13 @@
 .drinks-table .small { font-size: 11px; }
 .drink-pub { color: #2e9e5b; font-size: 11px; }
 .drink-actions { white-space: nowrap; }
+/* Cost-% vs target: red when cost eats too much of the price */
+.drinks-table .cost-over { color: var(--danger, #c0392b); font-weight: 600; }
+.drinks-table .cost-ok { color: var(--text2, #888); }
+/* Inactive-at-location rows (only shown via "Show inactive") read as dimmed */
+.drinks-table tr.drink-inactive td { opacity: 0.5; }
+.drinks-table .drink-active-cb { cursor: pointer; }
+.drinks-table .drink-active-cb:disabled { cursor: default; }
 .drinks-empty {
   padding: 32px;
   text-align: center;

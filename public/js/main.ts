@@ -32,7 +32,7 @@ import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals } from 
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
 import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName, assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole } from './team';
 import { openCostTargets, saveCostTargetsForm, ctRecalcTotal } from './cost';
-import { renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint } from './drinks';
+import { renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, drinksSetCatLocation, drinksToggleShowInactive, drinkToggleActive, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint } from './drinks';
 import { drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost } from './drinks-recipe';
 import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave } from './drinks-stocktake';
 import { drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive } from './drinks-order';
@@ -140,7 +140,7 @@ Object.assign(window, {
   assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole,
 
   // drinks
-  renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint,
+  renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, drinksSetCatLocation, drinksToggleShowInactive, drinkToggleActive, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint,
 
   // drinks — recipes
   drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost,
