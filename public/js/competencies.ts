@@ -122,7 +122,14 @@ export async function renderCompetencies(): Promise<void> {
   // tick and SSE-triggered re-renders must NOT refetch the whole (ever-growing)
   // teaching-event ledger every minute. Explicit reloads — first screen load and
   // after a local mutation — go through reloadCompetencies(), which clears cLoaded.
-  if (cLoaded) { paintComp(); return; }
+  if (cLoaded) {
+    // Repaint from cache (ARCH-1, no refetch) but preserve open teaching-guide
+    // foldouts across the repaint (#93), same as the fetch path below.
+    const reopen = openGuideHeadings();
+    paintComp();
+    restoreGuideHeadings(reopen);
+    return;
+  }
   el.innerHTML = '<div class="comp-loading">Loading…</div>';
   try {
     const data = await apiGet('/api/competencies');
@@ -135,7 +142,34 @@ export async function renderCompetencies(): Promise<void> {
     el.innerHTML = `<div class="comp-error">Could not load the training grid: ${esc(e instanceof Error ? e.message : 'Unknown error')}</div>`;
     return;
   }
+  // Preserve any open teaching-guide foldouts across this repaint. The live-sync
+  // re-render path is already excluded upstream (the liveSync:false registration
+  // below), so this guards the remaining callers — chiefly returning to the
+  // screen via showScreen(), and any local action that re-renders while a chunk's
+  // guide is open — so paintComp()'s innerHTML rebuild doesn't collapse a section
+  // the user is reading. Navigating to a different chunk calls paintComp()
+  // directly (not via here), so it still starts closed.
+  const reopen = openGuideHeadings();
   paintComp();
+  restoreGuideHeadings(reopen);
+}
+
+// The headings of the currently-open teaching-guide <details>. Heading text is
+// the stable identity within a chunk view (the only place these foldouts live).
+function openGuideHeadings(): Set<string> {
+  const open = new Set<string>();
+  document.querySelectorAll<HTMLElement>('#screen-competencies details.comp-guide-section[open] > summary')
+    .forEach(s => { if (s.textContent) open.add(s.textContent); });
+  return open;
+}
+
+function restoreGuideHeadings(headings: Set<string>): void {
+  if (!headings.size) return;
+  document.querySelectorAll<HTMLDetailsElement>('#screen-competencies details.comp-guide-section')
+    .forEach(d => {
+      const summary = d.querySelector('summary');
+      if (summary && summary.textContent && headings.has(summary.textContent)) d.open = true;
+    });
 }
 
 /** Force a fresh fetch of the training data, then repaint. Called after a local
@@ -691,4 +725,8 @@ export async function confirmCompDeleteEvent(): Promise<void> {
 }
 
 // Self-register so navigate.ts can dispatch without importing this module.
-registerRenderer('competencies', renderCompetencies);
+// liveSync:false — competencies data never arrives over SSE (routes/competencies.ts
+// doesn't broadcast), so live-sync patches must not re-render this screen: it's
+// wasted work and would collapse an open teaching-guide foldout. Navigation still
+// renders it via showScreen().
+registerRenderer('competencies', renderCompetencies, { liveSync: false });

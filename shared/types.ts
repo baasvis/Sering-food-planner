@@ -133,6 +133,20 @@ export interface CookRhythmConfig {
   days: Record<string, CookRhythmDay>; // keyed by 'Mon'..'Sun'
 }
 
+// ── Cost-per-guest targets ──
+// Director-set targets the West-tab cost bar steers against. All values are
+// euros per guest except foodCostPct (a percentage). The total €/guest target
+// is derived (soup + main + topping). revenuePerGuestOverride lets a director
+// pin the food-cost-% denominator instead of the rolling Tebi auto value
+// (null = use auto). One set applies to both meals + both locations for now.
+export interface CostTargets {
+  soup: number;                       // € per guest
+  main: number;                       // € per guest
+  topping: number;                    // € per guest (toppings & bread)
+  foodCostPct: number;                // target food cost as % of revenue (e.g. 25)
+  revenuePerGuestOverride: number | null; // € per guest, or null = auto from Tebi
+}
+
 // ── Closed services config ──
 // Marks a service (location + meal) as closed — no seating, but any guest/staff
 // demand registered to it rolls onto the previous open service at the same
@@ -372,6 +386,30 @@ export interface AppUser {
    *  director-only features like the private AI recipe assistant. Computed
    *  at session-issue / session-restore time and sent down with /auth/me. */
   isDirector?: boolean;
+  /** Per-screen page permissions resolved from the user's role, sent down with
+   *  login / GET /auth/me. An empty/absent map = no role = full edit (legacy).
+   *  Directors ignore this (always full edit). Frontend-only guardrail. */
+  permissions?: Record<string, PagePermission>;
+}
+
+/** Per-page access level for the role-based guardrails. */
+export type PagePermission = 'hidden' | 'view' | 'edit';
+
+/** Screens whose access a role can gate. 'team' is director-only and is
+ *  deliberately excluded (managing roles/access is a director power). Keep in
+ *  sync with NAV_SCREENS ids in public/js/state.ts. */
+export const GATEABLE_SCREENS = [
+  'dashboard', 'guests', 'planner', 'recipe-index', 'orders',
+  'competencies', 'supplies', 'finance', 'feedback-admin',
+] as const;
+export type GateableScreen = typeof GATEABLE_SCREENS[number];
+
+/** A role as returned by GET /api/access/roles. */
+export interface RoleDTO {
+  id: string;
+  name: string;
+  permissions: Record<string, PagePermission>;
+  isDefault: boolean;
 }
 
 /** An account-access request / grant, as returned by GET /api/access/requests.
@@ -389,6 +427,8 @@ export interface AccessRequestDTO {
   decidedBy: string | null;
   /** Linked Training (competencies) person id, set on approval. */
   personId: string | null;
+  /** Assigned role id (null = no role = full edit). */
+  roleId: string | null;
 }
 
 // ── Ratings (for served dialog) ──

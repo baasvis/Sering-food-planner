@@ -66,4 +66,20 @@ export function broadcast(senderEmail: string, eventType: string, data: Record<s
   }
 }
 
+// ── Send an event to specific users by email ──
+//
+// Unlike broadcast(), this targets a set of emails instead of excluding a
+// sender. Used to push a "permissions-changed" signal to the users whose role
+// (or whose role's matrix) a director just edited, so their tab refreshes its
+// access without a re-login.
+export function sendToEmails(emails: string[], eventType: string, data: Record<string, unknown> = {}) {
+  const set = new Set(emails.map(e => e.toLowerCase()));
+  if (set.size === 0) return;
+  const message = `data: ${JSON.stringify({ type: eventType, ...data })}\n\n`;
+  for (const [id, client] of clients) {
+    if (!set.has(client.user.email.toLowerCase())) continue;
+    try { client.res.write(message); } catch (_e) { clients.delete(id); }
+  }
+}
+
 export default router;

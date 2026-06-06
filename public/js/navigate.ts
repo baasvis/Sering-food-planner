@@ -7,10 +7,17 @@
 // where every screen needed dashboard.ts and dashboard.ts needed every screen.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NAV_SCREENS, S } from './state';
+import { NAV_SCREENS, S, screenPermission } from './state';
 
 type RenderFn = () => void;
-const renderers: Record<string, RenderFn> = {};
+// A screen's renderer plus whether it should re-run on data-driven re-renders.
+// liveSync=false marks screens whose data never arrives over SSE / shared state
+// `S` (e.g. competencies/Training): rerenderCurrentView() skips them, so an
+// incoming live-sync patch doesn't trigger a pointless re-fetch + repaint (which
+// would also reset transient DOM like open <details> foldouts). showScreen()
+// still renders them on navigation.
+interface RendererEntry { fn: RenderFn; liveSync: boolean; }
+const renderers: Record<string, RendererEntry> = {};
 
 let _currentScreen = 'dashboard';
 
@@ -32,8 +39,8 @@ export function setBackgroundRefresh(fn: BackgroundRefreshHook): void {
   _backgroundRefresh = fn;
 }
 
-export function registerRenderer(screen: string, fn: RenderFn) {
-  renderers[screen] = fn;
+export function registerRenderer(screen: string, fn: RenderFn, opts?: { liveSync?: boolean }) {
+  renderers[screen] = { fn, liveSync: opts?.liveSync !== false };
 }
 
 export function getCurrentScreen(): string {
@@ -44,9 +51,21 @@ export function setCurrentScreen(screen: string) {
   _currentScreen = screen;
 }
 
+/** Toggle the view-only treatment on a screen's container from the user's role.
+ *  The banner + disabled inputs are pure CSS keyed off the `screen--view-only`
+ *  class (see team.css), so they survive async re-renders; the hard "no writes
+ *  persist" guarantee lives in apiPost (utils.ts). Directors / edit users: no-op. */
+function applyScreenPermission(name: string): void {
+  const el = document.getElementById('screen-' + name);
+  if (el) el.classList.toggle('screen--view-only', screenPermission(name) === 'view');
+}
+
 export function rerenderCurrentView() {
-  const fn = renderers[_currentScreen];
-  if (fn) fn();
+  const entry = renderers[_currentScreen];
+  // Screens with liveSync:false opt out of data-driven re-renders (see
+  // registerRenderer). Permission + background-refresh below still run.
+  if (entry && entry.liveSync) entry.fn();
+  applyScreenPermission(_currentScreen);
   // Every data-driven re-render (local edits, undo, incoming live-sync
   // patches) flows through here, so it's the single choke point for keeping a
   // backgrounded dashboard's passive cards fresh without waiting for the user
@@ -60,9 +79,12 @@ export function rerenderCurrentView() {
  *  unknown values. */
 export function getScreenFromHash(): string {
   const hash = window.location.hash.replace('#', '');
-  // Exclude director-only screens for non-directors so a stale/shared #team URL
-  // resolves to the dashboard instead of a screen with no container.
-  const validScreens = NAV_SCREENS.filter(s => !s.directorOnly || S.user?.isDirector).map(s => s.id);
+  // Exclude director-only screens for non-directors, and any screen hidden by
+  // the user's role, so a stale/shared #hash resolves to the dashboard instead
+  // of a screen with no container.
+  const validScreens = NAV_SCREENS
+    .filter(s => (!s.directorOnly || S.user?.isDirector) && screenPermission(s.id) !== 'hidden')
+    .map(s => s.id);
   return validScreens.includes(hash) ? hash : 'dashboard';
 }
 
@@ -90,6 +112,8 @@ export function showScreen(name: string, pushState = true) {
   // Dispatch via registry. Renderers self-register at import time.
   // The previous showScreen also called rebuildPlanner() for dashboard /
   // planner / orders; that side-effect now lives inside those render fns.
-  const fn = renderers[name];
-  if (fn) fn();
+  // Navigation always renders, even for liveSync:false screens.
+  const entry = renderers[name];
+  if (entry) entry.fn();
+  applyScreenPermission(name);
 }

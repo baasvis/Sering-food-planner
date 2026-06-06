@@ -101,7 +101,11 @@ in git.
   dish type, plus a batch pool. Batches are assigned to slots by drag-drop
   or select-then-assign and run through the cook workflow. Sub-tabs cover
   each location, cross-location Transport, Caterings, and an Overview. "Fix
-  My Menu" auto-fills gaps with generated placeholder batches.
+  My Menu" auto-fills gaps with generated placeholder batches. The West tab
+  (the kitchen that cooks for both sites) carries a "cost per guest" steering
+  bar — the visible window's ingredient €/guest split into soups / mains /
+  toppings against editable director targets, traffic-lit, with a
+  costed-coverage indicator.
 
 - **Batches & inventory** — a batch is a physical container of food
   (PLANNED → COOKED → SERVING → DONE). Its stock uses the unified-batch
@@ -255,7 +259,7 @@ The food planner is live and working. Current priorities to expand it:
 
 - [x] **Caterings module**: name, date, guest count, pickup/delivery/on-location, auto-calculated dish requirements, logistics notes. Integrated as sub-tab in Week Plan.
 - [x] **Toppings/sides/bread**: shipped as the **Toppings & bread (Supplies)** module — standard (per-guest ratio + prep horizon) and one-off (drip-feed-until-depleted, auto-archive) supplies for bread, aioli, toppings, dips, ferments, with per-location stock and recipe-linked cost. See Section 3.
-- [ ] **Basic budgeting per service**: simple cost indicator per meal service — how much are we spending on ingredients for this lunch vs how many guests are paying.
+- [x] **Basic budgeting per service** (v1): a West-tab "cost per guest" steering bar on the Week Plan — visible-window €/guest split into soups / mains / toppings vs editable director targets (€1.80 total), traffic-lit, with a costed-coverage indicator and a conservative estimate for un-costed dishes. Next slices: food-cost-% vs Tebi revenue on the bar, per-candidate cost impact in the replace/add modal, and an expensive-dishes/moments drill-down.
 - [ ] Import all existing recipes from old spreadsheet
 - [x] Standard inventory items (always-in-stock list separate from per-dish ingredients)
 - [ ] TestTafel menu planning variant (7-course format, cost/labour per course, portion sizing, collective planning)

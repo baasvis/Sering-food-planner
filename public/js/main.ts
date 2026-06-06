@@ -30,7 +30,8 @@ import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot,
 import { toggleRitualStep, toggleRitualWhy, ritualScrollToArrivals } from './today-panel';
 import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals } from './transport-card';
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
-import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName } from './team';
+import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName, assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole } from './team';
+import { openCostTargets, saveCostTargetsForm, ctRecalcTotal } from './cost';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -119,6 +120,7 @@ Object.assign(window, {
   // today-panel (daily ritual)
   toggleRitualStep, toggleRitualWhy, ritualScrollToArrivals,
   openCookRhythmModal, crUpdateField, crToggleClosed, crResetDefaults, crSave,
+  openCostTargets, saveCostTargetsForm, ctRecalcTotal,
 
   // transport-card
   setTransportMode, confirmTransportPlan, confirmCentraalArrivals,
@@ -126,8 +128,9 @@ Object.assign(window, {
   // competencies
   renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent,
 
-  // team (access requests)
+  // team (access requests + roles)
   approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName,
+  assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole,
 });
 
 // ═══════════════════════════════════════════════════════════════════

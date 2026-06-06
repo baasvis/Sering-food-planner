@@ -183,9 +183,29 @@ model AccessRequest {
   // Training (competencies) person created/linked on approval. Lets the
   // approved account be the source of that person's name; see routes/access.ts.
   personId    String?   @map("person_id")
+  // Role-based page permissions. Null = full edit (preserves legacy behavior for
+  // env-listed / pre-role users); a non-null role maps each screen to a level.
+  roleId      String?   @map("role_id")
 
   @@index([status])
   @@map("access_requests")
+}
+
+// Role-based page permissions — frontend guardrails only (no server-side write
+// enforcement). `permissions` maps each gateable screen id to
+// "hidden" | "view" | "edit"; an AccessRequest.roleId links a user to one role.
+// Directors (DIRECTOR_EMAILS) bypass roles entirely (full edit). Resolved into
+// the AppUser at login / GET /auth/me — see routes/auth.ts (resolvePermissions)
+// and the frontend nav/view gating in public/js/navigate.ts.
+model Role {
+  id          String   @id
+  name        String
+  permissions Json     @default("{}") // { [screenId]: "hidden" | "view" | "edit" }
+  isDefault   Boolean  @default(false) @map("is_default") // assigned to newly-approved users
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("roles")
 }
 
 model Feedback {

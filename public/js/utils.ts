@@ -1,14 +1,14 @@
 // UUID GENERATION
 // ═══════════════════════════════════════════════════════════════════
 
-import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
+import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen } from './state';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
 import { esc } from './modal';
-import { rerenderCurrentView } from './navigate';
+import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { invalidateCategoryCache } from './dashboard';
 
 export function newId(): string {
@@ -55,7 +55,20 @@ export class ApiError extends Error {
   }
 }
 
+// Endpoints that must work regardless of the current screen's edit permission:
+// auth (login/logout), telemetry, the global feedback FAB, and the batched
+// state autosave (gating it could drop a legit edit made on an edit-screen).
+const VIEW_ONLY_EXEMPT = ['/api/auth/', '/api/telemetry', '/api/feedback', '/api/data/patch'];
+
 export async function apiPost(path: string, body: unknown, method: string = 'POST'): Promise<any> {
+  // Role guardrail: block writes issued from a screen the user only has 'view'
+  // on. This is a frontend guardrail, NOT a security boundary — the API still
+  // accepts direct calls; this stops the UI from making them. Reads (GET) and a
+  // small set of cross-cutting endpoints are always allowed.
+  if (method.toUpperCase() !== 'GET' && !VIEW_ONLY_EXEMPT.some(p => path.startsWith(p)) && !canEditScreen(getCurrentScreen())) {
+    toast("View only — you can't make changes on this page");
+    throw new ApiError(403, 'view_only');
+  }
   const r = await fetch(path, { method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
   if (r.status === 401) { doLogout(); throw new ApiError(401, 'Session expired'); }
   if (!r.ok) {
@@ -438,6 +451,41 @@ export async function saveCookRhythm(): Promise<void> {
   }
 }
 
+export async function loadCostTargets(): Promise<void> {
+  try {
+    const cfg = await apiGet('/api/cost-targets');
+    if (cfg && typeof cfg === 'object'
+        && typeof cfg.soup === 'number' && typeof cfg.main === 'number' && typeof cfg.topping === 'number') {
+      S.costTargets = {
+        soup: cfg.soup, main: cfg.main, topping: cfg.topping,
+        foodCostPct: typeof cfg.foodCostPct === 'number' ? cfg.foodCostPct : 25,
+        revenuePerGuestOverride: typeof cfg.revenuePerGuestOverride === 'number' ? cfg.revenuePerGuestOverride : null,
+      };
+    } else {
+      S.costTargets = null; // no saved config → DEFAULT_COST_TARGETS
+    }
+  } catch (_e: unknown) {
+    S.costTargets = null;
+  }
+}
+
+export async function saveCostTargets(): Promise<void> {
+  try {
+    await apiPost('/api/cost-targets', S.costTargets);
+  } catch (_e: unknown) {
+    toastError('Failed to save cost targets');
+  }
+}
+
+export async function loadRevenuePerGuest(): Promise<void> {
+  try {
+    const data = await apiGet('/api/finance/revenue-per-guest');
+    S.revenuePerGuest = (data && typeof data.revenuePerGuest === 'number') ? data.revenuePerGuest : null;
+  } catch (_e: unknown) {
+    S.revenuePerGuest = null;
+  }
+}
+
 export async function loadClosedServices(): Promise<void> {
   try {
     const cfg = await apiGet('/api/closed-services');
@@ -612,6 +660,14 @@ export function connectLiveSync(): void {
         console.log('Live sync connected (client', msg.clientId + ')');
         return;
       }
+      if (msg.type === 'permissions-changed') {
+        // A director changed this user's role (or their role's matrix). Reload
+        // to pick up fresh permissions — simplest correct refresh, and access
+        // changes are rare. Autosave (1.5s debounce) has flushed by the reload.
+        toast('Your access was updated — refreshing…');
+        setTimeout(() => location.reload(), 1500);
+        return;
+      }
       if (msg.type === 'patch') {
         applyRemotePatch(msg);
       }
@@ -685,6 +741,7 @@ interface RemotePatchMessage {
   storageConfig?: StorageConfig;
   kitchenEquipment?: KitchenEquipment;
   cookRhythm?: CookRhythmConfig;
+  costTargets?: CostTargets;
   closedServices?: ClosedServicesConfig;
   // Partial slot-keyed
   prepChecklist?: { loc: string; date: string; checked: string[] };
@@ -727,7 +784,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           recipes, deletedRecipes,
           ingredients, deletedIngredients,
           supplies, deletedSupplies,
-          storageConfig, kitchenEquipment, cookRhythm, closedServices,
+          storageConfig, kitchenEquipment, cookRhythm, costTargets, closedServices,
           prepChecklist, inventoryCompletion, ritualCompletion,
           guestsNextWeeks,
           ingredientsBulkReload, guestHistoryReload, recipesReload } = msg;
@@ -836,6 +893,12 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   // Cook rhythm (full-replace) — editable Fix My Menu rules
   if (cookRhythm) {
     S.cookRhythm = cookRhythm;
+    changed = true;
+  }
+
+  // Cost targets (full-replace) — West-tab cost-per-guest steering
+  if (costTargets) {
+    S.costTargets = costTargets;
     changed = true;
   }
 
