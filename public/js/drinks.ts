@@ -14,7 +14,7 @@ import { pushUndo } from './undo';
 import { registerRenderer } from './navigate';
 import {
   DRINK_LOCATIONS, DRINK_GLASS_TYPES, DRINK_SERVING_TEMPS, DRINK_CATALOGUE_CATEGORIES,
-  NON_SELLABLE_CATEGORIES, drinkCategoryLabel,
+  NON_SELLABLE_CATEGORIES, drinkCategoryLabel, drinkAreasFor,
 } from './drinks-constants';
 import {
   makeCostContext, drinkTotalCostExBtw, effectiveBtw, targetMarkupFor, actualMarkup,
@@ -609,6 +609,9 @@ function dynamicSectionsHtml(cat: string, d: Drink | null): string {
           return `<div class="df-loc-block">
             <strong>${esc(l.label)}</strong>
             <label class="df-field">Needed / target (order units) <input id="df-par-${l.key}" type="number" step="0.5" min="0" value="${li?.par != null ? esc(String(li.par)) : ''}"></label>
+            <label class="df-field">Storage area
+              <select id="df-area-${l.key}"><option value="">—</option>${drinkAreasFor(l.key).map(a => `<option value="${esc(a)}" ${li?.area === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
+            </label>
             <label class="df-field df-check"><input id="df-active-${l.key}" type="checkbox" ${!li || li.active !== false ? 'checked' : ''}> Active here</label>
           </div>`;
         }).join('')}
@@ -723,9 +726,9 @@ export async function saveDrinkForm(): Promise<void> {
   if (boolVal('df-natural')) info.natural = true;
   if (boolVal('df-bio')) info.bio = true;
 
-  const locations: Record<string, { par: number | null; active: boolean }> = {};
+  const locations: Record<string, { par: number | null; active: boolean; area?: string }> = {};
   for (const l of DRINK_LOCATIONS) {
-    locations[l.key] = { par: numVal(`df-par-${l.key}`), active: boolVal(`df-active-${l.key}`) };
+    locations[l.key] = { par: numVal(`df-par-${l.key}`), active: boolVal(`df-active-${l.key}`), area: strVal(`df-area-${l.key}`) || undefined };
   }
 
   const tebi = strVal('df-tebi').split(',').map(s => s.trim()).filter(Boolean);

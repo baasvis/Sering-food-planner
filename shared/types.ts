@@ -535,6 +535,9 @@ export interface DrinkServingFormat {
 export interface DrinkLocationInfo {
   par: number | null;
   active: boolean;
+  /** Home storage area at this location (e.g. "Keg Storage") — drives the
+   *  by-area stocktake grouping. Optional; unset = "Unassigned". */
+  area?: string;
 }
 
 /** Info fields, mostly for wine. All optional. */

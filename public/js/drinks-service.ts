@@ -120,7 +120,6 @@ function barCardHtml(d: Drink): string {
     row('Notes', d.serviceInstructions);
   }
 
-  const canExpand = isCocktail || cat === 'coffee-drink';
   return `<div class="bar-card" data-testid="bar-card" data-id="${esc(d.id)}">
     ${d.photoUrl ? `<img class="bar-card-photo" src="${esc(d.photoUrl)}" alt="${esc(d.name)}" loading="lazy">` : ''}
     <div class="bar-card-head">
@@ -129,7 +128,6 @@ function barCardHtml(d: Drink): string {
     </div>
     ${rows.length ? `<div class="bar-card-body">${rows.join('')}</div>` : '<div class="bar-card-body bar-card-empty">No details yet — add them on the Catalogue/Recipes tab.</div>'}
     <div class="bar-card-foot">
-      ${canExpand ? `<button class="btn btn-sm bar-card-expand" type="button" onclick="openServiceCard('${esc(d.id)}')">Build card ↗</button>` : '<span></span>'}
       <span class="bar-card-photo-actions">
         <button class="btn btn-sm" type="button" data-testid="bar-photo-btn" onclick="drinkBarAddPhoto('${esc(d.id)}')">📷 ${d.photoUrl ? 'Change' : 'Add photo'}</button>
         ${d.photoUrl ? `<button class="btn btn-sm btn-danger" type="button" onclick="drinkBarRemovePhoto('${esc(d.id)}')">✕</button>` : ''}

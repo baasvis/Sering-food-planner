@@ -34,11 +34,11 @@ import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName
 import { openCostTargets, saveCostTargetsForm, ctRecalcTotal } from './cost';
 import { renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, drinksSetCatLocation, drinksToggleShowInactive, drinkToggleActive, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint, openSupplierForm, saveSupplierForm, deleteSupplier } from './drinks';
 import { drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost } from './drinks-recipe';
-import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc } from './drinks-stocktake';
-import { drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive, drinksPlaceOrder } from './drinks-order';
+import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc, drinksStkOvStatus, drinksStkOvSave } from './drinks-stocktake';
+import { drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive, drinksPlaceOrder, drinksSfRecount } from './drinks-order';
 import { openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog } from './drinks-production';
 import { drinksBarSearch, drinksBarCategory, openServiceCard, drinkBarAddPhoto, drinkBarRemovePhoto } from './drinks-service';
-import { openAssortmentEdit, saveAssortmentEdit, openMenuForm, saveMenuForm, printDrinkMenu, deleteDrinkMenu } from './drinks-menu';
+import { openAssortmentEdit, assortmentEditToggle, assortmentEditSearch, saveAssortmentEdit, openMenuForm, menuFormAssortmentChange, menuPickToggle, menuPickSearch, menuPickAll, saveMenuForm, printDrinkMenu, deleteDrinkMenu } from './drinks-menu';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -146,10 +146,10 @@ Object.assign(window, {
   drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost,
 
   // drinks — stocktake
-  drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc,
+  drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc, drinksStkOvStatus, drinksStkOvSave,
 
   // drinks — orders
-  drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive, drinksPlaceOrder,
+  drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive, drinksPlaceOrder, drinksSfRecount,
 
   // drinks — production & write-offs
   openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog,
@@ -158,7 +158,7 @@ Object.assign(window, {
   drinksBarSearch, drinksBarCategory, openServiceCard, drinkBarAddPhoto, drinkBarRemovePhoto,
 
   // drinks — assortments & menus
-  openAssortmentEdit, saveAssortmentEdit, openMenuForm, saveMenuForm, printDrinkMenu, deleteDrinkMenu,
+  openAssortmentEdit, assortmentEditToggle, assortmentEditSearch, saveAssortmentEdit, openMenuForm, menuFormAssortmentChange, menuPickToggle, menuPickSearch, menuPickAll, saveMenuForm, printDrinkMenu, deleteDrinkMenu,
 });
 
 // ═══════════════════════════════════════════════════════════════════

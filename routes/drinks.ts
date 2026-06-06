@@ -593,7 +593,11 @@ router.get('/menus/:id/print', asyncHandler(async (req: Request, res: Response) 
   const menu = toDrinkMenu(menuRow);
   const assortmentRow = await prisma.assortment.findUnique({ where: { id: menu.assortmentId } });
   const entries = assortmentRow && Array.isArray(assortmentRow.entries) ? (assortmentRow.entries as Array<{ drinkId?: string }>) : [];
-  const drinkIds = entries.map(e => e.drinkId).filter((x): x is string => !!x);
+  const assortmentIds = entries.map(e => e.drinkId).filter((x): x is string => !!x);
+  // A menu may carry a subset (its sections' drinkIds); empty subset → whole assortment.
+  const menuSections = Array.isArray(menuRow.sections) ? (menuRow.sections as unknown as Array<{ drinkIds?: string[] }>) : [];
+  const selected = new Set(menuSections.flatMap(s => (s && Array.isArray(s.drinkIds)) ? s.drinkIds : []));
+  const drinkIds = selected.size ? assortmentIds.filter(id => selected.has(id)) : assortmentIds;
   const drinkRows = drinkIds.length ? await prisma.drink.findMany({ where: { id: { in: drinkIds } } }) : [];
   const byId = new Map(drinkRows.map(d => [d.id, d]));
   const loc = menu.location;

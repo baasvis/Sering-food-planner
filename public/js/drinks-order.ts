@@ -86,23 +86,49 @@ function shortfallCardHtml(supplier: string, sup: DrinkSupplier | undefined, lin
   if (sup?.contact?.phone) contactBits.push(esc(sup.contact.phone));
   if (sup?.contact?.url) contactBits.push(`<a href="${esc(sup.contact.url)}" target="_blank" rel="noopener">order online ↗</a>`);
   const dep = orderDepositTotal(lines.map(l => ({ orderQty: l.orderQty, deposit: l.deposit })));
+  const costOf = (drinkId: string) => (S.drinks || []).find(x => x.id === drinkId)?.costPrice || 0;
+  const costTotal = lines.reduce((s, l) => s + l.orderQty * costOf(l.drinkId), 0);
+  const supAttr = esc(supplier).replace(/'/g, "\\'");
   return `<div class="ord-shortfall" data-testid="ord-shortfall" data-supplier="${esc(supplier)}">
     <div class="ord-sf-head">
       <strong>${esc(supplier)}</strong>
-      <span class="muted small">${lines.length} item${lines.length > 1 ? 's' : ''} short${dep ? ` · €${dep.toFixed(2)} deposit` : ''}</span>
+      <span class="muted small">${lines.length} item${lines.length > 1 ? 's' : ''} short</span>
+      <span class="ord-sf-total" data-supplier="${esc(supplier)}" data-dep="${dep}">${orderCostLabel(costTotal, dep)}</span>
     </div>
     <div class="ord-sf-instr ${instr.length ? '' : 'muted small'}">${instr.length ? instr.join(' · ') : 'No order instructions set — add them on the Suppliers tab.'}</div>
     ${contactBits.length ? `<div class="ord-sf-contact small">${contactBits.join(' · ')}</div>` : ''}
-    <table class="drinks-table"><thead><tr><th>Drink</th><th class="num">Needed</th><th class="num">Stock</th><th class="num">Order</th><th class="num">Deposit</th></tr></thead>
+    <table class="drinks-table"><thead><tr><th>Drink</th><th class="num">Needed</th><th class="num">Stock</th><th class="num">Order</th><th class="num">Cost</th><th class="num">Deposit</th></tr></thead>
       <tbody>${lines.map(l => `<tr>
         <td>${esc(l.name)}</td>
         <td class="num">${l.par}</td>
         <td class="num">${Math.round(l.stock * 10) / 10}</td>
-        <td class="num"><input class="sf-qty" data-supplier="${esc(supplier)}" data-drinkid="${esc(l.drinkId)}" data-name="${esc(l.name)}" data-unit="${esc(l.orderUnit)}" data-deposit="${l.deposit}" type="number" min="0" step="1" value="${l.orderQty}" style="width:60px;text-align:right;"> ${esc(l.orderUnit)}</td>
+        <td class="num"><input class="sf-qty" data-supplier="${esc(supplier)}" data-drinkid="${esc(l.drinkId)}" data-name="${esc(l.name)}" data-unit="${esc(l.orderUnit)}" data-deposit="${l.deposit}" data-cost="${costOf(l.drinkId)}" type="number" min="0" step="1" value="${l.orderQty}" style="width:60px;text-align:right;" oninput="drinksSfRecount('${supAttr}')"> ${esc(l.orderUnit)}</td>
+        <td class="num sf-cost">${costOf(l.drinkId) ? '€' + (l.orderQty * costOf(l.drinkId)).toFixed(2) : '—'}</td>
         <td class="num">${l.deposit ? '€' + l.deposit.toFixed(2) : '—'}</td>
       </tr>`).join('')}</tbody></table>
-    ${isManager() ? `<div class="ord-sf-actions"><button class="btn btn-sm btn-primary" data-testid="ord-place" onclick="drinksPlaceOrder('${esc(supplier).replace(/'/g, "\\'")}')">Place order</button></div>` : '<div class="muted small">Managers place orders.</div>'}
+    ${isManager() ? `<div class="ord-sf-actions"><button class="btn btn-sm btn-primary" data-testid="ord-place" onclick="drinksPlaceOrder('${supAttr}')">Place order</button></div>` : '<div class="muted small">Managers place orders.</div>'}
   </div>`;
+}
+
+function orderCostLabel(cost: number, dep: number): string {
+  const bits = [`≈ €${cost.toFixed(2)} order cost`];
+  if (dep) bits.push(`+ €${dep.toFixed(2)} deposit`);
+  return bits.join(' ');
+}
+
+/** Recompute one supplier's order-cost total live as quantities are edited. */
+export function drinksSfRecount(supplier: string): void {
+  const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('.sf-qty')).filter(i => i.dataset.supplier === supplier);
+  let cost = 0;
+  for (const inp of inputs) {
+    const qty = Number(inp.value) || 0;
+    const unit = Number(inp.dataset.cost) || 0;
+    cost += qty * unit;
+    const cell = inp.closest('tr')?.querySelector('.sf-cost') as HTMLElement | null;
+    if (cell) cell.textContent = unit ? '€' + (qty * unit).toFixed(2) : '—';
+  }
+  const totalEl = document.querySelector(`.ord-sf-total[data-supplier="${CSS.escape(supplier)}"]`) as HTMLElement | null;
+  if (totalEl) totalEl.textContent = orderCostLabel(cost, Number(totalEl.dataset.dep) || 0);
 }
 
 /** Place an order for one supplier straight from the shortfall list: read the

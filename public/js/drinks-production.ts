@@ -50,9 +50,9 @@ async function refreshProduction(): Promise<void> {
 
   inner.innerHTML = `
     <h4 class="ord-h">To make — ${esc(loc())}</h4>
-    ${toMake.length === 0 ? '<div class="drinks-empty">Everything homemade is at or above par. 🎉</div>' : `
+    ${toMake.length === 0 ? '<div class="drinks-empty">Everything homemade is at or above its needed level. 🎉</div>' : `
       <div class="drinks-table-wrap"><table class="drinks-table" data-testid="drinks-tomake-table">
-        <thead><tr><th>Drink</th><th>Category</th><th class="num">Par</th><th class="num">Stock</th><th class="num">Short</th><th></th></tr></thead>
+        <thead><tr><th>Drink</th><th>Category</th><th class="num">Needed</th><th class="num">Stock</th><th class="num">Short</th><th></th></tr></thead>
         <tbody>${toMake.map(m => `<tr data-testid="tomake-row">
           <td class="drink-name">${esc(m.drink.name)}</td>
           <td>${esc(drinkCategoryLabel(m.drink.category))}</td>

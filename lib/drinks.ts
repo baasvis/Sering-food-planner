@@ -68,7 +68,7 @@ export function normalizeLocations(raw: Prisma.JsonValue | undefined): Record<st
   const out: Record<string, DrinkLocationInfo> = {};
   for (const loc of Object.keys(o)) {
     const e = (o[loc] && typeof o[loc] === 'object' ? o[loc] : {}) as Record<string, unknown>;
-    out[loc] = { par: num(e.par), active: e.active !== false };
+    out[loc] = { par: num(e.par), active: e.active !== false, area: typeof e.area === 'string' && e.area ? e.area : undefined };
   }
   return out;
 }
