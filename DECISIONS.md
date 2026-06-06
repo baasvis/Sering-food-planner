@@ -125,3 +125,22 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
   drive manager-gated catalogue CRUD + stocktake.
 - **[m4] Catalogue-CRUD e2e written here** (deferred from M2 per the GOAL "e2e
   from M4 on" rule), alongside the stocktake spec. 3 specs green.
+
+## M5 — ordering
+
+- **[m5] Ordering is manager-gated** (supplier/ordering is manager territory,
+  §5). Order math (`buildOrderSuggestions` / `suggestedOrderQty`) is a pure
+  shared helper (shared/drink-order.ts), unit-tested.
+- **[m5] Suggested order = par − stock, rounded up to whole order units**,
+  positives only, per supplier × location.
+- **[m5] Receiving adds to a "Delivery intake" pseudo-area** (not a real shelf),
+  which the next stocktake reconciles away (alongside the seed bootstrap).
+  Substitutions route the received qty to the substitute drink
+  (`receivedStockDeltas`).
+- **[m5] `expectedDelivery` carries the supplier's delivery-window text**
+  (best-effort), not a strict ISO date — avoids a date-picker for Phase 1.
+- **[m5] Demand nudge is client-side** (`demandNudge`): upcoming-week guests
+  (S.guestsNextWeeks) vs the current-week baseline (S.guests); banner only, no
+  auto-change to par/quantities.
+- **[m5] Order e2e receives qty 0** so the lifecycle (draft→ordered→received) is
+  exercised without permanently mutating staging stock.

@@ -17,6 +17,7 @@ import {
 } from './drinks-constants';
 import { renderRecipesTab } from './drinks-recipe';
 import { renderDrinksStocktakeTab } from './drinks-stocktake';
+import { renderDrinksOrdersTab } from './drinks-order';
 import type { Drink, DrinkServingFormat, DrinkSupplier } from '@shared/types';
 
 function isManager(): boolean { return !!S.user?.isManager; }
@@ -27,6 +28,7 @@ function drinkTabs(): { key: string; label: string }[] {
     { key: 'catalogue', label: 'Catalogue' },
     { key: 'recipes', label: 'Recipes' },
     { key: 'stocktake', label: 'Stocktake' },
+    { key: 'orders', label: 'Orders' },
     { key: 'suppliers', label: 'Suppliers' },
   ];
 }
@@ -59,6 +61,7 @@ function renderDrinkTabBody(): void {
   if (!body) return;
   if (S.drinksSubTab === 'recipes') { renderRecipesTab(); return; }
   if (S.drinksSubTab === 'stocktake') { renderDrinksStocktakeTab(); return; }
+  if (S.drinksSubTab === 'orders') { renderDrinksOrdersTab(); return; }
   if (S.drinksSubTab === 'suppliers') { body.innerHTML = suppliersHtml(); return; }
   body.innerHTML = catalogueShellHtml();
   updateCatalogueResults();

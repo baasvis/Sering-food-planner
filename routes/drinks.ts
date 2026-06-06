@@ -21,8 +21,13 @@ import {
   mergeConfig, validateDrinkInput, buildDrinkData, buildRowData, recalcAllDrinkCosts,
   normalizeFormats, VALID_LOCATIONS, DrinkInput,
 } from '../lib/drinks';
+import { receivedStockDeltas } from '../shared/drink-order';
 
-const SEED_BOOTSTRAP_AREA = 'Uncounted (pre-stocktake)';
+// Pseudo storage areas the stocktake reconciles away when a real count lands:
+// the seed pre-stocktake bootstrap and the order-receiving intake. Receiving
+// adds to RECEIVING_AREA; a real count of the drink consumes both.
+const BOOTSTRAP_AREAS = ['Uncounted (pre-stocktake)', 'Delivery intake'];
+const RECEIVING_AREA = 'Delivery intake';
 
 const router = express.Router();
 
@@ -160,9 +165,8 @@ router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
           create: { id: `${id}-${location}-${areaKey}`, drinkId: id, location, area, qty, countedBy: user.email, countedAt: now },
           update: { qty, countedBy: user.email, countedAt: now },
         });
-        if (area !== SEED_BOOTSTRAP_AREA) {
-          await txc.drinkStock.deleteMany({ where: { drinkId: id, location, area: SEED_BOOTSTRAP_AREA } });
-        }
+        // A real count reconciles the bootstrap + delivery-intake pseudo-areas.
+        await txc.drinkStock.deleteMany({ where: { drinkId: id, location, area: { in: BOOTSTRAP_AREAS }, NOT: { area } } });
         saved++;
       }
     });
@@ -170,6 +174,148 @@ router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
   dbAppendLog(user.email, user.name, 'drink-stocktake', `${saved} counts @ ${location}/${area}`);
   broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
   res.json({ saved });
+}));
+
+// ─── Orders (lifecycle: draft → ordered → received / cancelled) ─────────────
+// Manager-gated (supplier/ordering is manager territory, GOAL §5). Receiving
+// applies line receivedQty (routing substitutions) to stock.
+
+type DrinkOrderRow = Prisma.DrinkOrderGetPayload<{ include: { lines: true } }>;
+
+function toDrinkOrder(row: DrinkOrderRow) {
+  return {
+    id: row.id, location: row.location, supplier: row.supplier, status: row.status,
+    orderedBy: row.orderedBy, orderedAt: row.orderedAt ? row.orderedAt.toISOString() : null,
+    expectedDelivery: row.expectedDelivery, receivedBy: row.receivedBy,
+    receivedAt: row.receivedAt ? row.receivedAt.toISOString() : null,
+    note: row.note, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(),
+    lines: (row.lines || []).slice().sort((a, b) => a.sortOrder - b.sortOrder).map(l => ({
+      id: l.id, orderId: l.orderId, drinkId: l.drinkId, ingredientId: l.ingredientId, name: l.name,
+      orderedQty: l.orderedQty, orderUnit: l.orderUnit, receivedQty: l.receivedQty,
+      substitutedBy: l.substitutedBy, deposit: l.deposit, sortOrder: l.sortOrder,
+    })),
+  };
+}
+
+async function fetchOrderShape(id: string) {
+  const row = await prisma.drinkOrder.findUnique({ where: { id }, include: { lines: { orderBy: { sortOrder: 'asc' } } } });
+  return row ? toDrinkOrder(row) : null;
+}
+
+router.get('/orders', asyncHandler(async (req: Request, res: Response) => {
+  const location = String(req.query.location || '');
+  const rows = await prisma.drinkOrder.findMany({
+    where: location ? { location } : {},
+    include: { lines: { orderBy: { sortOrder: 'asc' } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(rows.map(toDrinkOrder));
+}));
+
+interface OrderLineInput { drinkId?: string; ingredientId?: string; name?: string; orderedQty?: number; orderUnit?: string; deposit?: number }
+interface OrderInput { id?: string; location?: string; supplier?: string; note?: string; lines?: OrderLineInput[] }
+
+router.post('/orders', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const input = req.body as OrderInput;
+  const idErr = checkId(input.id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  if (typeof input.location !== 'string' || !VALID_LOCATIONS.includes(input.location)) throw new AppError(400, 'invalid location');
+  if (typeof input.supplier !== 'string' || !input.supplier || input.supplier.length > 200) throw new AppError(400, 'invalid supplier');
+  if (!Array.isArray(input.lines) || input.lines.length === 0) throw new AppError(400, 'no order lines');
+  if (input.lines.length > 200) throw new AppError(400, 'too many lines (max 200)');
+  const id = input.id as string;
+  await withWriteLock(async () => {
+    await prisma.$transaction(async (txc) => {
+      await txc.drinkOrder.create({
+        data: { id, location: input.location as string, supplier: input.supplier as string, status: 'draft', note: typeof input.note === 'string' ? input.note.slice(0, 2000) : '' },
+      });
+      const lineData = (input.lines || []).map((l, i) => ({
+        id: `${id}-l${i}`, orderId: id,
+        drinkId: typeof l.drinkId === 'string' ? l.drinkId : null,
+        ingredientId: typeof l.ingredientId === 'string' ? l.ingredientId : null,
+        name: typeof l.name === 'string' ? l.name.slice(0, 200) : '',
+        orderedQty: Number(l.orderedQty) || 0, orderUnit: typeof l.orderUnit === 'string' ? l.orderUnit.slice(0, 50) : '',
+        deposit: Number(l.deposit) || 0, sortOrder: i,
+      }));
+      await txc.drinkOrderLine.createMany({ data: lineData });
+    });
+  });
+  const full = await fetchOrderShape(id);
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-order-create', `draft order for ${input.supplier} @ ${input.location}`);
+  res.json(full);
+}));
+
+interface OrderPatchInput { status?: string; expectedDelivery?: string | null; lines?: Array<{ id?: string; receivedQty?: number | null; substitutedBy?: string | null }> }
+
+router.patch('/orders/:id', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const id = req.params.id as string;
+  const idErr = checkId(id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  const body = req.body as OrderPatchInput;
+  const user = actor(req);
+  const ok = await withWriteLock(async () => {
+    const existing = await prisma.drinkOrder.findUnique({ where: { id } });
+    if (!existing) return false;
+    await prisma.$transaction(async (txc) => {
+      const data: Prisma.DrinkOrderUncheckedUpdateInput = {};
+      if (body.status === 'ordered') { data.status = 'ordered'; data.orderedBy = user.email; data.orderedAt = new Date(); if (typeof body.expectedDelivery === 'string') data.expectedDelivery = body.expectedDelivery.slice(0, 100); }
+      else if (body.status === 'cancelled') { data.status = 'cancelled'; }
+      else if (body.status === 'received') { data.status = 'received'; data.receivedBy = user.email; data.receivedAt = new Date(); }
+      if (Array.isArray(body.lines)) {
+        for (const lu of body.lines) {
+          if (typeof lu.id !== 'string') continue;
+          await txc.drinkOrderLine.updateMany({
+            where: { id: lu.id, orderId: id },
+            data: {
+              receivedQty: lu.receivedQty != null && Number.isFinite(Number(lu.receivedQty)) ? Number(lu.receivedQty) : null,
+              substitutedBy: typeof lu.substitutedBy === 'string' && lu.substitutedBy ? lu.substitutedBy : null,
+            },
+          });
+        }
+      }
+      if (Object.keys(data).length) await txc.drinkOrder.update({ where: { id }, data });
+      if (body.status === 'received') {
+        const lines = await txc.drinkOrderLine.findMany({ where: { orderId: id } });
+        const deltas = receivedStockDeltas(lines.map(l => ({ drinkId: l.drinkId, receivedQty: l.receivedQty, substitutedByDrinkId: l.substitutedBy })));
+        for (const dlt of deltas) {
+          await txc.drinkStock.upsert({
+            where: { drinkId_location_area: { drinkId: dlt.drinkId, location: existing.location, area: RECEIVING_AREA } },
+            create: { id: `${dlt.drinkId}-${existing.location}-delivery-intake`, drinkId: dlt.drinkId, location: existing.location, area: RECEIVING_AREA, qty: dlt.qty, countedBy: user.email, countedAt: new Date() },
+            update: { qty: { increment: dlt.qty }, countedAt: new Date() },
+          });
+        }
+      }
+    });
+    return true;
+  });
+  if (!ok) throw new AppError(404, 'Order not found');
+  const full = await fetchOrderShape(id);
+  dbAppendLog(user.email, user.name, 'drink-order-update', `order ${id} → ${body.status || 'updated'}`);
+  // Receiving changes stock → tell other clients to refetch the catalogue pools.
+  if (body.status === 'received') broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
+  res.json(full);
+}));
+
+router.delete('/orders/:id', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const id = req.params.id as string;
+  const idErr = checkId(id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  const result = await withWriteLock(async () => {
+    const o = await prisma.drinkOrder.findUnique({ where: { id } });
+    if (!o) return { notFound: true } as const;
+    if (o.status !== 'draft') return { notDraft: true } as const;
+    await prisma.drinkOrder.delete({ where: { id } }); // cascade deletes lines
+    return { ok: true } as const;
+  });
+  if ('notFound' in result) throw new AppError(404, 'Order not found');
+  if ('notDraft' in result) throw new AppError(400, 'Only draft orders can be deleted.');
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-order-delete', `deleted order ${id}`);
+  res.json({ ok: true });
 }));
 
 // ─── Suppliers ──────────────────────────────────────────────────────────────
