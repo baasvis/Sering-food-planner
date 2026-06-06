@@ -284,3 +284,38 @@ and `drinks(bar/stocktake/orders/suppliers/photo)`.
   wired to the existing `POST/PATCH/DELETE /api/drinks/suppliers`.
 - **e2e** — `drinks-stocktake.spec.ts` updated for the overview→Start→area flow;
   catalogue + order specs unchanged (manual order button retained).
+
+## Feedback round 2 — 2026-06-06 (second review + reference PDF)
+
+- **+ Add drink → kind chooser** — "+ Add" now asks Bought vs Recipe, so cocktails
+  / recipe drinks are addable from the catalogue too (routes to `openDrinkForm` or
+  `openDrinkRecipeForm`). Catalogue e2e gained the extra "Bought drink" click.
+- **Foldout form** — Supplier & ordering and Serving (incl. formats/prices) are
+  `<details>` foldouts (Supplier collapsed, Serving open) for easier oversight.
+- **AI PDF import** — `lib/drinks-import.ts` sends the uploaded PDF to Claude as a
+  native **document** block (model `AI_ANALYSIS_MODEL`, tool-forced structured
+  output) → `POST /api/drinks/import/scan` returns a product+price list the user
+  reviews/edits/checks → `POST /api/drinks/import/commit` bulk-creates (one
+  cost-recalc). Manager-gated; **503 without `ANTHROPIC_API_KEY`** (unset on
+  staging, so the scan was verified to 503 and commit verified with a stub; the
+  frontend shows a friendly "not set up" message since prod masks 5xx bodies).
+  This is also how the attached A5 PDF will eventually be read — Claude reads PDFs
+  the local sandbox tools couldn't.
+- **Bar** — removed the confusing "Build card" button (info is inline now).
+- **Stocktake by storage area** — each drink gets a per-location home **area**
+  (stored in the `locations` JSON, no migration); the overview groups by area,
+  colour-coded, with inline-editable In-stock + enough/short status and
+  name→editor links. Editing saves the count to that area via `/stock/bulk`
+  (prefill = pool; only changed rows save). Seeded drinks start "Unassigned"
+  until an area is set on the edit screen.
+- **Orders** — live **order-cost total** (Σ qty × costPrice) + per-row cost cell on
+  each supplier cart, recomputed as quantities change (alongside deposit).
+- **Production** — user-facing "Par" → "Needed".
+- **Menus** — Edit-drinks list is searchable; New/Edit menu picks a **subset** of
+  the assortment (stored in `menu.sections`; print route renders only those, else
+  the whole assortment); reused a shared `drinkCheckRows` searchable list.
+- **Visual polish** — per-category accent colours via `[data-cat]`, card depth +
+  hover, accent section headers, tab-bar + table-row hover; all on the app's
+  design tokens so light/dark + per-location accent still apply.
+- **Menu print formats (deferred)** — page-size/template options await Daan
+  re-sending the bar menu as a PNG/JPG (the PDF couldn't be rendered in-sandbox).
