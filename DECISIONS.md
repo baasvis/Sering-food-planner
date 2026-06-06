@@ -207,3 +207,31 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
 - **[m9] Seed idempotency re-verified** — a second `prisma db seed` skips every
   drinks section (suppliers/catalogue/config/recipes/assortments); counts stable
   (95 drinks, 11 suppliers, 3 assortments).
+
+## Post-rebase — onto main #94 ("Total review (2026-06-05)")
+
+- **Rebased the whole drinks branch onto origin/main `67af839`** (the
+  69-finding "Total review" remediation merge) after it landed mid-build, per the
+  user's "rebase after every major step / check if main moved" instruction. Nine
+  commits (m0–m9) replayed; only two conflicts, both expected and additive:
+  - `playwright.config.ts` — kept *both* main's `DIRECTOR_EMAILS: 'dev@local'`
+    and my `MANAGER_EMAILS: 'dev@local'`. (Director already implies manager via
+    `isManagerEmail`, so MANAGER_EMAILS is belt-and-suspenders / intent-doc.)
+  - `DESIGN.md` — kept both main's new feature bullets + data-model rows
+    (Supplies / Training / Today panel) and my Drinks bullet + 11 drink rows.
+  - Every code file (app.ts, routes/auth.ts, public/js/state.ts, utils.ts,
+    init.ts) auto-merged: my additions and main's edits were in disjoint regions.
+    Verified: drinks router still mounted, `isManagerEmail`/`requireManager`
+    intact and `isManager` merged alongside main's `isDirector` in the user
+    resolver, `drinks` still in NAV_SCREENS, drinks migration still last.
+  - Typecheck (server+client) clean post-rebase.
+- **Synced `e2e/navigation.spec.ts`** — added `'drinks'` to its hardcoded
+  `NAV_SCREENS` mirror (after `orders`). The file's own header comment mandates
+  keeping this list in sync when a nav screen is added (audit TEST-2/TEST-7 was
+  about exactly this drift); leaving drinks out would have recreated it. This
+  makes the navigation smoke test exercise the drinks screen (navigates, renders
+  non-empty, no console errors) on top of the dedicated drinks specs.
+- **`stocktake-start.spec.ts` flake** — failed once under full-suite load (5s
+  default `toBeVisible` timeout racing the staging DB while 20 specs ran), passed
+  in isolation (18.2s). Not a regression: the drinks branch touches none of the
+  orders/stocktake/inventory code.

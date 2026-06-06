@@ -16,6 +16,7 @@ const NAV_SCREENS = [
   'planner',
   'recipe-index',
   'orders',
+  'drinks',
   'competencies',
   'supplies',
   'finance',
