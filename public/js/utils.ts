@@ -209,7 +209,17 @@ export async function doSave(): Promise<void> {
   // while this save is in flight stays dirty and is sent on the next save.
   // (The old code ran takeSnapshot() AFTER the await, rebuilding the snapshot
   // from live state and silently absorbing mid-save edits.)
-  const sentBatches = (patch.batches || []).map(b => [b.id, JSON.stringify(b)] as const);
+  // Record the FULL live batch (not the trimmed wire payload) into the save
+  // snapshot. computePatch() may omit unchanged inventory[]/shipments[] from the
+  // patch (PERF-1), but the server merges those from the existing DB row, so the
+  // post-save state is the full local batch. Storing the trimmed payload would
+  // leave a phantom diff (live batch has the field, snapshot doesn't) and the
+  // save indicator would stick on "Unsaved" forever, re-sending every save
+  // (regression caught by e2e/batch-assign-modal).
+  const sentBatches = (patch.batches || []).map(b => {
+    const full = S.batches.find((x: Batch) => x.id === b.id);
+    return [b.id, JSON.stringify(full ?? b)] as const;
+  });
   const sentDeletedBatches = [...(patch.deletedBatches || [])];
   const sentGuests = patch.guests ? JSON.stringify(patch.guests) : null;
   const sentCaterings = (patch.caterings || []).map(c => [c.id, JSON.stringify(c)] as const);
@@ -994,8 +1004,14 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
 // Preserves local diffs so pending saves still detect unsaved changes.
 function updateSnapshotForRemote(msg: RemotePatchMessage): void {
   if (msg.batches) {
+    // Store the MERGED batch (from S.batches after the field-merge in
+    // applyRemotePatch), not the raw remote payload. A remote patch may omit
+    // unchanged inventory[]/shipments[] (PERF-1); storing the trimmed payload
+    // here would leave a phantom diff vs the merged local batch and peg the
+    // receiving client on "Unsaved", re-sending the batch on its next save.
     for (const b of msg.batches) {
-      _lastSaved.batches.set(b.id, JSON.stringify(b));
+      const merged = S.batches.find((x: Batch) => x.id === b.id);
+      _lastSaved.batches.set(b.id, JSON.stringify(merged ?? b));
     }
   }
   if (msg.deletedBatches) {

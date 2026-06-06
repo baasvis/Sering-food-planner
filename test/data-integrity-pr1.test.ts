@@ -36,7 +36,7 @@ jest.mock('../public/js/navigate', () => ({
 }));
 
 import { S } from '../public/js/state';
-import { computePatch, takeSnapshot, applyRemotePatch } from '../public/js/utils';
+import { computePatch, takeSnapshot, applyRemotePatch, doSave, patchIsEmpty } from '../public/js/utils';
 import { resolveStockDeduction } from '../public/js/recipe-editor';
 import type { Batch, DishType, InventoryEntry, Location, StorageType } from '../shared/types';
 
@@ -131,5 +131,43 @@ describe('PERF-1 — applyRemotePatch preserves stock when a patch omits it', ()
     applyRemotePatch({ batches: [incoming], user: 'Other' } as unknown as Parameters<typeof applyRemotePatch>[0]);
     const after = S.batches.find(x => x.id === local.id)!;
     expect((after.inventory || []).reduce((s, e) => s + e.qty, 0)).toBe(9);
+  });
+});
+
+// The two bugs below both stem from PERF-1 trimming inventory[]/shipments[] from
+// the wire payload: the SNAPSHOT (_lastSaved) must still track the FULL batch, or
+// the next computePatch() sees a phantom diff and the save indicator sticks on
+// "Unsaved" forever, re-sending the batch on every save. The existing tests above
+// prove the trim + the merge; these prove the snapshot reconciles afterwards.
+describe('PERF-1 — local save snapshot reconciles to the full batch (no phantom "Unsaved")', () => {
+  test('after a trimmed save, computePatch() is empty (not perpetually dirty)', async () => {
+    const b = makeBatch({ inventory: [inv(5)], shipments: [] }); // explicit arrays (unified-batch norm)
+    S.batches = [b];
+    takeSnapshot();
+    b.inventory = [inv(10)]; // mutate inventory only → computePatch trims unchanged shipments[]
+    const origFetch = (global as { fetch?: unknown }).fetch;
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    (global as unknown as { fetch: unknown }).fetch = fetchMock;
+    try {
+      await doSave();
+    } finally {
+      (global as unknown as { fetch: unknown }).fetch = origFetch;
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);            // the save actually fired
+    expect(patchIsEmpty(computePatch())).toBe(true);       // pre-fix: false (phantom shipments diff)
+  });
+});
+
+describe('PERF-1 — remote-patch snapshot reconciles to the merged batch (cross-client)', () => {
+  test('after a remote trimmed patch merges, computePatch() is empty (no phantom dirty)', () => {
+    const local = makeBatch({ inventory: [inv(50)], shipments: [] });
+    S.batches = [local];
+    takeSnapshot();
+    const partial: Record<string, unknown> = { id: local.id, name: 'Remote rename' }; // trimmed remote patch
+    applyRemotePatch({ batches: [partial], user: 'Other' } as unknown as Parameters<typeof applyRemotePatch>[0]);
+    const after = S.batches.find(x => x.id === local.id)!;
+    expect(after.name).toBe('Remote rename');                                // change applied
+    expect((after.inventory || []).reduce((s, e) => s + e.qty, 0)).toBe(50); // stock preserved by merge
+    expect(patchIsEmpty(computePatch())).toBe(true);                         // pre-fix: false (phantom inventory diff)
   });
 });
