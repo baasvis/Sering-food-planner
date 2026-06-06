@@ -498,3 +498,285 @@ export interface AiInsightRecord {
   status: InsightStatus;
   resolvedAt?: string;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRINKS MODULE — see DRINKS_DOMAIN.md for the domain spec.
+// Interface names intentionally mirror the Prisma model names (like Batch /
+// Supply / Ingredient do); backend code uses the lowercase prisma.<model>
+// client accessors and never imports the Prisma model *types* by name, so there
+// is no collision.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type DrinkMode = 'catalogue' | 'recipe';
+export type DrinkStatus = 'draft' | 'published';
+export type DrinkRefKind = 'ingredient' | 'drink';
+export type DrinkOrderStatus = 'draft' | 'ordered' | 'received' | 'cancelled';
+export type DrinkProductionStatus = 'fresh' | 'expired' | 'discarded';
+export type WriteOffReason = 'breakage' | 'spillage' | 'expired' | 'staff-drink' | 'comp' | 'other';
+
+/** Bumped on a breaking Drink shape change (mirrors BATCH_SCHEMA_VERSION). */
+export const DRINK_SCHEMA_VERSION = 1;
+
+/** A sellable serving format, e.g. tap glass 250ml or bottle 750ml. `price`
+ *  is per-location and incl-BTW; null = price not set yet. */
+export interface DrinkServingFormat {
+  name: string;
+  volumeMl: number;
+  glass?: string;
+  price: Record<string, number | null>;
+}
+
+/** Per-location catalogue data for a drink. Pool stock is NOT here — it lives
+ *  per storage area in DrinkStock and is summed (see stockByLocation). */
+export interface DrinkLocationInfo {
+  par: number | null;
+  active: boolean;
+}
+
+/** Info fields, mostly for wine. All optional. */
+export interface DrinkInfo {
+  producer?: string;
+  region?: string;
+  country?: string;
+  vintage?: string;
+  soil?: string;
+  grapes?: string;
+  natural?: boolean;
+  bio?: boolean;
+  profile?: string;
+  notes?: string;
+  extra?: string;
+}
+
+/** Batch/premix definition for recipe-mode drinks. */
+export interface DrinkBatchDef {
+  volumeMl: number;
+  bottleSizeMl: number | null;
+  note?: string;
+}
+
+/** Prep time inputs that drive labour cost amortisation. */
+export interface DrinkPrepTime {
+  prebatchMin: number;
+  prebatchYieldServings?: number | null;
+  perServeMin: number;
+}
+
+/** One ingredient row of a recipe-mode drink — references either a shared
+ *  Ingredient (kind 'ingredient') or another Drink building block (kind
+ *  'drink'). `refName`/`refCostPerUnit` are denormalized for display + costing. */
+export interface DrinkIngredientRow {
+  id: string;
+  drinkId: string;
+  sortOrder: number;
+  refKind: DrinkRefKind;
+  ingredientId: string | null;
+  refDrinkId: string | null;
+  amount: number | null;
+  unit: string;
+  note: string;
+  refName?: string;
+  refCostPerUnit?: number | null; // € per ml/g/piece (computed)
+}
+
+export interface Drink {
+  id: string;
+  name: string;
+  mode: DrinkMode;
+  category: string;
+  subtype: string;
+  abv: number;
+  btwRate: number | null;
+  status: DrinkStatus;
+  archived: boolean;
+  sellable: boolean;
+  supplier: string;
+  orderUnit: string;
+  orderUnitMl: number | null;
+  packNote: string;
+  itemId: string | null;
+  deposit: number;
+  costPrice: number | null;
+  costNote: string;
+  formats: DrinkServingFormat[];
+  locations: Record<string, DrinkLocationInfo>;
+  info: DrinkInfo;
+  tebiProductNames: string[];
+  serveVolumeMl: number | null;
+  glass: string;
+  glassVolumeMl: number | null;
+  servingTemp: string;
+  characteristics: string[];
+  garnish: string[];
+  seasonality: string;
+  serviceInstructions: string;
+  prepSteps: string[];
+  batch: DrinkBatchDef;
+  prepTime: DrinkPrepTime;
+  shelfLifeDays: number | null;
+  costPerServe: number | null;
+  suggestedPrice: number | null;
+  createdAt: string;
+  updatedAt: string;
+  ingredientRows: DrinkIngredientRow[];
+  /** Computed pool stock per location (sum of DrinkStock area rows). */
+  stockByLocation?: Record<string, number>;
+}
+
+export interface DrinkSupplierContact {
+  name?: string;
+  email?: string;
+  phone?: string;
+  url?: string;
+  [k: string]: string | undefined;
+}
+
+export interface DrinkSupplier {
+  id: string;
+  name: string;
+  products: string;
+  orderDays: string[];
+  orderDaysNote: string;
+  orderCutoff: string;
+  deliveryWindow: string;
+  contact: DrinkSupplierContact;
+  minimumOrder: string;
+  notes: string;
+  priceListRef: string;
+}
+
+/** One per-area stock count for a drink at a location. Pool = Σ qty over areas. */
+export interface DrinkStockEntry {
+  id: string;
+  drinkId: string;
+  location: string;
+  area: string;
+  qty: number;
+  countedBy: string;
+  countedAt: string | null;
+}
+
+export interface DrinkOrderLine {
+  id: string;
+  orderId: string;
+  drinkId: string | null;
+  ingredientId: string | null;
+  name: string;
+  orderedQty: number;
+  orderUnit: string;
+  receivedQty: number | null;
+  substitutedBy: string | null;
+  deposit: number;
+  sortOrder: number;
+}
+
+export interface DrinkOrder {
+  id: string;
+  location: string;
+  supplier: string;
+  status: DrinkOrderStatus;
+  orderedBy: string | null;
+  orderedAt: string | null;
+  expectedDelivery: string | null;
+  receivedBy: string | null;
+  receivedAt: string | null;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+  lines: DrinkOrderLine[];
+}
+
+export interface DrinkProductionLog {
+  id: string;
+  drinkId: string;
+  location: string;
+  batchesMade: number;
+  volumeMl: number;
+  bottlesYielded: number;
+  madeBy: string;
+  madeOn: string;
+  expiresOn: string | null;
+  status: DrinkProductionStatus;
+  note: string;
+  createdAt: string;
+}
+
+export interface DrinkWriteOff {
+  id: string;
+  refKind: DrinkRefKind;
+  drinkId: string | null;
+  ingredientId: string | null;
+  name: string;
+  location: string;
+  qty: number;
+  unit: string;
+  reason: WriteOffReason;
+  note: string;
+  who: string;
+  createdAt: string;
+}
+
+/** An assortment entry references a drink and optionally which serving formats
+ *  are offered (empty/absent = all of the drink's formats). */
+export interface AssortmentEntry {
+  drinkId: string;
+  formats?: string[];
+}
+
+export interface Assortment {
+  id: string;
+  name: string;
+  location: string;
+  serviceContext: string; // '' | 'testtafel'
+  description: string;
+  entries: AssortmentEntry[];
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DrinkMenuSection {
+  title: string;
+  drinkIds: string[];
+}
+
+export interface DrinkMenuLayout {
+  columns: 1 | 2;
+  sectionStyle: string;
+  typeScale: string;
+}
+
+export interface DrinkMenu {
+  id: string;
+  name: string;
+  assortmentId: string;
+  location: string;
+  sections: DrinkMenuSection[];
+  layout: DrinkMenuLayout;
+  published: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DrinkBtwRule {
+  alcoholicAbvThreshold: number;
+  alcoholic: number;
+  nonAlcoholic: number;
+}
+
+/** Per-category markup targets. `defaultMultiple` is the fallback where a
+ *  category target is null (cost unknown at seed time). */
+export interface DrinkMarkupTargets {
+  defaultMultiple: number;
+  [category: string]: number | null;
+}
+
+/** Drinks module config singleton (parsed from DrinkConfig.config JSON). */
+export interface DrinkConfig {
+  labourRatePerMin: number;
+  priceRounding: number;
+  btwRule: DrinkBtwRule;
+  markupTargets: DrinkMarkupTargets;
+  demandNudgeThresholdPct: number;
+  defaultShelfLifeDays: number;
+}

@@ -520,3 +520,258 @@ model TeachingEvent {
   @@index([learnerId])
   @@map("teaching_events")
 }
+
+// ── Drinks module ──
+// A unified drinks system across locations: catalogue (bought) + recipe
+// (homemade) drinks, costing/pricing, supplier-cycle stocktakes, ordering,
+// production logging, write-offs, service cards, assortments + menus. See
+// DRINKS_DOMAIN.md for the full domain spec.
+//
+// Stock is ONE pool per (drink, location) but is stored per storage area in
+// DrinkStock and summed — this keeps per-area history so storage tiers can be
+// split later (DRINKS_DOMAIN §3). Recipe ingredient rows reference either the
+// shared Ingredient DB by a LOOSE id (no Prisma relation — keeps the existing
+// Ingredient model byte-for-byte unchanged, per the GOAL touch-point rules) or
+// another Drink (building blocks, via the self-relation below). Order lines and
+// write-offs likewise use loose ingredient refs so drinks history never couples
+// to ingredient lifecycle.
+
+model Drink {
+  id       String  @id
+  name     String
+  mode     String // 'catalogue' | 'recipe'
+  category String
+  subtype  String  @default("")
+  abv      Float   @default(0)
+  btwRate  Int?    @map("btw_rate") // null = auto (abv>=0.5 → 21 else 9); overridable
+  status   String  @default("draft") // 'draft' | 'published'
+  archived Boolean @default(false)
+  sellable Boolean @default(true)
+
+  // bought / catalogue fields
+  supplier    String  @default("")
+  orderUnit   String  @default("") @map("order_unit")
+  orderUnitMl Float?  @map("order_unit_ml") // volume of one order unit (keg 20000, bottle 750) — per-serve cost + fractional depletion (Phase 2)
+  packNote    String  @default("") @map("pack_note")
+  itemId      String? @map("item_id") // supplier order code
+  deposit     Float   @default(0) // statiegeld € per order unit
+  costPrice   Float?  @map("cost_price") // ex-BTW per order unit
+  costNote    String  @default("") @map("cost_note")
+
+  formats          Json     @default("[]") // [{ name, volumeMl, glass?, price: { [loc]: number|null } }]
+  locations        Json     @default("{}") // { [loc]: { par: number|null, active: boolean } }
+  info             Json     @default("{}") // wine/info: { producer, region, country, vintage, soil, grapes, natural, bio, profile, notes, extra }
+  tebiProductNames String[] @default([]) @map("tebi_product_names") // Phase-2 sales reconciliation hook
+
+  // recipe-mode fields
+  serveVolumeMl       Float?   @map("serve_volume_ml")
+  glass               String   @default("")
+  glassVolumeMl       Float?   @map("glass_volume_ml")
+  servingTemp         String   @default("") @map("serving_temp")
+  characteristics     String[] @default([])
+  garnish             String[] @default([])
+  seasonality         String   @default("")
+  serviceInstructions String   @default("") @map("service_instructions")
+  prepSteps           Json     @default("[]") @map("prep_steps") // string[]
+  batch               Json     @default("{}") // { volumeMl, bottleSizeMl, note? }
+  prepTime            Json     @default("{}") @map("prep_time") // { prebatchMin, prebatchYieldServings?, perServeMin }
+  shelfLifeDays       Int?     @map("shelf_life_days")
+
+  // costing cache (computed in M3; ex-BTW per serve)
+  costPerServe   Float? @map("cost_per_serve")
+  suggestedPrice Float? @map("suggested_price")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  ingredientRows DrinkIngredientRow[] @relation("DrinkOwnsRows")
+  usedAsRefIn    DrinkIngredientRow[] @relation("DrinkUsedAsRef")
+  stockEntries   DrinkStock[]
+  productionLogs DrinkProductionLog[]
+
+  @@index([mode])
+  @@index([category])
+  @@index([status])
+  @@index([archived])
+  @@map("drinks")
+}
+
+model DrinkIngredientRow {
+  id           String  @id
+  drinkId      String  @map("drink_id")
+  sortOrder    Int     @default(0) @map("sort_order")
+  refKind      String  @map("ref_kind") // 'ingredient' | 'drink'
+  ingredientId String? @map("ingredient_id") // loose ref into ingredients (no FK — Ingredient model untouched)
+  refDrinkId   String? @map("ref_drink_id") // building-block ref → drinks.id
+  amount       Float?
+  unit         String  @default("ml") // 'ml' | 'g' | 'piece'
+  note         String  @default("")
+
+  drink    Drink  @relation("DrinkOwnsRows", fields: [drinkId], references: [id], onDelete: Cascade)
+  refDrink Drink? @relation("DrinkUsedAsRef", fields: [refDrinkId], references: [id])
+
+  @@index([drinkId])
+  @@index([ingredientId])
+  @@index([refDrinkId])
+  @@map("drink_ingredient_rows")
+}
+
+model DrinkSupplier {
+  id             String   @id
+  name           String   @unique
+  products       String   @default("")
+  orderDays      String[] @default([]) @map("order_days")
+  orderDaysNote  String   @default("") @map("order_days_note")
+  orderCutoff    String   @default("") @map("order_cutoff")
+  deliveryWindow String   @default("") @map("delivery_window")
+  contact        Json     @default("{}") // { name?, email?, phone?, url?, ... }
+  minimumOrder   String   @default("") @map("minimum_order")
+  notes          String   @default("")
+  priceListRef   String   @default("") @map("price_list_ref")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("drink_suppliers")
+}
+
+model DrinkStock {
+  id        String    @id
+  drinkId   String    @map("drink_id")
+  location  String
+  area      String    @default("")
+  qty       Float     @default(0) // supplier units (decimal allowed)
+  countedBy String    @default("") @map("counted_by")
+  countedAt DateTime? @map("counted_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  drink Drink @relation(fields: [drinkId], references: [id], onDelete: Cascade)
+
+  @@unique([drinkId, location, area])
+  @@index([drinkId])
+  @@index([location])
+  @@map("drink_stock")
+}
+
+model DrinkOrder {
+  id               String    @id
+  location         String
+  supplier         String    @default("")
+  status           String    @default("draft") // 'draft'|'ordered'|'received'|'cancelled'
+  orderedBy        String?   @map("ordered_by")
+  orderedAt        DateTime? @map("ordered_at")
+  expectedDelivery String?   @map("expected_delivery") // ISO date
+  receivedBy       String?   @map("received_by")
+  receivedAt       DateTime? @map("received_at")
+  note             String    @default("")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  lines DrinkOrderLine[]
+
+  @@index([location])
+  @@index([status])
+  @@map("drink_orders")
+}
+
+model DrinkOrderLine {
+  id            String  @id
+  orderId       String  @map("order_id")
+  drinkId       String? @map("drink_id") // loose ref → drinks.id (or)
+  ingredientId  String? @map("ingredient_id") // loose ref → ingredients.id (shared bar items)
+  name          String  @default("")
+  orderedQty    Float   @default(0) @map("ordered_qty")
+  orderUnit     String  @default("") @map("order_unit")
+  receivedQty   Float?  @map("received_qty")
+  substitutedBy String? @map("substituted_by")
+  deposit       Float   @default(0)
+  sortOrder     Int     @default(0) @map("sort_order")
+
+  order DrinkOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("drink_order_lines")
+}
+
+model DrinkProductionLog {
+  id             String   @id
+  drinkId        String   @map("drink_id")
+  location       String
+  batchesMade    Float    @default(0) @map("batches_made")
+  volumeMl       Float    @default(0) @map("volume_ml")
+  bottlesYielded Float    @default(0) @map("bottles_yielded")
+  madeBy         String   @default("") @map("made_by")
+  madeOn         String   @map("made_on") // ISO date
+  expiresOn      String?  @map("expires_on") // madeOn + shelfLifeDays
+  status         String   @default("fresh") // 'fresh'|'expired'|'discarded'
+  note           String   @default("")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  drink Drink @relation(fields: [drinkId], references: [id], onDelete: Cascade)
+
+  @@index([drinkId])
+  @@index([location])
+  @@map("drink_production_logs")
+}
+
+model DrinkWriteOff {
+  id           String   @id
+  refKind      String   @map("ref_kind") // 'drink'|'ingredient'
+  drinkId      String?  @map("drink_id") // loose ref
+  ingredientId String?  @map("ingredient_id") // loose ref
+  name         String   @default("")
+  location     String
+  qty          Float    @default(0)
+  unit         String   @default("")
+  reason       String // breakage|spillage|expired|staff-drink|comp|other
+  note         String   @default("")
+  who          String   @default("")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([refKind])
+  @@index([location])
+  @@map("drink_write_offs")
+}
+
+model Assortment {
+  id             String   @id
+  name           String
+  location       String // 'west'|'centraal'
+  serviceContext String   @default("") @map("service_context") // ''|'testtafel'
+  description    String   @default("")
+  entries        Json     @default("[]") // [{ drinkId, formats?: string[] }]
+  archived       Boolean  @default(false)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  menus DrinkMenu[]
+
+  @@index([location])
+  @@map("assortments")
+}
+
+model DrinkMenu {
+  id           String   @id
+  name         String
+  assortmentId String   @map("assortment_id")
+  location     String
+  sections     Json     @default("[]") // [{ title, drinkIds: string[] }]
+  layout       Json     @default("{}") // { columns, sectionStyle, typeScale }
+  published    Boolean  @default(false)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  assortment Assortment @relation(fields: [assortmentId], references: [id], onDelete: Cascade)
+
+  @@index([assortmentId])
+  @@map("drink_menus")
+}
+
+// Singleton module config (id always "default"), mirroring StorageConfig /
+// KitchenEquipment. Holds labour rate, price rounding, BTW rule, per-category
+// markup targets, demand-nudge threshold, default shelf life.
+model DrinkConfig {
+  id     String @id @default("default")
+  config Json   @default("{}")
+
+  @@map("drink_config")
+}
