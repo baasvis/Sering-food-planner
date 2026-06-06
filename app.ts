@@ -161,6 +161,7 @@ import healthRouter from './routes/health';
 import competenciesRouter from './routes/competencies';
 import suppliesRouter from './routes/supplies';
 import accessRouter from './routes/access';
+import drinksRouter from './routes/drinks';
 
 app.use('/api/data',              dataRouter);
 app.use('/api/batches',           batchesRouter);
@@ -176,6 +177,7 @@ app.use('/api/health',            healthRouter);
 app.use('/api/competencies',      competenciesRouter);
 app.use('/api/supplies',          suppliesRouter);
 app.use('/api/access',            accessRouter);
+app.use('/api/drinks',            drinksRouter);
 
 import adminRouter from './routes/admin';
 app.use('/api/admin',             adminRouter);

@@ -63,12 +63,32 @@ export function isStaffLeadEmail(email: string | null | undefined): boolean {
   return CONFIG.STAFF_LEAD_EMAILS.includes(email.toLowerCase());
 }
 
+/** Whether the given email is a manager — director ∪ MANAGER_EMAILS. Gates the
+ *  drinks-module money/supplier/publish writes (GOAL §5). Directors are always
+ *  managers. Exported so routes/drinks.ts shares one source of truth. */
+export function isManagerEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return isDirectorEmail(email) || CONFIG.MANAGER_EMAILS.includes(email.toLowerCase());
+}
+
 /** Director-only gate for admin endpoints. requireAuth must run first so
  *  req.user is populated. Shared by routes/access.ts and routes/recipe-ai.ts
  *  (one source of truth for the director check). */
 export function requireDirector(req: Request, res: Response, next: NextFunction): void {
   if (!isDirectorEmail(req.user?.email)) {
     res.status(403).json({ error: 'Forbidden', message: 'Director access required.' });
+    return;
+  }
+  next();
+}
+
+/** Manager-only gate for unconditionally manager-gated endpoints. requireAuth
+ *  must run first so req.user is populated. (routes/drinks.ts mostly uses an
+ *  inline manager check so it can keep recipe-mode drafting open while gating
+ *  catalogue/money writes — but this middleware is the shared mechanism.) */
+export function requireManager(req: Request, res: Response, next: NextFunction): void {
+  if (!isManagerEmail(req.user?.email)) {
+    res.status(403).json({ error: 'Forbidden', message: 'Manager access required.' });
     return;
   }
   next();
@@ -148,8 +168,11 @@ function accessRequestMessage(status: RequestOutcome): string {
   }
 }
 
+// Stamp the derived auth flags onto a user object. Named `withDirector`
+// historically; now also sets isManager (director ∪ MANAGER_EMAILS) so the
+// drinks-module affordances light up for managers.
 function withDirector(user: AppUser): AppUser {
-  return { ...user, isDirector: isDirectorEmail(user.email) };
+  return { ...user, isDirector: isDirectorEmail(user.email), isManager: isManagerEmail(user.email) };
 }
 
 /** Resolve a user's per-screen page permissions from their assigned role.
@@ -271,7 +294,7 @@ router.post('/google', asyncHandler(async (req: Request, res: Response) => {
     const devUser: AppUser = withDirector({ email: 'dev@local', name: 'Dev Mode', picture: null });
     const sessionId = await createSession(devUser);
     res.cookie('session', sessionId, cookieOpts());
-    return res.json({ ok: true, user: { email: devUser.email, name: devUser.name, isDirector: devUser.isDirector, permissions: await resolvePermissions(devUser.email) } });
+    return res.json({ ok: true, user: { email: devUser.email, name: devUser.name, isDirector: devUser.isDirector, isManager: devUser.isManager, permissions: await resolvePermissions(devUser.email) } });
   }
 
   try {
@@ -298,7 +321,7 @@ router.post('/google', asyncHandler(async (req: Request, res: Response) => {
     const userWithRole = withDirector(user);
     const sessionId = await createSession(userWithRole);
     res.cookie('session', sessionId, cookieOpts());
-    return res.json({ ok: true, user: { email: userWithRole.email, name: userWithRole.name, picture: userWithRole.picture, isDirector: userWithRole.isDirector, permissions: await resolvePermissions(userWithRole.email) } });
+    return res.json({ ok: true, user: { email: userWithRole.email, name: userWithRole.name, picture: userWithRole.picture, isDirector: userWithRole.isDirector, isManager: userWithRole.isManager, permissions: await resolvePermissions(userWithRole.email) } });
   } catch (e: unknown) {
     console.error('Auth error:', errMsg(e));
     return res.status(401).json({ error: 'Invalid token' });

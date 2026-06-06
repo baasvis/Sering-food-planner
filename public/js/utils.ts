@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply, Drink, DrinkSupplier, DrinkConfig } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
@@ -517,6 +517,31 @@ export async function saveClosedServices(): Promise<void> {
   }
 }
 
+// ── Drinks module loaders ──
+
+export async function loadDrinks(): Promise<void> {
+  try {
+    const data = await apiGet('/api/drinks');
+    if (Array.isArray(data)) S.drinks = data;
+  } catch (e: unknown) {
+    console.warn('Could not load drinks:', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
+export async function loadDrinkSuppliers(): Promise<void> {
+  try {
+    const data = await apiGet('/api/drinks/suppliers');
+    if (Array.isArray(data)) S.drinkSuppliers = data;
+  } catch (_e: unknown) { /* non-fatal — suppliers tab shows empty */ }
+}
+
+export async function loadDrinkConfig(): Promise<void> {
+  try {
+    const cfg = await apiGet('/api/drinks/config');
+    if (cfg && typeof cfg === 'object') S.drinkConfig = cfg;
+  } catch (_e: unknown) { S.drinkConfig = null; }
+}
+
 export async function loadGuestHistory(): Promise<void> {
   try {
     const data = await apiGet('/api/guest-history');
@@ -747,6 +772,12 @@ interface RemotePatchMessage {
   deletedIngredients?: string[];
   supplies?: Supply[];
   deletedSupplies?: string[];
+  // Drinks module item-deltas + config full-replace
+  drinks?: Drink[];
+  deletedDrinks?: string[];
+  drinkSuppliers?: DrinkSupplier[];
+  deletedDrinkSuppliers?: string[];
+  drinkConfig?: DrinkConfig;
   // Full-replace resources
   storageConfig?: StorageConfig;
   kitchenEquipment?: KitchenEquipment;
@@ -794,6 +825,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           recipes, deletedRecipes,
           ingredients, deletedIngredients,
           supplies, deletedSupplies,
+          drinks, deletedDrinks, drinkSuppliers, deletedDrinkSuppliers, drinkConfig,
           storageConfig, kitchenEquipment, cookRhythm, costTargets, closedServices,
           prepChecklist, inventoryCompletion, ritualCompletion,
           guestsNextWeeks,
@@ -884,6 +916,30 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     if (deletedSupplies) deletedSupplies.forEach((id: string) => supplyMap.delete(id));
     if (supplies) supplies.forEach((s: Supply) => supplyMap.set(s.id, s));
     S.supplies = [...supplyMap.values()];
+    changed = true;
+  }
+
+  // Merge drinks (item-delta by id)
+  if ((drinks && drinks.length) || (deletedDrinks && deletedDrinks.length)) {
+    const drinkMap = new Map((S.drinks || []).map((d: Drink) => [d.id, d]));
+    if (deletedDrinks) deletedDrinks.forEach((id: string) => drinkMap.delete(id));
+    if (drinks) drinks.forEach((d: Drink) => drinkMap.set(d.id, d));
+    S.drinks = [...drinkMap.values()];
+    changed = true;
+  }
+
+  // Merge drink suppliers (item-delta by id)
+  if ((drinkSuppliers && drinkSuppliers.length) || (deletedDrinkSuppliers && deletedDrinkSuppliers.length)) {
+    const supMap = new Map((S.drinkSuppliers || []).map((s: DrinkSupplier) => [s.id, s]));
+    if (deletedDrinkSuppliers) deletedDrinkSuppliers.forEach((id: string) => supMap.delete(id));
+    if (drinkSuppliers) drinkSuppliers.forEach((s: DrinkSupplier) => supMap.set(s.id, s));
+    S.drinkSuppliers = [...supMap.values()];
+    changed = true;
+  }
+
+  // Drink config (full-replace)
+  if (drinkConfig) {
+    S.drinkConfig = drinkConfig;
     changed = true;
   }
 

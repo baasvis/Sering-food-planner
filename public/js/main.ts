@@ -32,6 +32,7 @@ import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals } from 
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
 import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName, assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole } from './team';
 import { openCostTargets, saveCostTargetsForm, ctRecalcTotal } from './cost';
+import { renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint } from './drinks';
 
 // ═══════════════════════════════════════════════════════════════════
 // Wire up cross-module callbacks (avoids circular imports)
@@ -131,6 +132,9 @@ Object.assign(window, {
   // team (access requests + roles)
   approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName,
   assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole,
+
+  // drinks
+  renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint,
 });
 
 // ═══════════════════════════════════════════════════════════════════

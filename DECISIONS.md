@@ -53,3 +53,30 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
   is deliberately NOT added to the role `GATEABLE_SCREENS` list (extending the
   role system is out of scope per GOAL §7); manager-gating is the separate
   `MANAGER_EMAILS` tier.
+
+## M2 — catalogue + CRUD + seed
+
+- **[m2] Catalogue-mode drink CRUD is manager-gated wholesale.** GOAL §5 gates
+  "prices, supplier data, markup, publishing", not all CRUD. But a catalogue
+  (bought) drink is *defined* by those manager-owned fields, so gating the whole
+  create/update/delete for `mode:'catalogue'` is the pragmatic reading. M3 keeps
+  recipe-mode drafting open to all with field-level price gating. Enforced inline
+  (`assertManager`) not via `requireManager` middleware, so M3 can relax recipe
+  writes on the same endpoints.
+- **[m2] Seeded catalogue status.** The seed marks the live bar catalogue as
+  `published` (so M7 service cards show it), except `sellable:false` items
+  (consumables/glassware) which seed as `draft`.
+- **[m2] `num()` preserves null.** A normalizer coerced an unset price/par
+  (`null`) to `0` via `Number(null)===0` (a free drink). Fixed to keep null;
+  found via preview verification, pinned by test/drinks-helpers.test.ts.
+- **[m2] Domain enums (§6) are frontend constants** (`drinks-constants.ts`).
+  In-app *editable* enum lists are a future enhancement; Phase-1 uses constants
+  + free text where sensible.
+- **[m2] e2e specs land in their milestones.** Per GOAL ("from M4 on"), the
+  catalogue-CRUD e2e is written in M4 with the stocktake spec, not in M2. M2's
+  gate is typecheck + jest.
+- **[m2] Suppliers tab is read-only in M2**; full supplier CRUD UI lands with
+  Ordering (M5). Endpoints already support it.
+- **[m2] `isManager` on AppUser** (director ∪ MANAGER_EMAILS), stamped with
+  `isDirector`. `dev@local` is in `MANAGER_EMAILS` (worktree `.env`) so the
+  dev/e2e user can drive manager-gated catalogue CRUD.

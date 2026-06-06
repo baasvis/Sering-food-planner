@@ -386,6 +386,10 @@ export interface AppUser {
    *  director-only features like the private AI recipe assistant. Computed
    *  at session-issue / session-restore time and sent down with /auth/me. */
   isDirector?: boolean;
+  /** True when the user is a manager (director ∪ MANAGER_EMAILS) — drives the
+   *  drinks-module money/supplier/publish affordances. Computed alongside
+   *  isDirector at session-issue / restore time. */
+  isManager?: boolean;
   /** Per-screen page permissions resolved from the user's role, sent down with
    *  login / GET /auth/me. An empty/absent map = no role = full edit (legacy).
    *  Directors ignore this (always full edit). Frontend-only guardrail. */

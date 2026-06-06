@@ -3,7 +3,7 @@ import type { Location } from '@shared/types';
 import { loadData, connectLiveSync, saveState,
          loadIngredientDb, loadStorageConfig, loadKitchenEquipment, loadCookRhythm, loadCostTargets, loadRevenuePerGuest, loadClosedServices,
          loadGuestHistory, loadGuestsNextWeeks, loadInventoryCompletions,
-         loadRitualCompletions } from './utils';
+         loadRitualCompletions, loadDrinks, loadDrinkSuppliers, loadDrinkConfig } from './utils';
 import { flushUndo } from './undo';
 import { rebuildPlanner } from './core';
 import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
@@ -207,6 +207,9 @@ export async function initApp() {
     loadGuestsNextWeeks(),
     loadInventoryCompletions(),
     loadRitualCompletions(),
+    loadDrinks(),
+    loadDrinkSuppliers(),
+    loadDrinkConfig(),
   ]);
   rebuildPlanner();
   // Restore screen from URL hash (e.g. #planner, #orders) or default to dashboard

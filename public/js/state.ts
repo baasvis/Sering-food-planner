@@ -1,6 +1,6 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, CostTargets, Supply, PagePermission } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, CostTargets, Supply, PagePermission, Drink, DrinkSupplier, DrinkConfig, DrinkOrder, Assortment, DrinkMenu } from '@shared/types';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -108,6 +108,8 @@ export const NAV_SCREENS: NavScreen[] = [
     icon: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>' },
   { id: 'orders', topLabel: 'Orders', bottomLabel: 'Orders',
     icon: '<path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>' },
+  { id: 'drinks', topLabel: 'Drinks', bottomLabel: 'Drinks',
+    icon: '<path d="M5 4h14l-7 8z"/><line x1="12" y1="12" x2="12" y2="20"/><line x1="8" y1="20" x2="16" y2="20"/>' },
   { id: 'competencies', topLabel: 'Training', bottomLabel: 'Training',
     icon: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>' },
   { id: 'supplies', topLabel: 'Toppings & bread', bottomLabel: 'Toppings',
@@ -202,6 +204,16 @@ export interface AppState {
   financeWeekOffset: number;
   financeProductMeal: string;
   financeProductLoc: string;
+  // ── Drinks module ──
+  drinks: Drink[];
+  drinkSuppliers: DrinkSupplier[];
+  drinkConfig: DrinkConfig | null;
+  drinkOrders: DrinkOrder[];
+  assortments: Assortment[];
+  drinkMenus: DrinkMenu[];
+  drinksSubTab: string;
+  drinksFilters: { mode: string; category: string };
+  drinksSearch: string;
   archive?: Array<Record<string, unknown>>;
   openBatchPools?: Set<string>;
   _addModalState?: { loc: string; date: string; meal: string; existing: string[]; typeFilter: string; tab: string; locFilter: string } | null;
@@ -259,6 +271,15 @@ export let S: AppState = {
   financeWeekOffset: 0,
   financeProductMeal: 'all',
   financeProductLoc: 'all',
+  drinks: [],
+  drinkSuppliers: [],
+  drinkConfig: null,
+  drinkOrders: [],
+  assortments: [],
+  drinkMenus: [],
+  drinksSubTab: 'catalogue',
+  drinksFilters: { mode: 'all', category: 'all' },
+  drinksSearch: '',
 };
 
 // ── Global location helpers ──────────────────────────────────────

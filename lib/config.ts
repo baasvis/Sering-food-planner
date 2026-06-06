@@ -20,6 +20,11 @@ export const CONFIG = {
   // Notion, event corrections, people management). Mirrors the director gate.
   STAFF_LEAD_EMAILS: ((process.env.STAFF_LEAD_EMAILS ?? '')
     .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)),
+  // Manager allowlist for the drinks module — gates money fields (prices, markup
+  // targets), supplier data, and menu publishing. Directors are always managers
+  // (isManagerEmail in routes/auth.ts unions the two). Mirrors DIRECTOR_EMAILS.
+  MANAGER_EMAILS: ((process.env.MANAGER_EMAILS ?? '')
+    .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)),
   // Audit S3/S4: explicit auth-mode opt-in. When 'production', the dev-mode
   // bypass in routes/auth.ts is disabled and server.ts refuses to boot if
   // GOOGLE_CLIENT_ID or ALLOWED_EMAILS is empty. Decoupled from NODE_ENV so
