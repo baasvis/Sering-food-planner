@@ -620,6 +620,7 @@ export interface Drink {
   shelfLifeDays: number | null;
   costPerServe: number | null;
   suggestedPrice: number | null;
+  photoUrl: string | null;
   createdAt: string;
   updatedAt: string;
   ingredientRows: DrinkIngredientRow[];

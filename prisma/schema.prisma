@@ -578,8 +578,9 @@ model Drink {
   shelfLifeDays       Int?     @map("shelf_life_days")
 
   // costing cache (computed in M3; ex-BTW per serve)
-  costPerServe   Float? @map("cost_per_serve")
-  suggestedPrice Float? @map("suggested_price")
+  costPerServe   Float?  @map("cost_per_serve")
+  suggestedPrice Float?  @map("suggested_price")
+  photoUrl       String? @map("photo_url") // served URL when a final-product photo exists
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -588,12 +589,25 @@ model Drink {
   usedAsRefIn    DrinkIngredientRow[] @relation("DrinkUsedAsRef")
   stockEntries   DrinkStock[]
   productionLogs DrinkProductionLog[]
+  photo          DrinkPhoto?
 
   @@index([mode])
   @@index([category])
   @@index([status])
   @@index([archived])
   @@map("drinks")
+}
+
+model DrinkPhoto {
+  id        String @id
+  drinkId   String @unique @map("drink_id")
+  mimeType  String @map("mime_type")
+  data      Bytes
+  createdAt String @map("created_at")
+
+  drink Drink @relation(fields: [drinkId], references: [id], onDelete: Cascade)
+
+  @@map("drink_photos")
 }
 
 model DrinkIngredientRow {

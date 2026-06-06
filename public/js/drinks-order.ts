@@ -8,9 +8,9 @@
 import { S } from './state';
 import { newId, apiPost, toast, toastError, loadDrinks } from './utils';
 import { showModal, closeModal, esc } from './modal';
-import { drinkCategoryLabel } from './drinks-constants';
+import { drinkCategoryLabel, DRINK_LOCATIONS } from './drinks-constants';
 import { buildOrderSuggestions, orderDepositTotal, demandNudge, OrderSuggestionLine } from '@shared/drink-order';
-import type { DrinkOrder } from '@shared/types';
+import type { DrinkOrder, DrinkSupplier } from '@shared/types';
 
 function loc(): string { return S.currentLoc || 'west'; }
 function isManager(): boolean { return !!S.user?.isManager; }
@@ -43,14 +43,94 @@ async function refreshOrders(): Promise<void> {
   const nudge = demandNudgeBanner();
   const open = orders.filter(o => o.status === 'draft' || o.status === 'ordered');
   const done = orders.filter(o => o.status === 'received' || o.status === 'cancelled');
+  const locLabel = DRINK_LOCATIONS.find(l => l.key === loc())?.label || loc();
   inner.innerHTML = `
-    <div class="drinks-toolbar">
-      ${isManager() ? `<button class="btn btn-primary" data-testid="drink-order-new" onclick="drinksOrderNew()">+ New order</button>` : '<span class="muted small">Managers create orders.</span>'}
-    </div>
     ${nudge}
-    <h4 class="ord-h">Open</h4>
-    ${open.length ? open.map(orderCard).join('') : '<div class="drinks-empty">No open orders.</div>'}
-    ${done.length ? `<h4 class="ord-h">Recent</h4>${done.slice(0, 10).map(orderCard).join('')}` : ''}`;
+    <h4 class="ord-h">To order — short at ${esc(locLabel)}</h4>
+    ${shortfallSectionsHtml()}
+    ${open.length ? `<h4 class="ord-h">Open orders</h4>${open.map(orderCard).join('')}` : ''}
+    ${done.length ? `<h4 class="ord-h">Recent</h4>${done.slice(0, 10).map(orderCard).join('')}` : ''}
+    ${isManager() ? `<div class="ord-manual"><button class="btn btn-sm" data-testid="drink-order-new" onclick="drinksOrderNew()">+ Order something else…</button></div>` : ''}`;
+}
+
+/** Every supplier with at least one short item at this location, sorted. The
+ *  shortfall is computed live from par − stock (active drinks only), so the tab
+ *  shows what to order without anyone pressing "+ new order" (orders #1). */
+function shortfallBySupplier(): { supplier: string; lines: OrderSuggestionLine[] }[] {
+  const names = [...new Set((S.drinks || []).filter(d => d.mode === 'catalogue' && d.supplier).map(d => d.supplier))];
+  return names
+    .map(supplier => ({ supplier, lines: buildOrderSuggestions(S.drinks || [], supplier, loc()) }))
+    .filter(x => x.lines.length > 0)
+    .sort((a, b) => a.supplier.localeCompare(b.supplier));
+}
+
+function shortfallSectionsHtml(): string {
+  const groups = shortfallBySupplier();
+  if (groups.length === 0) {
+    return `<div class="drinks-empty" data-testid="ord-nothing-short">Everything is at or above target at ${esc(loc())}. 🎉</div>`;
+  }
+  return groups.map(g => {
+    const sup = (S.drinkSuppliers || []).find(s => s.name === g.supplier);
+    return shortfallCardHtml(g.supplier, sup, g.lines);
+  }).join('');
+}
+
+function shortfallCardHtml(supplier: string, sup: DrinkSupplier | undefined, lines: OrderSuggestionLine[]): string {
+  const instr: string[] = [];
+  if (sup?.orderDays?.length) instr.push(`<strong>Order days:</strong> ${sup.orderDays.map(esc).join(', ')}${sup.orderDaysNote ? ` (${esc(sup.orderDaysNote)})` : ''}`);
+  if (sup?.orderCutoff) instr.push(`<strong>Cutoff:</strong> ${esc(sup.orderCutoff)}`);
+  if (sup?.deliveryWindow) instr.push(`<strong>Delivery:</strong> ${esc(sup.deliveryWindow)}`);
+  if (sup?.minimumOrder) instr.push(`<strong>Min:</strong> ${esc(sup.minimumOrder)}`);
+  const contactBits: string[] = [];
+  if (sup?.contact?.email) contactBits.push(`<a href="mailto:${esc(sup.contact.email)}">${esc(sup.contact.email)}</a>`);
+  if (sup?.contact?.phone) contactBits.push(esc(sup.contact.phone));
+  if (sup?.contact?.url) contactBits.push(`<a href="${esc(sup.contact.url)}" target="_blank" rel="noopener">order online ↗</a>`);
+  const dep = orderDepositTotal(lines.map(l => ({ orderQty: l.orderQty, deposit: l.deposit })));
+  return `<div class="ord-shortfall" data-testid="ord-shortfall" data-supplier="${esc(supplier)}">
+    <div class="ord-sf-head">
+      <strong>${esc(supplier)}</strong>
+      <span class="muted small">${lines.length} item${lines.length > 1 ? 's' : ''} short${dep ? ` · €${dep.toFixed(2)} deposit` : ''}</span>
+    </div>
+    <div class="ord-sf-instr ${instr.length ? '' : 'muted small'}">${instr.length ? instr.join(' · ') : 'No order instructions set — add them on the Suppliers tab.'}</div>
+    ${contactBits.length ? `<div class="ord-sf-contact small">${contactBits.join(' · ')}</div>` : ''}
+    <table class="drinks-table"><thead><tr><th>Drink</th><th class="num">Needed</th><th class="num">Stock</th><th class="num">Order</th><th class="num">Deposit</th></tr></thead>
+      <tbody>${lines.map(l => `<tr>
+        <td>${esc(l.name)}</td>
+        <td class="num">${l.par}</td>
+        <td class="num">${Math.round(l.stock * 10) / 10}</td>
+        <td class="num"><input class="sf-qty" data-supplier="${esc(supplier)}" data-drinkid="${esc(l.drinkId)}" data-name="${esc(l.name)}" data-unit="${esc(l.orderUnit)}" data-deposit="${l.deposit}" type="number" min="0" step="1" value="${l.orderQty}" style="width:60px;text-align:right;"> ${esc(l.orderUnit)}</td>
+        <td class="num">${l.deposit ? '€' + l.deposit.toFixed(2) : '—'}</td>
+      </tr>`).join('')}</tbody></table>
+    ${isManager() ? `<div class="ord-sf-actions"><button class="btn btn-sm btn-primary" data-testid="ord-place" onclick="drinksPlaceOrder('${esc(supplier).replace(/'/g, "\\'")}')">Place order</button></div>` : '<div class="muted small">Managers place orders.</div>'}
+  </div>`;
+}
+
+/** Place an order for one supplier straight from the shortfall list: read the
+ *  (possibly edited) quantities, create the order and mark it ordered in one go,
+ *  so it drops into "Open orders" ready to receive. */
+export async function drinksPlaceOrder(supplier: string): Promise<void> {
+  if (!isManager()) { toastError('Manager access required.'); return; }
+  const lines = Array.from(document.querySelectorAll<HTMLInputElement>('.sf-qty'))
+    .filter(inp => inp.dataset.supplier === supplier)
+    .map(inp => ({
+      drinkId: inp.dataset.drinkid as string,
+      name: inp.dataset.name || '',
+      orderedQty: Number(inp.value) || 0,
+      orderUnit: inp.dataset.unit || '',
+      deposit: Number(inp.dataset.deposit) || 0,
+    }))
+    .filter(l => l.orderedQty > 0);
+  if (lines.length === 0) { toastError('Nothing to order — set a quantity above 0.'); return; }
+  const sup = (S.drinkSuppliers || []).find(s => s.name === supplier);
+  const id = newId();
+  try {
+    await apiPost('/api/drinks/orders', { id, location: loc(), supplier, lines });
+    await apiPost(`/api/drinks/orders/${id}`, { status: 'ordered', expectedDelivery: sup?.deliveryWindow || null }, 'PATCH');
+    toast(`Order placed — ${supplier}`);
+    refreshOrders();
+  } catch (e: unknown) {
+    toastError('Could not place order: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
 }
 
 function demandNudgeBanner(): string {

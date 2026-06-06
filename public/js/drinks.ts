@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { S } from './state';
-import { newId, apiPost, toast, toastError, loadDrinks } from './utils';
+import { newId, apiPost, toast, toastError, loadDrinks, loadDrinkSuppliers } from './utils';
 import { showModal, closeModal, esc } from './modal';
 import { pushUndo } from './undo';
 import { registerRenderer } from './navigate';
@@ -282,28 +282,149 @@ function effBtw(d: Drink): number {
 
 function suppliersHtml(): string {
   const sups = S.drinkSuppliers || [];
+  const mgr = isManager();
+  const toolbar = mgr
+    ? `<div class="drinks-toolbar"><button class="btn btn-primary" data-testid="supplier-add-btn" onclick="openSupplierForm()">+ Add supplier</button></div>`
+    : '';
   if (sups.length === 0) {
-    return `<div class="drinks-empty">No drink suppliers yet.</div>`;
+    return `${toolbar}<div class="drinks-empty">No drink suppliers yet.${mgr ? ' Add one above.' : ''}</div>`;
   }
-  const cards = sups.map(s => supplierCard(s)).join('');
-  return `<div class="drink-suppliers-grid">${cards}</div>`;
+  const cards = [...sups].sort((a, b) => a.name.localeCompare(b.name)).map(s => supplierCard(s, mgr)).join('');
+  return `${toolbar}<div class="drink-suppliers-grid">${cards}</div>`;
 }
 
-function supplierCard(s: DrinkSupplier): string {
+function supplierCard(s: DrinkSupplier, mgr: boolean): string {
   const contactBits: string[] = [];
   if (s.contact?.name) contactBits.push(esc(s.contact.name));
   if (s.contact?.email) contactBits.push(`<a href="mailto:${esc(s.contact.email)}">${esc(s.contact.email)}</a>`);
   if (s.contact?.phone) contactBits.push(esc(s.contact.phone));
   if (s.contact?.url) contactBits.push(`<a href="${esc(s.contact.url)}" target="_blank" rel="noopener">site</a>`);
-  return `<div class="drink-supplier-card">
-    <h4>${esc(s.name)}</h4>
+  return `<div class="drink-supplier-card" data-testid="supplier-card">
+    <div class="drink-supplier-head">
+      <h4>${esc(s.name)}</h4>
+      ${mgr ? `<div class="drink-supplier-actions">
+        <button class="btn btn-sm" data-testid="supplier-edit-btn" onclick="openSupplierForm('${esc(s.id)}')">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteSupplier('${esc(s.id)}')">✕</button>
+      </div>` : ''}
+    </div>
     ${s.products ? `<p class="muted small">${esc(s.products)}</p>` : ''}
     ${s.orderDays?.length ? `<p><strong>Order days:</strong> ${s.orderDays.map(esc).join(', ')}${s.orderDaysNote ? ` <span class="muted small">(${esc(s.orderDaysNote)})</span>` : ''}</p>` : ''}
+    ${s.orderCutoff ? `<p><strong>Cutoff:</strong> ${esc(s.orderCutoff)}</p>` : ''}
     ${s.deliveryWindow ? `<p><strong>Delivery:</strong> ${esc(s.deliveryWindow)}</p>` : ''}
     ${s.minimumOrder ? `<p><strong>Minimum:</strong> ${esc(s.minimumOrder)}</p>` : ''}
     ${contactBits.length ? `<p class="small">${contactBits.join(' · ')}</p>` : ''}
+    ${s.priceListRef ? `<p class="small muted">Price list: ${esc(s.priceListRef)}</p>` : ''}
     ${s.notes ? `<p class="muted small">${esc(s.notes)}</p>` : ''}
   </div>`;
+}
+
+// ── Supplier add/edit form (manager only) ────────────────────────────────────
+
+const SUPPLIER_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+export function openSupplierForm(id?: string): void {
+  if (!isManager()) { toastError('Manager access required.'); return; }
+  const s = id ? (S.drinkSuppliers || []).find(x => x.id === id) || null : null;
+  const v = (x: string | null | undefined) => x == null ? '' : esc(String(x));
+  const days = s?.orderDays || [];
+  showModal(`
+  <div class="drink-form" data-testid="supplier-form" data-id="${s ? esc(s.id) : newId()}">
+    <h3>${s ? 'Edit supplier' : 'Add drink supplier'}</h3>
+    <div class="df-grid">
+      <label class="df-field df-col2">Name
+        <input id="sf-name" data-testid="supplier-name-input" value="${v(s?.name)}" placeholder="e.g. Two Chefs Brewing">
+      </label>
+      <label class="df-field df-col2">Products / what they supply
+        <input id="sf-products" value="${v(s?.products)}" placeholder="e.g. craft beer kegs & cans">
+      </label>
+    </div>
+    <fieldset class="df-section">
+      <legend>Ordering</legend>
+      <div class="sf-days">${SUPPLIER_WEEKDAYS.map(d => `<label class="sf-day"><input type="checkbox" class="sf-day-cb" value="${d}" ${days.includes(d) ? 'checked' : ''}> ${d}</label>`).join('')}</div>
+      <div class="df-grid">
+        <label class="df-field df-col2">Order-days note <input id="sf-orderDaysNote" value="${v(s?.orderDaysNote)}" placeholder="e.g. order by Wed for Fri delivery"></label>
+        <label class="df-field">Order cutoff <input id="sf-orderCutoff" value="${v(s?.orderCutoff)}" placeholder="e.g. 12:00 day before"></label>
+        <label class="df-field">Delivery window <input id="sf-deliveryWindow" value="${v(s?.deliveryWindow)}" placeholder="e.g. Tue & Fri AM"></label>
+        <label class="df-field df-col2">Minimum order <input id="sf-minimumOrder" value="${v(s?.minimumOrder)}" placeholder="e.g. €150 or 1 full crate"></label>
+      </div>
+    </fieldset>
+    <fieldset class="df-section">
+      <legend>Contact</legend>
+      <div class="df-grid">
+        <label class="df-field">Contact name <input id="sf-contact-name" value="${v(s?.contact?.name)}"></label>
+        <label class="df-field">Email <input id="sf-contact-email" type="email" value="${v(s?.contact?.email)}"></label>
+        <label class="df-field">Phone <input id="sf-contact-phone" value="${v(s?.contact?.phone)}"></label>
+        <label class="df-field">Website <input id="sf-contact-url" value="${v(s?.contact?.url)}"></label>
+      </div>
+    </fieldset>
+    <div class="df-grid">
+      <label class="df-field df-col2">Price list reference <input id="sf-priceListRef" value="${v(s?.priceListRef)}" placeholder="link or doc name"></label>
+      <label class="df-field df-col2">Notes <textarea id="sf-notes" rows="2">${v(s?.notes)}</textarea></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" data-testid="supplier-save-btn" type="button" onclick="saveSupplierForm()">${s ? 'Save changes' : 'Add supplier'}</button>
+    </div>
+  </div>`);
+}
+
+export async function saveSupplierForm(): Promise<void> {
+  const form = document.querySelector('[data-testid="supplier-form"]') as HTMLElement | null;
+  if (!form) return;
+  const id = form.dataset.id || newId();
+  const isNew = !(S.drinkSuppliers || []).some(x => x.id === id);
+  const name = strVal('sf-name');
+  if (!name) { toastError('Supplier name is required.'); return; }
+  const orderDays = Array.from(document.querySelectorAll<HTMLInputElement>('.sf-day-cb'))
+    .filter(cb => cb.checked).map(cb => cb.value);
+  const contact: Record<string, string> = {};
+  for (const [id2, key] of [['sf-contact-name', 'name'], ['sf-contact-email', 'email'], ['sf-contact-phone', 'phone'], ['sf-contact-url', 'url']] as const) {
+    const val = strVal(id2);
+    if (val) contact[key] = val;
+  }
+  const payload = {
+    id, name,
+    products: strVal('sf-products'),
+    orderDays,
+    orderDaysNote: strVal('sf-orderDaysNote'),
+    orderCutoff: strVal('sf-orderCutoff'),
+    deliveryWindow: strVal('sf-deliveryWindow'),
+    minimumOrder: strVal('sf-minimumOrder'),
+    contact,
+    priceListRef: strVal('sf-priceListRef'),
+    notes: strVal('sf-notes'),
+  };
+  try {
+    if (isNew) { await apiPost('/api/drinks/suppliers', payload); toast('Supplier added'); }
+    else { await apiPost(`/api/drinks/suppliers/${id}`, payload, 'PATCH'); toast('Supplier saved'); }
+    closeModal();
+    await loadDrinkSuppliers();
+    renderDrinkTabBody();
+  } catch (e: unknown) {
+    toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+export function deleteSupplier(id: string): void {
+  if (!isManager()) { toastError('Manager access required.'); return; }
+  const s = (S.drinkSuppliers || []).find(x => x.id === id);
+  if (!s) return;
+  const removed = s;
+  S.drinkSuppliers = (S.drinkSuppliers || []).filter(x => x.id !== id);
+  renderDrinkTabBody();
+  pushUndo({
+    label: esc(removed.name) + ' deleted',
+    restore: () => { S.drinkSuppliers = [...(S.drinkSuppliers || []), removed]; renderDrinkTabBody(); },
+    commit: async () => {
+      try {
+        await apiPost(`/api/drinks/suppliers/${id}`, {}, 'DELETE');
+      } catch (e: unknown) {
+        toastError('Could not delete: ' + (e instanceof Error ? e.message : 'Unknown error'));
+        S.drinkSuppliers = [...(S.drinkSuppliers || []), removed];
+        renderDrinkTabBody();
+      }
+    },
+  });
 }
 
 // ── Catalogue CRUD form (manager only) ───────────────────────────────────────

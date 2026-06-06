@@ -292,7 +292,7 @@ function formDrink(): Drink {
     characteristics: [], garnish: [], seasonality: '', serviceInstructions: strv('rf-service'),
     prepSteps: _rf!.prepSteps, batch: { volumeMl: numv('rf-batchVol') || 0, bottleSizeMl: numv('rf-bottleSize') },
     prepTime: { prebatchMin: numv('rf-prebatchMin') || 0, prebatchYieldServings: numv('rf-prebatchYield'), perServeMin: numv('rf-perServeMin') || 0 },
-    shelfLifeDays: numv('rf-shelf'), costPerServe: null, suggestedPrice: null, createdAt: '', updatedAt: '',
+    shelfLifeDays: numv('rf-shelf'), costPerServe: null, suggestedPrice: null, photoUrl: null, createdAt: '', updatedAt: '',
     ingredientRows: _rf!.rows.map((r, i) => ({
       id: `${_rf!.id}-row-${i}`, drinkId: _rf!.id, sortOrder: i, refKind: r.refKind,
       ingredientId: r.refKind === 'ingredient' ? r.refId : null, refDrinkId: r.refKind === 'drink' ? r.refId : null,

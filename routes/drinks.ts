@@ -11,6 +11,7 @@
 
 import express, { Request, Response } from 'express';
 import crypto from 'crypto';
+import multer from 'multer';
 import { Prisma } from '@prisma/client';
 import { asyncHandler, AppError } from '../lib/config';
 import { prisma, dbAppendLog, withWriteLock, checkId } from '../lib/db';
@@ -32,6 +33,12 @@ const RECEIVING_AREA = 'Delivery intake';
 const PRODUCTION_AREA = 'Made (fresh)';
 
 const router = express.Router();
+const upload = multer({ limits: { fileSize: 2 * 1024 * 1024 } }); // 2MB max, mirrors recipe photos
+
+// Final-product photo mimetypes (audit S8: whitelist — no SVG, which can carry script).
+const DRINK_PHOTO_MIME: Record<string, string> = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+};
 
 function actor(req: Request): { email: string; name: string } {
   return req.user ? { email: req.user.email, name: req.user.name } : { email: 'anonymous', name: 'Anonymous' };
@@ -762,6 +769,63 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   dbAppendLog(user.email, user.name, 'drink-create', `created drink "${input.name}" (${input.mode})`);
   broadcast(user.email, 'patch', { user: user.name, drinks: [shape] });
   res.json(shape);
+}));
+
+// ── Final-product photo (mirrors recipe photos): bytes in DB, served by URL ───
+// Open to any signed-in user (a bartender snapping the finished drink), like
+// recipe photos — it's content, not a money/price field.
+router.post('/:id/photo', upload.single('photo'), asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const idErr = checkId(id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  const existing = await prisma.drink.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) throw new AppError(404, 'Drink not found');
+  const file = (req as Request & { file?: { mimetype: string; buffer: Buffer } }).file;
+  if (!file) throw new AppError(400, 'No photo uploaded');
+  const mime = (file.mimetype || '').toLowerCase();
+  if (!DRINK_PHOTO_MIME[mime]) throw new AppError(400, 'Photo must be jpg, png, webp, or gif');
+  const photoData = new Uint8Array(file.buffer);
+  const photoUrl = `/api/drinks/${id}/photo`;
+  const result = await withWriteLock(async () => {
+    await prisma.drinkPhoto.upsert({
+      where: { drinkId: id },
+      create: { id: `dphoto-${id}`, drinkId: id, mimeType: mime, data: photoData, createdAt: new Date().toISOString() },
+      update: { mimeType: mime, data: photoData },
+    });
+    await prisma.drink.update({ where: { id }, data: { photoUrl } });
+    return fetchDrinkShape(id);
+  });
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-photo', `added photo to "${result?.name || id}"`);
+  if (result) broadcast(user.email, 'patch', { user: user.name, drinks: [result] });
+  res.json({ ok: true, photoUrl });
+}));
+
+router.get('/:id/photo', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const photo = await prisma.drinkPhoto.findUnique({ where: { drinkId: id } });
+  if (!photo) throw new AppError(404, 'No photo');
+  const ext = DRINK_PHOTO_MIME[(photo.mimeType || '').toLowerCase()] || 'bin';
+  res.set('Content-Type', photo.mimeType);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Content-Disposition', `inline; filename="drink-${id}.${ext}"`);
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send(Buffer.from(photo.data));
+}));
+
+router.delete('/:id/photo', asyncHandler(async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const idErr = checkId(id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  const result = await withWriteLock(async () => {
+    await prisma.drinkPhoto.deleteMany({ where: { drinkId: id } });
+    await prisma.drink.update({ where: { id }, data: { photoUrl: null } });
+    return fetchDrinkShape(id);
+  });
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-photo', `removed photo from "${result?.name || id}"`);
+  if (result) broadcast(user.email, 'patch', { user: user.name, drinks: [result] });
+  res.json({ ok: true });
 }));
 
 // Flip a drink's per-location `active` flag (catalogue tickbox). Focused so the

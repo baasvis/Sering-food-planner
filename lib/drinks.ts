@@ -170,6 +170,7 @@ export function toDrink(row: DrinkRowMaybe, stockByLocation?: Record<string, num
     shelfLifeDays: row.shelfLifeDays,
     costPerServe: row.costPerServe,
     suggestedPrice: row.suggestedPrice,
+    photoUrl: row.photoUrl ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     ingredientRows: (row.ingredientRows ?? []).map(toDrinkIngredientRow),

@@ -8,17 +8,19 @@
 import { S } from './state';
 import { apiPost, toast, toastError, loadDrinks } from './utils';
 import { esc } from './modal';
-import { drinkAreasFor, drinkCategoryLabel } from './drinks-constants';
+import { drinkAreasFor, drinkCategoryLabel, DRINK_LOCATIONS } from './drinks-constants';
 import type { Drink, DrinkSupplier } from '@shared/types';
 
-let _mode: 'supplier' | 'area' = 'supplier';
+let _started = false; // false = stock-list overview; true = in the count flow
+let _mode: 'supplier' | 'area' = 'area';
 let _supplier: string | null = null;
 let _area: string | null = null;
 let _values: Record<string, number | undefined> = {};
+let _loc = ''; // overview/count location; defaults to the global location
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-function loc(): string { return S.currentLoc || 'west'; }
+function loc(): string { return _loc || S.currentLoc || 'west'; }
 function round1(n: number): number { return Math.round(n * 10) / 10; }
 
 /** Suppliers ordered with today/tomorrow order-days first ("due" surfaced). */
@@ -48,16 +50,69 @@ export function renderDrinksStocktakeTab(): void {
   const body = document.getElementById('drinks-tab-body');
   if (!body) return;
   if (_supplier || _area) { renderCountView(); return; }
-  // Chooser
+  if (_started) { renderChooser(); return; }
+  renderOverview();
+}
+
+/** Landing view: current drink stock for one location (toggle), grouped by
+ *  category — like the ingredient list — with a "Start stocktake" button that
+ *  drops into the by-area count flow (stocktake #1). */
+function renderOverview(): void {
+  const body = document.getElementById('drinks-tab-body');
+  if (!body) return;
+  const locLabel = DRINK_LOCATIONS.find(l => l.key === loc())?.label || loc();
+  const items = (S.drinks || []).filter(d => !d.archived && (d.locations?.[loc()]?.active !== false));
+  const groups = new Map<string, Drink[]>();
+  for (const d of items) { const g = groups.get(d.category) || []; g.push(d); groups.set(d.category, g); }
+  const cats = [...groups.keys()].sort((a, b) => a.localeCompare(b));
+  const listHtml = cats.length === 0
+    ? '<div class="drinks-empty">No drinks for this location.</div>'
+    : cats.map(cat => {
+        const rows = (groups.get(cat) || []).sort((a, b) => a.name.localeCompare(b.name));
+        return `<tbody class="stk-ov-group"><tr class="stk-ov-cat"><td colspan="3">${esc(drinkCategoryLabel(cat))}</td></tr>
+          ${rows.map(d => {
+            const pool = d.stockByLocation?.[loc()];
+            const par = d.locations?.[loc()]?.par;
+            const low = par != null && pool != null && pool < par;
+            return `<tr data-testid="stk-ov-row"><td>${esc(d.name)}</td>
+              <td class="num muted">${esc(d.orderUnit || 'unit')}</td>
+              <td class="num ${low ? 'stk-low' : ''}">${pool != null ? round1(pool) : '—'}${par != null ? ` <span class="muted">/ ${round1(par)}</span>` : ''}</td></tr>`;
+          }).join('')}</tbody>`;
+      }).join('');
+  body.innerHTML = `
+    <div class="stk-overview">
+      <div class="drinks-toolbar">
+        <div class="drinks-loc-toggle" data-testid="stk-loc-toggle">
+          ${DRINK_LOCATIONS.map(l => `<button class="lc ${loc() === l.key ? 'on' : ''}" data-loc="${l.key}" onclick="drinksStkSetLoc('${l.key}')">${esc(l.label)}</button>`).join('')}
+        </div>
+        <button class="btn btn-primary" data-testid="stk-start" onclick="drinksStkStart()">📋 Start stocktake</button>
+      </div>
+      <p class="muted small">Current stock at ${esc(locLabel)} (stock / needed). Tap “Start stocktake” to count by storage area.</p>
+      <div class="drinks-table-wrap"><table class="drinks-table stk-ov-table">
+        <thead><tr><th>Drink</th><th class="num">Unit</th><th class="num">Stock</th></tr></thead>
+        ${listHtml}
+      </table></div>
+    </div>`;
+}
+
+/** The area/supplier picker — reached via "Start stocktake". */
+function renderChooser(): void {
+  const body = document.getElementById('drinks-tab-body');
+  if (!body) return;
   const sups = suppliersByDue();
   const areas = drinkAreasFor(loc());
+  const locLabel = DRINK_LOCATIONS.find(l => l.key === loc())?.label || loc();
   body.innerHTML = `
     <div class="stk-chooser">
-      <div class="stk-mode">
-        <button class="fc ${_mode === 'supplier' ? 'on' : ''}" onclick="drinksStkSetMode('supplier')">By supplier</button>
-        <button class="fc ${_mode === 'area' ? 'on' : ''}" onclick="drinksStkSetMode('area')">By storage area</button>
+      <div class="stk-count-head">
+        <button class="btn btn-sm" onclick="drinksStkExit()">← Back</button>
+        <h3>Stocktake — ${esc(locLabel)}</h3>
       </div>
-      <p class="muted small">${esc(loc())} — pick ${_mode === 'supplier' ? 'a supplier to count its delivery' : 'a storage area to count'}.</p>
+      <div class="stk-mode">
+        <button class="fc ${_mode === 'area' ? 'on' : ''}" onclick="drinksStkSetMode('area')">By storage area</button>
+        <button class="fc ${_mode === 'supplier' ? 'on' : ''}" onclick="drinksStkSetMode('supplier')">By supplier</button>
+      </div>
+      <p class="muted small">Pick ${_mode === 'supplier' ? 'a supplier to count its delivery' : 'a storage area to count'}.</p>
       <div class="stk-grid">
         ${_mode === 'supplier'
           ? sups.map(({ sup, due }) => `<button class="stk-pick" data-testid="stk-supplier" onclick="drinksStkPickSupplier('${esc(sup.name)}')">
@@ -71,6 +126,9 @@ export function renderDrinksStocktakeTab(): void {
     </div>`;
 }
 
+export function drinksStkStart(): void { _started = true; _mode = 'area'; renderDrinksStocktakeTab(); }
+export function drinksStkExit(): void { _started = false; _supplier = null; _area = null; renderDrinksStocktakeTab(); }
+export function drinksStkSetLoc(l: string): void { _loc = l; _values = {}; renderDrinksStocktakeTab(); }
 export function drinksStkSetMode(m: string): void { _mode = m === 'area' ? 'area' : 'supplier'; renderDrinksStocktakeTab(); }
 export function drinksStkPickSupplier(name: string): void { _supplier = name; _area = drinkAreasFor(loc())[0]; _values = {}; renderCountView(); }
 export function drinksStkPickArea(area: string): void { _area = area; _supplier = null; _values = {}; renderCountView(); }

@@ -32,12 +32,12 @@ import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals } from 
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
 import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName, assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole } from './team';
 import { openCostTargets, saveCostTargetsForm, ctRecalcTotal } from './cost';
-import { renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, drinksSetCatLocation, drinksToggleShowInactive, drinkToggleActive, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint } from './drinks';
+import { renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, drinksSetCatLocation, drinksToggleShowInactive, drinkToggleActive, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint, openSupplierForm, saveSupplierForm, deleteSupplier } from './drinks';
 import { drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost } from './drinks-recipe';
-import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave } from './drinks-stocktake';
-import { drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive } from './drinks-order';
+import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc } from './drinks-stocktake';
+import { drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive, drinksPlaceOrder } from './drinks-order';
 import { openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog } from './drinks-production';
-import { drinksBarSearch, drinksBarCategory, openServiceCard } from './drinks-service';
+import { drinksBarSearch, drinksBarCategory, openServiceCard, drinkBarAddPhoto, drinkBarRemovePhoto } from './drinks-service';
 import { openAssortmentEdit, saveAssortmentEdit, openMenuForm, saveMenuForm, printDrinkMenu, deleteDrinkMenu } from './drinks-menu';
 
 // ═══════════════════════════════════════════════════════════════════
@@ -140,22 +140,22 @@ Object.assign(window, {
   assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole,
 
   // drinks
-  renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, drinksSetCatLocation, drinksToggleShowInactive, drinkToggleActive, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint,
+  renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, drinksSetCatLocation, drinksToggleShowInactive, drinkToggleActive, openDrinkForm, saveDrinkForm, deleteDrink, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint, openSupplierForm, saveSupplierForm, deleteSupplier,
 
   // drinks — recipes
   drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost,
 
   // drinks — stocktake
-  drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave,
+  drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc,
 
   // drinks — orders
-  drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive,
+  drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive, drinksPlaceOrder,
 
   // drinks — production & write-offs
   openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog,
 
   // drinks — bar / service cards
-  drinksBarSearch, drinksBarCategory, openServiceCard,
+  drinksBarSearch, drinksBarCategory, openServiceCard, drinkBarAddPhoto, drinkBarRemovePhoto,
 
   // drinks — assortments & menus
   openAssortmentEdit, saveAssortmentEdit, openMenuForm, saveMenuForm, printDrinkMenu, deleteDrinkMenu,

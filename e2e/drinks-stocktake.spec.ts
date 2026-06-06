@@ -2,13 +2,18 @@ import { test, expect } from '@playwright/test';
 import { loginAsDev } from './helpers';
 
 test.describe('Drinks stocktake', () => {
-  test('count a supplier delivery and save updates stock', async ({ page }) => {
+  test('start a stocktake by area and save updates stock', async ({ page }) => {
     await loginAsDev(page);
     await page.locator('.nav-btn[data-screen="drinks"]').click();
     await page.getByTestId('drinks-tab-stocktake').click();
 
-    // By-supplier is the default mode — pick the first supplier.
-    await page.getByTestId('stk-supplier').first().click();
+    // The tab lands on the stock-list overview (like the ingredient list); the
+    // count flow starts from the "Start stocktake" button.
+    await expect(page.getByTestId('stk-start')).toBeVisible();
+    await page.getByTestId('stk-start').click();
+
+    // By storage area is the default mode — pick the first area.
+    await page.getByTestId('stk-area').first().click();
     await expect(page.getByTestId('stk-rows')).toBeVisible();
 
     // Count the first drink, then save.
