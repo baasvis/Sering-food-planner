@@ -162,3 +162,13 @@ Format: `[Mxx] What was ambiguous → what I chose → why.`
   write-offs are all-user actions).
 - **[m6] No e2e** — M6 isn't in the GOAL §4 e2e list; covered by the
   production/write-off unit tests (test/drink-production.test.ts) + typecheck.
+
+## M7 — service cards (bartender mode)
+
+- **[m7] "Active assortment" = published + sellable drinks at the current
+  location.** M7 ships before M8 (assortments), so the bar grid is location-based;
+  M8 adds curated per-assortment selection. The Bar tab is purely read-only over
+  S.drinks (no backend) — a full-screen build card (glass, serve ml, build steps,
+  garnish, profile, price), large type, dark-mode friendly via theme vars.
+- **[m7] Bar tab placed second** (after Catalogue) for floor-staff prominence;
+  the default sub-tab stays Catalogue. Verified in preview (66 tiles, build card).
