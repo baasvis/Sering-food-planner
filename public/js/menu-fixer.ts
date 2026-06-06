@@ -1181,14 +1181,44 @@ function setFixMyMenuLoading(loading: boolean): void {
   }
 }
 
-/** Fix-My-Menu body — split out so the public `fixMyMenu` entry can
- *  show a spinner before the synchronous algorithm blocks the main
- *  thread. Runs: strip future services → clean orphan placeholders →
- *  auto-retire spent batches → generate missing placeholders →
- *  forced-assignment pre-pass → scored greedy loop → fallback ladder
- *  (teams → emergency placeholder → abandoned warning) → pot allocation
- *  → warnings. */
-function _fixMyMenuBody(): void {
+/** Structured result of one Fix-My-Menu run. Returned by the pure
+ *  `runFixMyMenuCore()` so callers (the UI wrapper `_fixMyMenuBody` and the
+ *  regression bench) can build their own side-effects/reports from one
+ *  canonical run instead of re-implementing the pipeline. */
+export interface FixMyMenuResult {
+  /** Orphan placeholders cleaned this run. */
+  cleaned: number;
+  /** Spent + stale batches auto-retired this run. */
+  retired: number;
+  /** Placeholders generated to fill empty cook days (excludes emergencies). */
+  newPlaceholders: Batch[];
+  /** Emergency placeholders the fallback ladder created. */
+  emergencyBatches: Batch[];
+  /** Total batches committed to slots across team-fill + forced + greedy. */
+  assigned: number;
+  /** Multi-batch teams formed (team-fill big-slots + fallback ladder). */
+  teamsFormed: number;
+  /** Emergency placeholders created by the fallback ladder. */
+  emergenciesCreated: number;
+  /** Slots the fallback ladder could not cover at all. */
+  abandoned: AbandonedSlot[];
+  /** Assembled, ordered warnings (under-filled, stockout, catering drops, …). */
+  warnings: Warning[];
+}
+
+/** Fix-My-Menu pure core — runs the full algorithm against the global S and
+ *  returns a structured result, with NO UI/persistence side-effects (no
+ *  spinner, save, rerender, ritual marking, or results modal). This is the
+ *  single source of truth for the pipeline: both the UI wrapper
+ *  (`_fixMyMenuBody`) and the regression bench (test/fmm-bench.test.ts via
+ *  bench/menu-fixer/run-pipeline.ts) call it, so the bench cannot drift from
+ *  production.
+ *
+ *  Runs: strip future services → clean orphan placeholders → auto-retire spent
+ *  batches → generate missing placeholders → team-fill big slots →
+ *  forced-assignment pre-pass → scored greedy loop → fallback ladder (teams →
+ *  emergency placeholder → abandoned) → pot allocation → warnings. */
+export function runFixMyMenuCore(): FixMyMenuResult {
   stripFutureServices(S.batches);
 
   // Caterings that lost a placeholder dish to orphan cleanup — collected here
@@ -1313,6 +1343,26 @@ function _fixMyMenuBody(): void {
     });
   }
 
+  return {
+    cleaned: orphans.length,
+    retired: retireIds.size,
+    newPlaceholders,
+    emergencyBatches: phaseC.emergencyBatches,
+    assigned: phaseTeam.committed + phaseB0.committed + phaseB.committed,
+    teamsFormed: phaseTeam.teamsFormed + phaseC.teamsFormed,
+    emergenciesCreated: phaseC.emergenciesCreated,
+    abandoned: phaseC.abandoned,
+    warnings,
+  };
+}
+
+/** Fix-My-Menu body — split out so the public `fixMyMenu` entry can show a
+ *  spinner before the synchronous algorithm blocks the main thread. Runs the
+ *  pure `runFixMyMenuCore()` pipeline, then applies the UI/persistence
+ *  side-effects (ritual marking, save, rerender, results modal). */
+function _fixMyMenuBody(): void {
+  const result = runFixMyMenuCore();
+
   markFixMyMenuRun();
   // Record the run in the shared ritual store too (lunch vs dinner by the
   // clock), so every device's "Today" panel sees it — markFixMyMenuRun only
@@ -1324,13 +1374,13 @@ function _fixMyMenuBody(): void {
   scheduleSave();
 
   showResultsModal({
-    cleaned: orphans.length,
-    created: newPlaceholders.length + phaseC.emergenciesCreated,
-    assigned: phaseTeam.committed + phaseB0.committed + phaseB.committed,
-    retired: retireIds.size,
-    placeholderNames: [...newPlaceholders.map(p => p.name), ...phaseC.emergencyBatches.map(p => p.name)],
-    teamsFormed: phaseTeam.teamsFormed + phaseC.teamsFormed,
-    warnings,
+    cleaned: result.cleaned,
+    created: result.newPlaceholders.length + result.emergenciesCreated,
+    assigned: result.assigned,
+    retired: result.retired,
+    placeholderNames: [...result.newPlaceholders.map(p => p.name), ...result.emergencyBatches.map(p => p.name)],
+    teamsFormed: result.teamsFormed,
+    warnings: result.warnings,
   });
 }
 

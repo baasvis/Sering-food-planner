@@ -37,10 +37,22 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
           cache: 'npm'
 
       - run: npm ci
+
+      # Cache the Playwright browser download keyed on the lockfile (which pins
+      # the playwright version). On a hit the install step below still runs but
+      # only re-installs OS-level --with-deps system packages (not cached),
+      # skipping the ~300MB Chromium download. Cache miss → full install.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

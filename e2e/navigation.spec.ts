@@ -1,9 +1,15 @@
 import { test, expect, type Page } from '@playwright/test';
 import { loginAsDev } from './helpers';
 
-// Mirrors NAV_SCREENS in public/js/state.ts. The 'feedback-admin' screen is
-// only accessible via deep-link in production but is part of the nav array,
-// so it's included here.
+// Mirrors NAV_SCREENS in public/js/state.ts. Keep this in sync when a screen is
+// added there — drift previously left 'supplies' (Toppings & bread) and 'team'
+// untested (audit TEST-2/TEST-7).
+//
+// 'team' is directorOnly: it only builds into the nav when the logged-in user
+// is a director. The e2e webServer sets DIRECTOR_EMAILS=dev@local
+// (playwright.config.ts) so the dev-mode user is a director and this screen is
+// reachable here. 'feedback-admin' is deep-link-only in production but is part
+// of the nav array, so it's included too.
 const NAV_SCREENS = [
   'dashboard',
   'guests',
@@ -11,8 +17,10 @@ const NAV_SCREENS = [
   'recipe-index',
   'orders',
   'competencies',
+  'supplies',
   'finance',
   'feedback-admin',
+  'team',
 ] as const;
 
 /**
@@ -69,6 +77,56 @@ test.describe('Navigation', () => {
       // give them a moment.
       await expect(container).not.toBeEmpty();
     }
+
+    assertNoErrors();
+  });
+
+  // TEST-7: minimal smoke for the new write-flow screens. The loop above
+  // already proves Supplies and Team navigate + render non-empty without
+  // console errors; here we additionally assert each screen's own primary
+  // control rendered, so a render that leaves a non-empty-but-broken container
+  // still fails. Full interaction flows (create/prep/approve) are out of scope.
+  test('Supplies screen renders its primary control', async ({ page }) => {
+    const assertNoErrors = trackConsoleErrors(page);
+    await loginAsDev(page);
+
+    await page.locator('.nav-btn[data-screen="supplies"]').click();
+    await expect(page.locator('#screen-supplies')).toHaveClass(/active/);
+    // The "+ New item" button (data-testid="supplies-new") is the screen's core
+    // affordance — its presence proves supplies.ts rendered, not just that the
+    // container exists.
+    await expect(page.getByTestId('supplies-new')).toBeVisible();
+
+    assertNoErrors();
+  });
+
+  test('Team (director-only) screen renders without error', async ({ page }) => {
+    const assertNoErrors = trackConsoleErrors(page);
+    await loginAsDev(page);
+
+    // Reachable only because the e2e dev user is a director (DIRECTOR_EMAILS in
+    // playwright.config.ts). buildNav() builds the nav button + container.
+    await page.locator('.nav-btn[data-screen="team"]').click();
+    await expect(page.locator('#screen-team')).toHaveClass(/active/);
+    await expect(page.locator('#screen-team')).not.toBeEmpty();
+
+    assertNoErrors();
+  });
+
+  test('Recipe-AI (director-only) assistant opens without error', async ({ page }) => {
+    const assertNoErrors = trackConsoleErrors(page);
+    await loginAsDev(page);
+
+    await page.locator('.nav-btn[data-screen="recipe-index"]').click();
+    // The director-only "AI helper" entry on the recipes screen. Opening it
+    // renders the recipe editor in AI mode (no Anthropic call happens until a
+    // message is sent), so this is a safe render-without-error smoke.
+    const aiBtn = page.getByTestId('recipe-ai-btn');
+    await expect(aiBtn).toBeVisible();
+    await aiBtn.click();
+    // The editor modal renders into the shared modal container.
+    await expect(page.locator('.modal-bg')).toBeVisible();
+    await expect(page.locator('#re-name')).toBeVisible();
 
     assertNoErrors();
   });
