@@ -950,6 +950,16 @@ function _startFreshnessTick() {
   setInterval(() => {
     const screen = document.getElementById('screen-dashboard');
     if (screen && screen.style.display !== 'none' && screen.offsetParent !== null) {
+      // Don't rebuild #dash-content out from under a user who is typing in it
+      // (audit UIUX-1): the Team To-Do input only reads on Enter/Add, so a tick
+      // mid-type would wipe the half-typed text. Skip this tick; the next one
+      // (or the user's own re-render) catches up the "X min ago" counters.
+      const active = document.activeElement as HTMLElement | null;
+      const content = document.getElementById('dash-content');
+      if (active && content && content.contains(active) &&
+          (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+        return;
+      }
       renderDashboardContent();
     }
   }, 60_000);

@@ -3,6 +3,7 @@ import { S } from './state';
 import { apiGet, apiPost, toast, toastError, todayIso, newId } from './utils';
 import { showModal, closeModal, esc } from './modal';
 import { registerRenderer, rerenderCurrentView } from './navigate';
+import { pushUndo } from './undo';
 import { computeSupplyDemand, supplyPricePerGuest } from '@shared/supply-demand';
 import { getEffectiveGuests } from './core';
 
@@ -44,21 +45,42 @@ const PRESERVATION_METHODS = [
 
 let _includeArchived = false;
 let _searchQuery = '';
+// Audit ARCH-5: paint from the cached S.supplies (kept fresh by /api/data at
+// bootstrap and by the SSE merge in applyRemotePatch) instead of refetching
+// /api/supplies on every render/SSE/60s-tick. Only fetch on first screen-enter
+// and after a local mutation, via reloadSupplies(). The "Include archived"
+// toggle filters S.supplies client-side — no refetch — because /api/data (and
+// loadSupplies below) return the canonical superset INCLUDING archived rows
+// (audit ARCH-9: one source of truth, archived filtered at the render site).
+let _loaded = false;
 
 export async function loadSupplies(): Promise<void> {
   try {
-    const list = await apiGet('/api/supplies' + (_includeArchived ? '?includeArchived=1' : '')) as Supply[];
+    // Always fetch the full shape (including archived) so S.supplies matches
+    // the /api/data superset and the archived toggle can filter client-side.
+    const list = await apiGet('/api/supplies?includeArchived=1') as Supply[];
     S.supplies = Array.isArray(list) ? list : [];
+    _loaded = true;
   } catch (e: unknown) {
     S.supplies = [];
     toastError('Failed to load toppings & bread: ' + (e instanceof Error ? e.message : 'unknown error'));
   }
 }
 
+/** Force a fresh fetch then repaint. Called after a local mutation (create /
+ *  edit / delete / prep) so the server-canonical row replaces the optimistic
+ *  one; the plain renderer paints from cache. */
+export async function reloadSupplies(): Promise<void> {
+  await loadSupplies();
+  updateSupplyResults();
+}
+
 export async function renderSupplies(): Promise<void> {
   const el = document.getElementById('screen-supplies');
   if (!el) return;
-  await loadSupplies();
+  // First screen-enter fetches once for guaranteed freshness; subsequent
+  // renders (SSE merges, 60s tick) paint from the cached S.supplies.
+  if (!_loaded) await loadSupplies();
   el.innerHTML = `
     <div class="screen-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
       <h2 style="margin:0;">Toppings &amp; bread</h2>
@@ -81,9 +103,9 @@ export function suppliesSetSearch(q: string): void {
   updateSupplyResults();
 }
 
-export async function suppliesToggleArchived(): Promise<void> {
+export function suppliesToggleArchived(): void {
   _includeArchived = !_includeArchived;
-  await loadSupplies();
+  // S.supplies already holds archived rows — just re-filter, no refetch.
   updateSupplyResults();
 }
 
@@ -91,7 +113,9 @@ function updateSupplyResults(): void {
   const el = document.getElementById('supplies-results');
   if (!el) return;
   const q = _searchQuery.toLowerCase();
-  const list = (S.supplies || []).filter((s) => !q || s.name.toLowerCase().includes(q));
+  const list = (S.supplies || [])
+    .filter((s) => _includeArchived || !s.archived)
+    .filter((s) => !q || s.name.toLowerCase().includes(q));
   if (list.length === 0) {
     el.innerHTML = `<div class="empty">No toppings or bread${q ? ` matching "${esc(q)}"` : ''} yet. Click "+ New item" to add one.</div>`;
     return;
@@ -115,22 +139,24 @@ function renderSupplyTable(label: string, list: Supply[], todayStr: string): str
   return `
     <div class="card" style="margin-bottom:12px;">
       <h3 style="margin:0 0 8px;">${esc(label)}</h3>
-      <table class="supplies-table" style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead>
-          <tr style="text-align:left;color:var(--text2);">
-            <th style="padding:6px 4px;">Name</th>
-            <th>Unit</th>
-            <th>Mode</th>
-            <th>Stock West</th>
-            <th>Stock Centraal</th>
-            <th>Demand (next horizon)</th>
-            <th>Cost / guest</th>
-            <th>Method</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div class="supplies-table-wrap">
+        <table class="supplies-table" style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="text-align:left;color:var(--text2);">
+              <th style="padding:6px 4px;">Name</th>
+              <th>Unit</th>
+              <th>Mode</th>
+              <th>Stock West</th>
+              <th>Stock Centraal</th>
+              <th>Demand (next horizon)</th>
+              <th>Cost / guest</th>
+              <th>Method</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
     </div>
   `;
 }
@@ -332,7 +358,7 @@ export async function suppliesSave(isNew: boolean): Promise<void> {
   const id = (document.getElementById('sup-id') as HTMLInputElement).value;
   const kind = (document.getElementById('sup-kind') as HTMLInputElement).value as SupplyKind;
   const name = ((document.getElementById('sup-name') as HTMLInputElement).value || '').trim();
-  if (!name) { alert('Please enter a name'); return; }
+  if (!name) { toastError('Please enter a name'); return; }
   const unit = ((document.getElementById('sup-unit') as HTMLInputElement).value || '').trim() || 'boxes';
   const recipeId = ((document.getElementById('sup-recipe') as HTMLSelectElement).value || '').trim() || null;
   const preservationMethod = ((document.getElementById('sup-method') as HTMLSelectElement).value || '').trim() || null;
@@ -359,7 +385,7 @@ export async function suppliesSave(isNew: boolean): Promise<void> {
     payload.guestsPerUnit = parseFloat((document.getElementById('sup-gpu') as HTMLInputElement).value) || 0;
     payload.prepHorizonDays = parseInt((document.getElementById('sup-horizon') as HTMLInputElement).value, 10) || 1;
     payload.prepMode = (document.getElementById('sup-mode') as HTMLSelectElement).value as SupplyPrepMode;
-    if (payload.guestsPerUnit <= 0) { alert('Guests served per unit must be greater than 0'); return; }
+    if (payload.guestsPerUnit <= 0) { toastError('Guests served per unit must be greater than 0'); return; }
   } else {
     payload.oneoffLocation = (document.getElementById('sup-loc') as HTMLSelectElement).value;
     payload.unitsPerService = parseFloat((document.getElementById('sup-ups') as HTMLInputElement).value) || 1;
@@ -375,24 +401,40 @@ export async function suppliesSave(isNew: boolean): Promise<void> {
       toast(`"${name}" saved`);
     }
     closeModal();
-    rerenderCurrentView();
+    // Refetch so the server-canonical row lands in S.supplies (the renderer
+    // now paints from cache — audit ARCH-5).
+    await reloadSupplies();
   } catch (e: unknown) {
     toastError('Save failed: ' + (e instanceof Error ? e.message : 'unknown'));
   }
 }
 
-export async function suppliesDelete(id: string): Promise<void> {
+// Destructive: use the pushUndo 5s-undo flow (project convention), not a native
+// confirm() dialog (audit UIUX-5). Optimistically removes the supply, then
+// commits the DELETE after the undo window — mirrors deleteV2Recipe.
+export function suppliesDelete(id: string): void {
   const s = (S.supplies || []).find((x) => x.id === id);
   if (!s) return;
-  if (!confirm(`Delete "${s.name}"? This is permanent.`)) return;
-  try {
-    await apiPost('/api/supplies/' + encodeURIComponent(id), null, 'DELETE');
-    closeModal();
-    toast(`"${s.name}" deleted`);
-    rerenderCurrentView();
-  } catch (e: unknown) {
-    toastError(e instanceof Error ? e.message : 'Delete failed');
-  }
+  const deleted = structuredClone(s);
+  S.supplies = (S.supplies || []).filter((x) => x.id !== id);
+  closeModal();
+  rerenderCurrentView();
+  pushUndo({
+    label: `"${esc(s.name)}" deleted`,
+    restore: () => {
+      S.supplies = [...(S.supplies || []), deleted];
+      rerenderCurrentView();
+    },
+    commit: async () => {
+      try {
+        await apiPost('/api/supplies/' + encodeURIComponent(id), null, 'DELETE');
+      } catch (e: unknown) {
+        toastError('Could not delete: ' + (e instanceof Error ? e.message : 'unknown error'));
+        S.supplies = [...(S.supplies || []), deleted];
+        rerenderCurrentView();
+      }
+    },
+  });
 }
 
 // ── Log prep — adds amount to stock, stamps lastMakeDate ──
@@ -425,12 +467,14 @@ export async function suppliesSubmitPrep(): Promise<void> {
   const id = (document.getElementById('sup-prep-id') as HTMLInputElement).value;
   const location = (document.getElementById('sup-prep-loc') as HTMLSelectElement).value;
   const amount = parseFloat((document.getElementById('sup-prep-amount') as HTMLInputElement).value);
-  if (!Number.isFinite(amount) || amount <= 0) { alert('Enter a positive amount'); return; }
+  if (!Number.isFinite(amount) || amount <= 0) { toastError('Enter a positive amount'); return; }
   try {
     await apiPost(`/api/supplies/${encodeURIComponent(id)}/prep`, { location, amount });
     toast(`+${amount} added to stock @ ${location}`);
     closeModal();
-    rerenderCurrentView();
+    // Refetch so the updated stock lands in S.supplies (renderer paints from
+    // cache — audit ARCH-5).
+    await reloadSupplies();
   } catch (e: unknown) {
     toastError('Log prep failed: ' + (e instanceof Error ? e.message : 'unknown'));
   }

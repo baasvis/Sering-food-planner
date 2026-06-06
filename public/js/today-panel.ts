@@ -159,10 +159,28 @@ export function renderTodayPanel(): string {
 
 // ── Handlers (registered on window in main.ts) ───────────────────────────
 
-/** Toggle a manual ritual step and re-render. */
+/** Repaint ONLY the Today panel in place from current S state. Avoids routing a
+ *  local ritual toggle through renderDashboard()'s "Loading dashboard…"
+ *  placeholder + async prep-checklist refetch (audit UIUX-2). markRitualStep
+ *  updates S synchronously and the panel reads only from S, so swapping the
+ *  panel's own outerHTML is sufficient. No dashboard import (would cycle:
+ *  dashboard.ts imports renderTodayPanel from here). */
+function repaintTodayPanel(loc: string): void {
+  const existing = document.querySelector(`.ritual-panel[data-loc="${loc}"]`)
+    || document.querySelector('.ritual-panel');
+  const html = renderTodayPanel();
+  if (existing && html) {
+    existing.outerHTML = html;
+    return;
+  }
+  // Panel missing or now empty — fall back to a full re-render.
+  rerenderCurrentView();
+}
+
+/** Toggle a manual ritual step and re-render just the Today panel in place. */
 export function toggleRitualStep(loc: string, key: string): void {
   markRitualStep(loc, key, !isRitualStepDone(loc, key));
-  rerenderCurrentView();
+  repaintTodayPanel(loc);
 }
 
 /** Fold a step open/closed to show why the action happens at this time. Flips

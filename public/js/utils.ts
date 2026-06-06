@@ -500,9 +500,20 @@ export function scheduleNextWeeksSave(): void {
   }, 1500);
 }
 
+// The single #toast region defaults to polite (role="status"). Toggle it to
+// assertive (role="alert") for errors so a screen reader interrupts to announce
+// a save/transport failure (audit UIUX-7), and back to polite for plain toasts.
+function setToastPoliteness(assertive: boolean): void {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.setAttribute('role', assertive ? 'alert' : 'status');
+  t.setAttribute('aria-live', assertive ? 'assertive' : 'polite');
+}
+
 export function toast(msg: string): void {
   const t = document.getElementById('toast');
   if (!t) return;
+  setToastPoliteness(false);
   t.textContent = msg;
   t.className = 'toast show';
   setTimeout(() => t.className = 'toast', 2200);
@@ -511,6 +522,7 @@ export function toast(msg: string): void {
 export function toastError(msg: string): void {
   const t = document.getElementById('toast');
   if (!t) return;
+  setToastPoliteness(true);
   t.textContent = msg;
   t.className = 'toast error show';
   setTimeout(() => t.className = 'toast', 4000);
@@ -519,6 +531,7 @@ export function toastError(msg: string): void {
 export function showUndoToast(msg: string, onUndo: () => void): void {
   const t = document.getElementById('toast');
   if (!t) return;
+  setToastPoliteness(false);
   t.innerHTML = `<span>${msg}</span><button class="toast-undo-btn" type="button">Undo</button>`;
   t.querySelector('.toast-undo-btn')!.addEventListener('click', onUndo);
   t.className = 'toast undo show';

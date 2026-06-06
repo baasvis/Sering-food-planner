@@ -193,17 +193,20 @@ function buildGridHtml(visibleChunks: CChunk[]): string {
   if (people.length === 0) {
     return '<div class="comp-empty">No staff added yet. Tap <strong>+ Add a name</strong> to add the first person, then tap a grid cell to log a teaching.</div>';
   }
+  // Keyboard access (audit UIUX-3): the click-only header/cell controls get
+  // role="button" + tabindex="0" + an onkeydown that fires the same handler on
+  // Enter/Space, mirroring .dash-arrival-block in transport-card.ts.
   const head = visibleChunks.map(c =>
-    `<th class="comp-chunkhead" data-testid="comp-chunkhead" data-chunk="${esc(c.id)}" title="${esc(c.name)} — ${esc(c.station)}" onclick="openCompChunk(this.dataset.chunk)">${esc(c.name)}</th>`
+    `<th class="comp-chunkhead" data-testid="comp-chunkhead" data-chunk="${esc(c.id)}" role="button" tabindex="0" title="${esc(c.name)} — ${esc(c.station)}" onclick="openCompChunk(this.dataset.chunk)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompChunk(this.dataset.chunk);}">${esc(c.name)}</th>`
   ).join('');
   const rows = people.map(p => {
     const cells = visibleChunks.map(c => {
       const last = lastTaught(p.id, c.id);
       const cls = recencyClass(last);
       const label = last ? esc(fmtDate(last)) : '&mdash;';
-      return `<td class="comp-cell ${cls}" data-testid="comp-cell" data-learner="${esc(p.id)}" data-chunk="${esc(c.id)}" title="${esc(p.name)} — ${esc(c.name)}" onclick="openCompLogModal(this.dataset.learner, this.dataset.chunk)">${label}</td>`;
+      return `<td class="comp-cell ${cls}" data-testid="comp-cell" data-learner="${esc(p.id)}" data-chunk="${esc(c.id)}" role="button" tabindex="0" title="${esc(p.name)} — ${esc(c.name)}" onclick="openCompLogModal(this.dataset.learner, this.dataset.chunk)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompLogModal(this.dataset.learner, this.dataset.chunk);}">${label}</td>`;
     }).join('');
-    return `<tr><th class="comp-rowhead" data-person="${esc(p.id)}" title="See ${esc(p.name)}'s history" onclick="openCompPerson(this.dataset.person)">${esc(p.name)}</th>${cells}</tr>`;
+    return `<tr><th class="comp-rowhead" data-person="${esc(p.id)}" role="button" tabindex="0" title="See ${esc(p.name)}'s history" onclick="openCompPerson(this.dataset.person)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompPerson(this.dataset.person);}">${esc(p.name)}</th>${cells}</tr>`;
   }).join('');
   return `
     <div class="comp-grid-wrap">

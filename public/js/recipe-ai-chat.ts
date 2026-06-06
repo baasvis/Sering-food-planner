@@ -80,6 +80,7 @@ function renderHTML(): string {
     </div>
     <div class="ai-chat-input-row">
       <textarea class="ai-chat-input" id="ai-chat-input"
+        aria-label="Describe a recipe"
         placeholder="Describe a recipe… (Ctrl/Cmd+Enter to send)"
         ${isStreaming ? 'disabled' : ''}
         onkeydown="aiRecipeKey(event)"></textarea>
