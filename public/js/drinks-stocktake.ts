@@ -40,10 +40,13 @@ function drinksForSupplier(name: string): Drink[] {
     && (d.locations?.[loc()]?.active !== false))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
-/** All stockable drinks at the location (for a by-area full count). */
-function allStockableDrinks(): Drink[] {
-  return (S.drinks || []).filter(d => !d.archived).sort((a, b) =>
-    a.category === b.category ? a.name.localeCompare(b.name) : a.category.localeCompare(b.category));
+/** Drinks whose home storage area at this location is `area` (active, not
+ *  archived) — so "count by area" lists only that area's drinks, not all. */
+function drinksForArea(area: string): Drink[] {
+  return (S.drinks || []).filter(d => !d.archived
+    && (d.locations?.[loc()]?.active !== false)
+    && (d.locations?.[loc()]?.area || '') === area)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function renderDrinksStocktakeTab(): void {
@@ -73,11 +76,14 @@ function stkOvRow(d: Drink, saveArea: string): string {
   const l = loc();
   const pool = d.stockByLocation?.[l] ?? null;
   const par = d.locations?.[l]?.par ?? null;
+  const home = d.locations?.[l]?.area || '';
   const val = pool != null ? String(round1(pool)) : '';
+  const areaOpts = ['<option value="">— area —</option>', ...drinkAreasFor(l).map(a => `<option value="${esc(a)}" ${a === home ? 'selected' : ''}>${esc(a)}</option>`)].join('');
   return `<tr data-testid="stk-ov-row">
     <td><button class="stk-ov-name linklike" type="button" onclick="openDrinkForm('${esc(d.id)}')">${esc(d.name)}</button>${d.subtype ? `<div class="muted small">${esc(d.subtype)}</div>` : ''}</td>
+    <td><select class="stk-ov-area" onchange="drinkStkSetArea('${esc(d.id)}', this.value)">${areaOpts}</select></td>
     <td class="num">${par != null ? round1(par) : '<span class="muted">—</span>'}</td>
-    <td class="num"><input class="stk-ov-input" data-id="${esc(d.id)}" data-area="${esc(saveArea)}" data-par="${par != null ? par : ''}" data-orig="${esc(val)}" type="number" min="0" step="0.5" value="${val}" placeholder="—" oninput="drinksStkOvStatus(this)"></td>
+    <td class="num"><input class="stk-ov-input" data-id="${esc(d.id)}" data-area="${esc(saveArea)}" data-par="${par != null ? par : ''}" type="number" min="0" step="0.5" value="${val}" placeholder="—" oninput="drinksStkOvStatus(this)" onchange="drinkStkSaveOne(this)"></td>
     <td class="stk-status">${stkStatusHtml(pool, par)}</td>
   </tr>`;
 }
@@ -110,7 +116,7 @@ function renderOverview(): void {
         return `<div class="stk-area-group" style="--area-color:${color}">
           <div class="stk-area-head"><span class="stk-area-dot"></span>${esc(label)} <span class="muted small">${rows.length}</span></div>
           <div class="drinks-table-wrap"><table class="drinks-table stk-ov-table">
-            <thead><tr><th>Drink</th><th class="num">Needed</th><th class="num">In stock</th><th>Status</th></tr></thead>
+            <thead><tr><th>Drink</th><th>Area</th><th class="num">Needed</th><th class="num">In stock</th><th>Status</th></tr></thead>
             <tbody>${rows.map(d => stkOvRow(d, saveArea)).join('')}</tbody>
           </table></div>
         </div>`;
@@ -123,9 +129,8 @@ function renderOverview(): void {
         </div>
         <button class="btn" data-testid="stk-start" onclick="drinksStkStart()">📋 Count by area</button>
       </div>
-      <p class="muted small">Stock at ${esc(locLabel)}, grouped by storage area. Fill in “In stock” and Save; tap a name to edit the drink. Set each drink's storage area on its edit screen.</p>
+      <p class="muted small">Stock at ${esc(locLabel)}, grouped by storage area. Change a count and it saves automatically; set each drink's area inline; tap a name to edit. Or use “Count by area” for a focused count.</p>
       ${sectionsHtml}
-      <div class="stk-savebar"><button class="btn btn-primary" data-testid="stk-ov-save" onclick="drinksStkOvSave()">Save counts</button></div>
     </div>`;
 }
 
@@ -137,28 +142,44 @@ export function drinksStkOvStatus(input: HTMLInputElement): void {
   if (cell) cell.innerHTML = stkStatusHtml(stock, par);
 }
 
-/** Save only the counts the user changed, posting per storage area. */
-export async function drinksStkOvSave(): Promise<void> {
-  const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('.stk-ov-input'));
-  const byArea = new Map<string, Array<{ drinkId: string; qty: number }>>();
-  for (const inp of inputs) {
-    if (inp.value === '' || inp.value === (inp.dataset.orig || '')) continue; // only changed
-    const qty = Number(inp.value);
-    if (!Number.isFinite(qty)) continue;
-    const area = inp.dataset.area as string;
-    const arr = byArea.get(area) || [];
-    arr.push({ drinkId: inp.dataset.id as string, qty });
-    byArea.set(area, arr);
-  }
-  if (byArea.size === 0) { toastError('No changes to save.'); return; }
+/** Auto-save a single count when its cell changes (blur). Saves to the drink's
+ *  home area (or the group's fallback) and refreshes that row's status. */
+export async function drinkStkSaveOne(input: HTMLInputElement): Promise<void> {
+  if (input.value === '') return; // blank = not counted
+  const qty = Number(input.value);
+  if (!Number.isFinite(qty) || qty < 0) { toastError('Enter a number ≥ 0.'); return; }
+  const area = input.dataset.area as string;
+  const drinkId = input.dataset.id as string;
   try {
-    let n = 0;
-    for (const [area, items] of byArea) { await apiPost('/api/drinks/stock/bulk', { location: loc(), area, items }); n += items.length; }
-    toast(`${n} count${n > 1 ? 's' : ''} saved`);
+    await apiPost('/api/drinks/stock/bulk', { location: loc(), area, items: [{ drinkId, qty }] });
+    input.classList.add('stk-saved');
+    setTimeout(() => input.classList.remove('stk-saved'), 900);
     await loadDrinks();
-    renderDrinksStocktakeTab();
+    const d = (S.drinks || []).find(x => x.id === drinkId);
+    const pool = d?.stockByLocation?.[loc()] ?? qty;
+    const par = input.dataset.par === '' || input.dataset.par == null ? null : Number(input.dataset.par);
+    const cell = input.closest('tr')?.querySelector('.stk-status');
+    if (cell) cell.innerHTML = stkStatusHtml(pool, par);
   } catch (e: unknown) {
     toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+/** Set a drink's home storage area inline from the list; re-renders so the row
+ *  moves to its colour-coded group. */
+export async function drinkStkSetArea(id: string, area: string): Promise<void> {
+  const d = (S.drinks || []).find(x => x.id === id);
+  if (!d) return;
+  const l = loc();
+  const prev = d.locations?.[l]?.area;
+  d.locations = { ...(d.locations || {}), [l]: { par: d.locations?.[l]?.par ?? null, active: d.locations?.[l]?.active !== false, area: area || undefined } };
+  renderDrinksStocktakeTab();
+  try {
+    await apiPost(`/api/drinks/${id}/area`, { location: l, area }, 'PATCH');
+  } catch (e: unknown) {
+    d.locations = { ...(d.locations || {}), [l]: { par: d.locations?.[l]?.par ?? null, active: d.locations?.[l]?.active !== false, area: prev } };
+    renderDrinksStocktakeTab();
+    toastError('Could not set area: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 
@@ -202,7 +223,7 @@ export function drinksStkPickArea(area: string): void { _area = area; _supplier 
 export function drinksStkBack(): void { _supplier = null; _area = null; _values = {}; renderDrinksStocktakeTab(); }
 
 function countList(): Drink[] {
-  return _supplier ? drinksForSupplier(_supplier) : allStockableDrinks();
+  return _supplier ? drinksForSupplier(_supplier) : (_area ? drinksForArea(_area) : []);
 }
 
 function renderCountView(): void {

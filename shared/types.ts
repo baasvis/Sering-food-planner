@@ -752,6 +752,12 @@ export interface DrinkMenuLayout {
   columns: 1 | 2;
   sectionStyle: string;
   typeScale: string;
+  /** Page size for print: 'A4' (default) or 'A5'. */
+  pageSize?: string;
+  /** Visual template: 'classic' (serif, default) or 'mono' (Inconsolata bar style). */
+  template?: string;
+  /** Optional footer line (e.g. social handles) printed at the bottom. */
+  footer?: string;
 }
 
 export interface DrinkMenu {

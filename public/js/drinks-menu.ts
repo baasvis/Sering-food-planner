@@ -156,7 +156,14 @@ export function openMenuForm(id?: string): void {
       <label class="df-field">Section style
         <select id="menu-sectionstyle">${['default', 'minimal', 'bold'].map(s => `<option value="${s}" ${s === layout.sectionStyle ? 'selected' : ''}>${s}</option>`).join('')}</select>
       </label>
+      <label class="df-field">Page size
+        <select id="menu-pagesize">${['A4', 'A5'].map(s => `<option value="${s}" ${s === (layout.pageSize || 'A4') ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      </label>
+      <label class="df-field">Template
+        <select id="menu-template"><option value="classic" ${(layout.template || 'classic') === 'classic' ? 'selected' : ''}>Classic (serif)</option><option value="mono" ${layout.template === 'mono' ? 'selected' : ''}>Bar (monospace)</option></select>
+      </label>
       <label class="df-field df-check"><input id="menu-published" type="checkbox" ${m?.published ? 'checked' : ''}> Published</label>
+      <label class="df-field df-col2">Footer line <input id="menu-footer" value="${m?.layout?.footer ? esc(m.layout.footer) : ''}" placeholder="e.g. @de_sering | @testtafel | @mediamatic_eten"></label>
     </div>
     <fieldset class="df-section">
       <legend>Drinks on this menu</legend>
@@ -208,6 +215,9 @@ export async function saveMenuForm(existingId: string): Promise<void> {
     columns: Number((document.getElementById('menu-columns') as HTMLSelectElement)?.value) === 2 ? 2 : 1,
     sectionStyle: (document.getElementById('menu-sectionstyle') as HTMLSelectElement)?.value || 'default',
     typeScale: (document.getElementById('menu-typescale') as HTMLSelectElement)?.value || 'normal',
+    pageSize: (document.getElementById('menu-pagesize') as HTMLSelectElement)?.value || 'A4',
+    template: (document.getElementById('menu-template') as HTMLSelectElement)?.value || 'classic',
+    footer: (document.getElementById('menu-footer') as HTMLInputElement)?.value.trim() || '',
   };
   const published = (document.getElementById('menu-published') as HTMLInputElement)?.checked || false;
   // Persist the chosen subset as a single section; empty → print shows the whole assortment.

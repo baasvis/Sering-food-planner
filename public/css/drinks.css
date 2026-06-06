@@ -298,7 +298,9 @@
 .stk-area-group { margin-bottom: 16px; border-left: 4px solid var(--area-color, #9ca3af); padding-left: 10px; }
 .stk-area-head { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .03em; color: var(--text, #444); margin: 4px 0 6px; }
 .stk-area-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--area-color, #9ca3af); display: inline-block; flex: none; }
-.stk-ov-input { width: 70px; text-align: right; }
+.stk-ov-input { width: 70px; text-align: right; transition: background .3s, box-shadow .3s; }
+.stk-ov-input.stk-saved { background: #e7f6ec; box-shadow: 0 0 0 2px #2e9e5b inset; }
+.stk-ov-area { font-size: 12px; padding: 3px 5px; border: 1px solid var(--border, #ccc); border-radius: 6px; background: var(--input-bg, #fff); color: var(--text, #222); max-width: 150px; }
 .stk-ov-name { background: none; border: none; padding: 0; color: var(--loc-accent, #7c3aed); font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
 .stk-ov-name:hover { text-decoration: underline; }
 .stk-status .stk-ok { color: #2e9e5b; font-weight: 600; }

@@ -29,6 +29,7 @@ import { scanMenuPdf, importConfigured, ImportItem } from '../lib/drinks-import'
 // Pseudo storage areas the stocktake reconciles away when a real count lands:
 // seed bootstrap, order-receiving intake, and fresh production. A real count of
 // the drink consumes all three.
+type DrinkLocMeta = { par: number | null; active: boolean; area?: string };
 const BOOTSTRAP_AREAS = ['Uncounted (pre-stocktake)', 'Delivery intake', 'Made (fresh)'];
 const RECEIVING_AREA = 'Delivery intake';
 const PRODUCTION_AREA = 'Made (fresh)';
@@ -603,9 +604,12 @@ router.get('/menus/:id/print', asyncHandler(async (req: Request, res: Response) 
   const drinkRows = drinkIds.length ? await prisma.drink.findMany({ where: { id: { in: drinkIds } } }) : [];
   const byId = new Map(drinkRows.map(d => [d.id, d]));
   const loc = menu.location;
-  const layout = (menu.layout || {}) as { columns?: number; typeScale?: string };
+  const layout = (menu.layout || {}) as { columns?: number; typeScale?: string; pageSize?: string; template?: string; footer?: string };
   const scale = layout.typeScale === 'large' ? 1.25 : layout.typeScale === 'compact' ? 0.85 : 1;
   const cols = layout.columns === 2 ? 2 : 1;
+  const pageSize = layout.pageSize === 'A5' ? 'A5' : 'A4';
+  const mono = layout.template === 'mono';
+  const footer = typeof layout.footer === 'string' ? layout.footer.trim() : '';
   // Group by category, preserving the assortment's entry order.
   const byCat: Record<string, typeof drinkRows> = {};
   for (const id2 of drinkIds) {
@@ -613,33 +617,48 @@ router.get('/menus/:id/print', asyncHandler(async (req: Request, res: Response) 
     if (!d || d.archived) continue;
     (byCat[d.category] = byCat[d.category] || []).push(d);
   }
+  // All priced formats for the location, joined: "€6.50 | €30.00" (glass | bottle).
   const priceOf = (d: typeof drinkRows[number]): string => {
     const fmts = Array.isArray(d.formats) ? (d.formats as Array<{ price?: Record<string, number | null> }>) : [];
-    const f = fmts.find(x => x.price?.[loc] != null) || fmts[0];
-    const p = f?.price?.[loc];
-    return p != null ? `€${p.toFixed(2)}` : '';
+    const prices = fmts.map(f => f.price?.[loc]).filter((p): p is number => p != null).map(p => `€${p.toFixed(2)}`);
+    return prices.length ? [...new Set(prices)].join(' | ') : '';
   };
   const sections = Object.entries(byCat).map(([cat, ds]) =>
     `<section><h2>${escHtml(MENU_CAT_LABELS[cat] || cat)}</h2>${ds.map(d =>
       `<div class="item"><span class="nm">${escHtml(d.name)}${d.subtype ? ` <em>${escHtml(d.subtype)}</em>` : ''}</span><span class="pr">${priceOf(d)}</span></div>`).join('')}</section>`).join('');
-  res.set('Content-Type', 'text/html; charset=utf-8');
-  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(menu.name)}</title><style>
-    @page { size: A4; margin: 18mm; }
+
+  const classicCss = `
     body { font-family: Georgia, 'Times New Roman', serif; color:#1a1a1a; font-size:${14 * scale}px; }
     h1 { text-align:center; font-size:${26 * scale}px; margin:0 0 4px; }
     .sub { text-align:center; color:#777; margin:0 0 22px; font-style:italic; }
-    .cols { column-count:${cols}; column-gap:30px; }
-    section { break-inside:avoid; margin-bottom:18px; }
     h2 { font-size:${15 * scale}px; text-transform:uppercase; letter-spacing:.08em; border-bottom:1px solid #bbb; padding-bottom:3px; }
-    .item { display:flex; justify-content:space-between; gap:14px; margin:5px 0; }
-    .nm em { color:#999; font-size:.85em; }
+    .nm em { color:#999; font-size:.85em; }`;
+  const monoCss = `
+    body { font-family:'Inconsolata', ui-monospace, 'Courier New', monospace; color:#111; font-size:${13.5 * scale}px; line-height:1.5; }
+    h1 { text-align:center; font-size:${22 * scale}px; font-weight:700; letter-spacing:.05em; margin:0 0 2px; }
+    .sub { text-align:center; color:#666; margin:0 0 20px; }
+    h2 { font-size:${14 * scale}px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; margin:0 0 4px; }
+    .item { border-bottom:1px dotted #d0d0d0; }
+    .nm em { color:#777; font-style:italic; }`;
+
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(menu.name)}</title>
+    ${mono ? '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;700&display=swap">' : ''}
+    <style>
+    @page { size: ${pageSize}; margin: ${pageSize === 'A5' ? '12mm' : '18mm'}; }
+    ${mono ? monoCss : classicCss}
+    .cols { column-count:${cols}; column-gap:26px; }
+    section { break-inside:avoid; margin-bottom:16px; }
+    .item { display:flex; justify-content:space-between; gap:14px; margin:4px 0; align-items:baseline; }
     .pr { white-space:nowrap; font-variant-numeric:tabular-nums; }
-    @media screen { body { max-width:760px; margin:24px auto; padding:0 16px; } }
+    .foot { text-align:center; color:#888; margin-top:22px; font-size:.85em; }
+    @media screen { body { max-width:${pageSize === 'A5' ? '460' : '760'}px; margin:24px auto; padding:0 16px; } }
   </style></head><body>
     <h1>${escHtml(menu.name)}</h1>
     <p class="sub">${escHtml(assortmentRow?.name || '')}${assortmentRow?.location ? ` · ${escHtml(assortmentRow.location)}` : ''}</p>
-    <div class="cols">${sections || '<p class="sub">No drinks in this assortment yet.</p>'}</div>
-    <script>window.onload=function(){setTimeout(function(){try{window.print()}catch(e){}},350)}</script>
+    <div class="cols">${sections || '<p class="sub">No drinks selected for this menu yet.</p>'}</div>
+    ${footer ? `<p class="foot">${escHtml(footer)}</p>` : ''}
+    <script>window.onload=function(){setTimeout(function(){try{window.print()}catch(e){}},${mono ? 600 : 350})}</script>
   </body></html>`);
 }));
 
@@ -898,15 +917,40 @@ router.patch('/:id/active', asyncHandler(async (req: Request, res: Response) => 
     const existing = await prisma.drink.findUnique({ where: { id } });
     if (!existing) return null;
     if (existing.mode === 'catalogue' && !isManagerEmail(req.user?.email)) throw new AppError(403, 'Manager access required.');
-    const locations = (existing.locations as Record<string, { par: number | null; active: boolean }> | null) || {};
+    const locations = (existing.locations as Record<string, DrinkLocMeta> | null) || {};
     const cur = locations[location] || { par: null, active: true };
-    locations[location] = { par: cur.par ?? null, active };
+    locations[location] = { ...cur, par: cur.par ?? null, active };
     await prisma.drink.update({ where: { id }, data: { locations: locations as unknown as Prisma.InputJsonValue } });
     return fetchDrinkShape(id);
   });
   if (!result) throw new AppError(404, 'Drink not found');
   const user = actor(req);
   dbAppendLog(user.email, user.name, 'drink-active', `set "${result.name}" active=${active} @ ${location}`);
+  broadcast(user.email, 'patch', { user: user.name, drinks: [result] });
+  res.json(result);
+}));
+
+// Set a drink's home storage area at a location (inline from the stocktake list).
+router.patch('/:id/area', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const id = req.params.id as string;
+  const idErr = checkId(id, 'id');
+  if (idErr) throw new AppError(400, idErr);
+  const { location, area } = req.body as { location?: string; area?: string };
+  if (!location || !VALID_LOCATIONS.includes(location)) throw new AppError(400, 'Valid location required.');
+  const result = await withWriteLock(async () => {
+    const existing = await prisma.drink.findUnique({ where: { id } });
+    if (!existing) return null;
+    if (existing.mode === 'catalogue' && !isManagerEmail(req.user?.email)) throw new AppError(403, 'Manager access required.');
+    const locations = (existing.locations as Record<string, DrinkLocMeta> | null) || {};
+    const cur = locations[location] || { par: null, active: true };
+    locations[location] = { ...cur, par: cur.par ?? null, active: cur.active !== false, area: area || undefined };
+    await prisma.drink.update({ where: { id }, data: { locations: locations as unknown as Prisma.InputJsonValue } });
+    return fetchDrinkShape(id);
+  });
+  if (!result) throw new AppError(404, 'Drink not found');
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-area', `set "${result.name}" area="${area || ''}" @ ${location}`);
   broadcast(user.email, 'patch', { user: user.name, drinks: [result] });
   res.json(result);
 }));
