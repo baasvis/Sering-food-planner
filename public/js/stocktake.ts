@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { S } from './state';
-import { apiPost, toastError, toast } from './utils';
+import { apiPost, toastError, toast, todayIso } from './utils';
 import type { Ingredient } from '@shared/types';
 
 /** A stocktake-eligible ingredient is the runtime shape returned by
@@ -35,7 +35,7 @@ export async function saveStocktakeForArea(
   values: Record<string, number | undefined>,
   loc: string,
 ): Promise<number> {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const updates: Array<{ ingredientId: string; location: string; amount: number }> = [];
 
   items.forEach(ing => {

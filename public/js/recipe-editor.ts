@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { S, ALLERGENS, INGREDIENT_CATEGORIES } from './state';
-import { apiGet, apiPost, toast, toastError, loadIngredientDb } from './utils';
+import { apiGet, apiPost, toast, toastError, loadIngredientDb, todayIso } from './utils';
 import { typeBadge, TYPES, getTotalStock, calcRequired, rebuildPlanner, getToday, dateToStr } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
@@ -1755,7 +1755,7 @@ export async function brSave() {
       if (stockUpdates.length > 0) {
         try {
           await apiPost('/api/ingredients/stock/bulk', stockUpdates);
-          const today = new Date().toISOString().slice(0, 10);
+          const today = todayIso();
           stockUpdates.forEach(u => {
             const dbIng = S.ingredientDb.find(i => i.id === u.ingredientId);
             if (dbIng) {

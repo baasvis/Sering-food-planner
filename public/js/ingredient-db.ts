@@ -1,6 +1,6 @@
 import type { Ingredient, StorageLocationMap } from '@shared/types';
 import { S, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, rebuildStorageCategories, getStorageConfigForLoc, getStorageColor, DEFAULT_STORAGE_CONFIG } from './state';
-import { toast, toastError, apiGet, apiPost, saveStorageConfig, loadIngredientDb } from './utils';
+import { toast, toastError, apiGet, apiPost, saveStorageConfig, loadIngredientDb, todayIso } from './utils';
 import { chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { renderOrders } from './orders';
@@ -172,7 +172,7 @@ export function saveInlineStock(ingId: string, location: string, val: string) {
   const ing = S.ingredientDb.find(i => i.id === ingId);
   if (ing) {
     if (!ing.stock) ing.stock = {};
-    ing.stock[location] = { amount, date: new Date().toISOString().slice(0, 10) };
+    ing.stock[location] = { amount, date: todayIso() };
   }
 
   // Debounced save to backend. apiPost throws on non-2xx (instead of the
@@ -616,8 +616,8 @@ export async function saveIngredientEdit(id: string) {
       centraal: { category: (document.getElementById('ing-edit-storageCentraalCat') as HTMLSelectElement).value, location: (document.getElementById('ing-edit-storageCentraalLoc') as HTMLSelectElement).value },
     },
     stock: {
-      west: { amount: parseFloat((document.getElementById('ing-edit-stockWest') as HTMLInputElement).value) || 0, date: new Date().toISOString().slice(0, 10) },
-      centraal: { amount: parseFloat((document.getElementById('ing-edit-stockCentraal') as HTMLInputElement).value) || 0, date: new Date().toISOString().slice(0, 10) },
+      west: { amount: parseFloat((document.getElementById('ing-edit-stockWest') as HTMLInputElement).value) || 0, date: todayIso() },
+      centraal: { amount: parseFloat((document.getElementById('ing-edit-stockCentraal') as HTMLInputElement).value) || 0, date: todayIso() },
     },
     nutrition: Object.keys(nutrition).length ? nutrition : {},
     active: (document.getElementById('ing-edit-active') as HTMLInputElement).checked,
@@ -883,8 +883,8 @@ export async function saveIngredientFromModal(id: string) {
   const stockWest = (document.getElementById('ing-edit-stockWest') as HTMLInputElement | null)?.value;
   const stockCentraal = (document.getElementById('ing-edit-stockCentraal') as HTMLInputElement | null)?.value;
   if (!ing.stock) ing.stock = {};
-  if (stockWest !== '' && stockWest !== undefined) ing.stock.west = { amount: parseFloat(stockWest) || 0, date: new Date().toISOString().slice(0, 10) };
-  if (stockCentraal !== '' && stockCentraal !== undefined) ing.stock.centraal = { amount: parseFloat(stockCentraal) || 0, date: new Date().toISOString().slice(0, 10) };
+  if (stockWest !== '' && stockWest !== undefined) ing.stock.west = { amount: parseFloat(stockWest) || 0, date: todayIso() };
+  if (stockCentraal !== '' && stockCentraal !== undefined) ing.stock.centraal = { amount: parseFloat(stockCentraal) || 0, date: todayIso() };
 
   const nut: Record<string, number> = {};
   ['energyKj','energyKcal','protein','carbs','sugar','fat','saturatedFat','fiber','salt'].forEach(k => {
