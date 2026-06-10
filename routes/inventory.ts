@@ -92,11 +92,11 @@ router.post('/kitchen-equipment', asyncHandler(async (req: Request, res: Respons
   if (threshold < 1 || threshold > 1000) {
     return res.status(400).json({ error: 'bigBurnerThreshold must be 1–1000 L' });
   }
-  await prisma.kitchenEquipment.upsert({
+  await withWriteLock(() => prisma.kitchenEquipment.upsert({
     where: { id: 'default' },
     create: { id: 'default', pots, gasBurners, inductionBurners, bigBurnerThreshold: threshold },
     update: { pots, gasBurners, inductionBurners, bigBurnerThreshold: threshold },
-  });
+  }));
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   broadcast(user.email, 'patch', {
     user: user.name,

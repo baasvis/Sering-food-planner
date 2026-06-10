@@ -7,6 +7,7 @@ import { prisma } from '../lib/db';
 import { asyncHandler } from '../lib/config';
 import { runTebiSync, cancelSync, getStatus, isSyncing } from '../lib/tebi-sync';
 import { requireScreenEdit } from './auth';
+import { formatIso, addDays } from '../shared/dates';
 import type { Prisma } from '@prisma/client';
 
 const router = express.Router();
@@ -207,9 +208,11 @@ router.post('/sync', requireScreenEdit('finance'), (req: Request, res: Response)
 
   const { startDate, endDate } = req.body;
 
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const defaultDate = yesterday.toISOString().slice(0, 10);
+  // "Yesterday" in Amsterdam wall-clock time. The host runs in UTC, where
+  // between 00:00 and ~02:00 local the UTC date is already a day behind —
+  // toISOString() here would default the sync to the day before yesterday.
+  const amsNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+  const defaultDate = formatIso(addDays(amsNow, -1));
 
   const start = startDate || defaultDate;
   const end = endDate || start;

@@ -1,5 +1,5 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS, rebuildStorageCategories } from './state';
-import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ingredientDbLoaded, ingredientDbError } from './utils';
+import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ingredientDbLoaded, ingredientDbError, todayIso } from './utils';
 import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, batchHasRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
@@ -337,7 +337,7 @@ export function updateSiStock(ingredientId: string, val: string) {
   // Input is in order units — convert to base units for storage
   const orderUnits = parseFloat(val) || 0;
   const baseAmount = ing.orderUnitSize > 0 ? orderUnits * ing.orderUnitSize : orderUnits;
-  ing.stock[loc] = { amount: baseAmount, date: new Date().toISOString().slice(0, 10) };
+  ing.stock[loc] = { amount: baseAmount, date: todayIso() };
   _updateSiToOrder(ingredientId, ing);
   const key = `${ingredientId}|${loc}`;
   const existing = siStockTimeouts.get(key);
@@ -1572,7 +1572,7 @@ export function persistIngredientStock(ingredientName: string, amount: number) {
   // separate ingredientDbFull array in sync — now collapsed into S.ingredientDb
   // per S13.)
   if (!db.stock) db.stock = {};
-  db.stock[loc] = { amount: amountNum, date: new Date().toISOString().slice(0, 10) };
+  db.stock[loc] = { amount: amountNum, date: todayIso() };
 
   // Debounced save to backend. apiPost throws on non-2xx (instead of the
   // bare-fetch silent fail the audit flagged as T4) — pipe to toastError so
@@ -1968,7 +1968,7 @@ export async function saveStocktakeArea(goToNext: boolean) {
   // Mirror the saved values into the local items so the in-memory copy is
   // consistent with the DB (this list is recomputed each render anyway, but
   // keeping it accurate avoids a render-flicker between save and reload).
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   items.forEach(ing => {
     const val = stocktakeValues[ing.id];
     if (val === undefined) return;
