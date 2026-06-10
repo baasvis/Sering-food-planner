@@ -1190,7 +1190,7 @@ export function getInventoryState(loc: string) {
   const mins = h * 60 + m;
   const lunchDeadline = 13 * 60 + 45; // 13:45
   const dinnerDeadline = 20 * 60 + 15; // 20:15
-  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const todayStr = dateToIso(now);
   const inv = S.inventoryDone[loc] || {};
   const lunchDone = inv.lunch === todayStr;
   const dinnerDone = inv.dinner === todayStr;
@@ -1798,7 +1798,7 @@ export function openServedFromInventory(id: string, loc: string) {
 
 export function finishInventory(loc: string) {
   const now = getAmsterdamNow();
-  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const todayStr = dateToIso(now);
   const st = getInventoryState(loc);
   if (!S.inventoryDone[loc]) S.inventoryDone[loc] = { lunch: null, dinner: null };
   S.inventoryDone[loc][st.window] = todayStr;

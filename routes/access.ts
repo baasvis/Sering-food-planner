@@ -145,13 +145,18 @@ router.patch('/roles/:id', asyncHandler(async (req: Request, res: Response) => {
 // DELETE /api/access/roles/:id — refused while any user still has the role.
 router.delete('/roles/:id', asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
-  const inUse = await prisma.accessRequest.count({ where: { roleId: id } });
-  if (inUse > 0) {
-    return res.status(409).json({ error: 'role_in_use', message: `${inUse} user(s) still have this role — reassign them first.` });
-  }
-  const role = await prisma.role.findUnique({ where: { id } });
-  if (!role) throw new AppError(404, 'Role not found');
-  await prisma.role.delete({ where: { id } });
+  // Lock + transaction so the in-use check and the delete are atomic — a role
+  // assignment landing between them can't orphan a user's roleId.
+  const role = await withWriteLock(() => prisma.$transaction(async (tx) => {
+    // 'role_in_use' is the wire contract — team.ts matches /in_use/ to pick
+    // the "reassign them first" toast.
+    const inUse = await tx.accessRequest.count({ where: { roleId: id } });
+    if (inUse > 0) throw new AppError(409, 'role_in_use');
+    const existing = await tx.role.findUnique({ where: { id } });
+    if (!existing) throw new AppError(404, 'Role not found');
+    await tx.role.delete({ where: { id } });
+    return existing;
+  }));
   await dbAppendLog(req.user!.email, req.user!.name, 'role_delete', role.name);
   res.json({ ok: true });
 }));

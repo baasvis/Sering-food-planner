@@ -245,7 +245,7 @@ describe('Finding 4 — "Fix my menu" retirement (findSpentBatches)', () => {
     // The original trigger: marking inventory done flips isServicePast an hour
     // early. findSpentBatches now uses isServiceDatePast, which ignores that.
     S.inventoryDone = {
-      west: { lunch: '2026-4-16', dinner: null }, // month is 0-indexed in the app's todayStr
+      west: { lunch: '2026-05-16', dinner: null }, // today, matching the app's todayStr (dateToIso)
       centraal: { lunch: null, dinner: null },
     };
     const todayBatch = makeBatch({

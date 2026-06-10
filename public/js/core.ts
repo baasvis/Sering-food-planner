@@ -198,7 +198,7 @@ export function isServicePast(svc: Service): boolean {
   // Today — check time and inventory state
   const mins = now.getHours() * 60 + now.getMinutes();
   const lk: Location = svc.loc === 'west' ? 'west' : 'centraal';
-  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const todayStr = dateToIso(now);
   const inv: Partial<InventoryDone> = S.inventoryDone[lk] || {};
   if (svc.meal === 'lunch') {
     const deadline = 13 * 60 + 45;     // 13:45
