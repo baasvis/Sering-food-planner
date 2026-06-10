@@ -3,7 +3,7 @@
   "suppliers": [
     {
       "name": "Two Chefs Brewing",
-      "products": "Draft kegs + cans: Premium Pilsner (Holy Gunter), Funky Falcon, Green Bullet, White Mamba, Sering Blonde, Bon Chef, Funky Falcon 0.2%",
+      "products": "Draft 20L fusten + blikken: Premium Pilsner €59, Funky Falcon €93.50, Golden Groove €93.50, White Mamba €86.40, Green Bullet, Sering Blonde; Bon Chef doos 12x33cl €22.60, Funky Falcon 0.2% €20.20 (alles ex BTW, facturen mei/jun 2026). Statiegeld €60/fust, €0.15/blik",
       "orderDays": ["Tuesday", "Wednesday"],
       "orderDaysNote": "Weekdays possible, Tue/Wed best",
       "deliveryWindow": "1-2 days",
@@ -45,7 +45,7 @@
     },
     {
       "name": "Pomme d'Or",
-      "products": "Cider: Cidre AOC Pays d'Auge '22 + Giard Cider — cases of 6 bottles",
+      "products": "Cider: Cidre Brut '22 van Patrice Giard (Pays d'Auge) — €6.60 ex BTW/fles, factuur 20260480 (09-06-2026), dozen van 6",
       "orderDays": ["Monday", "Tuesday"],
       "orderDaysNote": "In practice next-day or same-week delivery on email orders (Mar–May 2026 threads)",
       "deliveryWindow": "Wednesday (often next-day)",
@@ -56,13 +56,13 @@
     },
     {
       "name": "Dorstlust",
-      "products": "Club Mate, Fritz sodas, Three Cents sodas/tonic/ginger beer",
+      "products": "Club Mate (krat 20x330ml €18.01), Fritz sodas (krat 24x200ml — KLEIN €18.84, BIO €20.80, statiegeld €5/krat), Three Cents sodas (tray 24x200ml €25.71, geen statiegeld)",
       "orderDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
       "orderDaysNote": "Choose delivery day Tue/Wed/Fri",
       "deliveryWindow": "1-2 days",
       "contact": { "url": "https://dorstlust.nl" },
       "minimumOrder": "€200 minimum order",
-      "notes": "If unavailable, fall back to Kweker or Hanos (mind the sizes)."
+      "notes": "Transport €32.50 ex BTW per levering (soms gratis — check drempel). If unavailable, fall back to Kweker or Hanos (mind the sizes; Sligro had Club-Mate voor €23.94 — duurder)."
     },
     {
       "name": "Hanos",
@@ -94,6 +94,26 @@
       "contact": { "url": "https://friedhatswholesale.shipsbeans.com/" },
       "minimumOrder": null,
       "notes": "Login lives in env/secrets, not here."
+    },
+    {
+      "name": "Zuiver Wijnen",
+      "products": "TestTafel pairing-wijnen (rotatie) — bijv. Sylvaner H Domaine Otter 2006 €14.60 ex BTW (factuur ZS2026202144, 09-06-2026)",
+      "orderDays": [],
+      "orderDaysNote": "Webshop-bestellingen",
+      "deliveryWindow": null,
+      "contact": { "email": "webshop@zuiverwijnen.nl", "url": "https://zuiverwijnen.nl" },
+      "minimumOrder": null,
+      "notes": "Gevonden via facturen-mailbox juni 2026 — pairing/rotatie-wijnen naast Troppo en Daxivin."
+    },
+    {
+      "name": "Slurp Bier",
+      "products": "VERMOEDELIJK de bron van de Centraal-bieren (Gulpener / 2 Caps / Lowlander / Playground / Jever Fun) — craft-bierdistributeur",
+      "orderDays": [],
+      "orderDaysNote": "PLACEHOLDER — bevestigen",
+      "deliveryWindow": null,
+      "contact": {},
+      "minimumOrder": null,
+      "notes": "Factuur 2026-0005 (05-05-2026) in de facturen-mailbox — uitlezen om producten + kosten te bevestigen; HANOS is het alternatief-spoor."
     },
     {
       "name": "Vleck Wijnen",

@@ -256,7 +256,10 @@ router.post('/', requireScreenEdit('orders'), asyncHandler(async (req: Request, 
         `ON CONFLICT (id) DO UPDATE SET ${updateSet}`;
 
       await tx.$executeRawUnsafe(sql, ...allValues);
-    });
+      // The full-set upsert ships ~27K bind params in one statement; on a
+      // high-latency link it legitimately exceeds Prisma's 5s default
+      // transaction timeout, so give it real headroom.
+    }, { timeout: 60_000 });
   });
   // Audit T19: bulk supplier-XLSX imports change pricePer100 across many
   // ingredients at once. The per-ingredient recalc loop below (POST /:id)

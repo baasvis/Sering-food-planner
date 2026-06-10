@@ -141,7 +141,9 @@ async function seedDrinkCatalogue() {
     const sellable = d.sellable !== false;
     const locations = {};
     for (const [loc, info] of Object.entries(d.locations || {})) {
-      locations[loc] = { par: info.par == null ? null : info.par, active: true };
+      // active defaults true; seed entries can set active:false to scope a drink
+      // to one location (the app treats a missing location as active).
+      locations[loc] = { par: info.par == null ? null : info.par, active: info.active === false ? false : true };
       if (typeof info.stock === 'number' && info.stock > 0) {
         stockRows.push({
           id: slugId('dstk', `${d.name}-${loc}`),

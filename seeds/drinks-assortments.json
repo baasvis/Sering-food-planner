@@ -29,8 +29,8 @@
       "location": "west",
       "description": "Full program at Sering West: tap + can beer, house wines, premix cocktails, classic mixed drinks, homemade non-alc, sodas, coffee & tea.",
       "entries": [
-        "Premium Pilsner (Holy Gunter)", "Funky Falcon", "Green Bullet", "White Mamba", "Sering Blonde", "Bon Chef (NEIPA can)", "Funky Falcon 0.2%", "Erdinger Weissbier 0.0%",
-        "House Red — Tule Nero d'Avola", "House White — Tule Bianco (keg)", "House Rosé — Mas d'Intras", "Orange — Citizen Wine Ginja Ninja", "Bubbles — Tonello Marachelle Petnat", "Cider — Cidre AOC Pays d'Auge '22",
+        "Premium Pilsner (Holy Gunter)", "Funky Falcon", "Green Bullet", "White Mamba", "Sering Blonde", "Golden Groove", "Bon Chef (NEIPA can)", "Funky Falcon 0.2%", "Erdinger Weissbier 0.0%",
+        "House Red — Tule Rosso", "House White — Tule Bianco (keg)", "House Rosé — Mas d'Intras", "Orange — Citizen Wine Ginja Ninja", "Bubbles — Tonello Marachelle Petnat", "Cider — Cidre Brut '22 (Patrice Giard)",
         "Mezcal Margarita", "Espresso Martini", "Earl Grey Sour", "Lavender Lemon Drop", "Yuzu Sake Spritz",
         "Gin & Tonic", "Vodka Tonic / Soda", "Moscow Mule", "Mexican Mule", "Dark & Stormy",
         "Salmari", "Vodka", "Gin", "Tequila", "Rum (dark)", "Mezcal", "Bourbon",
@@ -44,13 +44,15 @@
     {
       "name": "Sering Centraal",
       "location": "centraal",
-      "description": "PLACEHOLDER assortment — terrace + community kitchen drinks at Mediamatic. Start as a subset of West; staff curate in-app.",
-      "todo": "Confirm actual Centraal range + pars; stock pool is shared with TestTafel.",
+      "description": "Centraal/Mediamatic range — beers + house wines + sodas, built from actual Tebi sales Mar–Jun 2026 (DSC products).",
+      "todo": "Confirm pars + suppliers for the Centraal beers (Gulpener/2 Caps/Lowlander/Playground/Jever — likely Slurp Bier or HANOS); stock pool is shared with TestTafel.",
       "entries": [
-        "Premium Pilsner (Holy Gunter)", "Funky Falcon 0.2%", "Erdinger Weissbier 0.0%",
-        "House Red — Tule Nero d'Avola", "House White — Tule Bianco (keg)", "Cider — Cidre AOC Pays d'Auge '22",
+        "Gulpener Pilsner (tap)", "Gulpener IPA", "Gulpener Witbier",
+        "2 Caps Blonde", "2 Caps IPA", "2 Caps Blanche de Wissant",
+        "Lowlander Wit 0.0%", "Playground IPA 0.5%", "Jever Fun 0.0%",
+        "House Red — Tule Rosso", "House White — Tule Bianco (keg)", "Orange — Citizen Wine Ginja Ninja", "Bubbles — Tonello Marachelle Petnat", "Cider — Cidre Brut '22 (Patrice Giard)",
         "Kombucha", "Ginger Lemonade",
-        "Fritz Cola", "Fritz Cola Zero", "Club Mate", "Apple Juice (Schulp)", "Orange Juice (Schulp)",
+        "Fritz Cola", "Fritz Apfelschorle", "Club Mate", "Apple Juice (Schulp)", "Sparkling Water Bottles (selling)",
         "Espresso", "Cappuccino", "Oat Latte", "Filter Coffee", "Chai Latte"
       ]
     },
@@ -61,7 +63,7 @@
       "description": "Fine-dining pairing program: natural wines by glass/bottle + homemade non-alcoholic pairings. Draws on the Mediamatic stock pool (location centraal).",
       "todo": "Wine list rotates — seed the house wines + Ginja Ninja; head waiter curates the rest in-app (wine-form fields: producer, region, soil, grapes, profile, notes).",
       "entries": [
-        "House White — Tule Bianco (keg)", "House Red — Tule Nero d'Avola", "Orange — Citizen Wine Ginja Ninja", "Bubbles — Tonello Marachelle Petnat", "Cider — Cidre AOC Pays d'Auge '22", "Chardonnay 0.0% — Bio Opia Sparkling",
+        "House White — Tule Bianco (keg)", "House Red — Tule Rosso", "Orange — Citizen Wine Ginja Ninja", "Bubbles — Tonello Marachelle Petnat", "Cider — Cidre Brut '22 (Patrice Giard)", "Chardonnay 0.0% — Bio Opia Sparkling",
         "Fizzy White Iced Tea", "Kombucha", "Spritz (Spectre/Kamille)"
       ]
     }
