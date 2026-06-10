@@ -48,6 +48,8 @@ import {
   teamFillBigSlots,
   scoredGreedyAssignment,
   runFallbackLadder,
+  drainLeftoversPass,
+  rebalanceSiblingCooks,
   getActiveRhythm,
   computeWeeklyCapacities,
   collectWarnings,
@@ -905,6 +907,161 @@ describe('teamFillBigSlots: cover a slot no single batch can fill (runs on EMPTY
     scoredGreedyAssignment(wrong, window, calc, guestsFn, NO_POT_CAPS);
     teamFillBigSlots(wrong, window, calc, guestsFn);
     expect(onDinner(wrong[0]) && onDinner(wrong[1])).toBe(false);
+  });
+});
+
+// ─── Algorithm: drainLeftoversPass ─────────────────────────────────────────
+
+describe('drainLeftoversPass: leftover cooked stock becomes an extra menu option', () => {
+  afterEach(() => { S.batches = []; S.caterings = []; });
+
+  test('leftover joins a 2-filled slot as 3rd option when its surplus covers the smaller share', () => {
+    // 90 guests west dinner: full = 25.2L, half = 12.6L, third = 8.4L.
+    // The 10L leftover can never absorb the half-share the greedy charges it,
+    // but as a 3rd peer (8.4L) it fits — the stranded-leftover fix.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const westDinner90 = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 90 : 0;
+    const svc: Service = { loc: 'west', date: '2026-05-05', meal: 'dinner' };
+    const freshA = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Fresh A', generated: true, services: [{ ...svc }] });
+    const freshB = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Fresh B', generated: true, services: [{ ...svc }] });
+    const leftover = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Leftover', inventory: [inv(10, 'west')] });
+    S.batches = [freshA, freshB, leftover]; S.caterings = [];
+    const calc = (x: Batch) => calcRequiredLive(x, westDinner90);
+    const res = drainLeftoversPass(S.batches, window, calc, westDinner90);
+    expect(res.batchesDrained).toBe(1);
+    expect(alreadyInSlot(leftover, 'west', '2026-05-05', 'dinner')).toBe(true);
+    // Fresh cooks' displayed size shrinks from a half- to a third-share too.
+    expect(calc(freshA)).toBeCloseTo(8.4, 1);
+  });
+
+  test('leftover too small for even the smallest extra share stays out (capacity honesty)', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const westDinner90 = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 90 : 0;
+    const svc: Service = { loc: 'west', date: '2026-05-05', meal: 'dinner' };
+    const freshA = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Fresh A', generated: true, services: [{ ...svc }] });
+    const freshB = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Fresh B', generated: true, services: [{ ...svc }] });
+    const tiny = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Tiny', inventory: [inv(5, 'west')] });
+    S.batches = [freshA, freshB, tiny]; S.caterings = [];
+    const calc = (x: Batch) => calcRequiredLive(x, westDinner90);
+    const res = drainLeftoversPass(S.batches, window, calc, westDinner90);
+    expect(res.committed).toBe(0);
+    expect(tiny.services).toHaveLength(0);
+  });
+
+  test('never pushes a slot past MAX_PEERS_PER_SLOT (4)', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const westDinner90 = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 90 : 0;
+    const svc: Service = { loc: 'west', date: '2026-05-05', meal: 'dinner' };
+    const four = Array.from({ length: 4 }, (_, i) =>
+      makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: `Fresh ${i}`, generated: true, services: [{ ...svc }] }));
+    const leftover = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Leftover', inventory: [inv(40, 'west')] });
+    S.batches = [...four, leftover]; S.caterings = [];
+    const calc = (x: Batch) => calcRequiredLive(x, westDinner90);
+    const res = drainLeftoversPass(S.batches, window, calc, westDinner90);
+    expect(res.committed).toBe(0);
+    expect(leftover.services).toHaveLength(0);
+  });
+
+  test('no reverse van: Centraal-located leftover never drains onto a West slot; frozen never drains', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const westDinner90 = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 90 : 0;
+    const svc: Service = { loc: 'west', date: '2026-05-05', meal: 'dinner' };
+    const freshA = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Fresh A', generated: true, services: [{ ...svc }] });
+    const freshB = makeBatch({ type: 'Soup', cookDate: '05/05/2026', name: 'Fresh B', generated: true, services: [{ ...svc }] });
+    const stranded = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'At Centraal', inventory: [inv(20, 'centraal')] });
+    const frozen = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Frozen', inventory: [inv(20, 'west', 'Frozen')] });
+    S.batches = [freshA, freshB, stranded, frozen]; S.caterings = [];
+    const calc = (x: Batch) => calcRequiredLive(x, westDinner90);
+    const res = drainLeftoversPass(S.batches, window, calc, westDinner90);
+    expect(res.committed).toBe(0);
+    expect(stranded.services).toHaveLength(0);
+    expect(frozen.services).toHaveLength(0);
+  });
+
+  test('5-day freshness cutoff still applies to drained leftovers', () => {
+    const window = makeWindow([{ iso: '2026-05-08', dayName: 'Fri', cookDate: '08/05/2026' }]);
+    const westDinner90 = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'west' && meal === 'dinner') ? 90 : 0;
+    const svc: Service = { loc: 'west', date: '2026-05-08', meal: 'dinner' };
+    const freshA = makeBatch({ type: 'Soup', cookDate: '08/05/2026', name: 'Fresh A', generated: true, services: [{ ...svc }] });
+    const freshB = makeBatch({ type: 'Soup', cookDate: '08/05/2026', name: 'Fresh B', generated: true, services: [{ ...svc }] });
+    const old = makeBatch({ type: 'Soup', cookDate: '02/05/2026', name: 'Old', inventory: [inv(30, 'west', 'Gastro', '02/05/2026')] });
+    S.batches = [freshA, freshB, old]; S.caterings = [];
+    const calc = (x: Batch) => calcRequiredLive(x, westDinner90);
+    const res = drainLeftoversPass(S.batches, window, calc, westDinner90);
+    expect(res.committed).toBe(0);
+    expect(old.services).toHaveLength(0);
+  });
+});
+
+// ─── Algorithm: rebalanceSiblingCooks ──────────────────────────────────────
+
+describe('rebalanceSiblingCooks: even out same-day same-type placeholder cooks', () => {
+  const svcAt = (date: string, loc: Location, meal: Meal): Service => ({ loc, date, meal });
+
+  test('moves services from the overloaded sibling to the starved one until the gap closes', () => {
+    // The "128L / 12L" case: sibA carries 6 services (10L each via the stub),
+    // sibB carries 0. Expect a 3/3 (or 4/2) split — gap ≤ REBALANCE_MIN_GAP_L.
+    const sibA = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup 1', generated: true,
+      services: [
+        svcAt('2026-05-04', 'west', 'lunch'), svcAt('2026-05-04', 'west', 'dinner'),
+        svcAt('2026-05-05', 'west', 'lunch'), svcAt('2026-05-05', 'west', 'dinner'),
+        svcAt('2026-05-06', 'west', 'lunch'), svcAt('2026-05-06', 'west', 'dinner'),
+      ],
+    });
+    const sibB = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Sun soup 2', generated: true, services: [] });
+    const calc = fixedCalcRequired(10);
+    const res = rebalanceSiblingCooks([sibA, sibB], calc);
+    expect(res.moved).toBeGreaterThan(0);
+    expect(sibA.services.length + sibB.services.length).toBe(6);
+    expect(Math.abs(calc(sibA) - calc(sibB))).toBeLessThanOrEqual(10);
+  });
+
+  test('leaves non-generated and recipe-linked batches alone', () => {
+    const manual = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Cook-made', generated: false,
+      services: [svcAt('2026-05-04', 'west', 'lunch'), svcAt('2026-05-04', 'west', 'dinner'), svcAt('2026-05-05', 'west', 'lunch')],
+    });
+    const sibling = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'Empty sib', generated: true, services: [] });
+    const withRecipe = makeBatch({
+      type: 'Soup', cookDate: '04/05/2026', name: 'Recipe chosen', generated: true, recipeId: 'r-1',
+      services: [svcAt('2026-05-05', 'west', 'lunch'), svcAt('2026-05-05', 'west', 'dinner'), svcAt('2026-05-06', 'west', 'lunch')],
+    });
+    const sibling2 = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Empty sib 2', generated: true, services: [] });
+    const res = rebalanceSiblingCooks([manual, sibling, withRecipe, sibling2], fixedCalcRequired(10));
+    expect(res.moved).toBe(0);
+    expect(manual.services).toHaveLength(3);
+    expect(withRecipe.services).toHaveLength(3);
+  });
+
+  test('never creates a same-slot duplicate on the receiving sibling', () => {
+    const shared = svcAt('2026-05-04', 'west', 'lunch');
+    const sibA = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'A', generated: true,
+      services: [{ ...shared }, svcAt('2026-05-04', 'west', 'dinner'), svcAt('2026-05-05', 'west', 'lunch'), svcAt('2026-05-05', 'west', 'dinner')],
+    });
+    const sibB = makeBatch({ type: 'Soup', cookDate: '03/05/2026', name: 'B', generated: true, services: [{ ...shared }] });
+    rebalanceSiblingCooks([sibA, sibB], fixedCalcRequired(10));
+    const bKeys = sibB.services.map(s => `${s.loc}|${s.date}|${s.meal}`);
+    expect(new Set(bKeys).size).toBe(bKeys.length);
+  });
+
+  test('past services stay where they are (history is not rewritten)', () => {
+    // Suite clock is pinned to 2026-05-01; April services are past.
+    const sibA = makeBatch({
+      type: 'Soup', cookDate: '25/04/2026', name: 'A', generated: true,
+      services: [svcAt('2026-04-26', 'west', 'lunch'), svcAt('2026-04-26', 'west', 'dinner'), svcAt('2026-04-27', 'west', 'lunch')],
+    });
+    const sibB = makeBatch({ type: 'Soup', cookDate: '25/04/2026', name: 'B', generated: true, services: [] });
+    const res = rebalanceSiblingCooks([sibA, sibB], fixedCalcRequired(10));
+    expect(res.moved).toBe(0);
+    expect(sibA.services).toHaveLength(3);
+    expect(sibB.services).toHaveLength(0);
   });
 });
 

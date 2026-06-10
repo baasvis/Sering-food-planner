@@ -494,6 +494,19 @@ const FORCED_ASSIGN_MIN_SCORE = 1_000_000_000; // = T_COVERAGE (see SCORE below)
 /** Fallback ladder team threshold: "some coverage" beats "none." */
 const FALLBACK_TEAM_MIN_COVERAGE = 0.6;
 
+/** Leftover-drain pass: a cooked batch with at least this much surplus is
+ *  offered as an EXTRA menu option (3rd/4th of its type) on eligible slots,
+ *  so leftover stock gets eaten instead of wasted. Below this it's noise. */
+const DRAIN_MIN_SURPLUS_L = 2;
+
+/** Absolute peer ceiling per (slot, type) once the drain pass relaxes the
+ *  standard SLOTS_PER_TYPE. Matches findCombinationTeam's maxK. */
+const MAX_PEERS_PER_SLOT = 4;
+
+/** Sibling rebalance: stop once same-day same-type placeholder cooks are
+ *  within this many liters of each other. */
+const REBALANCE_MIN_GAP_L = 10;
+
 /** Portion estimate (ml) per guest per dish, used only to size the week's total
  *  cook demand for the workload-overload capacity model (computeWeeklyCapacities).
  *  Each guest at a service eats roughly one soup + one main portion of this size. */
@@ -634,6 +647,7 @@ function scoredHardConstraintsOk(
   calcReq: (b: Batch) => number,
   getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
   todayIso: string,
+  maxPeers: number = SLOTS_PER_TYPE,
 ): boolean {
   const { batch, slot, day, type } = c;
   if (batch.type !== type) return false;
@@ -643,7 +657,7 @@ function scoredHardConstraintsOk(
   if (getGuestsFn(slot.loc, day.isoDate, slot.meal) <= 0) return false;
   if (!isServableBy(batch.cookDate, day.isoDate, slot.meal, slot.loc, primaryLoc(batch))) return false;
   if (alreadyInSlot(batch, slot.loc, day.isoDate, slot.meal)) return false;
-  if (countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal) >= SLOTS_PER_TYPE) return false;
+  if (countTypeInSlot(allBatches, type, slot.loc, day.isoDate, slot.meal) >= maxPeers) return false;
   const cookIso = cookDateToIso(batch.cookDate);
   if (!cookIso) return false;
   const totalStock = getTotalStock(batch);
@@ -1033,6 +1047,137 @@ export function runFallbackLadder(
 }
 
 /**
+ * Leftover-drain pass — runs AFTER the fallback ladder, when every slot
+ * holds its standard SLOTS_PER_TYPE options. Cooked batches that still end
+ * the window with surplus (waste-to-be) are added to eligible slots as an
+ * EXTRA option of their type (3rd/4th peer, up to MAX_PEERS_PER_SLOT).
+ *
+ * Why this closes the stranded-leftover failure: demand splits a slot's
+ * guests evenly across its peers, and the capacity gate charges a candidate
+ * its full share — so a 14 L leftover can never absorb the ~15 L half-share
+ * of a 110-guest slot and is locked out of every big slot while fresh
+ * placeholder cooks (which pass capacity unconditionally) take them. As an
+ * extra peer the share shrinks (guests/3, guests/4) until the leftover CAN
+ * legally cover it. Side benefit: every other peer's share — including the
+ * fresh cooks' displayed cook size — drops too, so cooks cook less.
+ *
+ * Capacity honesty is unchanged: scoredHardConstraintsOk still requires the
+ * batch's total demand to fit its serveable stock (with the no-reverse-van
+ * West gate), so a leftover never signs up for more than it can serve.
+ * Slots are tried soonest-first (eat oldest food at the nearest service);
+ * batches oldest-first (FIFO). Two sweeps: a commit lowers sibling shares,
+ * which can free another batch's surplus for the second sweep.
+ */
+export function drainLeftoversPass(
+  allBatches: Batch[],
+  window: PlanDay[],
+  calcReq: (b: Batch) => number,
+  getGuestsFn: (loc: Location, isoDate: string, meal: Meal) => number,
+): { committed: number; batchesDrained: number } {
+  const todayIso = window[0]?.isoDate ?? '';
+  const cooked = allBatches
+    .filter(b => TYPES_TO_PLAN.includes(b.type) && b.cookDate && !isOnlyFrozen(b) && getServeableTotalStock(b) > 0)
+    .sort((a, b) => {
+      const aIso = cookDateToIso(a.cookDate) || '';
+      const bIso = cookDateToIso(b.cookDate) || '';
+      if (aIso !== bIso) return aIso < bIso ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
+  let committed = 0;
+  const drainedIds = new Set<string>();
+  for (let sweep = 0; sweep < 2; sweep++) {
+    let sweepCommitted = 0;
+    for (const b of cooked) {
+      let surplus = getServeableTotalStock(b) - calcReq(b);
+      if (surplus <= DRAIN_MIN_SURPLUS_L) continue;
+      for (const day of window) {
+        if (surplus <= DRAIN_MIN_SURPLUS_L) break;
+        for (const slot of day.slots) {
+          const c: CandidatePlace = { batch: b, slot, day, type: b.type };
+          if (!scoredHardConstraintsOk(c, allBatches, calcReq, getGuestsFn, todayIso, MAX_PEERS_PER_SLOT)) continue;
+          b.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
+          committed++;
+          sweepCommitted++;
+          drainedIds.add(b.id);
+          surplus = getServeableTotalStock(b) - calcReq(b);
+          if (surplus <= DRAIN_MIN_SURPLUS_L) break;
+        }
+      }
+    }
+    if (sweepCommitted === 0) break;
+  }
+  return { committed, batchesDrained: drainedIds.size };
+}
+
+/**
+ * Sibling-rebalance pass — evens out same-(cookDate, type) GENERATED
+ * placeholder cooks. The scored greedy's load tie-break only fires on exact
+ * score ties, so on real data one sibling can end up sized 128 L while
+ * another gets 12 L (the "162 L cook, too big" complaint). Siblings with no
+ * inventory and no recipe are fully interchangeable (same cookDate → same
+ * servability, same default cook loc), so moving a future service between
+ * them changes nothing about slot coverage — only who carries the liters.
+ *
+ * Greedy step: take the heaviest and lightest sibling of each group, move
+ * the one future service whose transfer best narrows their demand gap,
+ * repeat (bounded) until the gap is under REBALANCE_MIN_GAP_L or no move
+ * improves it.
+ */
+export function rebalanceSiblingCooks(
+  allBatches: Batch[],
+  calcReq: (b: Batch) => number,
+): { moved: number } {
+  const groups = new Map<string, Batch[]>();
+  for (const b of allBatches) {
+    if (b.generated !== true) continue;
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (!b.cookDate) continue;
+    if ((b.inventory || []).length > 0) continue;   // cooked, or loc-pinned emergency
+    if (b.recipeId) continue;                        // a chosen recipe is a real dish
+    const key = `${b.cookDate}|${b.type}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(b);
+  }
+
+  let moved = 0;
+  for (const [, sibs] of groups) {
+    if (sibs.length < 2) continue;
+    let guard = 30;
+    while (guard-- > 0) {
+      sibs.sort((a, b) => calcReq(b) - calcReq(a));
+      const hi = sibs[0];
+      const lo = sibs[sibs.length - 1];
+      const gap = calcReq(hi) - calcReq(lo);
+      if (gap <= REBALANCE_MIN_GAP_L) break;
+
+      let bestIdx = -1;
+      let bestNewGap = gap;
+      for (let i = 0; i < hi.services.length; i++) {
+        const s = hi.services[i];
+        if (isServicePast(s)) continue;
+        if (alreadyInSlot(lo, s.loc, s.date, s.meal)) continue;
+        // Speculative move: peer counts in the slot are unchanged (one
+        // sibling swaps for another), so shares stay consistent.
+        hi.services.splice(i, 1);
+        lo.services.push(s);
+        const newGap = Math.abs(calcReq(hi) - calcReq(lo));
+        lo.services.pop();
+        hi.services.splice(i, 0, s);
+        if (newGap < bestNewGap - 0.5) {
+          bestNewGap = newGap;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx < 0) break;
+      const [svc] = hi.services.splice(bestIdx, 1);
+      lo.services.push(svc);
+      moved++;
+    }
+  }
+  return { moved };
+}
+
+/**
  * Multi-batch team for combination fill. Each member carries ≤60% of the
  * slot's guests; total team coverage must be ≥ FALLBACK_TEAM_MIN_COVERAGE
  * of the slot's guests. Per-batch capacity check (no family pool — each
@@ -1200,6 +1345,12 @@ export interface FixMyMenuResult {
   teamsFormed: number;
   /** Emergency placeholders created by the fallback ladder. */
   emergenciesCreated: number;
+  /** Leftover batches featured as extra menu options by the drain pass. */
+  leftoversDrained: number;
+  /** Extra-option service assignments the drain pass committed. */
+  drainAssignments: number;
+  /** Future services moved between sibling placeholder cooks to even out cook sizes. */
+  rebalancedServices: number;
   /** Slots the fallback ladder could not cover at all. */
   abandoned: AbandonedSlot[];
   /** Assembled, ordered warnings (under-filled, stockout, catering drops, …). */
@@ -1307,6 +1458,14 @@ export function runFixMyMenuCore(): FixMyMenuResult {
   const phaseC = runFallbackLadder(S.batches, planWindow, calcReqLive, memoGuests);
   rebuildPlanner();
 
+  // Drain leftover cooked stock as extra menu options (3rd/4th of a type),
+  // THEN even out same-day sibling cook sizes — drain first, because added
+  // peers shrink every sibling's share and change what needs rebalancing.
+  const phaseDrain = drainLeftoversPass(S.batches, planWindow, calcReqLive, memoGuests);
+  rebuildPlanner();
+  const phaseRebalance = rebalanceSiblingCooks(S.batches, calcReqLive);
+  rebuildPlanner();
+
   // Final pot allocation for warning generation.
   const finalPotCaps = allocatePotCaps(
     S.batches.filter(b => b.cookDate && TYPES_TO_PLAN.includes(b.type)),
@@ -1348,9 +1507,12 @@ export function runFixMyMenuCore(): FixMyMenuResult {
     retired: retireIds.size,
     newPlaceholders,
     emergencyBatches: phaseC.emergencyBatches,
-    assigned: phaseTeam.committed + phaseB0.committed + phaseB.committed,
+    assigned: phaseTeam.committed + phaseB0.committed + phaseB.committed + phaseDrain.committed,
     teamsFormed: phaseTeam.teamsFormed + phaseC.teamsFormed,
     emergenciesCreated: phaseC.emergenciesCreated,
+    leftoversDrained: phaseDrain.batchesDrained,
+    drainAssignments: phaseDrain.committed,
+    rebalancedServices: phaseRebalance.moved,
     abandoned: phaseC.abandoned,
     warnings,
   };
@@ -1380,6 +1542,8 @@ function _fixMyMenuBody(): void {
     retired: result.retired,
     placeholderNames: [...result.newPlaceholders.map(p => p.name), ...result.emergencyBatches.map(p => p.name)],
     teamsFormed: result.teamsFormed,
+    leftoversDrained: result.leftoversDrained,
+    rebalancedServices: result.rebalancedServices,
     warnings: result.warnings,
   });
 }
@@ -1653,6 +1817,8 @@ interface ResultsReport {
   retired: number;
   placeholderNames: string[];
   teamsFormed?: number;
+  leftoversDrained?: number;
+  rebalancedServices?: number;
   warnings: Warning[];
 }
 
@@ -1710,13 +1876,15 @@ function categoryHeader(c: WarningCategory): { title: string; hint: string } {
 
 function showResultsModal(report: ResultsReport): void {
   _lastReport = report;
-  const { cleaned, created, assigned, retired, placeholderNames, teamsFormed, warnings } = report;
+  const { cleaned, created, assigned, retired, placeholderNames, teamsFormed, leftoversDrained, rebalancedServices, warnings } = report;
   const summary: string[] = [];
   if (retired > 0) summary.push(`<div>🗑 Retired ${retired} old batch${retired === 1 ? '' : 'es'} (food used up, or a placeholder for a cook day that already passed)</div>`);
   if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
   if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
   if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);
   if (teamsFormed && teamsFormed > 0) summary.push(`<div>🤝 Combined ${teamsFormed} multi-batch team${teamsFormed === 1 ? '' : 's'} for high-demand slots</div>`);
+  if (leftoversDrained && leftoversDrained > 0) summary.push(`<div>♻️ Featured ${leftoversDrained} leftover batch${leftoversDrained === 1 ? '' : 'es'} as extra menu options so the stock gets eaten</div>`);
+  if (rebalancedServices && rebalancedServices > 0) summary.push(`<div>⚖️ Evened out cook sizes — moved ${rebalancedServices} service${rebalancedServices === 1 ? '' : 's'} between same-day cooks</div>`);
   if (summary.length === 0) summary.push(`<div>Menu already covers the cook rhythm — nothing to do.</div>`);
 
   const indexed = warnings.map((w, i) => ({ w, i }));

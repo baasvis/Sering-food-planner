@@ -88,11 +88,11 @@ describe('Fix-My-Menu bench (regression guard)', () => {
 
   test('mean objective score holds above the post-fix floor', () => {
     const mean = results.reduce((s, r) => s + r.score, 0) / results.length;
-    // Current mean across the 5 fixtures is ~25.7k (deterministic: 33266 /
-    // 28916 / 27764 / 23746 / 14621). The old 22000 floor sat ~14% below that,
-    // so a sizeable objective regression slipped through. 24000 keeps a ~6.5%
-    // cushion below the live mean — tight enough to catch a real scoring
-    // regression, loose enough to absorb minor fixture jitter.
-    expect(mean).toBeGreaterThanOrEqual(24000);
+    // Current mean across the 5 fixtures is ~28.6k (deterministic: 34466 /
+    // 30336 / 27764 / 29096 / 21301 — lifted from ~25.7k by the leftover-drain
+    // + sibling-rebalance passes). 26500 keeps a ~7% cushion below the live
+    // mean — tight enough to catch a real scoring regression (including losing
+    // either new pass), loose enough to absorb minor fixture jitter.
+    expect(mean).toBeGreaterThanOrEqual(26500);
   });
 });
