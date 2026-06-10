@@ -124,6 +124,80 @@ router.post('/config', asyncHandler(async (req: Request, res: Response) => {
   res.json(merged);
 }));
 
+/** Save a location's drink storage areas (manager — defining the area structure
+ *  is config territory; assigning drinks to areas stays open to all). Renames
+ *  cascade to existing stock rows and drink home areas so nothing goes stale;
+ *  an area dropped from the list has its stock merged into the first remaining
+ *  area and its drinks' homes cleared (they show as Unassigned for re-homing). */
+router.post('/storage-areas', asyncHandler(async (req: Request, res: Response) => {
+  assertManager(req);
+  const { location, areas, renames } = req.body as { location?: string; areas?: unknown; renames?: Record<string, string> };
+  if (!location || !VALID_LOCATIONS.includes(location)) throw new AppError(400, 'Valid location required.');
+  const clean = Array.isArray(areas)
+    ? [...new Set(areas.filter((a): a is string => typeof a === 'string' && a.trim().length > 0).map(a => a.trim()))]
+    : [];
+  if (clean.length === 0) throw new AppError(400, 'At least one storage area is required.');
+  if (clean.some(a => a.length > 60)) throw new AppError(400, 'Area names can be at most 60 characters.');
+  if (clean.some(a => BOOTSTRAP_AREAS.includes(a))) throw new AppError(400, 'That area name is reserved for the app.');
+  const renameMap: Record<string, string> = {};
+  if (renames && typeof renames === 'object') {
+    for (const [from, to] of Object.entries(renames)) {
+      if (typeof from === 'string' && typeof to === 'string' && from && to && from !== to && clean.includes(to)) renameMap[from] = to;
+    }
+  }
+
+  const merged = await withWriteLock(async () => {
+    const cfg = await getDrinkConfig();
+    const oldAreas = cfg.storageAreas[location] || [];
+    const removed = oldAreas.map(a => renameMap[a] || a).filter(a => !clean.includes(a));
+
+    // Move all stock rows at `location` from one area to another, merging qty
+    // into an existing row for the target area when there is one.
+    const moveStock = async (txc: Prisma.TransactionClient, from: string, to: string) => {
+      const rows = await txc.drinkStock.findMany({ where: { location, area: from } });
+      for (const r of rows) {
+        await txc.drinkStock.upsert({
+          where: { drinkId_location_area: { drinkId: r.drinkId, location, area: to } },
+          create: { id: `${r.drinkId}-${location}-${crypto.randomUUID().slice(0, 8)}`, drinkId: r.drinkId, location, area: to, qty: r.qty, countedBy: r.countedBy, countedAt: r.countedAt },
+          update: { qty: { increment: r.qty } },
+        });
+        await txc.drinkStock.delete({ where: { id: r.id } });
+      }
+    };
+
+    await prisma.$transaction(async (txc) => {
+      for (const [from, to] of Object.entries(renameMap)) await moveStock(txc, from, to);
+      for (const from of removed) await moveStock(txc, from, clean[0]);
+      // Re-home drinks in one pass: renames follow the new name; removed areas unassign.
+      if (Object.keys(renameMap).length || removed.length) {
+        const drinks = await txc.drink.findMany({ select: { id: true, locations: true } });
+        for (const dr of drinks) {
+          const locs = (dr.locations as Record<string, DrinkLocMeta> | null) || {};
+          const home = locs[location]?.area;
+          if (!home) continue;
+          const next = renameMap[home] ?? (removed.includes(home) ? undefined : home);
+          if (next === home) continue;
+          locs[location] = { ...locs[location], area: next };
+          await txc.drink.update({ where: { id: dr.id }, data: { locations: locs as unknown as Prisma.InputJsonValue } });
+        }
+      }
+    }, { timeout: 30_000 });
+
+    const next = mergeConfig({ ...cfg, storageAreas: { ...cfg.storageAreas, [location]: clean } } as unknown as Record<string, unknown>);
+    await prisma.drinkConfig.upsert({
+      where: { id: 'default' },
+      create: { id: 'default', config: next as unknown as Prisma.InputJsonValue },
+      update: { config: next as unknown as Prisma.InputJsonValue },
+    });
+    return next;
+  });
+
+  const user = actor(req);
+  dbAppendLog(user.email, user.name, 'drink-areas-save', `updated ${location} storage areas (${clean.length})`);
+  broadcast(user.email, 'patch', { user: user.name, drinkConfig: merged, drinksReload: true });
+  res.json(merged);
+}));
+
 /** Recompute costPerServe + suggestedPrice for every recipe drink. Idempotent;
  *  open to all authed users (recompute is harmless). Broadcasts a drinks reload. */
 router.post('/recalculate-costs', asyncHandler(async (req: Request, res: Response) => {

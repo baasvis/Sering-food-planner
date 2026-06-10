@@ -35,6 +35,14 @@ describe('normalizeLocations', () => {
     expect(l.centraal.par).toBeNull();
     expect(l.centraal.active).toBe(false);
   });
+  it('mergeConfig fills storageAreas defaults and keeps stored lists', () => {
+    const fromDefaults = mergeConfig({});
+    expect(fromDefaults.storageAreas.west).toContain('Keg Storage');
+    expect(fromDefaults.storageAreas.centraal).toContain('Bar fridge');
+    const custom = mergeConfig({ storageAreas: { west: ['Bar', '', 'Bar', 'Cellar West'] } });
+    expect(custom.storageAreas.west).toEqual(['Bar', 'Cellar West']); // cleaned + deduped
+    expect(custom.storageAreas.centraal).toContain('Bar fridge'); // default fills the gap
+  });
   // Regression: the active toggle once dropped `area` when rebuilding the
   // per-location object — area must survive a round trip through normalize.
   it('carries the home storage area through, treating empty/missing as unset', () => {

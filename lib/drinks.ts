@@ -12,6 +12,7 @@ import type {
   DrinkBatchDef, DrinkPrepTime, DrinkIngredientRow, DrinkRefKind, DrinkSupplier,
   DrinkConfig, DrinkSupplierContact,
 } from '../shared/types';
+import { DEFAULT_DRINK_STORAGE_AREAS } from '../shared/types';
 import { makeCostContext, drinkTotalCostExBtw, suggestedPriceInclBtw, targetMarkupFor, effectiveBtw } from '../shared/drink-cost';
 export { effectiveBtw };
 
@@ -30,6 +31,7 @@ export const DEFAULT_DRINK_CONFIG: DrinkConfig = {
   markupTargets: { defaultMultiple: 4.0 },
   demandNudgeThresholdPct: 25,
   defaultShelfLifeDays: 7,
+  storageAreas: DEFAULT_DRINK_STORAGE_AREAS,
 };
 
 // ── JSON normalizers (defensive: bad/legacy JSON never crashes a read) ──
@@ -256,7 +258,22 @@ export function mergeConfig(stored: Record<string, unknown>): DrinkConfig {
     markupTargets,
     demandNudgeThresholdPct: num(stored.demandNudgeThresholdPct) ?? d.demandNudgeThresholdPct,
     defaultShelfLifeDays: num(stored.defaultShelfLifeDays) ?? d.defaultShelfLifeDays,
+    storageAreas: mergeStorageAreas(stored.storageAreas),
   };
+}
+
+/** Per-location area lists: stored non-empty string arrays win, defaults fill
+ *  the gaps (a location with no/empty stored list keeps its built-in areas). */
+function mergeStorageAreas(raw: unknown): Record<string, string[]> {
+  const stored = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? (raw as Record<string, unknown>) : {};
+  const out: Record<string, string[]> = {};
+  for (const loc of Object.keys(DEFAULT_DRINK_STORAGE_AREAS)) {
+    const list = Array.isArray(stored[loc])
+      ? [...new Set((stored[loc] as unknown[]).filter((a): a is string => typeof a === 'string' && a.trim().length > 0).map(a => a.trim()))]
+      : [];
+    out[loc] = list.length ? list : DEFAULT_DRINK_STORAGE_AREAS[loc];
+  }
+  return out;
 }
 
 // ── Input validation + Prisma data builder (catalogue + recipe shared) ──

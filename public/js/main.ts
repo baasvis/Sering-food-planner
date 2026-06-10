@@ -34,7 +34,7 @@ import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName
 import { openCostTargets, saveCostTargetsForm, ctRecalcTotal } from './cost';
 import { renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, drinksSetCatLocation, drinksToggleShowInactive, drinkToggleActive, openAddDrinkChooser, openDrinkForm, saveDrinkForm, deleteDrink, openDrinkImport, drinkImportScan, drinkImportCommit, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint, openSupplierForm, saveSupplierForm, deleteSupplier } from './drinks';
 import { drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost } from './drinks-recipe';
-import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc, drinksStkOvStatus, drinkStkSaveOne, drinkStkSetArea } from './drinks-stocktake';
+import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc, drinksStkOvStatus, drinkStkSaveOne, drinkStkSetArea, openDrinkAreasEditor, drinkAreasAddRow, drinkAreasMoveRow, saveDrinkAreas } from './drinks-stocktake';
 import { drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive, drinksPlaceOrder, drinksSfRecount } from './drinks-order';
 import { openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog } from './drinks-production';
 import { drinksBarSearch, drinksBarCategory, drinkBarAddPhoto, drinkBarRemovePhoto } from './drinks-service';
@@ -146,7 +146,7 @@ Object.assign(window, {
   drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost,
 
   // drinks — stocktake
-  drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc, drinksStkOvStatus, drinkStkSaveOne, drinkStkSetArea,
+  drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc, drinksStkOvStatus, drinkStkSaveOne, drinkStkSetArea, openDrinkAreasEditor, drinkAreasAddRow, drinkAreasMoveRow, saveDrinkAreas,
 
   // drinks — orders
   drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive, drinksPlaceOrder, drinksSfRecount,

@@ -1,9 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // DRINKS — shared frontend constants (enums from DRINKS_DOMAIN §6).
-// Frontend constants for now; in-app editable lists are a future enhancement
-// (see DECISIONS.md [m2]). Shared by the drinks screen sub-modules so each one
-// doesn't import the big drinks.ts just for a dropdown list.
+// Storage areas are config-driven (drinkAreasFor reads S.drinkConfig); the
+// other lists are constants for now. Shared by the drinks screen sub-modules
+// so each one doesn't import the big drinks.ts just for a dropdown list.
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { S } from './state';
+import { DEFAULT_DRINK_STORAGE_AREAS } from '@shared/types';
 
 export const DRINK_LOCATIONS: { key: 'west' | 'centraal'; label: string }[] = [
   { key: 'west', label: 'West' },
@@ -75,18 +78,18 @@ export const DRINK_RECIPE_CATEGORIES: DrinkCategoryDef[] = [
  *  service cards). */
 export const NON_SELLABLE_CATEGORIES = new Set(['consumables', 'glassware', 'coffee-tea-stock', 'building-block']);
 
-/** Drink storage areas per location (DRINKS_DOMAIN §3). West areas are the real
- *  ones from the inventory sheet (condensed); Mediamatic/centraal are
- *  placeholders staff rename. Kept as a constant (not in the food storage-config)
- *  so drink areas don't pollute the food storage picker — see DECISIONS.md [m4]. */
-export const DRINK_STORAGE_AREAS: Record<string, string[]> = {
-  west: ['Keg Storage', 'Drinks Storage', 'Tea & Liquor Shelf', 'Shelf Under Bar', 'Walk-In FoH', 'Freezer', 'Kitchen Back Storage', 'Wine Lowboy'],
-  centraal: ['Bar fridge', 'Cellar', 'Dry storage', 'Wine storage'],
-};
+/** Drink storage areas live in the drinks config (editable via the Stocktake
+ *  tab's manager "Edit areas" modal); DEFAULT_DRINK_STORAGE_AREAS in
+ *  shared/types.ts is the built-in fallback. Kept out of the food
+ *  storage-config so drink areas don't pollute the food storage picker —
+ *  see DECISIONS.md [m4]. */
+export const DRINK_STORAGE_AREAS = DEFAULT_DRINK_STORAGE_AREAS;
 
-/** Areas for a location (falls back to west). */
+/** Areas for a location: the editable config list when set, else the defaults. */
 export function drinkAreasFor(loc: string): string[] {
-  return DRINK_STORAGE_AREAS[loc] || DRINK_STORAGE_AREAS.west;
+  const configured = S.drinkConfig?.storageAreas?.[loc];
+  if (Array.isArray(configured) && configured.length) return configured;
+  return DEFAULT_DRINK_STORAGE_AREAS[loc] || DEFAULT_DRINK_STORAGE_AREAS.west;
 }
 
 /** Look up a category label across catalogue + recipe definitions. */

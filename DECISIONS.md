@@ -404,3 +404,26 @@ has a changed-only write guard.
   locations shape has only evolved additively); drink storage areas live in a
   frontend constant, not the editable storage-config (DECISIONS [m4]) — staff
   can't rename areas in-app yet.
+
+## Round 4 — 2026-06-10 (Daan picked up both right-altitude candidates)
+
+- **One per-category field spec** — new `public/js/drinks-category-fields.ts`
+  is the single source of truth for "which fields matter for this category":
+  `categorySpec(cat)` drives the edit form (alcohol field, serve label, info
+  fields rendered as `df-info-<key>` and collected back via the same spec) and
+  `categoryBarRows(d)` drives the bar-card rows. Adding/renaming a category
+  field is now a one-file change that updates both surfaces together.
+- **Storage areas are editable config** — `DrinkConfig.storageAreas` (per
+  location; defaults in shared `DEFAULT_DRINK_STORAGE_AREAS`; `mergeConfig`
+  cleans/dedupes and falls back per location). The Stocktake tab gains a
+  manager-only **⚙ Edit areas** modal (rename in place / add / remove /
+  reorder). `POST /api/drinks/storage-areas` persists the list and **cascades**:
+  renames move existing DrinkStock rows (merging quantities) and re-home drinks
+  to the new name; a removed area's stock merges into the first remaining area
+  and its drinks become Unassigned for re-homing. Verified end-to-end on
+  staging (rename Keg Storage→Keg Room moved config + drink home + all 6 stock
+  rows with zero stragglers; restored after). Defining areas is manager-gated
+  (config territory); assigning a drink to an area stays open to all.
+  This supersedes the [m4] "constant for now" deviation; areas still live in
+  drinks config rather than the food storage-config (colors/spots semantics
+  don't apply, and food pickers stay unpolluted).

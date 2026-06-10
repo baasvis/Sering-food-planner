@@ -17,6 +17,7 @@ import {
   DRINK_LOCATIONS, DRINK_GLASS_TYPES, DRINK_SERVING_TEMPS, DRINK_CATALOGUE_CATEGORIES,
   NON_SELLABLE_CATEGORIES, drinkCategoryLabel, drinkAreasFor,
 } from './drinks-constants';
+import { categorySpec } from './drinks-category-fields';
 import {
   makeCostContext, drinkTotalCostExBtw, effectiveBtw, targetMarkupFor, actualMarkup,
 } from '@shared/drink-cost';
@@ -514,27 +515,27 @@ function buildDrinkFormHtml(d: Drink | null): string {
 }
 
 /** The fields shown depend on the category, so a beer doesn't drown in wine
- *  fields and a wine surfaces origin + tasting notes (catalogue #2). Hidden
- *  inputs keep the save path uniform for fields a type doesn't show. */
+ *  fields and a wine surfaces origin + tasting notes (catalogue #2). The
+ *  per-category field set lives in drinks-category-fields.ts — ONE spec shared
+ *  with the bar cards, so both surfaces update together. Hidden inputs keep the
+ *  save path uniform for fields a type doesn't show. */
 function dynamicSectionsHtml(cat: string, d: Drink | null): string {
-  const info = d?.info || {};
+  const spec = categorySpec(cat);
+  const info = (d?.info || {}) as Record<string, unknown>;
   const v = (x: string | number | null | undefined) => x == null ? '' : esc(String(x));
-  const isAlcoholic = cat === 'beer' || cat === 'wine' || cat === 'spirits';
-  const isWine = cat === 'wine';
-  const isSoft = cat === 'soft';
   const sellable = !NON_SELLABLE_CATEGORIES.has(cat);
   const out: string[] = [];
 
-  // Basics: alcohol % (alcoholic types) + BTW (sellable types). Non-shown values
-  // ride along as hidden inputs so saveDrinkForm reads a consistent set.
+  // Basics: alcohol % (per spec) + BTW (sellable types). Non-shown values ride
+  // along as hidden inputs so saveDrinkForm reads a consistent set.
   if (sellable) {
     out.push(`
     <fieldset class="df-section">
       <legend>Basics</legend>
       <div class="df-grid">
-        ${isAlcoholic
+        ${spec.showAlcohol
           ? `<label class="df-field">Alcohol %
-              <input id="df-abv" type="number" step="0.1" min="0" max="100" value="${d ? v(d.abv) : (cat === 'spirits' ? '40' : '5')}" oninput="drinkFormBtwHint()">
+              <input id="df-abv" type="number" step="0.1" min="0" max="100" value="${d ? v(d.abv) : spec.defaultAbv}" oninput="drinkFormBtwHint()">
             </label>`
           : `<input id="df-abv" type="hidden" value="${d ? v(d.abv) : '0'}">`}
         <label class="df-field">BTW %
@@ -580,32 +581,26 @@ function dynamicSectionsHtml(cat: string, d: Drink | null): string {
       </div>
     </details>`);
 
-  // Wine info — only for wine (origin + grapes + tasting notes).
-  if (isWine) {
+  // Category info section (wine origin/tasting etc) — fields come from the
+  // shared spec; ids are df-info-<key> and are collected back via the same spec.
+  if (spec.infoFields.length) {
     out.push(`
     <fieldset class="df-section">
-      <legend>Wine info</legend>
+      <legend>${spec.infoLegend}</legend>
       <div class="df-grid">
-        <label class="df-field">Producer / winery <input id="df-producer" value="${v(info.producer)}"></label>
-        <label class="df-field">Region <input id="df-region" value="${v(info.region)}"></label>
-        <label class="df-field">Country <input id="df-country" value="${v(info.country)}"></label>
-        <label class="df-field">Vintage <input id="df-vintage" value="${v(info.vintage)}"></label>
-        <label class="df-field">Grape(s) <input id="df-grapes" value="${v(info.grapes)}"></label>
-        <label class="df-field">Soil <input id="df-soil" value="${v(info.soil)}"></label>
-        <label class="df-field df-check"><input id="df-natural" type="checkbox" ${info.natural ? 'checked' : ''}> Natural</label>
-        <label class="df-field df-check"><input id="df-bio" type="checkbox" ${info.bio ? 'checked' : ''}> Bio / organic</label>
-        <label class="df-field df-col2">Flavour profile <input id="df-profile" value="${v(info.profile)}" placeholder="e.g. dry, mineral, citrus"></label>
-        <label class="df-field df-col2">Tasting notes <textarea id="df-notes" rows="2">${v(info.notes)}</textarea></label>
+        ${spec.infoFields.map(f => {
+          const val = info[f.key];
+          const cls = `df-field${f.input === 'check' ? ' df-check' : ''}${f.col2 ? ' df-col2' : ''}`;
+          if (f.input === 'check') return `<label class="${cls}"><input id="df-info-${f.key}" type="checkbox" ${val ? 'checked' : ''}> ${f.label}</label>`;
+          if (f.input === 'textarea') return `<label class="${cls}">${f.label} <textarea id="df-info-${f.key}" rows="2"${f.placeholder ? ` placeholder="${esc(f.placeholder)}"` : ''}>${v(val as string)}</textarea></label>`;
+          return `<label class="${cls}">${f.label} <input id="df-info-${f.key}" value="${v(val as string)}"${f.placeholder ? ` placeholder="${esc(f.placeholder)}"` : ''}></label>`;
+        }).join('')}
       </div>
     </fieldset>`);
   }
 
   // Serving — sellable types: temperature, how-to-serve / pairing, and formats.
   if (sellable) {
-    const serveLabel = isSoft ? 'Serving &amp; pairing notes' : 'How to serve';
-    const placeholder = isSoft
-      ? 'e.g. tall glass over ice with lime — pairs with spicy or fried dishes'
-      : 'e.g. chilled, no ice, in a stemmed glass';
     out.push(`
     <details class="df-section df-fold" open>
       <summary>Serving &amp; prices</summary>
@@ -616,8 +611,8 @@ function dynamicSectionsHtml(cat: string, d: Drink | null): string {
             ${DRINK_SERVING_TEMPS.map(t => `<option value="${esc(t)}" ${d?.servingTemp === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
           </select>
         </label>
-        <label class="df-field df-col2">${serveLabel}
-          <textarea id="df-serviceInstructions" rows="2" placeholder="${placeholder}">${v(d?.serviceInstructions)}</textarea>
+        <label class="df-field df-col2">${spec.serveLabel}
+          <textarea id="df-serviceInstructions" rows="2" placeholder="${spec.servePlaceholder}">${v(d?.serviceInstructions)}</textarea>
         </label>
       </div>
       <div class="df-formats-wrap">
@@ -747,13 +742,16 @@ export async function saveDrinkForm(): Promise<void> {
   if (!name) { toastError('Name is required.'); return; }
   const category = strVal('df-category');
 
+  // Collect the category's info fields via the SAME spec that rendered them.
   const info: Record<string, unknown> = {};
-  for (const [id, key] of [['df-producer', 'producer'], ['df-region', 'region'], ['df-country', 'country'], ['df-vintage', 'vintage'], ['df-soil', 'soil'], ['df-grapes', 'grapes'], ['df-profile', 'profile'], ['df-notes', 'notes']] as const) {
-    const val = strVal(id);
-    if (val) info[key] = val;
+  for (const f of categorySpec(category).infoFields) {
+    if (f.input === 'check') {
+      if (boolVal(`df-info-${f.key}`)) info[f.key] = true;
+    } else {
+      const val = strVal(`df-info-${f.key}`);
+      if (val) info[f.key] = val;
+    }
   }
-  if (boolVal('df-natural')) info.natural = true;
-  if (boolVal('df-bio')) info.bio = true;
 
   const locations: Record<string, { par: number | null; active: boolean; area?: string }> = {};
   for (const l of DRINK_LOCATIONS) {

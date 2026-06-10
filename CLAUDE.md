@@ -75,7 +75,8 @@ routes/
   supplies.ts          — Toppings/bread/ferment supplies CRUD: GET/POST/PATCH/DELETE /api/supplies,
                          plus /:id/prep and /:id/stock stock moves (standard ratio + one-off drip-feed)
   drinks.ts            — Drinks module, all under /api/drinks: drink CRUD (+ /:id/photo, /:id/active,
-                         /:id/area), /config, /suppliers, /stock + /stock/bulk (per-area counts; consumes
+                         /:id/area), /config + /storage-areas (editable areas; renames cascade to stock
+                         rows + drink homes), /suppliers, /stock + /stock/bulk (per-area counts; consumes
                          pseudo-areas; returns fresh pools), /orders lifecycle (draft→ordered→received),
                          /production + /write-offs, /assortments, /menus (+ /:id/print A4/A5 HTML),
                          /import/scan + /import/commit (AI PDF import). Money/catalogue writes
@@ -148,7 +149,9 @@ public/
     supplies.ts        — "Toppings & bread" screen: standard/one-off supplies editor, per-guest demand + price
     drinks.ts          — Drinks screen shell: sub-tab bar, Catalogue tab (needed/stock/cost-%/active, location toggle),
                          type-specific drink form, suppliers tab + form, AI PDF import UI
-    drinks-constants.ts — Drinks enums: categories/subtypes, glass types, serving temps, storage areas per location
+    drinks-constants.ts — Drinks enums: categories/subtypes, glass types, serving temps; drinkAreasFor reads the
+                         config-driven storage areas (defaults in shared/types DEFAULT_DRINK_STORAGE_AREAS)
+    drinks-category-fields.ts — Single per-category field spec driving BOTH the drink edit form and the bar cards
     drinks-recipe.ts, drinks-stocktake.ts, drinks-order.ts, drinks-production.ts, drinks-service.ts,
     drinks-menu.ts     — Per-tab drinks modules: recipes + live costing, by-area stock overview (inline auto-save),
                          auto-shortfall ordering, production/write-offs, bar reference cards, assortments + menu designer

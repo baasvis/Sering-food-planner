@@ -6,9 +6,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { S } from './state';
-import { apiPost, toast, toastError, loadDrinks } from './utils';
+import { apiPost, toast, toastError, loadDrinks, loadDrinkConfig } from './utils';
 import { trackEvent } from './telemetry';
-import { esc } from './modal';
+import { showModal, closeModal, esc } from './modal';
 import { drinkAreasFor, drinkCategoryLabel, DRINK_LOCATIONS } from './drinks-constants';
 import type { Drink, DrinkSupplier } from '@shared/types';
 
@@ -129,6 +129,7 @@ function renderOverview(): void {
           ${DRINK_LOCATIONS.map(x => `<button class="lc ${l === x.key ? 'on' : ''}" data-loc="${x.key}" onclick="drinksStkSetLoc('${x.key}')">${esc(x.label)}</button>`).join('')}
         </div>
         <button class="btn" data-testid="stk-start" onclick="drinksStkStart()">📋 Count by area</button>
+        ${S.user?.isManager ? `<button class="btn btn-sm" data-testid="stk-edit-areas" onclick="openDrinkAreasEditor()">⚙ Edit areas</button>` : ''}
       </div>
       <p class="muted small">Stock at ${esc(locLabel)}, grouped by storage area. Change a count and it saves automatically; set each drink's area inline; tap a name to edit. Or use “Count by area” for a focused count.</p>
       ${sectionsHtml}
@@ -291,6 +292,73 @@ export async function drinksStkSave(): Promise<void> {
     _values = {};
     await loadDrinks();
     renderCountView();
+  } catch (e: unknown) {
+    toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+// ── Storage-area editor (manager): rename / add / remove / reorder the areas
+//    of the current location. Saved to the drinks config; the backend cascades
+//    renames into existing stock rows + drink home areas, and merges a removed
+//    area's stock into the first remaining one. ─────────────────────────────
+
+export function openDrinkAreasEditor(): void {
+  if (!S.user?.isManager) { toastError('Manager access required.'); return; }
+  const l = loc();
+  const locLabel = DRINK_LOCATIONS.find(x => x.key === l)?.label || l;
+  const areas = drinkAreasFor(l);
+  showModal(`<div class="drink-form" data-testid="areas-editor">
+    <h3>Storage areas — ${esc(locLabel)}</h3>
+    <p class="muted small">Rename in place (existing counts and drink homes follow the new name). Removing an area moves its stock into the first area in the list and marks its drinks Unassigned.</p>
+    <div id="areas-list">${areas.map(a => areaRowHtml(a)).join('')}</div>
+    <button class="btn btn-sm" type="button" onclick="drinkAreasAddRow()">+ Add area</button>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" data-testid="areas-save" type="button" onclick="saveDrinkAreas()">Save areas</button>
+    </div>
+  </div>`);
+}
+
+function areaRowHtml(name: string): string {
+  return `<div class="area-row">
+    <input class="area-name" data-orig="${esc(name)}" value="${esc(name)}" maxlength="60" placeholder="Area name">
+    <button class="btn btn-sm" type="button" title="Move up" onclick="drinkAreasMoveRow(this, -1)">↑</button>
+    <button class="btn btn-sm" type="button" title="Move down" onclick="drinkAreasMoveRow(this, 1)">↓</button>
+    <button class="btn btn-sm btn-danger" type="button" title="Remove" onclick="this.closest('.area-row').remove()">✕</button>
+  </div>`;
+}
+
+export function drinkAreasAddRow(): void {
+  const list = document.getElementById('areas-list');
+  if (list) list.insertAdjacentHTML('beforeend', areaRowHtml(''));
+}
+
+export function drinkAreasMoveRow(btn: HTMLElement, dir: number): void {
+  const row = btn.closest('.area-row');
+  if (!row) return;
+  const sibling = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+  if (!sibling) return;
+  if (dir < 0) sibling.before(row); else sibling.after(row);
+}
+
+export async function saveDrinkAreas(): Promise<void> {
+  const l = loc();
+  const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('#areas-list .area-name'));
+  const areas = inputs.map(i => i.value.trim()).filter(Boolean);
+  if (areas.length === 0) { toastError('Keep at least one storage area.'); return; }
+  const renames: Record<string, string> = {};
+  for (const i of inputs) {
+    const orig = i.dataset.orig || '';
+    const now = i.value.trim();
+    if (orig && now && orig !== now) renames[orig] = now;
+  }
+  try {
+    const merged = await apiPost('/api/drinks/storage-areas', { location: l, areas, renames });
+    S.drinkConfig = merged;
+    closeModal();
+    toast('Storage areas saved');
+    await Promise.all([loadDrinkConfig(), loadDrinks()]);
+    renderDrinksStocktakeTab();
   } catch (e: unknown) {
     toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }

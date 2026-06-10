@@ -265,7 +265,7 @@ map — it is kept in sync as features land. Top-level shape:
 | Drink Write-Off | refKind, drinkId/ingredientId, location, qty, unit, reason, note, who | DrinkWriteOff / drink_write_offs |
 | Assortment | name, location, serviceContext, description, entries (JSON: drinkId + formats) | Assortment / assortments |
 | Drink Menu | name, assortmentId, location, sections (JSON), layout (JSON: columns/sectionStyle/typeScale), published | DrinkMenu / drink_menus |
-| Drink Config | id="default", config (JSON: labourRatePerMin, priceRounding, btwRule, markupTargets, demandNudgeThresholdPct, defaultShelfLifeDays) | DrinkConfig / drink_config |
+| Drink Config | id="default", config (JSON: labourRatePerMin, priceRounding, btwRule, markupTargets, demandNudgeThresholdPct, defaultShelfLifeDays, storageAreas per location) | DrinkConfig / drink_config |
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure

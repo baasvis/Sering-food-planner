@@ -793,4 +793,14 @@ export interface DrinkConfig {
   markupTargets: DrinkMarkupTargets;
   demandNudgeThresholdPct: number;
   defaultShelfLifeDays: number;
+  /** Editable drink storage areas per location (Stocktake "Edit areas").
+   *  Falls back to DEFAULT_DRINK_STORAGE_AREAS when unset/empty. */
+  storageAreas: Record<string, string[]>;
 }
+
+/** Built-in drink storage areas — the defaults a fresh config starts from.
+ *  Shared by the backend config merge and the frontend fallback. */
+export const DEFAULT_DRINK_STORAGE_AREAS: Record<string, string[]> = {
+  west: ['Keg Storage', 'Drinks Storage', 'Tea & Liquor Shelf', 'Shelf Under Bar', 'Walk-In FoH', 'Freezer', 'Kitchen Back Storage', 'Wine Lowboy'],
+  centraal: ['Bar fridge', 'Cellar', 'Dry storage', 'Wine storage'],
+};

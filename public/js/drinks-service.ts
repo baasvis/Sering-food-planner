@@ -11,6 +11,7 @@
 import { S } from './state';
 import { esc } from './modal';
 import { drinkCategoryLabel } from './drinks-constants';
+import { categoryBarRows } from './drinks-category-fields';
 import { apiPost, toast, toastError, loadDrinks } from './utils';
 import { trackEvent } from './telemetry';
 import type { Drink } from '@shared/types';
@@ -84,42 +85,14 @@ function updateBarResults(): void {
   }).join('');
 }
 
-/** A bar card shows the info a bartender actually needs for THIS type, inline —
- *  wine: origin + grapes + tasting notes; soft: pairing; cocktail/coffee: how to
- *  serve / make (with a tap-to-enlarge build card); beer/spirits: ABV + serve. */
+/** A bar card shows the info a bartender actually needs for THIS type, inline.
+ *  WHICH rows show per category lives in drinks-category-fields.ts — the same
+ *  spec the edit form renders from, so the two stay in sync by construction. */
 function barCardHtml(d: Drink): string {
   const price = servePrice(d);
   const cat = d.category;
-  const info = d.info || {};
-  const rows: string[] = [];
-  const row = (k: string, v: string | null | undefined) => {
-    if (v) rows.push(`<div class="bar-info-row"><span class="bar-info-k">${esc(k)}</span><span class="bar-info-v">${esc(v)}</span></div>`);
-  };
-  const isCocktail = cat === 'cocktail' || cat === 'homemade-na';
-
-  if (cat === 'wine') {
-    row('Origin', [info.region, info.country].filter(Boolean).join(', '));
-    row('Grape', info.grapes);
-    row('Vintage', info.vintage);
-    const style = [info.natural ? 'natural' : '', info.bio ? 'bio' : ''].filter(Boolean).join(' · ');
-    row('Style', style);
-    row('Tasting', info.notes || info.profile);
-    row('Serve', d.servingTemp);
-  } else if (cat === 'soft') {
-    row('Serve', d.servingTemp);
-    row('Serve with', d.serviceInstructions);
-  } else if (isCocktail) {
-    row('Serve', [d.glass, d.serveVolumeMl ? d.serveVolumeMl + ' ml' : '', (d.garnish || []).join(', ')].filter(Boolean).join(' · '));
-    row('How to serve', d.serviceInstructions || (d.prepSteps || []).join(' · '));
-  } else if (cat === 'coffee-drink') {
-    row('How to make', (d.prepSteps || []).join(' · ') || d.serviceInstructions);
-    row('Serve', [d.glass, d.servingTemp].filter(Boolean).join(' · '));
-  } else {
-    // beer / spirits / anything else
-    row('ABV', d.abv ? d.abv + '%' : '');
-    row('Serve', d.servingTemp);
-    row('Notes', d.serviceInstructions);
-  }
+  const rows = categoryBarRows(d).map(r =>
+    `<div class="bar-info-row"><span class="bar-info-k">${esc(r.k)}</span><span class="bar-info-v">${esc(r.v)}</span></div>`);
 
   return `<div class="bar-card" data-testid="bar-card" data-cat="${esc(cat)}" data-id="${esc(d.id)}">
     ${d.photoUrl ? `<img class="bar-card-photo" src="${esc(d.photoUrl)}" alt="${esc(d.name)}" loading="lazy">` : ''}

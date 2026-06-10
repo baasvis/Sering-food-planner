@@ -15,11 +15,13 @@ import {
   effectiveBtw, actualMarkup, markupLight, yieldBottles, CostContext,
 } from '@shared/drink-cost';
 import type { Drink, DrinkConfig, DrinkServingFormat } from '@shared/types';
+import { DEFAULT_DRINK_STORAGE_AREAS } from '@shared/types';
 
 const FALLBACK_CFG: DrinkConfig = {
   labourRatePerMin: 0.29, priceRounding: 0.1,
   btwRule: { alcoholicAbvThreshold: 0.5, alcoholic: 21, nonAlcoholic: 9 },
   markupTargets: { defaultMultiple: 4.0 }, demandNudgeThresholdPct: 25, defaultShelfLifeDays: 7,
+  storageAreas: DEFAULT_DRINK_STORAGE_AREAS,
 };
 function cfg(): DrinkConfig { return S.drinkConfig || FALLBACK_CFG; }
 function isManager(): boolean { return !!S.user?.isManager; }
