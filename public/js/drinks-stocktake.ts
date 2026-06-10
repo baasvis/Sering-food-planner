@@ -7,6 +7,7 @@
 
 import { S } from './state';
 import { apiPost, toast, toastError, loadDrinks } from './utils';
+import { trackEvent } from './telemetry';
 import { esc } from './modal';
 import { drinkAreasFor, drinkCategoryLabel, DRINK_LOCATIONS } from './drinks-constants';
 import type { Drink, DrinkSupplier } from '@shared/types';
@@ -143,7 +144,8 @@ export function drinksStkOvStatus(input: HTMLInputElement): void {
 }
 
 /** Auto-save a single count when its cell changes (blur). Saves to the drink's
- *  home area (or the group's fallback) and refreshes that row's status. */
+ *  home area (or the group's fallback) and refreshes that row's status from the
+ *  pool the save response returns — no full-catalogue refetch per cell. */
 export async function drinkStkSaveOne(input: HTMLInputElement): Promise<void> {
   if (input.value === '') return; // blank = not counted
   const qty = Number(input.value);
@@ -151,12 +153,13 @@ export async function drinkStkSaveOne(input: HTMLInputElement): Promise<void> {
   const area = input.dataset.area as string;
   const drinkId = input.dataset.id as string;
   try {
-    await apiPost('/api/drinks/stock/bulk', { location: loc(), area, items: [{ drinkId, qty }] });
+    const res = await apiPost('/api/drinks/stock/bulk', { location: loc(), area, items: [{ drinkId, qty }] }) as { saved: number; stock?: Record<string, number> };
+    trackEvent('drinks_stocktake_save', 'inline');
     input.classList.add('stk-saved');
     setTimeout(() => input.classList.remove('stk-saved'), 900);
-    await loadDrinks();
+    const pool = res.stock?.[drinkId] ?? qty;
     const d = (S.drinks || []).find(x => x.id === drinkId);
-    const pool = d?.stockByLocation?.[loc()] ?? qty;
+    if (d) d.stockByLocation = { ...(d.stockByLocation || {}), [loc()]: pool };
     const par = input.dataset.par === '' || input.dataset.par == null ? null : Number(input.dataset.par);
     const cell = input.closest('tr')?.querySelector('.stk-status');
     if (cell) cell.innerHTML = stkStatusHtml(pool, par);
@@ -203,7 +206,7 @@ function renderChooser(): void {
       <p class="muted small">Pick ${_mode === 'supplier' ? 'a supplier to count its delivery' : 'a storage area to count'}.</p>
       <div class="stk-grid">
         ${_mode === 'supplier'
-          ? sups.map(({ sup, due }) => `<button class="stk-pick" data-testid="stk-supplier" onclick="drinksStkPickSupplier('${esc(sup.name)}')">
+          ? sups.map(({ sup, due }) => `<button class="stk-pick" data-testid="stk-supplier" data-name="${esc(sup.name)}" onclick="drinksStkPickSupplier(this.dataset.name)">
               <span>${esc(sup.name)}${due ? ' <span class="stk-due">due</span>' : ''}</span>
               <span class="muted small">${drinksForSupplier(sup.name).length} drinks</span>
             </button>`).join('')
@@ -237,11 +240,11 @@ function renderCountView(): void {
       <div class="stk-count-head">
         <button class="btn btn-sm" onclick="drinksStkBack()">← Back</button>
         <h3>${title}</h3>
-        ${_supplier ? `<label class="stk-area-sel">Area
+        ${_supplier ? `<label class="stk-area-sel">Default area
           <select onchange="drinksStkSetArea(this.value)">${areas.map(a => `<option value="${esc(a)}" ${a === _area ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
         </label>` : ''}
       </div>
-      <p class="muted small">Count in order units (${_supplier ? 'this supplier' : 'this area'}). Blank = not counted; 0 = counted empty.</p>
+      <p class="muted small">Count in order units. Blank = not counted; 0 = counted empty.${_supplier ? ' Counts save to each drink’s home storage area (the default area is used for drinks without one).' : ''}</p>
       <div class="stk-rows" data-testid="stk-rows">
         ${items.length === 0 ? '<div class="drinks-empty">No drinks here.</div>' : items.map(d => stkRow(d)).join('')}
       </div>
@@ -264,13 +267,26 @@ export function drinksStkSetArea(area: string): void { _area = area; }
 export function drinksStkInput(id: string, v: string): void { _values[id] = v === '' ? undefined : Number(v); }
 
 export async function drinksStkSave(): Promise<void> {
-  const area = _area || drinkAreasFor(loc())[0];
+  const fallback = _area || drinkAreasFor(loc())[0];
   const itemsToSave = Object.entries(_values)
     .filter(([, v]) => v !== undefined && Number.isFinite(v as number))
     .map(([drinkId, qty]) => ({ drinkId, qty: qty as number }));
   if (itemsToSave.length === 0) { toastError('Nothing counted yet.'); return; }
+  // Area mode counts what's physically in the picked area; supplier mode routes
+  // each drink's count to its HOME area (fallback: the selected default area) so
+  // a delivery count doesn't scatter stock into the wrong area group.
+  const byArea = new Map<string, Array<{ drinkId: string; qty: number }>>();
+  for (const item of itemsToSave) {
+    const home = _supplier ? ((S.drinks || []).find(d => d.id === item.drinkId)?.locations?.[loc()]?.area || fallback) : fallback;
+    const arr = byArea.get(home) || [];
+    arr.push(item);
+    byArea.set(home, arr);
+  }
   try {
-    await apiPost('/api/drinks/stock/bulk', { location: loc(), area, items: itemsToSave });
+    for (const [area, items] of byArea) {
+      await apiPost('/api/drinks/stock/bulk', { location: loc(), area, items });
+    }
+    trackEvent('drinks_stocktake_save', _supplier ? 'supplier' : 'area', { counts: itemsToSave.length });
     toast(`${itemsToSave.length} counts saved`);
     _values = {};
     await loadDrinks();

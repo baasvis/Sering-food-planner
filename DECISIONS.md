@@ -343,3 +343,64 @@ and `drinks(bar/stocktake/orders/suppliers/photo)`.
 - **e2e** — `drinks-stocktake.spec` rewritten to seed a drink with a home area and
   assert the overview auto-save (the by-area-filter fix made the old "pick first
   area" assumption empty). `drinks-order` already self-seeds (round 2).
+
+## Full review pass — 2026-06-10 (7-angle code review of the whole branch)
+
+Ten findings survived verification; all fixed in one commit. Notable refutals along
+the way: `bottlesYielded ||` is intentional unit semantics (bottles vs litres);
+`/stock/bulk` does consume the pseudo-areas (no double-count); recipe saves do NOT
+wipe `locations` (field omitted from the payload); `recalcAllDrinkCosts` already
+has a changed-only write guard.
+
+- **Onclick quoting (bug)** — `esc()` HTML-escapes `'` to `&#39;`, which the
+  browser decodes back to a raw quote inside inline-onclick JS — a supplier named
+  "Bob's" would have broken Place-order/recount and the stocktake supplier picker
+  with a SyntaxError. All supplier-name args now flow through `data-*` attributes
+  (`this.dataset.supplier` / `.name`); never interpolate names into onclick strings.
+- **Active toggle dropped area client-side (bug)** — `drinkToggleActive` rebuilt
+  `locations[loc]` as `{par, active}`, losing `area` (and discarding the server's
+  fresh drink). Now: optimistic spread preserves all fields, then the endpoint's
+  returned drink replaces the S.drinks entry — no hand-merge drift. Regression
+  test added (`normalizeLocations` area passthrough).
+- **`/:id/area` opened to all signed-in users (decision)** — it was manager-gated
+  while counts (`/stock/bulk`) are open and the stocktake shows the area dropdown
+  to everyone, so non-managers got 403s mid-count. Area = where a drink physically
+  lives (stock organization, owned by whoever counts), not a money/commercial
+  field — gate removed. `active` stays manager-only (commercial decision).
+- **Import commit createMany (bug at scale)** — up to 200 sequential `create`
+  calls inside one interactive transaction would blow Prisma's 5s timeout against
+  the remote DB (~whole import rolls back). Now: validate + build all rows first,
+  one atomic `createMany`.
+- **Import scan hardening** — `max_tokens` 8192→16000 (recommended non-streaming
+  ceiling) + an explicit `stop_reason === 'max_tokens'` guard so a truncated
+  extraction says "split the PDF" instead of "no products found"; the scan route
+  returns a typed 422 with `safeErrMsg` instead of a masked production 500.
+- **Supplier counts route to home areas (fix)** — supplier-mode stocktake saved
+  every drink into the first storage area, scattering stock across wrong area
+  groups. Counts now go to each drink's home area; the picker's area select is
+  relabelled "Default area" (fallback for unassigned drinks). Area-mode still
+  saves to the picked area (you count what's physically there).
+- **Per-cell save no longer refetches the catalogue (perf)** — `/stock/bulk` now
+  returns the fresh pool per saved drink (`{saved, stock}`); the overview auto-save
+  updates S.drinks + the status cell from that instead of a full `loadDrinks()`
+  per cell (a 30-cell count was 30 full refetches).
+- **Dead code removed** — `openServiceCard` + its window registration + the
+  `.svc-*` modal/tile CSS (~80 lines) were unreachable since the Build-card button
+  was removed in round 2.
+- **Telemetry added (conventions gap)** — the drinks frontend emitted zero
+  `trackEvent()`s, invisible to AI insights and the weekly coverage agent. Added:
+  `drinks_catalogue_add`, `drinks_stocktake_save`, `drinks_order_place`,
+  `drinks_order_receive`, `drinks_import_commit`, `drinks_menu_print`,
+  `drinks_bar_photo`; coverage-manifest entries for the four spec-covered ones
+  (import/menu-print/photo deliberately left for the weekly agent to cover).
+- **Docs (conventions gap)** — CLAUDE.md project map now catalogues the drinks
+  module (routes/lib/shared/frontend/css/e2e/tests), the `MANAGER_EMAILS` tier,
+  and a DRINKS_DOMAIN.md pointer; stale tutorial copy rewritten ("par", "build
+  card", old stocktake/orders flows).
+- **Noted, not changed (right-altitude candidates for later)** — the parallel
+  per-category switches in `dynamicSectionsHtml` (form) vs `barCardHtml` (bar)
+  could share one field-spec; `escHtml`/photo-mime/multer mirror recipes.ts
+  (deliberate but extractable); DRINK_SCHEMA_VERSION exists but is unwired (the
+  locations shape has only evolved additively); drink storage areas live in a
+  frontend constant, not the editable storage-config (DECISIONS [m4]) — staff
+  can't rename areas in-app yet.

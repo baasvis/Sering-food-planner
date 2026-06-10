@@ -7,6 +7,7 @@
 
 import { S } from './state';
 import { newId, apiPost, toast, toastError } from './utils';
+import { trackEvent } from './telemetry';
 import { showModal, closeModal, esc } from './modal';
 import { drinkCategoryLabel } from './drinks-constants';
 import type { Assortment, DrinkMenu, Drink } from '@shared/types';
@@ -232,7 +233,10 @@ export async function saveMenuForm(existingId: string): Promise<void> {
   } catch (e: unknown) { toastError('Could not save: ' + (e instanceof Error ? e.message : 'Unknown error')); }
 }
 
-export function printDrinkMenu(id: string): void { window.open(`/api/drinks/menus/${id}/print`, '_blank'); }
+export function printDrinkMenu(id: string): void {
+  trackEvent('drinks_menu_print');
+  window.open(`/api/drinks/menus/${id}/print`, '_blank');
+}
 
 export async function deleteDrinkMenu(id: string): Promise<void> {
   try { await apiPost(`/api/drinks/menus/${id}`, {}, 'DELETE'); toast('Menu deleted'); refreshMenus(); }

@@ -7,6 +7,7 @@
 
 import { S } from './state';
 import { newId, apiPost, toast, toastError, loadDrinks } from './utils';
+import { trackEvent } from './telemetry';
 import { showModal, closeModal, esc } from './modal';
 import { drinkCategoryLabel, DRINK_LOCATIONS } from './drinks-constants';
 import { buildOrderSuggestions, orderDepositTotal, demandNudge, OrderSuggestionLine } from '@shared/drink-order';
@@ -88,7 +89,10 @@ function shortfallCardHtml(supplier: string, sup: DrinkSupplier | undefined, lin
   const dep = orderDepositTotal(lines.map(l => ({ orderQty: l.orderQty, deposit: l.deposit })));
   const costOf = (drinkId: string) => (S.drinks || []).find(x => x.id === drinkId)?.costPrice || 0;
   const costTotal = lines.reduce((s, l) => s + l.orderQty * costOf(l.drinkId), 0);
-  const supAttr = esc(supplier).replace(/'/g, "\\'");
+  // Supplier names go through data attributes (this.dataset.supplier), never as
+  // inline-JS string args: esc() turns ' into &#39;, which the HTML parser
+  // decodes back to a raw quote INSIDE the onclick JS — "Bob's" would be a
+  // SyntaxError. dataset round-trips any name safely.
   return `<div class="ord-shortfall" data-testid="ord-shortfall" data-supplier="${esc(supplier)}">
     <div class="ord-sf-head">
       <strong>${esc(supplier)}</strong>
@@ -102,11 +106,11 @@ function shortfallCardHtml(supplier: string, sup: DrinkSupplier | undefined, lin
         <td>${esc(l.name)}</td>
         <td class="num">${l.par}</td>
         <td class="num">${Math.round(l.stock * 10) / 10}</td>
-        <td class="num"><input class="sf-qty" data-supplier="${esc(supplier)}" data-drinkid="${esc(l.drinkId)}" data-name="${esc(l.name)}" data-unit="${esc(l.orderUnit)}" data-deposit="${l.deposit}" data-cost="${costOf(l.drinkId)}" type="number" min="0" step="1" value="${l.orderQty}" style="width:60px;text-align:right;" oninput="drinksSfRecount('${supAttr}')"> ${esc(l.orderUnit)}</td>
+        <td class="num"><input class="sf-qty" data-supplier="${esc(supplier)}" data-drinkid="${esc(l.drinkId)}" data-name="${esc(l.name)}" data-unit="${esc(l.orderUnit)}" data-deposit="${l.deposit}" data-cost="${costOf(l.drinkId)}" type="number" min="0" step="1" value="${l.orderQty}" style="width:60px;text-align:right;" oninput="drinksSfRecount(this.dataset.supplier)"> ${esc(l.orderUnit)}</td>
         <td class="num sf-cost">${costOf(l.drinkId) ? '€' + (l.orderQty * costOf(l.drinkId)).toFixed(2) : '—'}</td>
         <td class="num">${l.deposit ? '€' + l.deposit.toFixed(2) : '—'}</td>
       </tr>`).join('')}</tbody></table>
-    ${isManager() ? `<div class="ord-sf-actions"><button class="btn btn-sm btn-primary" data-testid="ord-place" onclick="drinksPlaceOrder('${supAttr}')">Place order</button></div>` : '<div class="muted small">Managers place orders.</div>'}
+    ${isManager() ? `<div class="ord-sf-actions"><button class="btn btn-sm btn-primary" data-testid="ord-place" data-supplier="${esc(supplier)}" onclick="drinksPlaceOrder(this.dataset.supplier)">Place order</button></div>` : '<div class="muted small">Managers place orders.</div>'}
   </div>`;
 }
 
@@ -152,6 +156,7 @@ export async function drinksPlaceOrder(supplier: string): Promise<void> {
   try {
     await apiPost('/api/drinks/orders', { id, location: loc(), supplier, lines });
     await apiPost(`/api/drinks/orders/${id}`, { status: 'ordered', expectedDelivery: sup?.deliveryWindow || null }, 'PATCH');
+    trackEvent('drinks_order_place', supplier, { lines: lines.length });
     toast(`Order placed — ${supplier}`);
     refreshOrders();
   } catch (e: unknown) {
@@ -337,6 +342,7 @@ export async function drinksOrderConfirmReceive(id: string): Promise<void> {
   });
   try {
     await apiPost(`/api/drinks/orders/${id}`, { status: 'received', lines }, 'PATCH');
+    trackEvent('drinks_order_receive', o.supplier);
     toast('Order received — stock updated');
     closeModal();
     await loadDrinks();

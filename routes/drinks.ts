@@ -13,7 +13,7 @@ import express, { Request, Response } from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import { Prisma } from '@prisma/client';
-import { asyncHandler, AppError } from '../lib/config';
+import { asyncHandler, AppError, safeErrMsg } from '../lib/config';
 import { prisma, dbAppendLog, withWriteLock, checkId } from '../lib/db';
 import { isManagerEmail } from './auth';
 import { broadcast } from './events';
@@ -165,6 +165,7 @@ router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
   const now = new Date();
   const areaKey = area.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'area';
   let saved = 0;
+  const savedIds: string[] = [];
   await withWriteLock(async () => {
     await prisma.$transaction(async (txc) => {
       for (const it of items) {
@@ -180,12 +181,20 @@ router.post('/stock/bulk', asyncHandler(async (req: Request, res: Response) => {
         // A real count reconciles the bootstrap + delivery-intake pseudo-areas.
         await txc.drinkStock.deleteMany({ where: { drinkId: id, location, area: { in: BOOTSTRAP_AREAS }, NOT: { area } } });
         saved++;
+        savedIds.push(id);
       }
     });
   });
+  // Return the fresh pool (Σ areas) per saved drink so the client can update
+  // its view without refetching the whole catalogue after each count.
+  const pools = savedIds.length
+    ? await prisma.drinkStock.groupBy({ by: ['drinkId'], where: { drinkId: { in: savedIds }, location }, _sum: { qty: true } })
+    : [];
+  const stock: Record<string, number> = {};
+  for (const g of pools) stock[g.drinkId] = g._sum.qty || 0;
   dbAppendLog(user.email, user.name, 'drink-stocktake', `${saved} counts @ ${location}/${area}`);
   broadcast(user.email, 'patch', { user: user.name, drinksReload: true });
-  res.json({ saved });
+  res.json({ saved, stock });
 }));
 
 // ─── Orders (lifecycle: draft → ordered → received / cancelled) ─────────────
@@ -803,7 +812,14 @@ router.post('/import/scan', pdfUpload.single('pdf'), asyncHandler(async (req: Re
   const file = (req as Request & { file?: { mimetype: string; buffer: Buffer } }).file;
   if (!file) throw new AppError(400, 'No PDF uploaded');
   if ((file.mimetype || '').toLowerCase() !== 'application/pdf') throw new AppError(400, 'Please upload a PDF.');
-  const items = await scanMenuPdf(Buffer.from(file.buffer).toString('base64'));
+  let items: ImportItem[];
+  try {
+    items = await scanMenuPdf(Buffer.from(file.buffer).toString('base64'));
+  } catch (e: unknown) {
+    // Scan failures are user-actionable (list too long, upstream AI error) —
+    // surface them as a typed 422 instead of a masked production 500.
+    throw new AppError(422, `Scan failed: ${safeErrMsg(e)}`);
+  }
   const user = actor(req);
   dbAppendLog(user.email, user.name, 'drink-import-scan', `scanned a PDF — ${items.length} products found`);
   res.json({ items });
@@ -817,27 +833,28 @@ router.post('/import/commit', asyncHandler(async (req: Request, res: Response) =
   if (items.length === 0) throw new AppError(400, 'No items to add.');
   if (items.length > 200) throw new AppError(400, 'Too many items in one import (max 200).');
   const created = await withWriteLock(async () => {
-    const ids: string[] = [];
-    await prisma.$transaction(async (txc) => {
-      for (const it of items) {
-        const id = 'drink-' + crypto.randomUUID();
-        const price = typeof it.price === 'number' ? it.price : null;
-        const input: DrinkInput = {
-          id, mode: 'catalogue', name: it.name.trim(), category: typeof it.category === 'string' ? it.category : 'soft',
-          subtype: typeof it.subtype === 'string' ? it.subtype : '', abv: typeof it.abv === 'number' ? it.abv : 0,
-          btwRate: null, status: 'draft', sellable: true, supplier: '', orderUnit: '', orderUnitMl: null,
-          packNote: '', itemId: null, deposit: 0, costPrice: null, costNote: '',
-          formats: price != null ? [{ name: 'serve', volumeMl: 0, price: { west: price, centraal: price } }] : [],
-          locations: {}, info: {}, tebiProductNames: [],
-        };
-        validateDrinkInput(input, true);
-        const data = buildDrinkData(input);
-        await txc.drink.create({ data: { ...(data as Prisma.DrinkUncheckedCreateInput), id, archived: false } });
-        ids.push(id);
-      }
-    });
+    // Validate + build every row first, then insert in ONE createMany statement.
+    // A per-item create loop inside an interactive transaction blows Prisma's
+    // 5s transaction timeout on a remote DB once the list gets large (~100+
+    // items × per-row round-trip); createMany is a single atomic round trip.
+    const rows: Prisma.DrinkUncheckedCreateInput[] = [];
+    for (const it of items) {
+      const id = 'drink-' + crypto.randomUUID();
+      const price = typeof it.price === 'number' ? it.price : null;
+      const input: DrinkInput = {
+        id, mode: 'catalogue', name: it.name.trim(), category: typeof it.category === 'string' ? it.category : 'soft',
+        subtype: typeof it.subtype === 'string' ? it.subtype : '', abv: typeof it.abv === 'number' ? it.abv : 0,
+        btwRate: null, status: 'draft', sellable: true, supplier: '', orderUnit: '', orderUnitMl: null,
+        packNote: '', itemId: null, deposit: 0, costPrice: null, costNote: '',
+        formats: price != null ? [{ name: 'serve', volumeMl: 0, price: { west: price, centraal: price } }] : [],
+        locations: {}, info: {}, tebiProductNames: [],
+      };
+      validateDrinkInput(input, true);
+      rows.push({ ...(buildDrinkData(input) as Prisma.DrinkUncheckedCreateInput), id, archived: false });
+    }
+    await prisma.drink.createMany({ data: rows });
     await recalcAllDrinkCosts();
-    return ids;
+    return rows.map(r => r.id as string);
   });
   const user = actor(req);
   dbAppendLog(user.email, user.name, 'drink-import-commit', `imported ${created.length} drinks from a PDF`);
@@ -931,17 +948,19 @@ router.patch('/:id/active', asyncHandler(async (req: Request, res: Response) => 
 }));
 
 // Set a drink's home storage area at a location (inline from the stocktake list).
+// Deliberately open to all signed-in users, like stock counts (/stock/bulk):
+// assigning where a drink physically lives is stock organization done by the
+// people counting, not a money/commercial field (review decision — see DECISIONS.md).
 router.patch('/:id/area', asyncHandler(async (req: Request, res: Response) => {
-  assertManager(req);
   const id = req.params.id as string;
   const idErr = checkId(id, 'id');
   if (idErr) throw new AppError(400, idErr);
   const { location, area } = req.body as { location?: string; area?: string };
   if (!location || !VALID_LOCATIONS.includes(location)) throw new AppError(400, 'Valid location required.');
+  if (area != null && (typeof area !== 'string' || area.length > 100)) throw new AppError(400, 'invalid area');
   const result = await withWriteLock(async () => {
     const existing = await prisma.drink.findUnique({ where: { id } });
     if (!existing) return null;
-    if (existing.mode === 'catalogue' && !isManagerEmail(req.user?.email)) throw new AppError(403, 'Manager access required.');
     const locations = (existing.locations as Record<string, DrinkLocMeta> | null) || {};
     const cur = locations[location] || { par: null, active: true };
     locations[location] = { ...cur, par: cur.par ?? null, active: cur.active !== false, area: area || undefined };

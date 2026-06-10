@@ -37,7 +37,7 @@ import { drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrin
 import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc, drinksStkOvStatus, drinkStkSaveOne, drinkStkSetArea } from './drinks-stocktake';
 import { drinksOrderNew, drinksOrderPickSupplier, drinksOrderQty, drinksOrderCreate, drinksOrderMarkOrdered, drinksOrderDelete, drinksOrderCancel, drinksOrderOpenReceive, drinksOrderConfirmReceive, drinksPlaceOrder, drinksSfRecount } from './drinks-order';
 import { openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog } from './drinks-production';
-import { drinksBarSearch, drinksBarCategory, openServiceCard, drinkBarAddPhoto, drinkBarRemovePhoto } from './drinks-service';
+import { drinksBarSearch, drinksBarCategory, drinkBarAddPhoto, drinkBarRemovePhoto } from './drinks-service';
 import { openAssortmentEdit, assortmentEditToggle, assortmentEditSearch, saveAssortmentEdit, openMenuForm, menuFormAssortmentChange, menuPickToggle, menuPickSearch, menuPickAll, saveMenuForm, printDrinkMenu, deleteDrinkMenu } from './drinks-menu';
 
 // ═══════════════════════════════════════════════════════════════════
@@ -155,7 +155,7 @@ Object.assign(window, {
   openDrinkProduction, drinkProductionPreview, submitDrinkProduction, openDrinkWriteOff, submitDrinkWriteOff, discardProductionLog,
 
   // drinks — bar / service cards
-  drinksBarSearch, drinksBarCategory, openServiceCard, drinkBarAddPhoto, drinkBarRemovePhoto,
+  drinksBarSearch, drinksBarCategory, drinkBarAddPhoto, drinkBarRemovePhoto,
 
   // drinks — assortments & menus
   openAssortmentEdit, assortmentEditToggle, assortmentEditSearch, saveAssortmentEdit, openMenuForm, menuFormAssortmentChange, menuPickToggle, menuPickSearch, menuPickAll, saveMenuForm, printDrinkMenu, deleteDrinkMenu,

@@ -35,6 +35,16 @@ describe('normalizeLocations', () => {
     expect(l.centraal.par).toBeNull();
     expect(l.centraal.active).toBe(false);
   });
+  // Regression: the active toggle once dropped `area` when rebuilding the
+  // per-location object — area must survive a round trip through normalize.
+  it('carries the home storage area through, treating empty/missing as unset', () => {
+    const l = normalizeLocations({
+      west: { par: 4, active: true, area: 'Keg Storage' },
+      centraal: { par: 2, active: true, area: '' },
+    } as never);
+    expect(l.west.area).toBe('Keg Storage');
+    expect(l.centraal.area).toBeUndefined();
+  });
 });
 
 describe('effectiveBtw', () => {

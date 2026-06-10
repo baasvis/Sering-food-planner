@@ -17,7 +17,10 @@
 server.ts              — Express entry point (starts listening, schedules cron jobs)
 app.ts                 — Express app, mounts routers, global error handler, gzip + static serving
 shared/
-  types.ts             — Shared interfaces (Batch, Service, Ingredient, etc.) used by both backend & frontend
+  types.ts             — Shared interfaces (Batch, Service, Ingredient, Drink, etc.) used by both backend & frontend
+  drink-cost.ts        — Drinks cost engine (pure, dual-use): recursive building-block rollup, labour amortisation, BTW, markup targets, suggested price
+  drink-order.ts       — Drinks ordering helpers (pure): suggested qty (par−stock), deposits, received-stock deltas, demand nudge
+  drink-production.ts  — Drinks production helpers (pure): produced units (bottles/litres), consumed building blocks, expiry
 types/
   express.d.ts         — Express Request augmentation (req.user)
   globals.d.ts         — DOM type augmentations
@@ -35,6 +38,8 @@ lib/
   telemetry-coverage.ts — Discovers trackEvent() features in public/js, mines telemetry sessions for user journeys, surfaces uncovered features for the weekly e2e coverage agent
   notion-sync.ts       — One-way sync of the competency chunk library from Notion → Postgres (notionConfigured, syncChunksFromNotion); upsert-only, never deletes
   notion-markdown.ts   — Pure converter: Notion chunk page block tree → canonical `## `-delimited teaching-guide markdown (unit-testable, no I/O)
+  drinks.ts            — Drinks normalizers (toDrink, locations/formats/info), stock-pool aggregation, config merge, validation, buildDrinkData, recalcAllDrinkCosts
+  drinks-import.ts     — AI menu/price-list import: sends an uploaded PDF to Claude (native document block) → structured product+price list
 routes/
   auth.ts              — Login, logout, session, requireAuth + requireDirector middleware,
                          POST /auth/request-access (self-service account request),
@@ -69,6 +74,12 @@ routes/
                          DELETE /events/:id, POST /sync-chunks (admin actions staff-lead gated)
   supplies.ts          — Toppings/bread/ferment supplies CRUD: GET/POST/PATCH/DELETE /api/supplies,
                          plus /:id/prep and /:id/stock stock moves (standard ratio + one-off drip-feed)
+  drinks.ts            — Drinks module, all under /api/drinks: drink CRUD (+ /:id/photo, /:id/active,
+                         /:id/area), /config, /suppliers, /stock + /stock/bulk (per-area counts; consumes
+                         pseudo-areas; returns fresh pools), /orders lifecycle (draft→ordered→received),
+                         /production + /write-offs, /assortments, /menus (+ /:id/print A4/A5 HTML),
+                         /import/scan + /import/commit (AI PDF import). Money/catalogue writes
+                         manager-gated; counts, areas, production, write-offs open to all. See DRINKS_DOMAIN.md
 scripts/
   fix-raw-amounts.ts          — One-off recipe ingredient backfill
   import-standard-inventory.js — CSV → DB importer
@@ -85,7 +96,8 @@ e2e/                          — Playwright end-to-end test suite (run via `npm
   batch-create.spec.ts, batch-cooked.spec.ts, batch-delete.spec.ts, batch-assign-modal.spec.ts — Batch lifecycle
   guests.spec.ts, orders.spec.ts, recipes.spec.ts — Per-screen flows
   predictions-apply.spec.ts, stocktake-start.spec.ts, feedback-submit.spec.ts — Feature flows
-  helpers.ts                  — Shared test setup (dev login, location chooser dismiss)
+  drinks-catalogue.spec.ts, drinks-stocktake.spec.ts, drinks-order.spec.ts — Drinks flows (add drink, overview auto-save, auto-shortfall order)
+  helpers.ts                  — Shared test setup (dev login, location chooser dismiss, deleteDrinksByNamePrefix)
   coverage-manifest.json      — Maps trackEvent() feature names to which spec covers them; consumed by lib/telemetry-coverage.ts
 public/
   index.html           — Shell HTML + login screen (single module entry point)
@@ -100,6 +112,7 @@ public/
     finance.css        — Finance dashboard styles
     feedback.css       — Feedback FAB and form
     team.css           — Login "request access" affordance, dashboard "waiting for access" banner, Team screen
+    drinks.css         — All drinks-screen styles (catalogue table, bar cards, stocktake areas, orders, menus, per-category accents)
     tutorial.css       — Tutorial overlay and tooltips
     mobile.css         — All mobile/responsive overrides, bottom nav
   js/
@@ -133,11 +146,17 @@ public/
     competencies.ts    — Training screen: people × chunks teaching grid, log-event modal, public ledger
     chunk-guide.ts     — Pure helper: split a chunk's teaching-guide markdown into `## ` sections (shared by competencies.ts)
     supplies.ts        — "Toppings & bread" screen: standard/one-off supplies editor, per-guest demand + price
+    drinks.ts          — Drinks screen shell: sub-tab bar, Catalogue tab (needed/stock/cost-%/active, location toggle),
+                         type-specific drink form, suppliers tab + form, AI PDF import UI
+    drinks-constants.ts — Drinks enums: categories/subtypes, glass types, serving temps, storage areas per location
+    drinks-recipe.ts, drinks-stocktake.ts, drinks-order.ts, drinks-production.ts, drinks-service.ts,
+    drinks-menu.ts     — Per-tab drinks modules: recipes + live costing, by-area stock overview (inline auto-save),
+                         auto-shortfall ordering, production/write-offs, bar reference cards, assortments + menu designer
     ritual.ts          — Pure daily-ritual model: per-location step list with derived done(ctx) predicates + clock/phase logic
     today-panel.ts     — Always-on dashboard "Today" panel: renders ritual.ts as a phase-grouped, deep-linked checklist
     telemetry.ts       — Frontend telemetry collection (errors, screen views, feature usage)
     tutorial.ts        — Guided tutorial system
-test/                  — 31 *.test.ts files (run `ls test/*.test.ts`). Grouped below by area; keep new tests here.
+test/                  — 35 *.test.ts files (run `ls test/*.test.ts`). Grouped below by area; keep new tests here.
   api.test.ts          — API integration tests (Jest + @swc/jest)
   batch-recipe-stock-deduct.test.ts — Batch recipe editor stock-deduction logic
   batch-construction.test.ts — Guard: UI-built Batch literals match the canonical shape
@@ -169,6 +188,10 @@ test/                  — 31 *.test.ts files (run `ls test/*.test.ts`). Grouped
   stock-location.test.ts — Frontend getDbStockForLoc / hasDbStockEntryForLoc unit tests
   redact-secrets.test.ts — lib/config redactSecrets / safeErrMsg unit tests
   xlsx-api-smoke.test.ts — Supplier XLSX upload smoke test
+  drinks-helpers.test.ts — Drinks normalizers (formats/locations incl. area passthrough), BTW, stock map, config, validation
+  drink-cost.test.ts   — Drinks cost engine (recursive rollup, labour, markup, suggested price)
+  drink-order.test.ts  — Drinks ordering helpers (suggested qty, deposits, received deltas, nudge)
+  drink-production.test.ts — Drinks production helpers (produced units, consumed blocks, write-off delta)
   setup-env.ts         — Test DB guard: refuses prod hosts, swaps in DATABASE_URL_TEST
   setup-dom-stubs.ts   — DOM/localStorage stubs for frontend-logic tests
 .github/workflows/
@@ -196,7 +219,7 @@ npm run dev            # Vite on :5173 (frontend HMR) + tsx on :3000 (backend)
 npm run build          # Vite build + tsc backend → dist/
 npm run preview        # Build + serve on :3000 (single port, for Claude preview)
 npm start              # node dist/server/server.js (production)
-npm test               # Jest with @swc/jest. Unit + API tests (31 files in test/).
+npm test               # Jest with @swc/jest. Unit + API tests (35 files in test/).
                        # Requires DATABASE_URL_TEST pointing at a scratch DB —
                        # test/setup-env.ts refuses to run against production.
                        # See "Testing" section below.
@@ -218,6 +241,7 @@ Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 `AUTH_MODE=production` (set on the Railway prod env, not in dev/staging) makes server.ts refuse to boot if `GOOGLE_CLIENT_ID` or `ALLOWED_EMAILS` is empty, and disables the dev-mode bypass in `routes/auth.ts`. Decoupled from `NODE_ENV` so `npm run preview` (which sets `NODE_ENV=production`) keeps using dev login.
 Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`). `ANTHROPIC_API_KEY` also powers the director-only AI recipe assistant — `DIRECTOR_EMAILS` (comma-separated; defaults to Daan's email) controls who can use it.
+Optional (Drinks): `MANAGER_EMAILS` (comma-separated) is the drinks **manager** tier — `isManagerEmail` = directors ∪ `MANAGER_EMAILS` (`routes/auth.ts`). Managers own catalogue CRUD, prices/costs, supplier data, ordering, assortments and menu publishing; stock counts, storage-area assignment, production, write-offs and recipe drafts are open to any signed-in user. The AI PDF import (`/api/drinks/import/*`) also needs `ANTHROPIC_API_KEY` (503 without it).
 Optional: `MAINTENANCE_MODE=1` puts the app in read-only mode (writes return 503, reads/SSE keep working) for deploy windows — see `prisma/migrations/DEPLOY.md`.
 Optional: `COVERAGE_API_KEY` for the weekly e2e coverage agent — required for `GET /api/coverage/snapshot` (returns 503 if unset). The endpoint is mounted before `requireAuth` so a remote agent can fetch with a `Bearer <key>` header instead of a session cookie.
 Optional (Competencies): `STAFF_LEAD_EMAILS` (comma-separated) gates the Competencies admin actions — chunk sync, teaching-event deletion, person rename/(de)activate. This is the staff-lead role, distinct from and independent of `DIRECTOR_EMAILS`; both default to no one having the role until set. The Notion chunk-library sync needs `NOTION_TOKEN` + `NOTION_CHUNKS_DATA_SOURCE_ID` (both required — `notionConfigured()` is false and the sync silently no-ops if either is missing); `COMPETENCY_SYNC_CRON` (default `0 5 * * *`) schedules the daily pull.
@@ -225,6 +249,8 @@ Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Ledger 1 (Sering West, d
 Note on the `_2` env vars: only `scripts/tebi-sync-worker.js` reads them. The app-level `tebiConfigured` check (`lib/tebi-sync.ts`) and `runTebiSync` refusal logic look at the primary `TEBI_EMAIL`/`TEBI_PASSWORD` only. If `TEBI_LEDGER_ID_2` is set but the `_2` credentials are not, the worker silently falls back to primary creds — only valid if one Tebi account spans both ledgers (no longer the case as of 2026-04-26). Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` to bypass discovery if needed.
 
 **For anything Tebi-related — auth, endpoint catalogue, the post-2026-05-07 product_top + filter pipeline, GuestHistory auto-update, common failure modes, diagnostic scripts — see [`TEBI.md`](TEBI.md).** That doc is the single source of truth for the integration; update it when you fix or extend something.
+
+**For the drinks module — domain model (catalogue vs recipe drinks, building blocks, per-area stock with pseudo-area reconciliation, costing/BTW/markup rules, permission tiers) — see [`DRINKS_DOMAIN.md`](DRINKS_DOMAIN.md)**, with the build/decision log in `DECISIONS.md`.
 
 ## Preview (for Claude Code verification)
 Use `preview_start` with `name: "preview"` (not `"dev"`). The `dev` script runs two

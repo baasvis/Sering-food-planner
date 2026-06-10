@@ -376,33 +376,6 @@
 .bar-card-photo { width: 100%; height: 150px; object-fit: cover; border-radius: 8px; display: block; }
 .bar-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; }
 .bar-card-photo-actions { display: inline-flex; gap: 4px; }
-.bar-card-expand { align-self: flex-start; }
-
-.svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.svc-tile {
-  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
-  padding: 14px; border-radius: 12px; border: 1px solid var(--border, #ddd);
-  background: var(--card, #fff); color: var(--text, #222); cursor: pointer; text-align: left; min-height: 78px;
-}
-.svc-tile:hover { border-color: var(--loc-accent, #7c3aed); }
-.svc-tile-name { font-weight: 700; font-size: 15px; line-height: 1.2; }
-.svc-tile-meta { font-size: 11px; color: var(--text2, #888); }
-.svc-tile-price { margin-top: auto; font-weight: 700; color: var(--loc-accent, #7c3aed); }
-
-/* Full service card (in modal) — large type, dark-mode friendly via vars. */
-.modal:has(.svc-card) { max-width: 520px; width: min(520px, 94vw); }
-.svc-card-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.svc-card-top h2 { margin: 0; font-size: 26px; }
-.svc-card-price { font-size: 22px; font-weight: 800; color: var(--loc-accent, #7c3aed); }
-.svc-card-line { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; font-size: 15px; color: var(--text2, #666); }
-.svc-card-line strong { color: var(--text, #222); }
-.svc-card-build { margin: 14px 0; }
-.svc-card-build h3, .svc-card-sub h3 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2, #888); }
-.svc-card-build p { margin: 0; font-size: 18px; line-height: 1.4; }
-.svc-card-sub { margin: 10px 0; }
-.svc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.svc-chip { background: var(--chip-bg, #f0eee8); border-radius: 999px; padding: 3px 12px; font-size: 13px; }
-.svc-card-close { width: 100%; margin-top: 16px; padding: 12px; font-size: 16px; }
 
 /* ── Assortment editor ── */
 .am-list { max-height: 50vh; overflow-y: auto; border: 1px solid var(--border, #e0ded7); border-radius: 8px; padding: 8px 12px; }

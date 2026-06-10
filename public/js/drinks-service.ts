@@ -9,9 +9,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { S } from './state';
-import { showModal, esc } from './modal';
+import { esc } from './modal';
 import { drinkCategoryLabel } from './drinks-constants';
 import { apiPost, toast, toastError, loadDrinks } from './utils';
+import { trackEvent } from './telemetry';
 import type { Drink } from '@shared/types';
 
 let _barSearch = '';
@@ -150,6 +151,7 @@ export function drinkBarAddPhoto(id: string): void {
     try {
       const r = await fetch(`/api/drinks/${id}/photo`, { method: 'POST', body: fd, credentials: 'include' });
       if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || 'upload failed');
+      trackEvent('drinks_bar_photo');
       toast('Photo added');
       await loadDrinks();
       renderDrinksBarTab();
@@ -171,26 +173,6 @@ export async function drinkBarRemovePhoto(id: string): Promise<void> {
   }
 }
 
-export function openServiceCard(drinkId: string): void {
-  const d = (S.drinks || []).find(x => x.id === drinkId);
-  if (!d) return;
-  const price = servePrice(d);
-  const build = d.serviceInstructions || (d.prepSteps || []).join(' · ');
-  const chips = (arr: string[]) => arr.map(x => `<span class="svc-chip">${esc(x)}</span>`).join('');
-  showModal(`<div class="svc-card" data-testid="svc-card">
-    <div class="svc-card-top">
-      <h2>${esc(d.name)}</h2>
-      ${price != null ? `<div class="svc-card-price">€${price.toFixed(2)}</div>` : ''}
-    </div>
-    <div class="svc-card-line">
-      ${d.glass ? `<span><strong>Glass</strong> ${esc(d.glass)}</span>` : ''}
-      ${d.serveVolumeMl ? `<span><strong>Serve</strong> ${d.serveVolumeMl} ml</span>` : ''}
-      ${d.servingTemp ? `<span><strong>Temp</strong> ${esc(d.servingTemp)}</span>` : ''}
-      ${d.abv ? `<span><strong>ABV</strong> ${d.abv}%</span>` : ''}
-    </div>
-    ${build ? `<div class="svc-card-build"><h3>Build</h3><p>${esc(build)}</p></div>` : ''}
-    ${(d.garnish || []).length ? `<div class="svc-card-sub"><h3>Garnish</h3><div class="svc-chips">${chips(d.garnish)}</div></div>` : ''}
-    ${(d.characteristics || []).length ? `<div class="svc-card-sub"><h3>Profile</h3><div class="svc-chips">${chips(d.characteristics)}</div></div>` : ''}
-    <button class="btn svc-card-close" type="button" onclick="closeModal()">Done</button>
-  </div>`);
-}
+// (The old full-screen "Build card" modal — openServiceCard — was removed with
+// its button in feedback round 2: all per-type info now renders inline on the
+// bar cards, so the modal was dead code.)

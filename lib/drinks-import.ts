@@ -72,11 +72,19 @@ export async function scanMenuPdf(pdfBase64: string): Promise<ImportItem[]> {
 
   const resp = await client.messages.create({
     model: MODEL,
-    max_tokens: 8192,
+    // ~16K is the recommended non-streaming ceiling (SDK HTTP timeouts above
+    // that); comfortably fits a few hundred extracted products.
+    max_tokens: 16000,
     tools: [tool],
     tool_choice: { type: 'tool', name: 'record_products' },
     messages: [message],
   });
+
+  // A truncated tool call (stop_reason max_tokens) would otherwise surface as
+  // a misleading "no products found" — fail loudly with an actionable message.
+  if (resp.stop_reason === 'max_tokens') {
+    throw new Error('The product list is too long to extract in one pass — split the PDF and import in parts.');
+  }
 
   const block = resp.content.find((c): c is Anthropic.ToolUseBlock => c.type === 'tool_use');
   if (!block) return [];

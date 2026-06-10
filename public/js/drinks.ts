@@ -9,6 +9,7 @@
 
 import { S } from './state';
 import { newId, apiPost, toast, toastError, loadDrinks, loadDrinkSuppliers } from './utils';
+import { trackEvent } from './telemetry';
 import { showModal, closeModal, esc } from './modal';
 import { pushUndo } from './undo';
 import { registerRenderer } from './navigate';
@@ -258,13 +259,17 @@ export async function drinkToggleActive(id: string): Promise<void> {
   if (!d) return;
   const cur = activeAtLoc(d, loc);
   const next = !cur;
-  const par = d.locations?.[loc]?.par ?? null;
-  d.locations = { ...(d.locations || {}), [loc]: { par, active: next } };
+  const prevLocations = d.locations;
+  // Optimistic flip that keeps every other per-location field (par, area, …).
+  d.locations = { ...(d.locations || {}), [loc]: { ...(d.locations?.[loc] || { par: null, active: true }), active: next } };
   updateCatalogueResults();
   try {
-    await apiPost(`/api/drinks/${id}/active`, { location: loc, active: next }, 'PATCH');
+    // Adopt the server's canonical drink rather than hand-merging — no field drift.
+    const fresh = await apiPost(`/api/drinks/${id}/active`, { location: loc, active: next }, 'PATCH') as Drink;
+    S.drinks = (S.drinks || []).map(x => x.id === id ? fresh : x);
+    updateCatalogueResults();
   } catch (e: unknown) {
-    d.locations = { ...(d.locations || {}), [loc]: { par, active: cur } };
+    d.locations = prevLocations;
     updateCatalogueResults();
     toastError('Could not update: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
@@ -786,6 +791,7 @@ export async function saveDrinkForm(): Promise<void> {
   try {
     if (_form.isNew) {
       await apiPost('/api/drinks', payload);
+      trackEvent('drinks_catalogue_add', category);
       toast('Drink added');
     } else {
       await apiPost(`/api/drinks/${_form.id}`, payload, 'PATCH');
@@ -903,6 +909,7 @@ export async function drinkImportCommit(): Promise<void> {
   if (items.length === 0) { toastError('Nothing selected.'); return; }
   try {
     const res = await apiPost('/api/drinks/import/commit', { items }) as { created: number };
+    trackEvent('drinks_import_commit', String(res.created));
     toast(`${res.created} drink${res.created === 1 ? '' : 's'} added`);
     closeModal();
     await loadDrinks();
