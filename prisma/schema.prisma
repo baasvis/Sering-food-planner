@@ -509,6 +509,227 @@ model TebiInvoice {
   @@map("tebi_invoice")
 }
 
+// ── Sering Hub L1/L2 tables (Hub plan §2.1) ──
+//
+// Written and read by the Hub ONLY (sering-hub repo). They live in the
+// planner-owned schema per the §1.10 schema-authority discipline: the planner
+// runs `prisma migrate deploy`; the Hub copies this schema and runs
+// `prisma generate` only. Planner code must not read or write these tables.
+//
+// L1 = rawest format the upstream exposes; L2 = materialised single-source
+// interpretation, recomputed incrementally by the Hub's
+// lib/layers/l2/recompute.ts after each Tebi sync.
+//
+// `org` is the Hub/planner location key: 'west' | 'centraal' | 'testtafel'.
+// Currency is Decimal(10,2); btwRate is Decimal(5,4) (e.g. 0.0900).
+
+// L1: raw per-day per-profit-center product_top rows, exactly as Tebi returns
+// them — BEFORE the TestTafel↔Centraal misattribution reassignment that
+// ProductRevenue rows carry. No net column: product_top only exposes gross;
+// net is an L2 interpretation via per-Type BTW rates.
+model TebiProductDaily {
+  id               Int      @id @default(autoincrement())
+  ledger           String
+  profitCenterId   String   @map("profit_center_id")
+  profitCenterName String   @map("profit_center_name") // PC label as discovered: west|centraal|testtafel
+  date             String // YYYY-MM-DD business day
+  productName      String   @map("product_name")
+  quantity         Float    @default(0)
+  grossRevenue     Decimal  @map("gross_revenue") @db.Decimal(10, 2)
+  syncedAt         DateTime @default(now()) @map("synced_at")
+
+  @@unique([ledger, profitCenterId, date, productName])
+  @@index([date])
+  @@index([profitCenterName, date])
+  @@map("tebi_product_daily")
+}
+
+// L2: 5-minute sales buckets from TebiInvoice.createdAt (Europe/Amsterdam).
+// `org` attribution for ledger 724466 evenings is heuristic — see the Hub's
+// sources/tebi/org-attribution.ts.
+model Sales5MinBucket {
+  id         Int      @id @default(autoincrement())
+  org        String
+  date       String // YYYY-MM-DD business day
+  hourMinute Int      @map("hour_minute") // minutes since local midnight, 5-min steps
+  count      Int      @default(0)
+  gross      Decimal  @db.Decimal(10, 2)
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, date, hourMinute])
+  @@index([date])
+  @@map("sales_5min_bucket")
+}
+
+// L2: hourly sales from TebiInvoice (same org attribution as Sales5MinBucket).
+model SalesHour {
+  id         Int      @id @default(autoincrement())
+  org        String
+  date       String
+  hour       Int // 0-23, Europe/Amsterdam
+  sales      Int      @default(0) // invoice count
+  gross      Decimal  @db.Decimal(10, 2)
+  net        Decimal  @db.Decimal(10, 2)
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, date, hour])
+  @@index([date])
+  @@map("sales_hour")
+}
+
+// L2: per-day per-org totals. gross/net come from Tebi's per-PC revenue
+// charts (exact, as-rung-up — currently mirrored in DailyRevenue per-loc
+// rows); sales/covers come from org-attributed TebiInvoice rows. The two
+// sources are deliberately mixed per-field — each field uses its most
+// reliable upstream.
+model SalesDay {
+  id         Int      @id @default(autoincrement())
+  org        String
+  date       String
+  gross      Decimal  @db.Decimal(10, 2)
+  net        Decimal  @db.Decimal(10, 2)
+  sales      Int      @default(0)
+  covers     Int      @default(0)
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, date])
+  @@index([date])
+  @@map("sales_day")
+}
+
+// L2: per-day per-org per-product rows from TebiProductDaily, with the
+// misattribution reassignment applied and `type` derived from the Hub's
+// productNameToType(). type=null means uncategorized (surfaced in the
+// dashboard). net = gross / (1 + btwRate-of-type).
+model ProductDay {
+  id          Int      @id @default(autoincrement())
+  org         String
+  date        String
+  productName String   @map("product_name")
+  type        String?
+  qty         Float    @default(0)
+  gross       Decimal  @db.Decimal(10, 2)
+  net         Decimal  @db.Decimal(10, 2)
+  computedAt  DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, date, productName])
+  @@index([date])
+  @@index([org, type, date])
+  @@map("product_day")
+}
+
+// L2: per-day per-Type aggregates from ProductDay. regtype mirrors the xlsx
+// Revenue-input convention: REGULAR (POS) vs INVOICES (catering, Phase 3).
+model TypeDay {
+  id         Int      @id @default(autoincrement())
+  org        String
+  date       String
+  type       String
+  regtype    String   @default("REGULAR")
+  count      Float    @default(0) // sum of product quantities
+  gross      Decimal  @db.Decimal(10, 2)
+  net        Decimal  @db.Decimal(10, 2)
+  btwRate    Decimal  @map("btw_rate") @db.Decimal(5, 4)
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, date, type, regtype])
+  @@index([date])
+  @@map("type_day")
+}
+
+// L2: ISO-week per-Type revenue — the Hub's equivalent of the xlsx "Revenue
+// input" sheet. regtype is part of the unique key so REGULAR (Tebi) and
+// INVOICES (catering, Phase 3) rows coexist; the Hub's recompute touches
+// only its own regtype scope (scope-by-regtype invariant, plan §2.3).
+// count semantics: REGULAR = sum of product quantities; INVOICES = guest
+// count from the catering line item (null if not specified).
+model WeeklyRevenue {
+  id         Int      @id @default(autoincrement())
+  org        String
+  year       Int
+  week       Int // ISO week 1-53
+  type       String
+  regtype    String   @default("REGULAR")
+  count      Float?
+  gross      Decimal  @db.Decimal(10, 2)
+  btwRate    Decimal  @map("btw_rate") @db.Decimal(5, 4)
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, year, week, type, regtype])
+  @@index([year, week])
+  @@map("weekly_revenue")
+}
+
+// L2: ISO-week guest counts from TebiProductDaily via the meal allowlist.
+// meal ∈ 'lunch' | 'dinner' | 'staff' — EXCLUSIVE counts (staff is NOT
+// folded into lunch/dinner here, unlike GuestHistory which folds a 30/70
+// staff split into its lunch/dinner rows).
+model WeeklyGuests {
+  id         Int      @id @default(autoincrement())
+  org        String
+  year       Int
+  week       Int
+  meal       String
+  count      Int      @default(0)
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, year, week, meal])
+  @@index([year, week])
+  @@map("weekly_guests")
+}
+
+// L2 (populated in Hub Phase 3 from TimeclockEntry; schema lands now so the
+// planner only deploys one Hub migration): ISO-week hours per role.
+model WeeklyHours {
+  id         Int      @id @default(autoincrement())
+  org        String
+  year       Int
+  week       Int
+  role       String
+  hours      Decimal  @db.Decimal(10, 2)
+  hourlyRate Decimal  @map("hourly_rate") @db.Decimal(10, 2)
+  total      Decimal  @db.Decimal(10, 2)
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, year, week, role])
+  @@index([year, week])
+  @@map("weekly_hours")
+}
+
+// L2 (populated in Hub Phase 3 from FoodcostInvoice): ISO-week food costs
+// per supplier source (Hanos / Lindenhoff / groenhartig / ...).
+model WeeklyFoodcost {
+  id         Int      @id @default(autoincrement())
+  org        String
+  year       Int
+  week       Int
+  source     String
+  gross      Decimal  @db.Decimal(10, 2)
+  btwRate    Decimal  @map("btw_rate") @db.Decimal(5, 4)
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, year, week, source])
+  @@index([year, week])
+  @@map("weekly_foodcost")
+}
+
+// L2 (populated in Hub Phase 3/4 from ManualLineItem + expanded
+// RecurringLineItem + ComputedCell): ISO-week cost line items.
+model WeeklyLineItem {
+  id         Int      @id @default(autoincrement())
+  org        String
+  year       Int
+  week       Int
+  label      String
+  amount     Decimal  @db.Decimal(10, 2)
+  btwRate    Decimal  @map("btw_rate") @db.Decimal(5, 4)
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@unique([org, year, week, label])
+  @@index([year, week])
+  @@map("weekly_line_item")
+}
+
 // ── Competencies module ──
 // Peer-teaching tracker. A TeachingEvent is the atomic record: a teacher
 // taught a learner one Chunk on a date. Competence is derived from this
