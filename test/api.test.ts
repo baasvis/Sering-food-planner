@@ -1026,6 +1026,38 @@ describe('Guest History Roundtrip', () => {
       .send('null');
     expect(res.status).toBe(400);
   });
+
+  // Hub plan §1.14 regression: the Sering Hub writes 'testtafel' GuestHistory
+  // rows to this shared table. A west/centraal CSV upload must NOT destroy
+  // them — the upload path's deleteMany() is scoped to west/centraal.
+  it('POST /api/guest-history preserves testtafel rows', async () => {
+    // Seed a Hub-style testtafel row directly. The 2099- date prefix is
+    // swept by the afterAll cleanup.
+    await prisma.guestHistory.upsert({
+      where: { location_meal_date: { location: 'testtafel', meal: 'dinner', date: '2099-03-03' } },
+      create: { location: 'testtafel', meal: 'dinner', date: '2099-03-03', count: 25 },
+      update: { count: 25 },
+    });
+
+    // Upload a west/centraal CSV — the only locations this path ever carries.
+    const postRes = await request(app)
+      .post('/api/guest-history')
+      .send({ west: { lunch: { '2099-03-01': 12 } }, centraal: { dinner: { '2099-03-02': 7 } } });
+    expect(postRes.status).toBe(200);
+    expect(postRes.body.ok).toBe(true);
+
+    // The testtafel row must survive the upload's deleteMany().
+    const survivor = await prisma.guestHistory.findUnique({
+      where: { location_meal_date: { location: 'testtafel', meal: 'dinner', date: '2099-03-03' } },
+    });
+    expect(survivor).not.toBeNull();
+    expect(survivor?.count).toBe(25);
+
+    // …and the uploaded west/centraal data still applied.
+    const getRes = await request(app).get('/api/guest-history');
+    expect(getRes.body.west.lunch['2099-03-01']).toBe(12);
+    expect(getRes.body.centraal.dinner['2099-03-02']).toBe(7);
+  });
 });
 
 // ── Guests Next Weeks Roundtrip ──

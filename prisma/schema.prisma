@@ -462,6 +462,53 @@ model AiInsight {
   @@map("ai_insight")
 }
 
+// Tebi L1 capture (plan §1.4). One row per Tebi invoice header. Hub writes;
+// planner doesn't read it today but the table lives in the planner-owned
+// schema per the §1.10 schema-authority discipline.
+//
+// `profitCenterId` + `profitCenterName` are nullable in Phase 1 because the
+// Tebi invoice list endpoint silently ignores the per-PC `filter` param —
+// invoices come back at ledger granularity, not per-PC. Per-PC attribution
+// happens in Phase 2 via `Sales5MinBucket` (cross-reference invoice
+// timestamps × per-PC product_top data). Don't backfill these by ledger
+// heuristic in Phase 1 — Account 1 has held different PCs over time and a
+// constant per-account label would mis-attribute historical rows when we
+// backfill.
+//
+// **Phase 2 maintainer warning:** the Phase 1 Hub worker sets
+// `profitCenterId` and `profitCenterName` to `null` in BOTH the upsert
+// `create` AND `update` payloads (sources/tebi/worker.ts:upsertTebiInvoices).
+// Harmless today — nothing populates these at L1. But if Phase 2 ever
+// enriches these columns at L1 (vs. L2-only enrichment in Sales5MinBucket),
+// the worker's `update` path will silently clobber any backfilled value on
+// the next re-sync. Fix at that point: omit the PC fields from the update
+// payload, or set them only on create.
+//
+// Indexes pre-created so the Phase 2 enrichment doesn't pay the
+// add-index-to-populated-table cost.
+model TebiInvoice {
+  id               Int       @id @default(autoincrement())
+  ledger           String
+  profitCenterId   String?   @map("profit_center_id")
+  profitCenterName String?   @map("profit_center_name")
+  invoiceKey       String    @map("invoice_key")
+  sequenceNumber   String?   @map("sequence_number")
+  name             String?
+  businessDay      String    @map("business_day")
+  createdAt        DateTime  @map("created_at")
+  closedTime       DateTime? @map("closed_time")
+  grossRevenue     Decimal   @map("gross_revenue") @db.Decimal(10, 2)
+  netRevenue       Decimal   @map("net_revenue") @db.Decimal(10, 2)
+  guest            Int?
+  receiptUrl       String?   @map("receipt_url")
+  syncedAt         DateTime  @default(now()) @map("synced_at")
+
+  @@unique([ledger, invoiceKey])
+  @@index([businessDay])
+  @@index([profitCenterName, businessDay])
+  @@map("tebi_invoice")
+}
+
 // ── Competencies module ──
 // Peer-teaching tracker. A TeachingEvent is the atomic record: a teacher
 // taught a learner one Chunk on a date. Competence is derived from this
