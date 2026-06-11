@@ -1139,6 +1139,17 @@ export function replaceWithV2Recipe(recipeId: string) {
     cost: 0,
   }));
 
+  // Carry forward the placeholder's planned cook date so the cook doesn't
+  // have to re-enter it — but only when it's today or later. A stale past
+  // date on a fresh, never-cooked batch is an inconsistent state (audit
+  // CORR-8): it groups in the wrong cook day and is never auto-retired.
+  // cookDate is stored as dd/mm/yyyy, so parse before comparing (a raw
+  // string >= against ISO would mis-order it).
+  const oldCookD = old.cookDate ? strToDate(old.cookDate) : null;
+  const carriedCookDate = (oldCookD && dateToIso(oldCookD) >= dateToIso(getToday()))
+    ? old.cookDate
+    : null;
+
   // Unified-batch model: new replacement starts with empty inventory and
   // shipments. The cook decides where it's cooked at "Mark cooked" time.
   // We don't auto-port `old`'s inventory because the new dish is a
@@ -1153,7 +1164,7 @@ export function replaceWithV2Recipe(recipeId: string) {
     allergens: allAllergens,
     extraAllergens: [],
     orderFor: false,
-    cookDate: null,  // fresh, never-cooked replacement — the cook sets the date at Mark-Cooked (audit CORR-8)
+    cookDate: carriedCookDate,
     note: '',
     services: [...(old.services || [])],
     createdAt: new Date().toISOString(),
