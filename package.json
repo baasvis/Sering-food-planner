@@ -1,0 +1,30 @@
+{
+  "name": "note-voice-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Voice & text notes from a Pixel PWA, served to Claude cowork via a remote MCP server",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "pg": "^8.13.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
