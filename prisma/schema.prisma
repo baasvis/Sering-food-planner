@@ -665,7 +665,9 @@ model WeeklyRevenue {
   btwRate    Decimal  @map("btw_rate") @db.Decimal(5, 4)
   computedAt DateTime @default(now()) @map("computed_at")
 
-  @@unique([org, year, week, type, regtype])
+  // btwRate is part of the key: a catering invoice routinely splits one Type
+  // across 9% and 21% rows (food vs alcohol/rental) — xlsx §5.6 convention.
+  @@unique([org, year, week, type, regtype, btwRate])
   @@index([year, week])
   @@map("weekly_revenue")
 }
