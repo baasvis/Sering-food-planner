@@ -903,6 +903,92 @@ model SupplierInvoiceLineItem {
   @@map("supplier_invoice_line_item")
 }
 
+// ── Hub Phase 4: overrides, computed cells, recurring line items (plan §4.4-§4.6) ──
+// Hub-only tables. getCellValue() (Hub lib/layers/overrides.ts) reads them at
+// L2/L3 read time: a matching active Override wins, else a matching
+// ComputedCell's evaluated formula, else the raw L2 value.
+
+// Per-cell correction. Structured columns (not a JSON rowKey) so the key is
+// typed + indexable + queryable ("all overrides for week 18"). Which optional
+// columns apply depends on tableName (e.g. WeeklyHours uses role; WeeklyRevenue
+// uses type+regtype; WeeklyFoodcost uses source). The value is typed —
+// valueNumber is Decimal(15,4), wider than money so percentages fit.
+model Override {
+  id          Int       @id @default(autoincrement())
+  tableName   String    @map("table_name")
+  org         String
+  year        Int
+  week        Int?
+  date        String?
+  role        String?
+  source      String?
+  type        String?
+  regtype     String?
+  label       String?
+  productName String?   @map("product_name")
+  field       String
+  valueNumber Decimal?  @map("value_number") @db.Decimal(15, 4)
+  valueString String?   @map("value_string")
+  valueDate   DateTime? @map("value_date")
+  author      String
+  reason      String    @default("")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  revokedAt   DateTime? @map("revoked_at")
+  revokedBy   String?   @map("revoked_by")
+  revokeReason String?  @map("revoke_reason")
+
+  @@index([tableName, org, year, week])
+  @@map("override")
+}
+
+// Formula-driven cell (plan §4.5). Result lands in tableName/label/field for
+// the [startYear,startWeek..endYear,endWeek] window; the formula is a small
+// expression in the Hub's DSL (weeklyRevenue(org,type), weeklyRevenueTotal(org),
+// weeklyGuests(org,meal), weeklyHours(org,role), weeklyFoodcost(org,source) +
+// arithmetic). Expanded weekly into WeeklyLineItem during the lineitems
+// recompute; honored at read time after a static Override, before raw L2.
+model ComputedCell {
+  id          Int      @id @default(autoincrement())
+  tableName   String   @default("WeeklyLineItem") @map("table_name")
+  org         String
+  label       String
+  field       String   @default("amount")
+  startYear   Int      @map("start_year")
+  startWeek   Int      @map("start_week")
+  endYear     Int?     @map("end_year")
+  endWeek     Int?     @map("end_week")
+  formula     String
+  btwRate     Decimal  @default(0) @map("btw_rate") @db.Decimal(5, 4)
+  description String   @default("")
+  author      String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([org, startYear, startWeek])
+  @@map("computed_cell")
+}
+
+// Recurring cost (plan §4.6). org null = sering-wide → split across orgs by
+// weekly-revenue share at expansion time. Expanded into WeeklyLineItem for
+// every week in [startYear,startWeek..endYear,endWeek]. The TT +720 fixed
+// weekly extra is modeled here, not as an override.
+model RecurringLineItem {
+  id        Int      @id @default(autoincrement())
+  org       String?
+  label     String
+  amount    Decimal  @db.Decimal(10, 2)
+  btwRate   Decimal  @map("btw_rate") @db.Decimal(5, 4)
+  frequency String   @default("weekly") // "weekly" | "monthly"
+  startYear Int      @map("start_year")
+  startWeek Int      @map("start_week")
+  endYear   Int?     @map("end_year")
+  endWeek   Int?     @map("end_week")
+  notes     String   @default("")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([startYear, startWeek])
+  @@map("recurring_line_item")
+}
+
 // L1: Lightspeed historical exports (TestTafel pre-Tebi). Three CSVs per
 // export window: receipts, receipt-items, payments. Re-uploading a window
 // replaces items/payments per receipt (no stable per-line upstream id).
