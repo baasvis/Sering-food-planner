@@ -547,16 +547,22 @@ model TebiProductDaily {
 // L2: 5-minute sales buckets from TebiInvoice.createdAt (Europe/Amsterdam).
 // `org` attribution for ledger 724466 evenings is heuristic — see the Hub's
 // sources/tebi/org-attribution.ts.
+//
+// `source` ('tebi' | 'lightspeed') scopes each upstream's recompute deletes
+// on this and the other daily L2 tables — TestTafel rows come from Lightspeed
+// before the ~2026-05 POS switch and from Tebi after, and the two recomputes
+// must not clobber each other (Hub plan §3.5).
 model Sales5MinBucket {
   id         Int      @id @default(autoincrement())
   org        String
+  source     String   @default("tebi")
   date       String // YYYY-MM-DD business day
   hourMinute Int      @map("hour_minute") // minutes since local midnight, 5-min steps
   count      Int      @default(0)
   gross      Decimal  @db.Decimal(10, 2)
   computedAt DateTime @default(now()) @map("computed_at")
 
-  @@unique([org, date, hourMinute])
+  @@unique([source, org, date, hourMinute])
   @@index([date])
   @@map("sales_5min_bucket")
 }
@@ -565,6 +571,7 @@ model Sales5MinBucket {
 model SalesHour {
   id         Int      @id @default(autoincrement())
   org        String
+  source     String   @default("tebi")
   date       String
   hour       Int // 0-23, Europe/Amsterdam
   sales      Int      @default(0) // invoice count
@@ -572,7 +579,7 @@ model SalesHour {
   net        Decimal  @db.Decimal(10, 2)
   computedAt DateTime @default(now()) @map("computed_at")
 
-  @@unique([org, date, hour])
+  @@unique([source, org, date, hour])
   @@index([date])
   @@map("sales_hour")
 }
@@ -585,6 +592,7 @@ model SalesHour {
 model SalesDay {
   id         Int      @id @default(autoincrement())
   org        String
+  source     String   @default("tebi")
   date       String
   gross      Decimal  @db.Decimal(10, 2)
   net        Decimal  @db.Decimal(10, 2)
@@ -592,7 +600,7 @@ model SalesDay {
   covers     Int      @default(0)
   computedAt DateTime @default(now()) @map("computed_at")
 
-  @@unique([org, date])
+  @@unique([source, org, date])
   @@index([date])
   @@map("sales_day")
 }
@@ -604,6 +612,7 @@ model SalesDay {
 model ProductDay {
   id          Int      @id @default(autoincrement())
   org         String
+  source      String   @default("tebi")
   date        String
   productName String   @map("product_name")
   type        String?
@@ -612,7 +621,7 @@ model ProductDay {
   net         Decimal  @db.Decimal(10, 2)
   computedAt  DateTime @default(now()) @map("computed_at")
 
-  @@unique([org, date, productName])
+  @@unique([source, org, date, productName])
   @@index([date])
   @@index([org, type, date])
   @@map("product_day")
@@ -623,6 +632,7 @@ model ProductDay {
 model TypeDay {
   id         Int      @id @default(autoincrement())
   org        String
+  source     String   @default("tebi")
   date       String
   type       String
   regtype    String   @default("REGULAR")
@@ -632,7 +642,7 @@ model TypeDay {
   btwRate    Decimal  @map("btw_rate") @db.Decimal(5, 4)
   computedAt DateTime @default(now()) @map("computed_at")
 
-  @@unique([org, date, type, regtype])
+  @@unique([source, org, date, type, regtype])
   @@index([date])
   @@map("type_day")
 }
@@ -728,6 +738,167 @@ model WeeklyLineItem {
   @@unique([org, year, week, label])
   @@index([year, week])
   @@map("weekly_line_item")
+}
+
+// ── Hub Phase 3 L1 tables (plan §3.1-§3.5) ──
+
+// L1: one row per Connecteam timeclock shift (timesheet_overview xlsx export,
+// "All Employees" sheet). `jobType` is the raw Connecteam job name — the
+// Hub's role mapping translates it to (org, reader role, rate) at L2 time.
+model TimeclockEntry {
+  id         Int      @id @default(autoincrement())
+  person     String // "First Last"
+  jobType    String   @map("job_type")
+  start      DateTime
+  end        DateTime
+  hours      Float    @default(0) // from the export's "Shift hours" column
+  sourceFile String   @default("") @map("source_file")
+  syncedAt   DateTime @default(now()) @map("synced_at")
+
+  @@unique([person, start, jobType])
+  @@index([start])
+  @@map("timeclock_entry")
+}
+
+// L1: manual hours rows that don't come from the timeclock — the weekly
+// "Daan hours" (38h admin), the interns/special-contracts total, and ad-hoc
+// corrections. `hours`/`hourlyRate` may be null for total-only rows.
+model HoursAdjustment {
+  id         Int      @id @default(autoincrement())
+  org        String
+  year       Int
+  week       Int
+  role       String
+  hours      Decimal? @db.Decimal(10, 2)
+  hourlyRate Decimal? @map("hourly_rate") @db.Decimal(10, 2)
+  total      Decimal  @db.Decimal(10, 2)
+  notes      String   @default("")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([year, week])
+  @@map("hours_adjustment")
+}
+
+// L1: one row per foodcost invoice (manual entry; Hanos / Lindenhoff /
+// Groenhartig / …). PDF parsing is a deferred follow-up.
+model FoodcostInvoice {
+  id           Int      @id @default(autoincrement())
+  org          String
+  year         Int
+  week         Int
+  source       String
+  gross        Decimal  @db.Decimal(10, 2)
+  btwRate      Decimal  @map("btw_rate") @db.Decimal(5, 4)
+  clientNumber String   @default("") @map("client_number")
+  notes        String   @default("")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([year, week])
+  @@map("foodcost_invoice")
+}
+
+// L1: catering invoices + their BTW-split line items. The L2 recompute rolls
+// line items into WeeklyRevenue rows with regtype='INVOICES', week taken
+// from the EVENT date (not the invoice date).
+model CateringInvoice {
+  id            Int      @id @default(autoincrement())
+  factuurNumber String   @default("") @map("factuur_number")
+  eventDate     String   @map("event_date") // YYYY-MM-DD
+  description   String   @default("")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  items CateringInvoiceLineItem[]
+
+  @@index([eventDate])
+  @@map("catering_invoice")
+}
+
+model CateringInvoiceLineItem {
+  id        Int     @id @default(autoincrement())
+  invoiceId Int     @map("invoice_id")
+  org       String
+  type      String // 'SR Catering' | 'SC Catering' | 'TT Catering' | …
+  gross     Decimal @db.Decimal(10, 2)
+  count     Int? // guest count when known
+  btwRate   Decimal @map("btw_rate") @db.Decimal(5, 4)
+  notes     String  @default("")
+
+  invoice CateringInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("catering_invoice_line_item")
+}
+
+// L1: one-off manual cost line items per ISO week. Recurring patterns and
+// formula-driven cells are Phase 4 (RecurringLineItem / ComputedCell).
+model ManualLineItem {
+  id        Int      @id @default(autoincrement())
+  org       String
+  year      Int
+  week      Int
+  label     String
+  amount    Decimal  @db.Decimal(10, 2)
+  btwRate   Decimal  @map("btw_rate") @db.Decimal(5, 4)
+  notes     String   @default("")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([org, year, week, label])
+  @@index([year, week])
+  @@map("manual_line_item")
+}
+
+// L1: Lightspeed historical exports (TestTafel pre-Tebi). Three CSVs per
+// export window: receipts, receipt-items, payments. Re-uploading a window
+// replaces items/payments per receipt (no stable per-line upstream id).
+model LightspeedReceipt {
+  id             Int       @id @default(autoincrement())
+  receiptId      String    @unique @map("receipt_id")
+  sequenceNumber String    @default("") @map("sequence_number")
+  creationDate   DateTime  @map("creation_date")
+  finalizedDate  DateTime? @map("finalized_date")
+  status         String    @default("")
+  tableName      String    @default("") @map("table_name")
+  netTotal       Decimal   @map("net_total") @db.Decimal(10, 2)
+  total          Decimal   @db.Decimal(10, 2)
+  tip            Decimal   @db.Decimal(10, 2)
+  taxes          String    @default("") // raw, e.g. "9.0%=34.68 | 21.0%=19.09"
+  covers         Int       @default(0)
+  sourceFile     String    @default("") @map("source_file")
+  syncedAt       DateTime  @default(now()) @map("synced_at")
+
+  @@index([creationDate])
+  @@map("lightspeed_receipt")
+}
+
+model LightspeedReceiptItem {
+  id            Int      @id @default(autoincrement())
+  receiptId     String   @map("receipt_id")
+  productName   String   @map("product_name")
+  category      String   @default("")
+  quantity      Float    @default(0)
+  gross         Decimal  @db.Decimal(10, 2) // Total Tax Inclusive Price
+  taxPercentage Decimal  @map("tax_percentage") @db.Decimal(5, 2) // e.g. 21.00
+  creationDate  DateTime @map("creation_date")
+  syncedAt      DateTime @default(now()) @map("synced_at")
+
+  @@index([receiptId])
+  @@index([creationDate])
+  @@map("lightspeed_receipt_item")
+}
+
+model LightspeedPayment {
+  id          Int      @id @default(autoincrement())
+  paymentId   String   @unique @map("payment_id")
+  receiptId   String   @map("receipt_id")
+  method      String   @default("") // Payment Name, e.g. "Pre payments"
+  paymentType String   @default("") @map("payment_type") // Card / Cash
+  amount      Decimal  @db.Decimal(10, 2)
+  tip         Decimal  @db.Decimal(10, 2)
+  createdDate DateTime @map("created_date")
+  syncedAt    DateTime @default(now()) @map("synced_at")
+
+  @@index([receiptId])
+  @@map("lightspeed_payment")
 }
 
 // ── Competencies module ──
