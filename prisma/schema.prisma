@@ -849,6 +849,60 @@ model ManualLineItem {
   @@map("manual_line_item")
 }
 
+// L1: parsed supplier invoices — ALL vendors (food, drinks, overhead), one
+// row per invoice, captured by the cowork "invoice pass" (PDF parsing happens
+// in Claude sessions; sering-hub/scripts/add-supplier-invoice.ts books the
+// result). Richer than FoodcostInvoice, which stays the booking row that
+// feeds WeeklyFoodcost: the pass writes BOTH (SupplierInvoice = raw archive
+// incl. drinks/overhead portions; FoodcostInvoice = the food booking).
+// `categoryTotals` holds the vendor's own breakdown when present (Hanos
+// "Splitsing t.b.v. uw administratie").
+model SupplierInvoice {
+  id            Int      @id @default(autoincrement())
+  vendor        String // canonical name, e.g. "Hanos" | "Lindenhoff"
+  org           String // west | centraal | testtafel (delivery-address rule)
+  invoiceNumber String   @map("invoice_number")
+  invoiceDate   String   @map("invoice_date") // YYYY-MM-DD
+  year          Int // ISO year/week of invoiceDate
+  week          Int
+  totalIncl     Decimal  @map("total_incl") @db.Decimal(10, 2)
+  totalExcl     Decimal? @map("total_excl") @db.Decimal(10, 2)
+  btwLowBase    Decimal? @map("btw_low_base") @db.Decimal(10, 2) // 9% base
+  btwHighBase   Decimal? @map("btw_high_base") @db.Decimal(10, 2) // 21% base
+  category      String   @default("food") // food | drinks | overhead | mixed
+  categoryTotals Json    @default("{}") @map("category_totals")
+  driveFileId   String   @default("") @map("drive_file_id")
+  notes         String   @default("")
+  syncedAt      DateTime @default(now()) @map("synced_at")
+
+  items SupplierInvoiceLineItem[]
+
+  @@unique([vendor, invoiceNumber])
+  @@index([year, week])
+  @@index([org, year, week])
+  @@map("supplier_invoice")
+}
+
+model SupplierInvoiceLineItem {
+  id            Int     @id @default(autoincrement())
+  invoiceId     Int     @map("invoice_id")
+  articleNumber String  @default("") @map("article_number")
+  description   String
+  quantity      Float   @default(0)
+  unit          String  @default("") // e.g. "FL. 1000 ML", "ZAK 5 KG"
+  unitPrice     Decimal? @map("unit_price") @db.Decimal(10, 4)
+  amount        Decimal @db.Decimal(10, 2)
+  btwRate       Decimal @map("btw_rate") @db.Decimal(5, 4)
+  category      String  @default("") // vendor category hint (Hanos Cd bucket)
+  deliveryDate  String  @default("") @map("delivery_date") // YYYY-MM-DD (afleverbon)
+
+  invoice SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([articleNumber])
+  @@map("supplier_invoice_line_item")
+}
+
 // L1: Lightspeed historical exports (TestTafel pre-Tebi). Three CSVs per
 // export window: receipts, receipt-items, payments. Re-uploading a window
 // replaces items/payments per receipt (no stable per-line upstream id).
