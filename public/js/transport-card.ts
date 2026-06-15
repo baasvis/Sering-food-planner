@@ -579,7 +579,7 @@ export function renderTransportCard(): string {
     ? `<div class="tcard-empty">Nothing scheduled to leave for Centraal in the next 3 services.</div>`
     : packSection + uncookedSection;
 
-  return `<div class="dash-card tcard ${lit}">
+  return `<div class="dash-card tcard ${lit}" data-testid="transport-card">
     <div class="dash-card-title">
       <span class="dash-card-icon">🚚</span> Pack for Centraal — tomorrow
       ${modeToggle()}
