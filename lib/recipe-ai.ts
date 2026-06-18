@@ -3,10 +3,13 @@
 //
 // Three responsibilities:
 //   1. Build the cached system prompt (house-style doc + ingredient catalog +
-//      3 exemplar recipes) so the AI knows what a Sering recipe looks like.
-//   2. Define the tools Claude can call to mutate an in-flight recipe state.
-//   3. Stream a tool-use chat loop, applying tool calls to the state and
-//      forwarding events to the SSE handler in routes/recipe-ai.ts.
+//      a spread of exemplar recipes) so the AI knows what a Sering recipe
+//      looks like.
+//   2. Define the tools Claude can call: five that mutate an in-flight recipe
+//      state, plus one read-only `search_recipes` that queries the library.
+//   3. Stream a tool-use chat loop, applying mutating tool calls to the state,
+//      running read tools against the DB, feeding back live cost/volume
+//      metrics, and forwarding events to the SSE handler in routes/recipe-ai.ts.
 //
 // The state lives on the wire — there is no server-side persistence. Each
 // chat turn POSTs the full state + conversation; this module returns the
@@ -19,6 +22,8 @@ import path from 'path';
 import type Anthropic from '@anthropic-ai/sdk';
 import { prisma } from './db';
 import { errMsg } from './config';
+import { toGrams } from '../shared/units';
+import { flexPricePer100g } from '../shared/recipe-cost';
 import type { Ingredient, RecipeFull } from '../shared/types';
 
 // ── Wire types (shared with frontend via JSON, no Prisma coupling) ──
@@ -73,12 +78,25 @@ export type ChatStreamEvent =
 
 // ── Exemplar recipes — hand-picked from the prod library ──
 //
-// One Soup, one Main course, one Dessert that show the house style at its
-// best. Loaded once per process and re-used across chat sessions.
+// A spread of soups, main courses, and one dessert that show the house style
+// at its best — open + closed structure, in-budget cost discipline, and the
+// pasta-sauce main format. Loaded once per process (5-min TTL) and re-used
+// across chat sessions. loadExemplars() restores this curated order so the
+// prompt presents them grouped soups → mains → dessert.
 
 export const EXEMPLAR_IDS = [
+  // Soups
   'e3365e92-94ed-4749-b9da-35cc83211595', // Cajun-style red lentil soup (open structure)
+  '9c418c4f-b706-468a-8e24-6fbc37df7071', // Spiced Yellow Split Pea Soup (closed, in-target cost, rated)
+  'c4b3268b-95f9-4ddb-a9f1-59754e2fbef8', // Borscht (closed, Eastern European, textbook structure)
+  '481b7c08-f4c3-4589-a033-5b50a82e4811', // Sayur Lodeh (open, Indonesian coconut)
+  // Main courses
   'c547de85-3e3c-4650-a0d4-cc56b1483cd0', // Carrot Coconut Dahl (closed + LARGE SCALE STYLE)
+  '68671121-329d-4a45-a3a3-2477d3401f2d', // Thai green curry (open structure, flex veg slots)
+  '2a271415-3816-4ec3-ab8b-bf3d335833e7', // Peanut Stew with sweet potato & spinach (closed)
+  '430e65d8-f7e6-402e-b0bf-de2538941f35', // Red Pesto Pasta (pasta-sauce format, ~90 g/portion)
+  '4bee11bf-5f3e-42f0-9290-6e8e2023d997', // Black Dahl (closed, simple, frequently served)
+  // Dessert
   '202eb783-49da-48ad-b5ea-c71468dfe43d', // Johannas Banana Cinnamon Crumble Cake
 ] as const;
 
@@ -95,6 +113,11 @@ export async function loadExemplars(): Promise<RecipeFull[]> {
         ingredients: { include: { ingredient: { select: { name: true } } }, orderBy: { sortOrder: 'asc' } },
       },
     });
+    // findMany ignores the order of the id array — restore the curated
+    // EXEMPLAR_IDS order so the prompt presents them grouped soups → mains →
+    // dessert. Any id missing from prod simply drops out (no crash).
+    const order = new Map<string, number>(EXEMPLAR_IDS.map((id, i) => [id, i] as const));
+    rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
     _exemplarCache = rows.map(r => ({
       id: r.id,
       name: r.name,
@@ -203,7 +226,7 @@ export function buildSystemPrompt(ingredients: Ingredient[], exemplars: RecipeFu
   const exemplarJson = JSON.stringify(exemplars, null, 0);
   // Order = most-stable-first so the cache prefix survives volatility:
   //   1. House-style doc — only changes on server restart (loaded once at module load)
-  //   2. Exemplar recipes — process-cached, change rarely (when a director edits one of the 3)
+  //   2. Exemplar recipes — process-cached, change rarely (when a director edits one of them)
   //   3. Ingredient catalog — re-fetched per chat session, changes whenever an ingredient is added/edited
   // If the catalog were ahead of the exemplars, every catalog change would invalidate
   // the exemplar block too. With this order, only the catalog re-tokenizes.
@@ -215,7 +238,7 @@ export function buildSystemPrompt(ingredients: Ingredient[], exemplars: RecipeFu
     },
     {
       type: 'text',
-      text: `## Exemplar recipes (JSON)\n\nThree existing recipes that show the Sering house style. Match their structure, voice, and ingredient density.\n\n${exemplarJson}`,
+      text: `## Exemplar recipes (JSON)\n\n${exemplars.length} existing recipes (soups, main courses, and a dessert) that show the Sering house style. Match their structure, voice, and ingredient density.\n\n${exemplarJson}`,
       cache_control: { type: 'ephemeral' },
     },
     {
@@ -320,6 +343,19 @@ export const RECIPE_TOOLS = [
         allergens: { type: 'array', items: { type: 'string' } },
       },
       required: ['allergens'],
+    },
+  },
+  {
+    name: 'search_recipes',
+    description:
+      "Search the existing De Sering recipe library. READ-ONLY — it does not change the editor. Use it BEFORE drafting to check whether a similar recipe already exists (avoid duplicates), to base a new draft on an existing one, or to answer the user's questions about the library. A narrow query (1–2 matches) returns full ingredients and prep steps; a broad query returns slim summaries (names, type, cost) — narrow the query or lower the limit to get full detail for a specific recipe.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Case-insensitive substring match on the recipe name (e.g. "dahl", "borscht"). Omit to list by type only.' },
+        type: { type: 'string', enum: RECIPE_TYPES, description: 'Optional filter by recipe type' },
+        limit: { type: 'number', description: 'Max results (default 4, max 8)' },
+      },
     },
   },
 ];
@@ -451,9 +487,175 @@ export function summarizeTool(name: string, input: unknown, newState: AIRecipeSt
       return 'Updated storage notes';
     case 'set_extra_allergens':
       return `Set extra allergens (${newState.extraAllergens.length})`;
+    case 'search_recipes': {
+      const i = (input ?? {}) as { query?: string; type?: string };
+      const q = [i.query, i.type].filter(Boolean).join(' ').trim();
+      return q ? `Searched recipes: ${q}` : 'Searched recipes';
+    }
     default:
       return name;
   }
+}
+
+// ── Cost & volume metrics (pure, unit-testable) ──
+//
+// The AI is told to hit food-cost and volume targets, but the editor state it
+// receives carries no computed cost or volume. We compute them here from the
+// catalog prices + the draft's amounts and feed them back so the model can
+// steer. Mirrors the editor's live price bar (public/js/recipe-editor.ts):
+// cost runs off RAW (purchased) weight, volume off COOKED weight.
+
+/** Food-cost-per-serving target band per recipe type (from the house style). */
+const COST_TARGETS: Record<string, string> = {
+  'Soup': '€0.25–0.50',
+  'Main course': '€0.45–0.90',
+  'Dessert': '€0.40–0.55',
+};
+
+export interface DraftMetrics {
+  volumeL: number;
+  servings: number | null;
+  totalCost: number;
+  perServing: number | null;
+  pricedCount: number;
+  nonFlexCount: number;
+}
+
+export function computeDraftMetrics(state: AIRecipeState, catalog: Ingredient[]): DraftMetrics {
+  const priceById = new Map(catalog.map(c => [c.id, c.pricePer100 || 0]));
+  let totalML = 0;
+  let totalCost = 0;
+  let pricedCount = 0;
+  let nonFlexCount = 0;
+  for (const ing of state.ingredients) {
+    // Volume tracks what ends up in the pot (cooked), falling back to raw.
+    const cooked = (ing.cookedAmount ?? ing.rawAmount) || 0;
+    totalML += toGrams(cooked, ing.unit); // 1 ml ≈ 1 g for the planner's purposes
+    // Cost tracks what you buy (raw weight).
+    const rawGrams = toGrams(ing.rawAmount || 0, ing.unit);
+    if (ing.isFlexible) {
+      if (rawGrams > 0) totalCost += (rawGrams / 100) * flexPricePer100g(ing.flexLabel);
+      continue;
+    }
+    nonFlexCount++;
+    if (ing.ingredientId) {
+      const price = priceById.get(ing.ingredientId) || 0;
+      if (price > 0) {
+        totalCost += (rawGrams / 100) * price;
+        pricedCount++;
+      }
+    }
+  }
+  const volumeL = Math.round(totalML) / 1000;
+  const servings = volumeL > 0 && state.servingSize > 0
+    ? Math.round((volumeL * 1000) / state.servingSize)
+    : null;
+  const perServing = servings && servings > 0 ? totalCost / servings : null;
+  return { volumeL, servings, totalCost, perServing, pricedCount, nonFlexCount };
+}
+
+/** Multi-line metrics block for the per-turn editor_state preamble. */
+export function formatDraftMetrics(state: AIRecipeState, m: DraftMetrics): string {
+  const parts = [
+    `volume ${m.volumeL.toFixed(1)} L`,
+    m.servings != null ? `~${m.servings} servings at ${state.servingSize} ml` : 'servings n/a (set amounts)',
+    m.perServing != null ? `food cost €${m.perServing.toFixed(2)}/serving` : 'cost n/a',
+    `${m.pricedCount}/${m.nonFlexCount} non-flex ingredients priced from the catalog`,
+  ];
+  let s = parts.join(' · ');
+  const target = COST_TARGETS[state.type];
+  if (target) s += `\nCost target for ${state.type}: ${target}/serving.`;
+  return s;
+}
+
+/** One-line metrics summary appended to a tool_result after a cost-affecting
+ *  edit, so the model sees the impact of what it just changed. */
+export function draftMetricsLine(state: AIRecipeState, m: DraftMetrics): string {
+  const target = COST_TARGETS[state.type];
+  const cost = m.perServing != null ? `€${m.perServing.toFixed(2)}` : '€?';
+  return `Draft now: ${m.volumeL.toFixed(1)} L, ${m.servings ?? '?'} servings, ${cost}/serving${target ? ` (target ${target})` : ''}.`;
+}
+
+// ── Recipe-library search (read tool executor) ──
+
+const SEARCH_DEFAULT_LIMIT = 4;
+const SEARCH_MAX_LIMIT = 8;
+
+// Up to this many matches come back with full ingredients + prep steps. Beyond
+// it (broad list-style queries) we return slim summaries so a "list everything"
+// query can't blow up the turn's context. The model can narrow its query (or
+// set limit ≤ 2) to get full detail for a specific recipe.
+const SEARCH_FULL_DETAIL_MAX = 2;
+
+/** Pure: normalize/clamp untrusted model input into Prisma findMany args.
+ *  Extracted from runRecipeSearch so the coercion (type-enum validation, limit
+ *  clamp 1–8, optional name/type filters) is unit-testable without a DB. */
+export function buildRecipeSearchArgs(input: unknown): {
+  where: { name?: { contains: string; mode: 'insensitive' }; type?: string };
+  take: number;
+} {
+  const i = (input ?? {}) as { query?: unknown; type?: unknown; limit?: unknown };
+  const query = typeof i.query === 'string' ? i.query.trim() : '';
+  const typeFilter = typeof i.type === 'string' && (RECIPE_TYPES as readonly string[]).includes(i.type) ? i.type : '';
+  let take = typeof i.limit === 'number' && Number.isFinite(i.limit) ? Math.floor(i.limit) : SEARCH_DEFAULT_LIMIT;
+  take = Math.max(1, Math.min(SEARCH_MAX_LIMIT, take));
+
+  const where: { name?: { contains: string; mode: 'insensitive' }; type?: string } = {};
+  if (query) where.name = { contains: query, mode: 'insensitive' };
+  if (typeFilter) where.type = typeFilter;
+  return { where, take };
+}
+
+/** Execute a `search_recipes` tool call against the live library. Returns a
+ *  JSON string for the tool_result content. Read-only. */
+export async function runRecipeSearch(input: unknown): Promise<string> {
+  const { where, take } = buildRecipeSearchArgs(input);
+
+  const rows = await prisma.recipe.findMany({
+    where,
+    take,
+    orderBy: [{ isComplete: 'desc' }, { timesServed: 'desc' }, { name: 'asc' }],
+    include: {
+      ingredients: { include: { ingredient: { select: { name: true } } }, orderBy: { sortOrder: 'asc' } },
+    },
+  });
+
+  const full = rows.length <= SEARCH_FULL_DETAIL_MAX;
+  const results = rows.map(r => {
+    const base = {
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      structure: r.structure,
+      seasonality: r.seasonality,
+      servingSize: r.servingSize,
+      recipeVolumeL: r.recipeVolume != null ? Number(r.recipeVolume) : null,
+      costPerServing: r.costPerServing != null ? Number(r.costPerServing) : null,
+    };
+    if (!full) {
+      // Broad query: identify + compare only, no per-ingredient amounts or steps.
+      return {
+        ...base,
+        ingredientCount: r.ingredients.length,
+        ingredientNames: r.ingredients.map(ri => ri.ingredient?.name || '').filter(Boolean),
+      };
+    }
+    return {
+      ...base,
+      ingredients: r.ingredients.map(ri => ({
+        name: ri.ingredient?.name || '',
+        rawAmount: Number(ri.rawAmount),
+        cookedAmount: ri.cookedAmount != null ? Number(ri.cookedAmount) : null,
+        unit: ri.unit,
+        isFlexible: ri.isFlexible,
+        flexLabel: ri.flexLabel,
+      })),
+      prepSteps: (Array.isArray(r.prepSteps) ? r.prepSteps as { text: string; note?: string }[] : [])
+        .map(s => ({ text: s.text, ...(s.note ? { note: s.note } : {}) })),
+    };
+  });
+
+  return JSON.stringify({ count: results.length, detail: full ? 'full' : 'summary', results });
 }
 
 // ── Streaming chat loop ──
@@ -499,9 +701,10 @@ export async function chatStream(
   for (let idx = 0; idx < messages.length; idx++) {
     const m = messages[idx];
     if (m.role === 'user' && idx === messages.length - 1) {
+      const metrics = computeDraftMetrics(initialState, ingredients);
       conversation.push({
         role: 'user',
-        content: `<editor_state>\n${JSON.stringify(initialState, null, 0)}\n</editor_state>\n\n${m.content}`,
+        content: `<editor_state>\n${JSON.stringify(initialState, null, 0)}\n</editor_state>\n<computed_metrics>\n${formatDraftMetrics(initialState, metrics)}\n</computed_metrics>\n\n${m.content}`,
       });
     } else {
       conversation.push({ role: m.role, content: m.content });
@@ -546,16 +749,31 @@ export async function chatStream(
     // the fully assembled block — for tool_use that's the parsed input.
     stream.on('contentBlock', (block: Anthropic.ContentBlock) => {
       if (block.type !== 'tool_use') return;
+      if (block.name === 'search_recipes') {
+        // Read-only tool — it needs an async DB query, so it's executed after
+        // finalMessage() when building tool_results. Just surface the chip now;
+        // don't touch state and don't record an outcome here.
+        onEvent({ type: 'tool_use', id: block.id, name: block.name, summary: summarizeTool(block.name, block.input, state) });
+        return;
+      }
       try {
         state = applyToolCall(state, block.name, block.input, ingredients);
         const summary = summarizeTool(block.name, block.input, state);
         onEvent({ type: 'tool_use', id: block.id, name: block.name, summary });
         onEvent({ type: 'state_update', state });
-        toolOutcomes.set(block.id, { ok: true, message: 'Applied successfully.' });
+        // Echo live cost/volume after edits that move the numbers, so the model
+        // can steer toward the cost/volume targets within the same turn.
+        const message = (block.name === 'set_ingredients' || block.name === 'set_recipe_basics')
+          ? `Applied successfully. ${draftMetricsLine(state, computeDraftMetrics(state, ingredients))}`
+          : 'Applied successfully.';
+        toolOutcomes.set(block.id, { ok: true, message });
       } catch (e: unknown) {
         const msg = errMsg(e);
+        // Recoverable: record an is_error tool_result so Claude self-corrects on
+        // the next loop. Deliberately NOT emitting a client `error` event — the
+        // frontend treats those as fatal and would drop the rest of an otherwise
+        // recoverable turn. The corrected result still streams to the user.
         console.error('Recipe AI: tool application failed:', msg);
-        onEvent({ type: 'error', message: `Tool ${block.name} failed: ${msg}` });
         toolOutcomes.set(block.id, { ok: false, message: `Failed to apply: ${msg}. The editor state is unchanged for this tool call.` });
       }
     });
@@ -571,23 +789,37 @@ export async function chatStream(
       return { tokensIn: totalIn, tokensOut: totalOut, cacheReadTokens: totalCache, finalState: state };
     }
 
+    // Client gone? Don't run read-tool DB queries or issue another billed
+    // request for a dead socket — bail before assembling tool_results.
+    if (signal?.aborted) {
+      return { tokensIn: totalIn, tokensOut: totalOut, cacheReadTokens: totalCache, finalState: state };
+    }
+
     // Tool-use turn: append the assistant message verbatim, then add
     // tool_result blocks so Claude can continue its reasoning. Mark blocks
     // is_error when applyToolCall threw so Claude knows the state didn't change.
     conversation.push({ role: 'assistant', content: finalMessage.content });
-    const toolResults = finalMessage.content
-      .filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
-      .map(b => {
-        // If the contentBlock listener never recorded an outcome (shouldn't
-        // happen, but be defensive), treat it as a soft failure.
-        const outcome = toolOutcomes.get(b.id) ?? { ok: false, message: 'Tool result not captured.' };
-        return {
-          type: 'tool_result' as const,
-          tool_use_id: b.id,
-          content: outcome.message,
-          ...(outcome.ok ? {} : { is_error: true as const }),
-        };
-      });
+    const toolUseBlocks = finalMessage.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+    const toolResults = await Promise.all(toolUseBlocks.map(async b => {
+      if (b.name === 'search_recipes') {
+        // Read tool: run the query now and return the results as the content.
+        try {
+          return { type: 'tool_result' as const, tool_use_id: b.id, content: await runRecipeSearch(b.input) };
+        } catch (e: unknown) {
+          return { type: 'tool_result' as const, tool_use_id: b.id, content: `Search failed: ${errMsg(e)}`, is_error: true as const };
+        }
+      }
+      // Mutating tool: read the outcome the contentBlock listener recorded. If
+      // it never recorded one (shouldn't happen, but be defensive), treat it as
+      // a soft failure so Claude knows the state may not have changed.
+      const outcome = toolOutcomes.get(b.id) ?? { ok: false, message: 'Tool result not captured.' };
+      return {
+        type: 'tool_result' as const,
+        tool_use_id: b.id,
+        content: outcome.message,
+        ...(outcome.ok ? {} : { is_error: true as const }),
+      };
+    }));
     conversation.push({ role: 'user', content: toolResults });
   }
 

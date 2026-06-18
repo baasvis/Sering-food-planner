@@ -1174,6 +1174,7 @@ function _renderDetailContent() {
         <button class="btn" onclick="closeModal()">Close</button>
         <button class="btn" onclick="rePrintRecipe('${esc(r.id)}')">Print A4</button>
         <button class="btn" onclick="reVersionRecipe('${esc(r.id)}')">Save version</button>
+        ${S.user?.isDirector ? `<button class="btn" onclick="openRecipeEditor('${esc(r.id)}', { aiMode: true })" title="Edit this recipe with the AI helper" style="background:var(--purple,#7c3aed);border-color:var(--purple,#7c3aed);color:#fff;">✨ Edit with AI</button>` : ''}
         <button class="btn btn-primary" onclick="openRecipeEditor('${esc(r.id)}')">Edit</button>
       </div>
     </div>
