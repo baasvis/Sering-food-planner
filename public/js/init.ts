@@ -10,6 +10,8 @@ import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
 import { checkSession, initGoogleSignIn } from './auth';
 import { closeModal, showModal } from './modal';
 import { rerenderCurrentView } from './navigate';
+import { checkInventoryReminder } from './planner';
+import { checkPendingFmmSnapshots } from './fmm-snapshot';
 
 // Re-export modal functions so existing imports from init.ts keep working
 export { showModal, closeModal, esc } from './modal';
@@ -217,6 +219,8 @@ export async function initApp() {
   showScreen(startScreen, false);
   // Start live sync so other users' changes appear instantly
   connectLiveSync();
+  // Re-arm any pending Fix-My-Menu +30min snapshot left over from before a reload.
+  checkPendingFmmSnapshots();
   // Auto-refresh every 60s so the UI updates when a service deadline passes (13:45 / 20:15)
   // Only rebuild planner data silently; re-render only non-dashboard views to avoid flash.
   // Guarded so repeated logout→login in one tab doesn't stack timers (audit ARCH-3).
@@ -230,7 +234,12 @@ export async function initApp() {
         rerenderCurrentView();
         requestAnimationFrame(() => window.scrollTo(0, scrollY));
       }
+      // Nag for the cooked-food inventory once a deadline (13:45 / 20:15) passes.
+      checkInventoryReminder();
     }, 60000);
+    // Prompt initial check shortly after login, so a cook opening the app after
+    // a deadline gets reminded without waiting for the first 60s tick.
+    setTimeout(() => checkInventoryReminder(), 5000);
   }
 }
 

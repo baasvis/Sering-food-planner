@@ -747,6 +747,7 @@ router.get('/recipes/:id/print', asyncHandler(async (req: Request, res: Response
       ${recipe.structure ? `<span>${esc(recipe.structure)}</span>` : ''}
       ${recipe.seasonality ? `<span>${esc(recipe.seasonality)}</span>` : ''}
       ${recipe.servingTemp ? `<span>${esc(recipe.servingTemp)}</span>` : ''}
+      ${recipe.recipeVolume ? `<span>${(recipe.recipeVolume * scaleFactor).toFixed(1)} L</span>` : ''}
       ${servings ? `<span>${servings} servings</span>` : ''}
       ${recipe.servingSize ? `<span>${recipe.servingSize} ml/serving</span>` : ''}
       ${recipe.costPerServing != null ? `<span>&euro;${recipe.costPerServing.toFixed(2)}/serving</span>` : ''}

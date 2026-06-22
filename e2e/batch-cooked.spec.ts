@@ -74,7 +74,12 @@ test.describe('Batch cooked transition', () => {
     // ── Step 5: click the mark-as-cooked button ────────────────────────────
     await tileById.locator('[data-testid="cook-today-btn"]').click();
 
-    // confirmCooked() schedules a save (1.5s debounce) → POST /api/data/patch.
+    // Marking cooked now asks how many litres were cooked (this becomes the
+    // batch's stock). This is a blank batch with no services, so the suggested
+    // amount is empty — confirm with no value to just record the cook.
+    await page.locator('[data-testid="cook-amount-confirm"]').click();
+
+    // confirmCookedAmount() schedules a save (1.5s debounce) → POST /api/data/patch.
     await expect(page.locator('#save-text')).toHaveText('Saved', { timeout: 10_000 });
 
     // ── Step 6: verify the batch transitioned to cooked in the DB ──────────

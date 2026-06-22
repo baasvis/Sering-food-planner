@@ -23,6 +23,7 @@ import {
 import { rerenderCurrentView } from './navigate';
 import { showModal, closeModal, esc } from './modal';
 import { markFixMyMenuRun } from './transport-card';
+import { captureMenuSnapshot, recordFixMyMenuSnapshots } from './fmm-snapshot';
 import { fixMyMenuRitualSteps } from './ritual';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -1361,7 +1362,12 @@ export function runFixMyMenuCore(): FixMyMenuResult {
  *  pure `runFixMyMenuCore()` pipeline, then applies the UI/persistence
  *  side-effects (ritual marking, save, rerender, results modal). */
 function _fixMyMenuBody(): void {
+  // Snapshot the plan BEFORE the algorithm touches it, then AFTER, plus one
+  // more ~30 min later (scheduled in recordFixMyMenuSnapshots) so the before
+  // state, the algorithm's effect, and the by-hand follow-up can be compared.
+  const beforeSnap = captureMenuSnapshot();
   const result = runFixMyMenuCore();
+  recordFixMyMenuSnapshots(beforeSnap, captureMenuSnapshot());
 
   markFixMyMenuRun();
   // Record the run in the shared ritual store too (lunch vs dinner by the

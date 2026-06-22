@@ -26,7 +26,7 @@
     .dash-guest-big{flex-direction:row;gap:8px;width:100%;justify-content:center;padding:6px 8px;min-width:0;overflow:hidden;}
     .dash-guest-big .dash-guest-num{font-size:24px;}
     .dash-flow-wrap,.dash-flow-canvas-wrap{min-width:0;}
-    .dash-inv-btn,.dash-st-btn{font-size:9px;padding:4px 6px;width:100%;}
+    .dash-st-btn{font-size:9px;padding:4px 6px;width:100%;}
     .dash-stock-total{width:100%;}
     .dash-chip-name{font-size:11px;}
     .dash-chip-expand{padding-left:16px;}

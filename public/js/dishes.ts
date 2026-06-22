@@ -6,7 +6,7 @@ import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { trackEvent } from './telemetry';
 import { addDishFromRecipe } from './recipes';
-import { openPostCookRecording, openBatchRecipe } from './recipe-editor';
+import { openBatchRecipe } from './recipe-editor';
 import { batchDragStart, batchDragEnd, openReplaceBatch } from './planner';
 import type { Batch, CateringDish, DishType, Location, StorageType, Service, InventoryEntry, Shipment } from '@shared/types';
 import { locName } from '@shared/location';
@@ -868,34 +868,79 @@ export function confirmCooked(id: string) {
 }
 
 /** Internal completion of `confirmCooked` once the cook location is known.
- *  Exposed via window so the chooser modal's onclick can call it. */
+ *  Exposed via window so the chooser modal's onclick can call it.
+ *
+ *  The litres the cook enters become the batch's stock (not the planned
+ *  estimate). Three paths:
+ *   - already has stock → re-confirm, just stamp the cook date;
+ *   - recipe batch → open the batch recipe editor in confirm-cook mode, whose
+ *     Volume field is the cooked amount and writes stock on save;
+ *   - plain batch → ask "how many litres did you cook?" and write that. */
 export function confirmCookedAt(id: string, cookLoc: Location) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   const today = dateToStr(getToday());
-  d.cookDate = today;
-  // If the batch already has inventory (e.g. cook re-confirms after editing),
-  // leave it alone — confirmCooked is meant for the FIRST confirm. Otherwise
-  // auto-fill a single Gastro entry at cookLoc with calcRequired worth.
   const totalNow = getTotalStock(d);
-  if (totalNow === 0) {
-    // calcRequired reads the family-allocation cache — refresh it first, or a
-    // stale cache can auto-fill 0 L and leave the cook with a cooked batch
-    // that has no stock.
-    rebuildPlanner();
-    const qty = calcRequired(d);
-    if (qty > 0) {
-      addInventory(d, { loc: cookLoc, storage: 'Gastro', qty, cookDate: today });
-    }
+
+  // Re-confirm of a batch that already has stock — just stamp the cook date.
+  if (totalNow > 0) {
+    d.cookDate = today;
+    scheduleSave();
+    rerenderCurrentView();
+    toast(esc(d.name) + ' marked as cooked at ' + locName(cookLoc) + ' — stock ' + totalNow.toFixed(1) + 'L');
+    return;
   }
+
+  // Recipe batch: the batch recipe editor's Volume field is the cooked amount.
+  if (d.recipeId) {
+    openBatchRecipe(id, { confirmCook: true, cookLoc });
+    return;
+  }
+
+  // Plain batch: ask the cook how many litres they actually cooked.
+  promptCookAmount(id, cookLoc);
+}
+
+/** Modal asking for the litres actually cooked, pre-filled with the planned
+ *  requirement so "cooked exactly what was needed" is one click. */
+function promptCookAmount(id: string, cookLoc: Location) {
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  // calcRequired reads the family-allocation cache — refresh it first so the
+  // suggested amount is accurate even when this is reached "cold".
+  rebuildPlanner();
+  const suggested = Math.round(calcRequired(d) * 10) / 10;
+  showModal(`<h3>How many litres did you cook?</h3>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">${esc(d.name)} — cooked at ${esc(locName(cookLoc))}. This becomes the batch's stock.</p>
+    <div class="fr"><label>Litres cooked</label>
+      <input type="number" id="cooked-liters" min="0" step="0.5" value="${suggested > 0 ? suggested : ''}" placeholder="e.g. 40"
+        onkeydown="if(event.key==='Enter')confirmCookedAmount('${esc(id)}','${esc(cookLoc)}')" /></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" data-testid="cook-amount-confirm" onclick="confirmCookedAmount('${esc(id)}','${esc(cookLoc)}')">Mark cooked</button>
+    </div>`);
+  setTimeout(() => {
+    const el = document.getElementById('cooked-liters') as HTMLInputElement | null;
+    if (el) { el.focus(); el.select(); }
+  }, 0);
+}
+
+/** Commit the cooked litres entered in promptCookAmount as the batch's stock. */
+export function confirmCookedAmount(id: string, cookLoc: Location) {
+  const d = S.batches.find(x => x.id === id);
+  if (!d) return;
+  const raw = (document.getElementById('cooked-liters') as HTMLInputElement | null)?.value ?? '';
+  const val = parseFloat(raw);
+  const today = dateToStr(getToday());
+  d.cookDate = today;
+  if (val && val > 0) {
+    addInventory(d, { loc: cookLoc, storage: 'Gastro', qty: Math.round(val * 10) / 10, cookDate: today });
+  }
+  closeModal();
   scheduleSave();
   rerenderCurrentView();
   const finalQty = getTotalStock(d);
   toast(esc(d.name) + ' marked as cooked at ' + locName(cookLoc) + ' — stock ' + finalQty.toFixed(1) + 'L');
-  // Offer post-cook recording for v2 recipe batches
-  if (d.recipeId) {
-    openPostCookRecording(id);
-  }
 }
 
 /** ── Send modal — POST /api/batches/:id/ship ──
@@ -1218,13 +1263,20 @@ export function saveBatchFromRecipe(recipeId: string) {
 }
 
 export function openNewDishScratch() {
+  const allergenChips = ALLERGENS.map(a =>
+    `<label class="nd-allergen-chip"><input type="checkbox" value="${esc(a)}" class="nd-allergen-cb" /> ${esc(a)}</label>`
+  ).join('');
   showModal(`<h3>New batch</h3>
-    <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Creates an empty placeholder. Use the planner to assign services, then click "Mark cooked" once it's actually in the pot.</p>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Fill in litres if you've already cooked it; leave it blank to create an empty placeholder you'll cook later.</p>
     <div class="fr"><label>Name</label><input type="text" id="nd-name" placeholder="e.g. Mushroom soup" /></div>
     <div class="fr"><label>Type</label><select id="nd-type">
       <option>Soup</option><option>Main course</option><option>Dessert</option>
     </select></div>
+    <div class="fr"><label>Litres cooked (optional)</label><input type="number" id="nd-liters" min="0" step="0.5" placeholder="e.g. 40 — leave blank for a placeholder" /></div>
     <div class="fr"><label>Serving size (ml per guest)</label><input type="number" id="nd-serving" value="280" /></div>
+    <div class="fr"><label>Allergens</label>
+      <div class="nd-allergen-grid">${allergenChips}</div>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" data-testid="new-batch-submit" onclick="saveNewDish()">Create batch</button>
@@ -1235,16 +1287,31 @@ export async function saveNewDish() {
   trackEvent('batch_create');
   const name = (document.getElementById('nd-name') as HTMLInputElement).value.trim();
   if (!name) { alert('Please enter a batch name'); return; }
-  // Unified-batch model: blank batch starts with empty inventory + shipments.
-  // Cook fills inventory via "Mark cooked" (sets first inventory entry) or
-  // via the Edit modal's Power view (per-entry add).
+
+  // Selected allergens (from the checkbox grid).
+  const allergens = Array.from(document.querySelectorAll('.nd-allergen-cb'))
+    .filter(cb => (cb as HTMLInputElement).checked)
+    .map(cb => (cb as HTMLInputElement).value);
+
+  // Optional litres: when provided, the batch is created cooked with stock at
+  // the current location (so it's immediately visible/usable), not as an empty
+  // placeholder. Without litres it stays an empty placeholder.
+  const litersRaw = (document.getElementById('nd-liters') as HTMLInputElement | null)?.value || '';
+  const liters = parseFloat(litersRaw);
+  let inventory: InventoryEntry[] = [];
+  let cookDate: string | null = null;
+  if (liters && liters > 0) {
+    cookDate = dateToStr(getToday());
+    inventory = [{ loc: S.currentLoc, storage: 'Gastro', qty: Math.round(liters * 10) / 10, cookDate }];
+  }
+
   const newDish: Batch = {
     id: newId(), name,
     type: (document.getElementById('nd-type') as HTMLSelectElement).value as DishType,
     serving: parseInt((document.getElementById('nd-serving') as HTMLInputElement).value) || 280,
-    allergens: [], extraAllergens: [], orderFor: false,
-    cookDate: null,
-    inventory: [],
+    allergens, extraAllergens: [], orderFor: false,
+    cookDate,
+    inventory,
     shipments: [],
     services: [],
     note: '',
@@ -1256,7 +1323,7 @@ export async function saveNewDish() {
   };
   S.batches.push(newDish);
   closeModal(); rebuildPlanner(); rerenderCurrentView(); scheduleSave();
-  toast(`"${name}" added`);
+  toast(liters && liters > 0 ? `"${name}" — ${Math.round(liters * 10) / 10}L created` : `"${name}" added`);
 }
 
 // ── EDIT DISH ─────────────────────────────────────────────
