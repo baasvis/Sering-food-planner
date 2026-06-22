@@ -193,6 +193,123 @@ async function upsertGuestHistory(date, guestCountsByLoc) {
   return count;
 }
 
+// ── VENDORED from sering-hub/sources/tebi/worker.ts — keep in sync ──────────
+// Raw L1 capture into the Hub's tables (tebi_invoice, tebi_product_daily). The
+// planner is the working Tebi egress (Railway can log in here), so it persists
+// the raw Tebi shape it already fetches; the Hub's L2/L3 recompute reads these
+// rows and applies attribution + type + BTW on read. We write ONLY raw rows —
+// no interpretation — mirroring the Hub worker's mappers so the rows are
+// identical regardless of which downloader wrote them. The Hub never writes
+// these tables on Railway (its login is blocked there); this path replaces
+// that. See the schema comment on TebiInvoice/TebiProductDaily.
+function parseCurrencyStr(v) {
+  if (v == null) return '0.00';
+  if (typeof v === 'number') {
+    if (Number.isFinite(v)) return v.toFixed(2);
+  } else if (typeof v === 'string') {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n.toFixed(2);
+  } else if (typeof v === 'object') {
+    for (const k of ['amount', 'quantity', 'value']) {
+      const n = Number(v[k]);
+      if (Number.isFinite(n)) return n.toFixed(2);
+    }
+  }
+  return '0.00';
+}
+
+function parseGuestCovers(v) {
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.round(v);
+  if (v && typeof v === 'object' && typeof v.covers === 'number' && Number.isFinite(v.covers)) {
+    return Math.round(v.covers);
+  }
+  return null;
+}
+
+function parseDateOrNull(v) {
+  if (typeof v !== 'string') return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// Idempotent on (ledger, invoiceKey). profitCenterId/Name stay null — the Tebi
+// invoice endpoint returns ledger granularity; the Hub attributes per-PC later.
+async function upsertTebiInvoices(ledger, invoices) {
+  if (!invoices || invoices.length === 0) return 0;
+  let count = 0;
+  for (const invoice of invoices) {
+    if (!invoice || !invoice.key) continue;
+    const createdAt = parseDateOrNull(invoice.created);
+    if (!createdAt) {
+      err(`  Skipping TebiInvoice ${ledger}/${invoice.key}: unparseable createdAt`);
+      continue;
+    }
+    const data = {
+      ledger,
+      profitCenterId: null,
+      profitCenterName: null,
+      invoiceKey: invoice.key,
+      sequenceNumber: invoice.sequenceNumber != null ? String(invoice.sequenceNumber) : null,
+      name: typeof invoice.name === 'string' ? invoice.name : null,
+      businessDay: invoice.businessDay,
+      createdAt,
+      closedTime: parseDateOrNull(invoice.closedTime),
+      grossRevenue: parseCurrencyStr(invoice.grossRevenue),
+      netRevenue: parseCurrencyStr(invoice.netRevenue),
+      guest: parseGuestCovers(invoice.guest),
+      receiptUrl: typeof invoice.receiptUrl === 'string' ? invoice.receiptUrl : null,
+    };
+    try {
+      await prisma.tebiInvoice.upsert({
+        where: { ledger_invoiceKey: { ledger, invoiceKey: invoice.key } },
+        update: data,
+        create: data,
+      });
+      count++;
+    } catch (e) {
+      err(`  Failed to upsert TebiInvoice ${ledger}/${invoice.key}: ${e.message}`);
+    }
+  }
+  return count;
+}
+
+// Idempotent on (ledger, profitCenterId, date, productName). Raw product_top.
+async function upsertTebiProductDaily(ledger, rows) {
+  if (!rows || rows.length === 0) return 0;
+  let count = 0;
+  for (const row of rows) {
+    if (!row.date || !row.productName || !row.profitCenterId) continue;
+    const data = {
+      ledger,
+      profitCenterId: row.profitCenterId,
+      profitCenterName: row.profitCenterName,
+      date: row.date,
+      productName: row.productName,
+      quantity: row.quantity || 0,
+      grossRevenue: (row.grossRevenue || 0).toFixed(2),
+      syncedAt: new Date(),
+    };
+    try {
+      await prisma.tebiProductDaily.upsert({
+        where: {
+          ledger_profitCenterId_date_productName: {
+            ledger,
+            profitCenterId: row.profitCenterId,
+            date: row.date,
+            productName: row.productName,
+          },
+        },
+        update: data,
+        create: data,
+      });
+      count++;
+    } catch (e) {
+      err(`  Failed to upsert TebiProductDaily ${row.date}/${row.productName}: ${e.message}`);
+    }
+  }
+  return count;
+}
+
 async function runAccount(accountConfig, dates) {
   const { label } = accountConfig;
   log(`Starting ${label}...`);
@@ -216,13 +333,13 @@ async function runAccount(accountConfig, dates) {
   // distinguishes "scraper healthy" from "scraper writing only ledger-totals".
   // Without this breakdown the cron exits 0 the moment any row at all writes,
   // which let the silent partial-failure go unnoticed for ~7 weeks.
-  const stats = { allRows: 0, perLocationRows: 0, productRows: 0, guestRows: 0, failedDates: 0 };
+  const stats = { allRows: 0, perLocationRows: 0, productRows: 0, guestRows: 0, invoiceRows: 0, rawProductRows: 0, failedDates: 0 };
   try {
     for (const date of dates) {
       log(`[${label}] Fetching ${date}...`);
       const apiEndDate = nextDay(date);
       try {
-        const { summary, productRows, guestCounts } = await runForAccount(accountConfig, page, date, apiEndDate);
+        const { summary, productRows, guestCounts, invoices, rawProductRows } = await runForAccount(accountConfig, page, date, apiEndDate);
         const allRowExpected = summary.grossRevenue != null ? 1 : 0;
         const perLocCount = Object.keys(summary.locations || {}).filter((k) => k !== 'all').length;
         const productCount = (productRows || []).length;
@@ -241,13 +358,21 @@ async function runAccount(accountConfig, dates) {
         stats.perLocationRows += perLocCount;
         stats.productRows += productCount;
         stats.guestRows += guestRowCount;
-        log(`[${label}] Saved ${date} (${wrote} rows: all=${allRowExpected} perLoc=${perLocCount} products=${productCount} guests=${guestRowCount})`);
+        // Raw L1 capture for the Hub (additive — does not affect the rows
+        // above). Failures here are logged per-row inside the upserts and must
+        // never fail the planner sync, so they're outside the row-shape gate.
+        const ledger = accountConfig.ledgerId;
+        const invCount = await upsertTebiInvoices(ledger, invoices);
+        const rawProdCount = await upsertTebiProductDaily(ledger, rawProductRows);
+        stats.invoiceRows += invCount;
+        stats.rawProductRows += rawProdCount;
+        log(`[${label}] Saved ${date} (${wrote} rows: all=${allRowExpected} perLoc=${perLocCount} products=${productCount} guests=${guestRowCount} | L1: invoices=${invCount} rawProducts=${rawProdCount})`);
       } catch (e) {
         stats.failedDates += 1;
         err(`[${label}] Failed for ${date}: ${e.message}`);
       }
     }
-    log(`${label} complete (all=${stats.allRows} perLoc=${stats.perLocationRows} products=${stats.productRows} guests=${stats.guestRows} failedDates=${stats.failedDates})`);
+    log(`${label} complete (all=${stats.allRows} perLoc=${stats.perLocationRows} products=${stats.productRows} guests=${stats.guestRows} invoices=${stats.invoiceRows} rawProducts=${stats.rawProductRows} failedDates=${stats.failedDates})`);
   } finally {
     await browser.close();
   }
@@ -311,7 +436,7 @@ async function main() {
   log(`Syncing ${startDate} to ${endDate} across ${accounts.length} account(s)`);
   const dates = dateRange(startDate, endDate);
 
-  const totals = { allRows: 0, perLocationRows: 0, productRows: 0, guestRows: 0, failedDates: 0 };
+  const totals = { allRows: 0, perLocationRows: 0, productRows: 0, guestRows: 0, invoiceRows: 0, rawProductRows: 0, failedDates: 0 };
   let failedAccounts = 0;
 
   // Run accounts sequentially — avoids browser resource contention
@@ -322,6 +447,8 @@ async function main() {
       totals.perLocationRows += stats.perLocationRows;
       totals.productRows += stats.productRows;
       totals.guestRows += stats.guestRows;
+      totals.invoiceRows += stats.invoiceRows;
+      totals.rawProductRows += stats.rawProductRows;
       totals.failedDates += stats.failedDates;
     } catch (e) {
       // One account failing doesn't abort the other, but record it so we can
@@ -332,7 +459,7 @@ async function main() {
   }
 
   const totalRowsWritten = totals.allRows + totals.perLocationRows + totals.productRows + totals.guestRows;
-  log(`All accounts synced (allRows=${totals.allRows} perLocationRows=${totals.perLocationRows} productRows=${totals.productRows} guestRows=${totals.guestRows} failedDates=${totals.failedDates}, ${failedAccounts}/${accounts.length} accounts failed entirely)`);
+  log(`All accounts synced (allRows=${totals.allRows} perLocationRows=${totals.perLocationRows} productRows=${totals.productRows} guestRows=${totals.guestRows} invoiceRows=${totals.invoiceRows} rawProductRows=${totals.rawProductRows} failedDates=${totals.failedDates}, ${failedAccounts}/${accounts.length} accounts failed entirely)`);
 
   // The worker used to exit 0 even when zero rows had been written, because
   // every per-date and per-account failure was caught and logged. That made
