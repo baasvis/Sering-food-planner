@@ -181,6 +181,17 @@
 .tcard-total-label{font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;}
 .tcard-total-qty{font-size:14px;font-weight:800;color:var(--text);}
 .tcard-confirm{font-size:12px;padding:6px 14px;}
+.tcard-actions{display:flex;align-items:center;gap:8px;}
+.tcard-edit{font-size:12px;padding:6px 10px;white-space:nowrap;}
+.tcard-edited-note{font-size:11px;color:var(--text2);margin-bottom:6px;display:flex;align-items:center;gap:6px;}
+.tcard-reset-link{background:none;border:none;color:var(--accent,#2563eb);font-size:11px;cursor:pointer;padding:0;text-decoration:underline;}
+.tcard-empty-edit{font-size:12px;color:var(--text3);padding:10px 4px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px;}
+/* Pack editor modal */
+.pack-edit-list{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;margin-bottom:8px;}
+.pack-edit-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid var(--border);}
+.pack-edit-name{font-size:13px;color:var(--text);}
+.pack-edit-avail{font-size:11px;color:var(--text3);margin-left:6px;}
+.pack-edit-qty{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2);}
 
 /* ── Today ritual panel (a .dash-card with daily-flow steps) ─────── */
 .ritual-panel{border-left:3px solid var(--loc-accent);}

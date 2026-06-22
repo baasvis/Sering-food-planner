@@ -1134,7 +1134,6 @@ export function renderDashboardContent() {
           <div class="dash-card-title">
             <span class="dash-card-icon">📦</span> Stock
             <span class="dash-stock-total">${stockBatches.length} batches — ${totalStock} L</span>
-            <button class="btn btn-sm dash-inv-btn" onclick="openInventory('${loc}')">🍽️ Cooked Food Inventory</button>
             <button class="btn btn-sm dash-st-btn" onclick="openStocktakeModal()">📋 Ingredient Stocktake</button>
           </div>
           ${renderInventoryFreshness()}

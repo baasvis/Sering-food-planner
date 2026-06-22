@@ -39,6 +39,7 @@ import {
   wasFixMyMenuRunToday,
   markFixMyMenuRun,
   countPendingUncookedForCentraal,
+  roundUpPack,
 } from '../public/js/transport-card';
 import { recomputeBatchAllocations } from '../public/js/core';
 import { S } from '../public/js/state';
@@ -279,8 +280,13 @@ describe('computeTransportPlan — destination subtraction', () => {
     const plan = computeTransportPlan('lean', [b]);
     expect(plan).toHaveLength(1);
     expect(plan[0].destStock).toBeGreaterThan(0);
-    // sendQty + destStock should still cover the demand (or hit West stock cap).
-    expect(plan[0].sendQty + plan[0].destStock).toBeLessThanOrEqual(plan[0].totalDemand + 0.1);
+    // The Centraal stock is subtracted from demand BEFORE the pack qty is
+    // rounded up to a whole/nice litre count (roundUpPack). So sendQty tracks
+    // the net demand (demand − destStock), rounded up by less than 5 L — not
+    // the full demand.
+    const netDemand = plan[0].totalDemand - plan[0].destStock;
+    expect(plan[0].sendQty).toBeGreaterThanOrEqual(netDemand - 0.1);
+    expect(plan[0].sendQty).toBeLessThan(netDemand + 5);
   });
 
   test('Frozen Centraal stock does NOT reduce sendQty (Daan smoke 2026-05-12 item 5)', () => {
@@ -684,5 +690,34 @@ describe('computePendingUncookedRows', () => {
     expect(computePendingUncookedRows([cooked, raw]).map(r => r.batchId)).toEqual([raw.id]);
     // ...but passing the packable plan suppresses it — same dish identity.
     expect(computePendingUncookedRows([cooked, raw], plan)).toEqual([]);
+  });
+});
+
+describe('roundUpPack — Centraal pack rounding', () => {
+  it('rounds up to a multiple of 5 when within 2 L of it', () => {
+    expect(roundUpPack(3.5)).toBe(5);   // 5 - 3.5 = 1.5 ≤ 2
+    expect(roundUpPack(4.8)).toBe(5);   // 0.2 ≤ 2
+    expect(roundUpPack(8.2)).toBe(10);  // 1.8 ≤ 2
+    expect(roundUpPack(13.1)).toBe(15); // 1.9 ≤ 2
+    expect(roundUpPack(23.5)).toBe(25); // 1.5 ≤ 2
+    expect(roundUpPack(3)).toBe(5);     // exactly 2 below → still rounds up
+  });
+
+  it('rounds up to a whole litre when not within 2 L of a multiple of 5', () => {
+    expect(roundUpPack(5.3)).toBe(6);   // next 5 is 10, 4.7 > 2 → ceil
+    expect(roundUpPack(22)).toBe(22);   // next 5 is 25, 3 > 2 → ceil(22)=22
+    expect(roundUpPack(2)).toBe(2);     // next 5 is 5, 3 > 2 → ceil(2)=2
+    expect(roundUpPack(11.4)).toBe(12); // next 5 is 15, 3.6 > 2 → ceil
+  });
+
+  it('leaves exact multiples of 5 unchanged', () => {
+    expect(roundUpPack(5)).toBe(5);
+    expect(roundUpPack(10)).toBe(10);
+    expect(roundUpPack(25)).toBe(25);
+  });
+
+  it('returns 0 for non-positive input', () => {
+    expect(roundUpPack(0)).toBe(0);
+    expect(roundUpPack(-3)).toBe(0);
   });
 });

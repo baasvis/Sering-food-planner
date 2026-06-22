@@ -1,6 +1,6 @@
 import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, Meal, Service, StorageType, Supply } from '@shared/types';
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
-import { newId, scheduleSave, toast, toastError, apiPost, todayIso } from './utils';
+import { newId, scheduleSave, doSave, toast, toastError, apiPost, todayIso } from './utils';
 import { computeSupplyDemand } from '@shared/supply-demand';
 import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, getEffectiveGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory, consolidateInventory } from './core';
 import { isServableBy } from './menu-fixer';
@@ -1107,7 +1107,13 @@ export function confirmReplaceBatch(newBatchId: string) {
   closeModal();
   rebuildPlanner();
   rerenderCurrentView();
+  // Flush immediately rather than the 1.5s debounce: the catering-ref update
+  // lives only in memory until saved, and an incoming SSE patch during that
+  // window can overwrite S.caterings and revert the dish back to the retired
+  // placeholder. doSave persists the new ref right away. scheduleSave is kept
+  // as a fallback in case a save is already in flight (doSave no-ops then).
   scheduleSave();
+  void doSave();
   toast(`Replaced ${oldName} with ${replacement.name}`);
 }
 
@@ -1188,7 +1194,11 @@ export function replaceWithV2Recipe(recipeId: string) {
   closeModal();
   rebuildPlanner();
   rerenderCurrentView();
+  // Flush now, not on the 1.5s debounce — see confirmReplaceBatch: an incoming
+  // SSE patch in the debounce window can revert the catering's dish back to the
+  // old placeholder id before the ref update is saved.
   scheduleSave();
+  void doSave();
   toast(`Replaced ${oldName} with ${r.name}`);
 }
 
@@ -1235,6 +1245,66 @@ export function getInventoryButton(loc: string) {
   }
   const cls = st.urgent ? 'inv-btn inv-urgent' : 'inv-btn';
   return `<button class="btn ${cls}" onclick="openInventory('${loc}')">${st.label}</button>`;
+}
+
+// ── Cooked-food inventory reminder popup ─────────────────────────────────
+// At 13:45 and 20:15 (the inventory deadlines) a popup nags the cook to do the
+// cooked-food inventory. It fires once per (loc, date, window) so it doesn't
+// repeat every 60s tick, and is gated by getInventoryState — doing the
+// inventory (which stamps inventoryDone) stops it. Driven by the global 60s
+// tick in init.ts.
+
+const INV_REMINDER_SHOWN_KEY = 'sering-inv-reminder-shown';
+
+function _invReminderShown(): Record<string, boolean> {
+  try { return JSON.parse(localStorage.getItem(INV_REMINDER_SHOWN_KEY) || '{}'); }
+  catch (_e: unknown) { return {}; }
+}
+function _setInvReminderShown(o: Record<string, boolean>): void {
+  try { localStorage.setItem(INV_REMINDER_SHOWN_KEY, JSON.stringify(o)); }
+  catch (_e: unknown) { /* private-mode browsers throw on setItem — ignore */ }
+}
+
+/** Show a one-time "PLEASE DO COOKED FOOD INVENTORY" popup when an inventory
+ *  deadline (13:45 / 20:15) has passed for the current location and that
+ *  window's inventory isn't done. Must be clicked away. */
+export function checkInventoryReminder(): void {
+  const loc = S.currentLoc;
+  if (!loc) return;
+  const st = getInventoryState(loc);
+  // Only nag once the deadline has actually passed (overdue state) and the
+  // window isn't done.
+  if (st.done || st.label !== 'DO INVENTORY') return;
+  const date = dateToIso(getAmsterdamNow());
+  const key = `${loc}|${date}|${st.window}`;
+  const shown = _invReminderShown();
+  if (shown[key]) return;
+  // Don't stomp a modal the user is already interacting with — retry next tick.
+  const root = document.getElementById('modal-root');
+  if (root && root.children.length > 0) return;
+  shown[key] = true;
+  _setInvReminderShown(shown);
+  trackEvent('inventory_reminder_shown', st.window, { loc });
+  showModal(`<div class="inv-reminder">
+    <div style="font-size:40px;text-align:center;">&#127869;</div>
+    <h3 style="text-align:center;margin:8px 0 6px;">PLEASE DO COOKED FOOD INVENTORY</h3>
+    <p style="text-align:center;color:var(--text2);margin-bottom:16px;">Count the cooked food at ${esc(locName(loc))} so the plan stays accurate.</p>
+    <div class="modal-actions" style="justify-content:center;">
+      <button class="btn" onclick="closeModal()">Later</button>
+      <button class="btn btn-primary" onclick="closeModal();openInventory('${esc(loc)}')">Do inventory now</button>
+    </div>
+  </div>`);
+}
+
+/** Reset the inventory-reminder timer for a location (called when inventory is
+ *  finished). Clears today's shown-flags so the reminder system is fresh for
+ *  the next window. */
+export function resetInventoryReminder(loc: string): void {
+  const date = dateToIso(getAmsterdamNow());
+  const shown = _invReminderShown();
+  delete shown[`${loc}|${date}|lunch`];
+  delete shown[`${loc}|${date}|dinner`];
+  _setInvReminderShown(shown);
 }
 
 // ── INVENTORY MODAL (DAAN-CRITICAL) ─────────────────────────────────────────
@@ -1813,6 +1883,8 @@ export function finishInventory(loc: string) {
   const st = getInventoryState(loc);
   if (!S.inventoryDone[loc]) S.inventoryDone[loc] = { lunch: null, dinner: null };
   S.inventoryDone[loc][st.window] = todayStr;
+  // Doing the inventory resets the cooked-food-inventory reminder timer.
+  resetInventoryReminder(loc);
   // Update local freshness counter immediately so the dashboard chip updates
   // without waiting for the server round-trip.
   if (st.window === 'lunch' || st.window === 'dinner') {

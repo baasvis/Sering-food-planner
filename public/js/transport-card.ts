@@ -15,7 +15,7 @@
 import type { Batch, Service, Location, DishType } from '@shared/types';
 import { S } from './state';
 import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner, getStockAt, getServeableStockAt, getPendingFromShipments } from './core';
-import { esc } from './modal';
+import { showModal, closeModal, esc } from './modal';
 import { trackEvent } from './telemetry';
 import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { toast, toastError, apiPost } from './utils';
@@ -71,6 +71,11 @@ const BULK_HORIZON_DAYS = 7;
 // Card-level UI state. Stored module-locally because it's purely visual and
 // doesn't need cross-tab persistence.
 let _mode: TransportMode = 'lean';
+
+// Manual pack overrides (Task: "change what is packed"). When non-null this is
+// the explicit pack list (batchId → litres) the cook edited by hand; it
+// replaces the auto-computed plan until they pack-and-send (which clears it).
+let _packEdits: Map<string, number> | null = null;
 
 // ── Public helpers ───────────────────────────────────────────────────────
 
@@ -300,10 +305,11 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
     const alreadyUsed = destStockUsedByIdentity.get(identity) || 0;
     const destStockAvailable = Math.max(0, destStockTotal - alreadyUsed);
     const netDemand = Math.max(0, totalDemand - destStockAvailable);
-    // Cap sendQty at the batch's available West stock (was b.stock; now
+    // Round the packed amount up to a whole/nice litre count (see roundUpPack),
+    // then cap at the batch's available West stock (was b.stock; now
     // getStockAt(b, 'west')). Backend's /ship endpoint also caps and surfaces
     // a warning, so this is a hint not a hard limit.
-    const sendQty = Math.min(netDemand, getStockAt(a.batch, 'west'));
+    const sendQty = Math.min(roundUpPack(netDemand), getStockAt(a.batch, 'west'));
     if (sendQty <= 0) continue;
     const consumedThisRow = Math.min(destStockAvailable, totalDemand);
     destStockUsedByIdentity.set(identity, alreadyUsed + consumedThisRow);
@@ -327,6 +333,51 @@ export function computeTransportPlan(mode: TransportMode, batches: Batch[]): Tra
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+/** Round a Centraal pack quantity UP to a "nice" amount. Packing happens in
+ *  whole-litre containers, so we always round up to a whole litre — and if the
+ *  amount lands within 2 L below a multiple of 5 (5, 10, 15, 20, …) we round up
+ *  to that multiple instead, so the cook packs e.g. a clean 10 L rather than
+ *  8.2 L. Pure + exported for unit testing. */
+export function roundUpPack(n: number): number {
+  if (n <= 0) return 0;
+  const nextFive = Math.ceil(n / 5 - 1e-9) * 5;
+  if (nextFive - n <= 2) return nextFive;
+  return Math.ceil(n - 1e-9);
+}
+
+/** Build transport rows from a manual pack-edit map (batchId → litres),
+ *  capping each at the batch's available West stock. Used when the cook has
+ *  hand-edited what to pack via the pack editor. */
+function buildRowsFromEdits(edits: Map<string, number>): TransportRow[] {
+  const rows: TransportRow[] = [];
+  for (const [batchId, qty] of edits) {
+    const b = S.batches.find(x => x.id === batchId);
+    if (!b || qty <= 0) continue;
+    const capped = Math.min(qty, getStockAt(b, 'west'));
+    if (capped <= 0) continue;
+    rows.push({
+      batchId,
+      name: b.name,
+      type: b.type,
+      totalDemand: round1(capped),
+      destStock: 0,
+      sendQty: round1(capped),
+      services: [],
+      future: false,
+    });
+  }
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  rows.sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
+  return rows;
+}
+
+/** The rows the card should actually show / pack: the cook's manual edits if
+ *  they've made any, otherwise the auto-computed plan. */
+export function effectivePackRows(): TransportRow[] {
+  if (_packEdits) return buildRowsFromEdits(_packEdits);
+  return computeTransportPlan(_mode, S.batches);
 }
 
 /** Count batches that *would* be in the lean plan if they were cooked —
@@ -546,9 +597,10 @@ export function renderTransportCard(): string {
   // defensive in case future callers don't.
   rebuildPlanner();
 
-  const rows = computeTransportPlan(_mode, S.batches);
+  const rows = effectivePackRows();
   const uncookedRows = computePendingUncookedRows(S.batches, rows);
   const totalSendQty = round1(rows.reduce((s, r) => s + r.sendQty, 0));
+  const edited = _packEdits !== null;
   const readiness = getReadiness(S.batches, S.inventoryCompletions);
   const lit = readiness.allReady && rows.length > 0 ? 'tcard-lit' : '';
 
@@ -559,13 +611,22 @@ export function renderTransportCard(): string {
     trackEvent('transport_card_shown', _mode, { rowCount: rows.length, totalVolume: totalSendQty });
   }
 
-  // Cooked, packable rows + total + the "Pack and send" action.
-  const packSection = rows.length === 0
-    ? ''
-    : `<div class="tcard-rows">${rows.map(rowHtml).join('')}</div>
+  // Cooked, packable rows + total + the "Food is packed" action. An "Edit
+  // pack" button lets the cook add West-stock dishes or change amounts.
+  const editBtn = `<button class="btn btn-sm tcard-edit" onclick="openPackEditor()" title="Add dishes from West stock or change the packed amounts">✏️ Edit pack</button>`;
+  const editedNote = edited
+    ? `<div class="tcard-edited-note">Hand-edited pack list — <button class="tcard-reset-link" onclick="resetPackEditor()">reset to auto</button></div>`
+    : '';
+  const packSection = (rows.length === 0 && !edited)
+    ? `<div class="tcard-empty-edit">Nothing auto-scheduled for Centraal. ${editBtn}</div>`
+    : `${editedNote}
+       <div class="tcard-rows">${rows.map(rowHtml).join('')}</div>
        <div class="tcard-footer">
          <div class="tcard-total"><span class="tcard-total-label">Total to pack</span> <span class="tcard-total-qty">${totalSendQty} L</span></div>
-         <button class="btn btn-primary tcard-confirm" onclick="confirmTransportPlan()">Pack and send</button>
+         <div class="tcard-actions">
+           ${editBtn}
+           <button class="btn btn-primary tcard-confirm" onclick="confirmTransportPlan()">Food is packed for tomorrow</button>
+         </div>
        </div>`;
 
   // Dishes scheduled for Centraal but not cooked yet — greyed, not packable.
@@ -575,8 +636,8 @@ export function renderTransportCard(): string {
     : `<div class="tcard-uncooked-hdr">Not cooked yet — can't pack until cooked</div>
        <div class="tcard-rows">${uncookedRows.map(uncookedRowHtml).join('')}</div>`;
 
-  const body = (rows.length === 0 && uncookedRows.length === 0)
-    ? `<div class="tcard-empty">Nothing scheduled to leave for Centraal in the next 3 services.</div>`
+  const body = (rows.length === 0 && uncookedRows.length === 0 && !edited)
+    ? `<div class="tcard-empty">Nothing scheduled to leave for Centraal in the next 3 services. <button class="btn btn-sm tcard-edit" onclick="openPackEditor()" title="Pack dishes from West stock by hand">✏️ Pack something anyway</button></div>`
     : packSection + uncookedSection;
 
   return `<div class="dash-card tcard ${lit}">
@@ -601,7 +662,7 @@ export function renderTransportCard(): string {
 export async function confirmTransportPlan(): Promise<void> {
   if (S.currentLoc !== 'west') return;
   rebuildPlanner();
-  const rows = computeTransportPlan(_mode, S.batches);
+  const rows = effectivePackRows();
   if (rows.length === 0) {
     toast('Nothing to pack');
     return;
@@ -634,10 +695,97 @@ export async function confirmTransportPlan(): Promise<void> {
     const cappedNote = cappedCount > 0 ? ` (${cappedCount} capped to available)` : '';
     toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for Centraal${cappedNote}`);
   }
+  // The pack is done — drop any hand-edited override so the card returns to the
+  // live auto plan for the next pack.
+  _packEdits = null;
   // Refresh the card so the just-shipped rows drop off immediately. Without
-  // this it keeps showing the old plan (and its "Pack and send" button) until
-  // the next 60s tick — long enough to accidentally submit the same pack
-  // twice. Mirrors confirmCentraalArrivals, which already does this.
+  // this it keeps showing the old plan (and its action button) until the next
+  // 60s tick — long enough to accidentally submit the same pack twice. Mirrors
+  // confirmCentraalArrivals, which already does this.
+  rebuildPlanner();
+  rerenderCurrentView();
+}
+
+// ── Pack editor ──────────────────────────────────────────────────────────
+//
+// Lets the cook change what's packed for Centraal by hand: add any cooked
+// dish with West stock, raise/lower an amount, or drop a dish (set to 0).
+// Seeds from the current plan so the common case is a quick tweak.
+
+/** Open the "edit what's packed" modal. Lists every cooked batch with West
+ *  stock, each with a litres input pre-filled from the current pack plan. */
+export function openPackEditor(): void {
+  if (S.currentLoc !== 'west') return;
+  rebuildPlanner();
+  const current = new Map((_packEdits ? buildRowsFromEdits(_packEdits) : computeTransportPlan(_mode, S.batches))
+    .map(r => [r.batchId, r.sendQty] as const));
+
+  // Candidate dishes: anything cooked with West stock, plus anything already
+  // in the current pack list (defensive — should be a subset).
+  const candidates = S.batches.filter(b => isBatchCooked(b) && getStockAt(b, 'west') > 0);
+  for (const id of current.keys()) {
+    if (!candidates.some(c => c.id === id)) {
+      const b = S.batches.find(x => x.id === id);
+      if (b) candidates.push(b);
+    }
+  }
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  candidates.sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
+
+  if (candidates.length === 0) {
+    showModal(`<h3>Edit pack for Centraal</h3>
+      <p style="color:var(--text2);">No cooked dishes with stock at Sering West to pack.</p>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+    return;
+  }
+
+  const rowsHtml = candidates.map(b => {
+    const avail = round1(getStockAt(b, 'west'));
+    const val = current.get(b.id);
+    return `<div class="pack-edit-row">
+      <div class="pack-edit-name">${esc(b.name)} <span class="pack-edit-avail">${avail} L at West</span></div>
+      <div class="pack-edit-qty">
+        <input type="number" min="0" step="0.5" max="${avail}" value="${val != null ? val : ''}"
+          placeholder="0" data-pack-edit="${esc(b.id)}" class="re-inline-input re-inline-num" style="width:80px;" />
+        <span>L</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  showModal(`<h3>Edit pack for Centraal</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:10px;">Set how many litres of each dish to pack. Leave at 0 to skip a dish. You can't pack more than is in stock at West.</p>
+    <div class="pack-edit-list">${rowsHtml}</div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="savePackEditor()">Save pack list</button>
+    </div>`);
+}
+
+/** Persist the pack-editor inputs into `_packEdits` and refresh the card. */
+export function savePackEditor(): void {
+  const map = new Map<string, number>();
+  document.querySelectorAll('[data-pack-edit]').forEach(el => {
+    const input = el as HTMLInputElement;
+    const id = input.getAttribute('data-pack-edit');
+    if (!id) return;
+    const v = parseFloat(input.value);
+    if (v && v > 0) {
+      const b = S.batches.find(x => x.id === id);
+      const capped = b ? Math.min(v, getStockAt(b, 'west')) : v;
+      if (capped > 0) map.set(id, Math.round(capped * 10) / 10);
+    }
+  });
+  _packEdits = map;
+  trackEvent('transport_pack_edited', '', { rowCount: map.size });
+  closeModal();
+  rebuildPlanner();
+  rerenderCurrentView();
+}
+
+/** Discard manual edits and return to the auto-computed pack plan. */
+export function resetPackEditor(): void {
+  _packEdits = null;
+  closeModal();
   rebuildPlanner();
   rerenderCurrentView();
 }
