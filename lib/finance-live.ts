@@ -92,3 +92,58 @@ export function isoWeekDates(dateStr: string): string[] {
   const dow = (d.getUTCDay() + 6) % 7; // 0 = Monday
   return Array.from({ length: 7 }, (_, i) => shiftDate(dateStr, i - dow));
 }
+
+// ── Controllable targets (live dashboard step 2) ────────────────────────────
+export const VENUES = ['west', 'centraal', 'testtafel'] as const;
+export const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; // getUTCDay() index → labourByDay key
+
+export interface VenueTargets { foodPerMeal?: number; drinkPerMeal?: number; labourByDay?: Record<string, number> }
+export type TargetsConfig = Record<string, VenueTargets>;
+export interface ResolvedTargets { foodPerMeal: number | null; drinkPerMeal: number | null; labourToday: number | null }
+
+const PER_MEAL_MAX = 1000;   // € spend-per-meal target ceiling
+const LABOUR_MAX = 100000;   // € labour-per-day target ceiling
+
+function boundedNum(v: unknown, max: number): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > max) return undefined;
+  return Math.round(v * 100) / 100;
+}
+
+// Sanitize an arbitrary value (request body OR a DB JSON column) into a valid
+// TargetsConfig: strict venue + weekday allowlist (prototype-pollution-proof),
+// numbers bounded, out-of-range / wrong-shape silently dropped. The single
+// source of truth for the shape — used by GET, POST and the /live resolver.
+export function cleanTargetsConfig(raw: unknown): TargetsConfig {
+  const out: TargetsConfig = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const body = raw as Record<string, unknown>;
+  for (const venue of VENUES) {
+    const vt = body[venue];
+    if (!vt || typeof vt !== 'object' || Array.isArray(vt)) continue;
+    const v = vt as Record<string, unknown>;
+    const cleaned: VenueTargets = {};
+    const f = boundedNum(v.foodPerMeal, PER_MEAL_MAX); if (f !== undefined) cleaned.foodPerMeal = f;
+    const d = boundedNum(v.drinkPerMeal, PER_MEAL_MAX); if (d !== undefined) cleaned.drinkPerMeal = d;
+    if (v.labourByDay && typeof v.labourByDay === 'object' && !Array.isArray(v.labourByDay)) {
+      const src = v.labourByDay as Record<string, unknown>;
+      const lbd: Record<string, number> = {};
+      for (const wd of WEEKDAYS) { const n = boundedNum(src[wd], LABOUR_MAX); if (n !== undefined) lbd[wd] = n; }
+      if (Object.keys(lbd).length) cleaned.labourByDay = lbd;
+    }
+    if (Object.keys(cleaned).length) out[venue] = cleaned;
+  }
+  return out;
+}
+
+// Resolve a venue's targets for a specific day (labour target keyed by weekday).
+// date is an Amsterdam business-day string; getUTCDay() on a UTC-constructed
+// midnight is DST-safe and matches the Sun-first WEEKDAYS index.
+export function resolveTargetsForDay(config: TargetsConfig, venue: string, date: string): ResolvedTargets {
+  const vt = config[venue] || {};
+  const weekday = WEEKDAYS[new Date(date + 'T00:00:00Z').getUTCDay()];
+  return {
+    foodPerMeal: typeof vt.foodPerMeal === 'number' ? vt.foodPerMeal : null,
+    drinkPerMeal: typeof vt.drinkPerMeal === 'number' ? vt.drinkPerMeal : null,
+    labourToday: vt.labourByDay && typeof vt.labourByDay[weekday] === 'number' ? vt.labourByDay[weekday] : null,
+  };
+}
