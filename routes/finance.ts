@@ -9,6 +9,8 @@ import { runTebiSync, cancelSync, getStatus, isSyncing } from '../lib/tebi-sync'
 import { requireScreenEdit } from './auth';
 import { formatIso, addDays } from '../shared/dates';
 import { classifyDayRows, cumulativeByHour, isoWeekDates, shiftDate, r2, perMeal, cleanTargetsConfig, resolveTargetsForDay, VENUES, type DaySummary } from '../lib/finance-live';
+import { computeLabour, blendedRate } from '../lib/labour';
+import { getPlannedShiftsForDate, shiftsConfigured } from '../lib/notion-shifts';
 import { broadcast } from './events';
 import type { Prisma } from '@prisma/client';
 
@@ -266,6 +268,29 @@ router.get('/live', asyncHandler(async (req: Request, res: Response) => {
   const wtdRows = await prisma.salesDay.findMany({ where: { org: venue, date: { in: weekDates }, source: SOURCE }, select: { date: true, gross: true } });
   const byDay = weekDates.map((d) => ({ date: d, gross: r2(Number(wtdRows.find((row) => row.date === d)?.gross || 0)) }));
 
+  // Planned labour: today's roster shifts (Notion) × a blended €/hr from the
+  // venue's most recent WeeklyHours week. labour% = cost incurred so far ÷
+  // revenue so far. Null when the Notion shifts integration isn't configured.
+  let labour: ReturnType<typeof computeLabour> | null = null;
+  if (shiftsConfigured()) {
+    const todayAms = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
+    let nowMin = 100000;          // a past/complete day counts every shift in full
+    if (date > todayAms) nowMin = 0;  // future day: nothing elapsed yet
+    else if (date === todayAms) {
+      const [h, m] = new Date().toLocaleTimeString('en-GB', { timeZone: 'Europe/Amsterdam', hour12: false }).split(':').map(Number);
+      nowMin = h * 60 + m;
+    }
+    const [shifts, latestWk] = await Promise.all([
+      getPlannedShiftsForDate(date),
+      prisma.weeklyHours.findFirst({ where: { org: venue }, orderBy: [{ year: 'desc' }, { week: 'desc' }], select: { year: true, week: true } }),
+    ]);
+    const rateRows = latestWk
+      ? await prisma.weeklyHours.findMany({ where: { org: venue, year: latestWk.year, week: latestWk.week }, select: { hours: true, total: true } })
+      : [];
+    const rate = blendedRate(rateRows.map((r) => ({ hours: Number(r.hours), total: Number(r.total) })));
+    labour = computeLabour(shifts.filter((s) => s.org === venue), rate, nowMin, today.gross);
+  }
+
   res.json({
     venue,
     date,
@@ -291,6 +316,7 @@ router.get('/live', asyncHandler(async (req: Request, res: Response) => {
     },
     topProducts,
     targets,
+    labour,
     intraday: { today: cumulativeByHour(hoursToday), lastWeek: cumulativeByHour(hoursPrior) },
     weekToDate: { gross: r2(byDay.reduce((s, x) => s + x.gross, 0)), byDay },
   });
