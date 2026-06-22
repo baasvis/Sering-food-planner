@@ -23,6 +23,37 @@ const prisma = new PrismaClient();
 function log(msg) { console.log(`[sync] ${msg}`); }
 function err(msg) { console.error(`[sync] ERROR: ${msg}`); }
 
+// ── Transient-DB-error retry (parity with sering-hub/sources/tebi/worker.ts) ──
+// A two-ledger 14-day backfill issues thousands of sequential upserts over
+// several minutes; a single connection blip mid-run used to drop those rows
+// silently (the per-row try/catch logged and moved on). Retry the retryable
+// class — connection resets, pool timeouts, server-closed — with a short
+// backoff; rethrow everything else (constraint violations etc.) immediately.
+const RETRYABLE_DB_ERROR = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|connection|socket|terminat|closed the connection|timed out/i;
+const RETRYABLE_PRISMA_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024']);
+function isRetryableDbError(e) {
+  const code = e && e.code;
+  if (typeof code === 'string' && RETRYABLE_PRISMA_CODES.has(code)) return true;
+  return RETRYABLE_DB_ERROR.test(e instanceof Error ? e.message : String(e));
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function withDbRetry(label, fn) {
+  const delays = [250, 1500]; // 3 attempts total
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (attempt >= delays.length || !isRetryableDbError(e)) throw e;
+      err(`  ${label}: transient DB error, retrying (${attempt + 1}/${delays.length}): ${e instanceof Error ? e.message : String(e)}`);
+      await sleep(delays[attempt]);
+    }
+  }
+}
+
+// Canary: counts parseCurrencyStr fallbacks to '0.00', warned at the end of a
+// run so a drift in the Tebi invoice amount shape surfaces (parity with the Hub).
+let currencyFallbackCount = 0;
+
 function nextDay(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const date = new Date(y, m - 1, d + 1);
@@ -41,7 +72,7 @@ function dateRange(start, end) {
 
 async function upsertRevenue(date, location, data) {
   const now = new Date().toISOString();
-  await prisma.dailyRevenue.upsert({
+  await withDbRetry(`DailyRevenue ${date}/${location}`, () => prisma.dailyRevenue.upsert({
     where: { date_location: { date, location } },
     update: {
       grossRevenue: data.grossRevenue || 0,
@@ -61,7 +92,7 @@ async function upsertRevenue(date, location, data) {
       invoiceCount: data.invoiceCount || 0,
       syncedAt: now,
     },
-  });
+  }));
 }
 
 async function upsertProductRevenue(rows) {
@@ -71,7 +102,7 @@ async function upsertProductRevenue(rows) {
   for (const row of rows) {
     if (!row.date || !row.productName) continue;
     try {
-      await prisma.productRevenue.upsert({
+      await withDbRetry(`ProductRevenue ${row.productName}`, () => prisma.productRevenue.upsert({
         where: {
           date_location_meal_productName: {
             date: row.date,
@@ -98,7 +129,7 @@ async function upsertProductRevenue(rows) {
           netRevenue: row.netRevenue || 0,
           syncedAt: now,
         },
-      });
+      }));
       count++;
     } catch (e) {
       err(`  Failed to upsert product ${row.productName}: ${e.message}`);
@@ -179,11 +210,11 @@ async function upsertGuestHistory(date, guestCountsByLoc) {
       const value = parseInt(counts[meal] ?? 0, 10) || 0;
       if (value <= 0) continue; // skip zero rows
       try {
-        await prisma.guestHistory.upsert({
+        await withDbRetry(`GuestHistory ${date}/${location}/${meal}`, () => prisma.guestHistory.upsert({
           where: { location_meal_date: { location, meal, date } },
           update: { count: value },
           create: { location, meal, date, count: value },
-        });
+        }));
         count++;
       } catch (e) {
         err(`  Failed to upsert guest_history ${date}/${location}/${meal}: ${e.message}`);
@@ -215,6 +246,7 @@ function parseCurrencyStr(v) {
       if (Number.isFinite(n)) return n.toFixed(2);
     }
   }
+  currencyFallbackCount++; // unparseable amount shape — canary, warned at run end
   return '0.00';
 }
 
@@ -260,11 +292,11 @@ async function upsertTebiInvoices(ledger, invoices) {
       receiptUrl: typeof invoice.receiptUrl === 'string' ? invoice.receiptUrl : null,
     };
     try {
-      await prisma.tebiInvoice.upsert({
+      await withDbRetry(`TebiInvoice ${ledger}/${invoice.key}`, () => prisma.tebiInvoice.upsert({
         where: { ledger_invoiceKey: { ledger, invoiceKey: invoice.key } },
         update: data,
         create: data,
-      });
+      }));
       count++;
     } catch (e) {
       err(`  Failed to upsert TebiInvoice ${ledger}/${invoice.key}: ${e.message}`);
@@ -290,7 +322,7 @@ async function upsertTebiProductDaily(ledger, rows) {
       syncedAt: new Date(),
     };
     try {
-      await prisma.tebiProductDaily.upsert({
+      await withDbRetry(`TebiProductDaily ${row.date}/${row.productName}`, () => prisma.tebiProductDaily.upsert({
         where: {
           ledger_profitCenterId_date_productName: {
             ledger,
@@ -301,7 +333,7 @@ async function upsertTebiProductDaily(ledger, rows) {
         },
         update: data,
         create: data,
-      });
+      }));
       count++;
     } catch (e) {
       err(`  Failed to upsert TebiProductDaily ${row.date}/${row.productName}: ${e.message}`);
@@ -460,6 +492,10 @@ async function main() {
 
   const totalRowsWritten = totals.allRows + totals.perLocationRows + totals.productRows + totals.guestRows;
   log(`All accounts synced (allRows=${totals.allRows} perLocationRows=${totals.perLocationRows} productRows=${totals.productRows} guestRows=${totals.guestRows} invoiceRows=${totals.invoiceRows} rawProductRows=${totals.rawProductRows} failedDates=${totals.failedDates}, ${failedAccounts}/${accounts.length} accounts failed entirely)`);
+
+  if (currencyFallbackCount > 0) {
+    err(`parseCurrencyStr fell back to "0.00" on ${currencyFallbackCount} unparseable invoice amount(s) this run — check the Tebi invoice response shape if this number grows.`);
+  }
 
   // The worker used to exit 0 even when zero rows had been written, because
   // every per-date and per-account failure was caught and logged. That made
