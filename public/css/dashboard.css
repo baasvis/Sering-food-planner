@@ -39,9 +39,7 @@
 .dash-card-title{font-size:11px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
 .dash-card-icon{font-size:14px;flex-shrink:0;}
 .dash-stock-total{font-size:10px;font-weight:400;color:var(--text3);text-transform:none;letter-spacing:0;}
-.dash-inv-btn{margin-left:auto;font-size:10px;padding:3px 8px;border-radius:6px;font-weight:700;background:var(--red-bg, rgba(220,38,38,.1));color:var(--red, #dc2626);border-color:rgba(220,38,38,.25);}
-.dash-inv-btn:hover{background:var(--red, #dc2626);color:#fff;}
-.dash-st-btn{font-size:10px;padding:3px 8px;border-radius:6px;font-weight:700;background:var(--green-bg);color:var(--green);border-color:rgba(22,163,74,.25);}
+.dash-st-btn{margin-left:auto;font-size:10px;padding:3px 8px;border-radius:6px;font-weight:700;background:var(--green-bg);color:var(--green);border-color:rgba(22,163,74,.25);}
 .dash-st-btn:hover{background:var(--green);color:#fff;}
 .dash-inv-fresh-row{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px;}
 .dash-inv-fresh-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;border:1px solid var(--border);background:var(--bg2);color:var(--text2);cursor:pointer;}
