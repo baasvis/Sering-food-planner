@@ -8,6 +8,7 @@ import { asyncHandler } from '../lib/config';
 import { runTebiSync, cancelSync, getStatus, isSyncing } from '../lib/tebi-sync';
 import { requireScreenEdit } from './auth';
 import { formatIso, addDays } from '../shared/dates';
+import { classifyDayRows, cumulativeByHour, isoWeekDates, shiftDate, r2, perMeal, type DaySummary } from '../lib/finance-live';
 import type { Prisma } from '@prisma/client';
 
 const router = express.Router();
@@ -212,61 +213,23 @@ router.get('/products', asyncHandler(async (req: Request, res: Response) => {
 // staff influence. Food vs drink is classified by the Hub's Type name (ProductDay
 // carries the financial Type); the regexes below are intentionally broad and
 // tunable.
-// Tips/gratuity aren't sales — excluded from revenue entirely. "AF" = the
-// alcohol-free drink Types (TT Homemade/bought AF), which are drinks not food.
-const NON_REVENUE = /\btips?\b|fooi|gratuit/i;
-const DRINK_TYPE = /beer|wine|cocktail|mix|coffee|thee|\btea\b|soft|frisdrank|spirit|\bgin\b|tonic|juice|\bsap\b|limonade|pairing|token|borrel|\bbar\b|\baf\b|alcoholvrij|alcohol.?free/i;
-const MEAL_TYPE = /lunch|dinner|diner|hoofd|\bmain\b|soup|soep|brunch|ontbijt|\bmenu\b/i;
-
-function shiftDate(dateStr: string, days: number): string {
-  const d = new Date(dateStr + 'T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function isoWeekDates(dateStr: string): string[] {
-  const d = new Date(dateStr + 'T00:00:00Z');
-  const dow = (d.getUTCDay() + 6) % 7; // 0 = Monday
-  return Array.from({ length: 7 }, (_, i) => shiftDate(dateStr, i - dow));
-}
-
-const r2 = (n: number): number => Math.round(n * 100) / 100;
-const perMeal = (v: number, meals: number): number | null => (meals > 0 ? r2(v / meals) : null);
-
-interface DaySummary { gross: number; net: number; foodGross: number; drinkGross: number; meals: number; rows: { productName: string; type: string | null; qty: number; gross: number }[] }
+// SOURCE: the L2 tables carry `source` ('tebi' | 'lightspeed'). For a LIVE
+// dashboard we read Tebi only — Lightspeed is the pre-2026-05 archive, and a
+// handful of cutover-overlap dates carry BOTH sources, which would double-count
+// if summed. Every current / last-week / this-week date is Tebi.
+const SOURCE = 'tebi';
+const VENUES = new Set(['west', 'centraal', 'testtafel']);
 
 async function summarizeDay(org: string, date: string): Promise<DaySummary> {
   const rows = await prisma.productDay.findMany({
-    where: { org, date },
+    where: { org, date, source: SOURCE },
     select: { productName: true, type: true, qty: true, gross: true, net: true },
   });
-  let gross = 0, net = 0, foodGross = 0, drinkGross = 0, meals = 0;
-  const out: DaySummary['rows'] = [];
-  for (const row of rows) {
-    if (row.type && NON_REVENUE.test(row.type)) continue; // tips/gratuity: not a sale
-    const g = Number(row.gross), n = Number(row.net);
-    gross += g; net += n;
-    const isDrink = row.type ? DRINK_TYPE.test(row.type) : false;
-    if (isDrink) drinkGross += g; else foodGross += g;
-    if (row.type && MEAL_TYPE.test(row.type)) meals += row.qty;
-    out.push({ productName: row.productName, type: row.type, qty: row.qty, gross: g });
-  }
-  return { gross, net, foodGross, drinkGross, meals, rows: out };
+  return classifyDayRows(rows.map((row) => ({
+    productName: row.productName, type: row.type, qty: row.qty,
+    gross: Number(row.gross), net: Number(row.net),
+  })));
 }
-
-function cumulativeByHour(rows: { hour: number; gross: unknown }[]): { hour: number; cum: number }[] {
-  if (rows.length === 0) return [];
-  const byHour = new Map<number, number>();
-  for (const row of rows) byHour.set(row.hour, Number(row.gross));
-  const hours = rows.map((r) => r.hour);
-  const minH = Math.min(...hours), maxH = Math.max(...hours);
-  let cum = 0;
-  const out: { hour: number; cum: number }[] = [];
-  for (let h = minH; h <= maxH; h++) { cum += byHour.get(h) || 0; out.push({ hour: h, cum: r2(cum) }); }
-  return out;
-}
-
-const VENUES = new Set(['west', 'centraal', 'testtafel']);
 
 router.get('/live', asyncHandler(async (req: Request, res: Response) => {
   const venue = String(req.query.venue || 'west');
@@ -282,19 +245,20 @@ router.get('/live', asyncHandler(async (req: Request, res: Response) => {
   const [today, prior, hoursToday, hoursPrior, salesToday, freshness] = await Promise.all([
     summarizeDay(venue, date),
     summarizeDay(venue, priorDate),
-    prisma.salesHour.findMany({ where: { org: venue, date }, select: { hour: true, gross: true }, orderBy: { hour: 'asc' } }),
-    prisma.salesHour.findMany({ where: { org: venue, date: priorDate }, select: { hour: true, gross: true }, orderBy: { hour: 'asc' } }),
-    prisma.salesDay.findFirst({ where: { org: venue, date }, select: { sales: true, computedAt: true } }),
+    prisma.salesHour.findMany({ where: { org: venue, date, source: SOURCE }, select: { hour: true, gross: true }, orderBy: { hour: 'asc' } }),
+    prisma.salesHour.findMany({ where: { org: venue, date: priorDate, source: SOURCE }, select: { hour: true, gross: true }, orderBy: { hour: 'asc' } }),
+    prisma.salesDay.findFirst({ where: { org: venue, date, source: SOURCE }, select: { sales: true, computedAt: true } }),
     prisma.weeklyRevenue.aggregate({ _max: { computedAt: true } }),
   ]);
 
-  const topProducts = today.rows
-    .map((row) => ({ name: row.productName, qty: Math.round(row.qty * 10) / 10, gross: r2(row.gross), drink: row.type ? DRINK_TYPE.test(row.type) : false }))
+  const topProducts = today.products
+    .slice()
     .sort((a, b) => b.gross - a.gross)
-    .slice(0, 8);
+    .slice(0, 8)
+    .map((p) => ({ name: p.name, qty: p.qty, gross: p.gross, bucket: p.bucket }));
 
   const weekDates = isoWeekDates(date).filter((d) => d <= date);
-  const wtdRows = await prisma.salesDay.findMany({ where: { org: venue, date: { in: weekDates } }, select: { date: true, gross: true } });
+  const wtdRows = await prisma.salesDay.findMany({ where: { org: venue, date: { in: weekDates }, source: SOURCE }, select: { date: true, gross: true } });
   const byDay = weekDates.map((d) => ({ date: d, gross: r2(Number(wtdRows.find((row) => row.date === d)?.gross || 0)) }));
 
   res.json({
@@ -306,6 +270,8 @@ router.get('/live', asyncHandler(async (req: Request, res: Response) => {
       revenueNet: r2(today.net),
       revenueFood: r2(today.foodGross),
       revenueDrink: r2(today.drinkGross),
+      revenueOther: r2(today.otherGross),
+      revenueUncategorized: r2(today.uncategorizedGross),
       meals: Math.round(today.meals * 10) / 10,
       sales: salesToday?.sales ?? 0,
       spendPerMeal: perMeal(today.gross, today.meals),
