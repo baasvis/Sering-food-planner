@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import express, { Request, Response } from 'express';
-import { prisma } from '../lib/db';
+import { prisma, withWriteLock, dbAppendLog } from '../lib/db';
 import { asyncHandler } from '../lib/config';
 import { runTebiSync, cancelSync, getStatus, isSyncing } from '../lib/tebi-sync';
 import { requireScreenEdit } from './auth';
@@ -219,6 +219,10 @@ router.get('/products', asyncHandler(async (req: Request, res: Response) => {
 // if summed. Every current / last-week / this-week date is Tebi.
 const SOURCE = 'tebi';
 const VENUES = new Set(['west', 'centraal', 'testtafel']);
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; // getUTCDay() index → labourByDay key
+
+interface VenueTargets { foodPerMeal?: number; drinkPerMeal?: number; labourByDay?: Record<string, number> }
+type TargetsConfig = Record<string, VenueTargets>;
 
 async function summarizeDay(org: string, date: string): Promise<DaySummary> {
   const rows = await prisma.productDay.findMany({
@@ -242,14 +246,24 @@ router.get('/live', asyncHandler(async (req: Request, res: Response) => {
   }
   const priorDate = shiftDate(date, -7);
 
-  const [today, prior, hoursToday, hoursPrior, salesToday, freshness] = await Promise.all([
+  const [today, prior, hoursToday, hoursPrior, salesToday, freshness, targetsRow] = await Promise.all([
     summarizeDay(venue, date),
     summarizeDay(venue, priorDate),
     prisma.salesHour.findMany({ where: { org: venue, date, source: SOURCE }, select: { hour: true, gross: true }, orderBy: { hour: 'asc' } }),
     prisma.salesHour.findMany({ where: { org: venue, date: priorDate, source: SOURCE }, select: { hour: true, gross: true }, orderBy: { hour: 'asc' } }),
     prisma.salesDay.findFirst({ where: { org: venue, date, source: SOURCE }, select: { sales: true, computedAt: true } }),
     prisma.weeklyRevenue.aggregate({ _max: { computedAt: true } }),
+    prisma.financeTargets.findUnique({ where: { id: 'default' } }),
   ]);
+
+  // Controllable targets for this venue + weekday (no revenue target by design).
+  const vt = ((targetsRow?.config as TargetsConfig) || {})[venue] || {};
+  const weekday = WEEKDAYS[new Date(date + 'T00:00:00Z').getUTCDay()];
+  const targets = {
+    foodPerMeal: typeof vt.foodPerMeal === 'number' ? vt.foodPerMeal : null,
+    drinkPerMeal: typeof vt.drinkPerMeal === 'number' ? vt.drinkPerMeal : null,
+    labourToday: vt.labourByDay && typeof vt.labourByDay[weekday] === 'number' ? vt.labourByDay[weekday] : null,
+  };
 
   const topProducts = today.products
     .slice()
@@ -285,9 +299,45 @@ router.get('/live', asyncHandler(async (req: Request, res: Response) => {
       spendPerMeal: perMeal(prior.gross, prior.meals),
     },
     topProducts,
+    targets,
     intraday: { today: cumulativeByHour(hoursToday), lastWeek: cumulativeByHour(hoursPrior) },
     weekToDate: { gross: r2(byDay.reduce((s, x) => s + x.gross, 0)), byDay },
   });
+}));
+
+// ── Controllable targets config (manager-set) ───────────────────────────────
+// GET returns the whole config; POST replaces it. Shape:
+//   { <venue>: { foodPerMeal?, drinkPerMeal?, labourByDay?: { Mon..Sun } } }
+router.get('/targets', asyncHandler(async (_req: Request, res: Response) => {
+  const row = await prisma.financeTargets.findUnique({ where: { id: 'default' } });
+  res.json((row?.config as TargetsConfig) || {});
+}));
+
+router.post('/targets', requireScreenEdit('finance'), asyncHandler(async (req: Request, res: Response) => {
+  const body = (req.body || {}) as TargetsConfig;
+  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+  const clean: TargetsConfig = {};
+  for (const venue of VENUES) {
+    const vt = body[venue];
+    if (!vt || typeof vt !== 'object') continue;
+    const out: VenueTargets = {};
+    const f = num(vt.foodPerMeal); if (f !== undefined) out.foodPerMeal = f;
+    const d = num(vt.drinkPerMeal); if (d !== undefined) out.drinkPerMeal = d;
+    if (vt.labourByDay && typeof vt.labourByDay === 'object') {
+      const lbd: Record<string, number> = {};
+      for (const wd of WEEKDAYS) { const n = num(vt.labourByDay[wd]); if (n !== undefined) lbd[wd] = n; }
+      if (Object.keys(lbd).length) out.labourByDay = lbd;
+    }
+    if (Object.keys(out).length) clean[venue] = out;
+  }
+  await withWriteLock(() => prisma.financeTargets.upsert({
+    where: { id: 'default' },
+    create: { id: 'default', config: clean as unknown as Prisma.InputJsonValue },
+    update: { config: clean as unknown as Prisma.InputJsonValue },
+  }));
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'finance-targets-update', JSON.stringify(clean));
+  res.json({ ok: true, config: clean });
 }));
 
 router.post('/sync', requireScreenEdit('finance'), (req: Request, res: Response) => {
