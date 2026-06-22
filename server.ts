@@ -145,6 +145,31 @@ app.listen(PORT, () => {
     console.log('  Finance sync scheduled:', schedule);
   }).catch(() => { console.log('  node-cron not available, skipping finance sync'); });
 
+  // Intraday Tebi finance sync waves — pull TODAY-so-far so the Sering Hub's
+  // live dashboard tracks the service day. The 04:30 cron above does the 14-day
+  // backfill; these sync today only (much lighter). runTebiSync()'s isSyncing()
+  // guard skips a wave if a sync is still running, so waves never overlap.
+  // Pinned to Europe/Amsterdam so the service times stay correct across DST
+  // (Railway runs UTC). Every wave time is between 02:00 and midnight Amsterdam,
+  // so the UTC calendar date equals the Amsterdam business day — today's date
+  // is the right day to sync. Each wave also refreshes the Hub's raw L1
+  // (tebi_invoice / tebi_product_daily), which the Hub recomputes ~10 min later.
+  import('node-cron').then(cron => {
+    const TZ = process.env.FINANCE_TZ || 'Europe/Amsterdam';
+    const waveCron = process.env.FINANCE_INTRADAY_CRON || '0 14,18,20 * * *';
+    const lateCron = process.env.FINANCE_INTRADAY_CRON_LATE || '30 23 * * *';
+    const syncToday = (label: string) => {
+      const d = new Date().toISOString().slice(0, 10);
+      const result = runTebiSync({ start: d, end: d, source: 'cron' });
+      if (!result.ok) {
+        console.log(`[finance-intraday:${label}] Skipped: ${result.error}`);
+      }
+    };
+    cron.schedule(waveCron, () => syncToday('wave'), { timezone: TZ });
+    cron.schedule(lateCron, () => syncToday('late'), { timezone: TZ });
+    console.log(`  Finance intraday sync scheduled (${TZ}): ${waveCron} + ${lateCron}`);
+  }).catch(() => { console.log('  node-cron not available, skipping intraday finance sync'); });
+
   // Daily Notion competency-chunk sync — Notion is the source of truth for the
   // chunk library; pull the latest in (upsert is idempotent).
   if (CONFIG.NOTION_TOKEN && CONFIG.NOTION_CHUNKS_DATA_SOURCE_ID) {

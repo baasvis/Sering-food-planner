@@ -792,6 +792,43 @@ function formatResults(results, startDate, profitCenters) {
 // staff_dinner } } and is the source for the GuestHistory auto-update done
 // in tebi-sync-worker.js. `productRows` is built from product_top (no
 // invoice line items as of 2026-05-07).
+// VENDORED from sering-hub/sources/tebi/scraper.js (formatRawProductDaily) —
+// keep in sync. Builds raw per-PC product_top rows for the Hub's
+// TebiProductDaily L1. No reassignment / type / net — the Hub's L2 recompute
+// applies attribution + type + BTW on read, so the planner writes only the
+// raw Tebi shape. Walks the identical product_top response as
+// formatProductRevenueFromTop above (groupedBy ITEM / metrics).
+function formatRawProductDaily(productTopByPc, profitCenters, date) {
+  const rows = [];
+  for (const [pcName, chartData] of Object.entries(productTopByPc || {})) {
+    if (!chartData || !Array.isArray(chartData.data)) continue;
+    const pcUuid = (profitCenters || {})[pcName] || '';
+    for (const entry of chartData.data) {
+      const itemEntry = (entry.key && Array.isArray(entry.key.groupedBy))
+        ? entry.key.groupedBy.find(g => g && g.name === 'ITEM')
+        : null;
+      if (!itemEntry) continue;
+      const productName = itemEntry.value || 'Unknown';
+      const qtyMetric = (entry.metrics || []).find(m => m && m.name === 'TOTAL_PRODUCTS_SOLD');
+      const grossMetric = (entry.metrics || []).find(m => m && m.name === 'GROSS_REVENUE');
+      const quantity = qtyMetric ? parseFloat(qtyMetric.value) || 0 : 0;
+      const grossRevenue = grossMetric && typeof grossMetric.value === 'object'
+        ? parseFloat(grossMetric.value.quantity) || 0
+        : 0;
+      if (quantity <= 0 && grossRevenue <= 0) continue;
+      rows.push({
+        date,
+        profitCenterName: pcName,
+        profitCenterId: pcUuid,
+        productName,
+        quantity: r2(quantity),
+        grossRevenue: r2(grossRevenue),
+      });
+    }
+  }
+  return rows;
+}
+
 async function runForAccount(config, page, startDate, endDate) {
   const { email, password, ledgerId, forceLocation } = config;
 
@@ -830,7 +867,16 @@ async function runForAccount(config, page, startDate, endDate) {
     );
     const guestCounts = deriveGuestCountsFromProductRows(productRows);
 
-    return { summary, productRows, guestCounts };
+    // Raw L1 capture for the Hub (TebiInvoice + TebiProductDaily). The Hub's
+    // L2 recompute reads these and applies attribution/type/BTW on read, so we
+    // pass only the raw Tebi shape. invoices.data is the post-2026-05-07 key;
+    // .content is the pre-rename fallback.
+    const invoices = Array.isArray(rawData.invoices?.data)
+      ? rawData.invoices.data
+      : Array.isArray(rawData.invoices?.content) ? rawData.invoices.content : [];
+    const rawProductRows = formatRawProductDaily(rawData.productTopByPc, profitCenters, startDate);
+
+    return { summary, productRows, guestCounts, invoices, rawProductRows };
   } finally {
     process.env.TEBI_EMAIL    = origEmail;
     process.env.TEBI_PASSWORD = origPass;
