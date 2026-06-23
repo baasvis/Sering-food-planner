@@ -291,6 +291,19 @@ model ClosedServices {
   @@map("closed_services")
 }
 
+// Controllable targets for the live finance dashboard (staff screen). config:
+//   { <venue>: { foodPerMeal: number|null, drinkPerMeal: number|null,
+//                labourByDay: { Mon: number|null, ..., Sun: number|null } } }
+// venue = west | centraal | testtafel. foodPerMeal/drinkPerMeal are € that
+// staff influence via upselling; labourByDay is a € labour-cost target per
+// weekday. No revenue target by design (covers/footfall aren't controllable).
+model FinanceTargets {
+  id     String @id @default("default")
+  config Json   @default("{}")
+
+  @@map("finance_targets")
+}
+
 model DailyRevenue {
   id           Int    @id @default(autoincrement())
   date         String

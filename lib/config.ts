@@ -40,6 +40,7 @@ export const CONFIG = {
   // chunk content; the app pulls it in read-only.
   NOTION_TOKEN: process.env.NOTION_TOKEN || '',
   NOTION_CHUNKS_DATA_SOURCE_ID: process.env.NOTION_CHUNKS_DATA_SOURCE_ID || '',
+  NOTION_SHIFTS_DATA_SOURCE_ID: process.env.NOTION_SHIFTS_DATA_SOURCE_ID || '', // "Sering Shifts" roster → live-dashboard labour
 };
 
 // Extract error message safely from unknown caught values

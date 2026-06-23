@@ -3,11 +3,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import express, { Request, Response } from 'express';
-import { prisma } from '../lib/db';
+import { prisma, withWriteLock, dbAppendLog } from '../lib/db';
 import { asyncHandler } from '../lib/config';
 import { runTebiSync, cancelSync, getStatus, isSyncing } from '../lib/tebi-sync';
 import { requireScreenEdit } from './auth';
 import { formatIso, addDays } from '../shared/dates';
+import { classifyDayRows, cumulativeByHour, isoWeekDates, shiftDate, r2, perMeal, cleanTargetsConfig, resolveTargetsForDay, VENUES, type DaySummary } from '../lib/finance-live';
+import { computeLabour, blendedRate } from '../lib/labour';
+import { getPlannedShiftsForDate, shiftsConfigured } from '../lib/notion-shifts';
 import type { Prisma } from '@prisma/client';
 
 const router = express.Router();
@@ -199,6 +202,147 @@ router.get('/products', asyncHandler(async (req: Request, res: Response) => {
   }
 
   res.json(rows);
+}));
+
+// ── Live staff dashboard (Sering Hub-fed) ───────────────────────────────────
+// One venue's day, read from the Hub's L2 tables in the shared DB: revenue with
+// a food/drink split, meals sold, spend-per-meal (the controllable targets),
+// top products, the intraday curve, and last-week / week-to-date context.
+// Targets and labour are layered on by separate endpoints.
+//
+// The POS records no cover count (TEBI.md), so "per meal" uses MEAL-type product
+// quantities as the denominator — which is also exactly the "spend per meal"
+// staff influence. Food vs drink is classified by the Hub's Type name (ProductDay
+// carries the financial Type); the regexes below are intentionally broad and
+// tunable.
+// SOURCE: the L2 tables carry `source` ('tebi' | 'lightspeed'). For a LIVE
+// dashboard we read Tebi only — Lightspeed is the pre-2026-05 archive, and a
+// handful of cutover-overlap dates carry BOTH sources, which would double-count
+// if summed. Every current / last-week / this-week date is Tebi.
+const SOURCE = 'tebi';
+const VENUE_SET = new Set<string>(VENUES);
+
+async function summarizeDay(org: string, date: string): Promise<DaySummary> {
+  const rows = await prisma.productDay.findMany({
+    where: { org, date, source: SOURCE },
+    select: { productName: true, type: true, qty: true, gross: true, net: true },
+  });
+  return classifyDayRows(rows.map((row) => ({
+    productName: row.productName, type: row.type, qty: row.qty,
+    gross: Number(row.gross), net: Number(row.net),
+  })));
+}
+
+router.get('/live', asyncHandler(async (req: Request, res: Response) => {
+  const venue = String(req.query.venue || 'west');
+  if (!VENUE_SET.has(venue)) {
+    return res.status(400).json({ error: 'venue must be west, centraal or testtafel' });
+  }
+  const date = String(req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' }));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  }
+  const priorDate = shiftDate(date, -7);
+
+  const [today, prior, hoursToday, hoursPrior, salesToday, freshness, targetsRow] = await Promise.all([
+    summarizeDay(venue, date),
+    summarizeDay(venue, priorDate),
+    prisma.salesHour.findMany({ where: { org: venue, date, source: SOURCE }, select: { hour: true, gross: true }, orderBy: { hour: 'asc' } }),
+    prisma.salesHour.findMany({ where: { org: venue, date: priorDate, source: SOURCE }, select: { hour: true, gross: true }, orderBy: { hour: 'asc' } }),
+    prisma.salesDay.findFirst({ where: { org: venue, date, source: SOURCE }, select: { sales: true, computedAt: true } }),
+    prisma.weeklyRevenue.aggregate({ _max: { computedAt: true } }),
+    prisma.financeTargets.findUnique({ where: { id: 'default' } }),
+  ]);
+
+  // Controllable targets for this venue + weekday (no revenue target by design).
+  const targets = resolveTargetsForDay(cleanTargetsConfig(targetsRow?.config), venue, date);
+
+  const topProducts = today.products
+    .slice()
+    .sort((a, b) => b.gross - a.gross)
+    .slice(0, 8)
+    .map((p) => ({ name: p.name, qty: p.qty, gross: p.gross, bucket: p.bucket }));
+
+  const weekDates = isoWeekDates(date).filter((d) => d <= date);
+  const wtdRows = await prisma.salesDay.findMany({ where: { org: venue, date: { in: weekDates }, source: SOURCE }, select: { date: true, gross: true } });
+  const byDay = weekDates.map((d) => ({ date: d, gross: r2(Number(wtdRows.find((row) => row.date === d)?.gross || 0)) }));
+
+  // Planned labour: today's roster shifts (Notion) × a blended €/hr from the
+  // venue's most recent WeeklyHours week. labour% = cost incurred so far ÷
+  // revenue so far. Null when the Notion shifts integration isn't configured.
+  let labour: ReturnType<typeof computeLabour> | null = null;
+  if (shiftsConfigured()) {
+    const todayAms = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
+    let nowMin = 100000;          // a past/complete day counts every shift in full
+    if (date > todayAms) nowMin = 0;  // future day: nothing elapsed yet
+    else if (date === todayAms) {
+      const [h, m] = new Date().toLocaleTimeString('en-GB', { timeZone: 'Europe/Amsterdam', hour12: false }).split(':').map(Number);
+      nowMin = h * 60 + m;
+    }
+    const [shifts, latestWk] = await Promise.all([
+      getPlannedShiftsForDate(date),
+      prisma.weeklyHours.findFirst({ where: { org: venue }, orderBy: [{ year: 'desc' }, { week: 'desc' }], select: { year: true, week: true } }),
+    ]);
+    const rateRows = latestWk
+      ? await prisma.weeklyHours.findMany({ where: { org: venue, year: latestWk.year, week: latestWk.week }, select: { hours: true, total: true } })
+      : [];
+    const rate = blendedRate(rateRows.map((r) => ({ hours: Number(r.hours), total: Number(r.total) })));
+    labour = computeLabour(shifts.filter((s) => s.org === venue), rate, nowMin, today.gross);
+  }
+
+  res.json({
+    venue,
+    date,
+    updatedAt: (salesToday?.computedAt || freshness._max.computedAt)?.toISOString() ?? null,
+    today: {
+      revenueGross: r2(today.gross),
+      revenueNet: r2(today.net),
+      revenueFood: r2(today.foodGross),
+      revenueDrink: r2(today.drinkGross),
+      revenueOther: r2(today.otherGross),
+      revenueUncategorized: r2(today.uncategorizedGross),
+      meals: Math.round(today.meals * 10) / 10,
+      sales: salesToday?.sales ?? 0,
+      spendPerMeal: perMeal(today.gross, today.meals),
+      foodPerMeal: perMeal(today.foodGross, today.meals),
+      drinkPerMeal: perMeal(today.drinkGross, today.meals),
+    },
+    lastWeek: {
+      date: priorDate,
+      revenueGross: r2(prior.gross),
+      meals: Math.round(prior.meals * 10) / 10,
+      spendPerMeal: perMeal(prior.gross, prior.meals),
+    },
+    topProducts,
+    targets,
+    labour,
+    intraday: { today: cumulativeByHour(hoursToday), lastWeek: cumulativeByHour(hoursPrior) },
+    weekToDate: { gross: r2(byDay.reduce((s, x) => s + x.gross, 0)), byDay },
+  });
+}));
+
+// ── Controllable targets config (manager-set) ───────────────────────────────
+// GET returns the whole config; POST replaces it. Shape:
+//   { <venue>: { foodPerMeal?, drinkPerMeal?, labourByDay?: { Mon..Sun } } }
+router.get('/targets', asyncHandler(async (_req: Request, res: Response) => {
+  const row = await prisma.financeTargets.findUnique({ where: { id: 'default' } });
+  res.json(cleanTargetsConfig(row?.config));
+}));
+
+// Full-replace: the editor loads then saves the whole config, so POST overwrites
+// it (out-of-range / unknown keys are dropped by cleanTargetsConfig). No SSE
+// broadcast — the saver's own dashboard refreshes via loadFinanceLive(), and
+// other open dashboards re-read targets on their next 60s /live poll.
+router.post('/targets', requireScreenEdit('finance'), asyncHandler(async (req: Request, res: Response) => {
+  const clean = cleanTargetsConfig(req.body);
+  await withWriteLock(() => prisma.financeTargets.upsert({
+    where: { id: 'default' },
+    create: { id: 'default', config: clean as unknown as Prisma.InputJsonValue },
+    update: { config: clean as unknown as Prisma.InputJsonValue },
+  }));
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'finance-targets-update', JSON.stringify(clean));
+  res.json({ ok: true, config: clean });
 }));
 
 router.post('/sync', requireScreenEdit('finance'), (req: Request, res: Response) => {

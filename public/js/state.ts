@@ -204,6 +204,8 @@ export interface AppState {
   financeWeekOffset: number;
   financeProductMeal: string;
   financeProductLoc: string;
+  financeLiveVenue: string;        // live dashboard: selected venue
+  financeLive: unknown;            // live dashboard: /api/finance/live payload (or null)
   // ── Drinks module ──
   drinks: Drink[];
   drinkSuppliers: DrinkSupplier[];
@@ -271,6 +273,8 @@ export let S: AppState = {
   financeWeekOffset: 0,
   financeProductMeal: 'all',
   financeProductLoc: 'all',
+  financeLiveVenue: 'west',
+  financeLive: null,
   drinks: [],
   drinkSuppliers: [],
   drinkConfig: null,
