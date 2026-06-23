@@ -71,6 +71,7 @@
 .fin-empty { font-size: 13px; color: var(--text2); padding: 18px 0; text-align: center; }
 .fin-empty-sub { font-size: 12px; }
 .fin-loading { font-size: 14px; color: var(--text2); padding: 40px 0; text-align: center; }
+.fin-error { font-size: 14px; color: var(--text2); padding: 40px 0; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
 
 /* targets editor */
 .fin-tg-modal h3 { margin: 0 0 4px; }

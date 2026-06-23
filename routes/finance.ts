@@ -11,7 +11,6 @@ import { formatIso, addDays } from '../shared/dates';
 import { classifyDayRows, cumulativeByHour, isoWeekDates, shiftDate, r2, perMeal, cleanTargetsConfig, resolveTargetsForDay, VENUES, type DaySummary } from '../lib/finance-live';
 import { computeLabour, blendedRate } from '../lib/labour';
 import { getPlannedShiftsForDate, shiftsConfigured } from '../lib/notion-shifts';
-import { broadcast } from './events';
 import type { Prisma } from '@prisma/client';
 
 const router = express.Router();
@@ -331,8 +330,9 @@ router.get('/targets', asyncHandler(async (_req: Request, res: Response) => {
 }));
 
 // Full-replace: the editor loads then saves the whole config, so POST overwrites
-// it (out-of-range / unknown keys are dropped by cleanTargetsConfig). broadcast()
-// keeps other live-dashboard viewers in sync, matching the sibling config POSTs.
+// it (out-of-range / unknown keys are dropped by cleanTargetsConfig). No SSE
+// broadcast — the saver's own dashboard refreshes via loadFinanceLive(), and
+// other open dashboards re-read targets on their next 60s /live poll.
 router.post('/targets', requireScreenEdit('finance'), asyncHandler(async (req: Request, res: Response) => {
   const clean = cleanTargetsConfig(req.body);
   await withWriteLock(() => prisma.financeTargets.upsert({
@@ -342,7 +342,6 @@ router.post('/targets', requireScreenEdit('finance'), asyncHandler(async (req: R
   }));
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'finance-targets-update', JSON.stringify(clean));
-  broadcast(user.email, 'patch', { user: user.name, financeTargets: clean });
   res.json({ ok: true, config: clean });
 }));
 
