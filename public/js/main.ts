@@ -20,7 +20,8 @@ import { aiRecipeSend, aiRecipeKey, aiRecipeReset } from './recipe-ai-chat';
 import { renderOrders, switchOrdersTab, renderStandardInventoryTab, renderDishesTab, renderBatchIngredientTable, renderCombinedOrderTab, toggleBatchIngredient, toggleAllBatchIngredients, toggleCombinedIncludeDishes, copyOrderCodes, copyDishOrderCodes, copySiOrderCodes, copyCombinedOrderCodes, checkHanosStatus, isHanosEnabled, collectHanosItems, hanosAddSingle, hanosConfirmBulk, collectHanosBatchItems, hanosConfirmBulkBatches, showHanosConfirmModal, hanosExecuteFromModal, saveGramsPerPiece, toggleOrderSection, persistIngredientStock, updateOrderStockInput, updateCombinedOrderStock, updateOrderStock, startStocktake, renderStocktakeAreaPicker, enterStocktakeArea, renderStocktakeArea, updateStocktakeToOrder, saveStocktakeArea, exitStocktake, buildCombinedOrderData, getIngredientsForArea, toBaseUnit, normalizeSupplier, formatAmount, lookupIngredient, getDbStockTotal, hasDbStockEntry, formatStorageLoc, getStorageCategory, renderStorageBadge, calcOrderUnits, getStandardInventoryItems, updateSiSearch, hideSiSuggestions, addToStandardInventory, removeSiItem, updateSiTarget, updateSiStock, resetBatchToggles } from './orders';
 import { renderIngredientDbTab, loadIngredientDbFull, updateIngredientSearch, getFilteredIngredients, renderTypePills, renderPriceLevel, renderInlineStock, saveInlineStock, renderStockBadges, renderIngredientEditRow, showInlineCategoryEdit, saveInlineCategory, updateStorageLocOpts, updateEditCategoryOptions, saveIngredientEdit, toggleIngredientActive, deleteIngredient, openIngredientModal, saveIngredientFromModal, hanosLookupProduct, openAddIngredientModal, saveNewIngredient, openStoragePopover, updatePopStorageLoc, saveStorageFromPopover, handleSupplierUpload, renderSupplierImportPanel, applySupplierUpdate, openStorageLocationsModal, renderStorageModal, ingredientMatchesTypeFilter, getCategoriesForTypeFilter, dropStorageArea, updateStorageColor, addStorageCategory, removeStorageCategory, addStorageSpot, removeStorageSpot, storageModalLoc, storageModalDragIdx, setIngredientDbEditId } from './ingredient-db';
 import { renderFinance, loadFinanceLive, setFinanceVenue, financeRefreshNow, openFinanceTargets, saveFinanceTargets } from './finance';
-import { openFeedback, selectFeedbackType, submitFeedback, showFeedbackFab, feedbackTypes, feedbackSelectedType } from './feedback';
+import { openQuickFeedback, selectFeedbackType, submitFeedback, showFeedbackFab, feedbackTypes, feedbackSelectedType } from './feedback';
+import { openFeedbackChat, feedbackChatSend, feedbackChatKey, sendFeedbackReport } from './feedback-ai-chat';
 import { renderFeedbackAdmin, setFeedbackFilter, copyFeedbackForClaude, formatFeedbackDate, feedbackData, feedbackFilter, toggleFeedbackItemProcessed, toggleFeedbackProcessed } from './feedback-admin';
 import { TUTORIALS, startTutorial, tutNext, tutPrev, tutSkip } from './tutorial';
 import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, switchGlobalLocation, confirmSwitchLocation } from './init';
@@ -105,8 +106,9 @@ Object.assign(window, {
   // finance
   renderFinance, loadFinanceLive, setFinanceVenue, financeRefreshNow, openFinanceTargets, saveFinanceTargets,
 
-  // feedback
-  openFeedback, selectFeedbackType, submitFeedback, showFeedbackFab,
+  // feedback — FAB opens the AI intake chat; quick form is the escape hatch
+  openFeedback: openFeedbackChat, openQuickFeedback, feedbackChatSend, feedbackChatKey, sendFeedbackReport,
+  selectFeedbackType, submitFeedback, showFeedbackFab,
 
   // feedback-admin
   renderFeedbackAdmin, setFeedbackFilter, copyFeedbackForClaude, toggleFeedbackItemProcessed, toggleFeedbackProcessed,

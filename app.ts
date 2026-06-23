@@ -51,6 +51,8 @@ app.use(compression({
     if (req.path.startsWith('/api/events')) return false;
     // Recipe AI chat is also SSE — must not buffer.
     if (req.path.startsWith('/api/recipe-ai/chat')) return false;
+    // Feedback intake chat is SSE too.
+    if (req.path.startsWith('/api/feedback-ai/chat')) return false;
     return compression.filter(req, res);
   },
 }));
@@ -184,6 +186,9 @@ app.use('/api/admin',             adminRouter);
 
 import recipeAiRouter from './routes/recipe-ai';
 app.use('/api/recipe-ai',         recipeAiRouter);
+
+import feedbackAiRouter from './routes/feedback-ai';
+app.use('/api/feedback-ai',       feedbackAiRouter);
 
 // ── Global error handler ──
 

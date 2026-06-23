@@ -14,15 +14,18 @@ export const feedbackTypes = [
 
 export let feedbackSelectedType = '';
 
-export function openFeedback() {
+// The legacy one-shot form. The FAB now opens the AI intake chat
+// (openFeedbackChat); this stays as the "quick note" escape hatch for people in
+// a hurry, reachable from the chat header.
+export function openQuickFeedback() {
   const currentScreen = document.querySelector('.screen.active')?.id?.replace('screen-', '') || 'unknown';
   const screenLabels = { dashboard:'Dashboard', guests:'Guests', planner:'Week plan', 'recipe-index':'Recipes', orders:'Orders' };
   const screenLabel = screenLabels[currentScreen] || currentScreen;
 
   feedbackSelectedType = '';
 
-  showModal(`<h3>Feedback &amp; ideas</h3>
-    <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">Help us improve De Sering's food planner. Every bit of feedback counts.</p>
+  showModal(`<h3>Quick note</h3>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">In a hurry? Jot it down here. Or <a href="#" onclick="openFeedback();return false;" style="color:var(--purple);font-weight:600;">talk it through with the assistant &rarr;</a></p>
     <div class="feedback-form">
       <div>
         <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:6px;">What kind of feedback?</label>
@@ -76,6 +79,7 @@ export async function submitFeedback(screen: any) {
     type: feedbackSelectedType || 'general',
     text,
     screen,
+    source: 'quick',
     user: S.user?.name || S.user?.email || 'anonymous',
     timestamp: new Date().toISOString(),
     userAgent: navigator.userAgent,
