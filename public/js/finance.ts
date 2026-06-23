@@ -1,490 +1,296 @@
-import { S, LOCATIONS, DAYS } from './state';
+import { S } from './state';
+import { canEditScreen } from './state';
 import { apiGet, apiPost, toast, toastError } from './utils';
 import { esc } from './modal';
-import { trackEvent } from './telemetry';
+import { showModal, closeModal } from './modal';
+import { getCurrentScreen } from './navigate';
 import { registerRenderer } from './navigate';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FINANCE — Revenue overview from Tebi POS
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Wire shapes returned by the finance endpoints (routes/finance.ts). S.financeData
-// and S.financeProducts are typed Record<string, unknown>[] in AppState, so we
-// narrow the rows to these local interfaces at the point of use.
-interface FinanceRow {
-  date: string;
-  location: string;
-  grossRevenue: number;
-  netRevenue: number;
-  sales: number;
-  covers: number;
-}
-
-interface FinanceProductRow {
-  productName: string;
-  productCategory: string;
-  quantity: number;
-  grossRevenue: number;
-  netRevenue: number;
-}
-
-export function getFinanceMonday(offset: any) {
-  const d = new Date();
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
-  d.setDate(diff + (offset || 0) * 7);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-// Delegate to @shared/dates — was duplicating dateToIso/todayIso/localDateStr.
-// `import as` + `export` (not pure re-export) so the aliases land in local
-// scope; renderFinance and loadFinanceData call fmtDate / fmtDateShort below.
 import { formatIso as fmtDate, shortDayMonth as fmtDateShort } from '@shared/dates';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FINANCE — live staff dashboard (Sering Hub-fed). One venue at a time; live
+// pulse + today scorecard + week-to-date, scored against the controllable
+// targets (spend-per-meal, labour). Data from GET /api/finance/live.
+// ─────────────────────────────────────────────────────────────────────────────
+
 export { fmtDate, fmtDateShort };
 
-export function fmtEuro(n: any) {
-  if (n == null || isNaN(n)) return '-';
+export function fmtEuro(n: unknown): string {
+  if (n == null || isNaN(Number(n))) return '–';
   return '€' + Number(n).toLocaleString('nl-NL', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
-
-export function fmtEuroFull(n: any) {
-  if (n == null || isNaN(n)) return '-';
+export function fmtEuroFull(n: unknown): string {
+  if (n == null || isNaN(Number(n))) return '–';
   return '€' + Number(n).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+const eur2 = (n: number | null | undefined): string => (n == null || isNaN(Number(n)) ? '–' : '€' + Number(n).toFixed(2));
+const eur0 = (n: number | null | undefined): string => (n == null || isNaN(Number(n)) ? '–' : '€' + Math.round(Number(n)).toLocaleString('nl-NL'));
 
-export const SERVICE_PERIODS = [
-  { key: 'all', label: 'All' },
-  { key: 'morning', label: 'Morning' },
-  { key: 'lunch', label: 'Lunch' },
-  { key: 'afternoon', label: 'Afternoon' },
-  { key: 'dinner', label: 'Dinner' },
-  { key: 'bar', label: 'Bar' },
-];
-
-export const FINANCE_LOCATIONS = [
-  { key: 'all', label: 'All locations' },
-  { key: 'west', label: 'West' },
+const VENUE_TABS = [
+  { key: 'west', label: 'Sering West' },
   { key: 'centraal', label: 'Centraal' },
   { key: 'testtafel', label: 'TestTafel' },
 ];
 
-// ── Data loading ────────────────────────────────────────────────────────────
+interface LiveTargets { foodPerMeal: number | null; drinkPerMeal: number | null; labourToday: number | null }
+interface LiveLabour { plannedHours: number; plannedCost: number | null; hoursSoFar: number; costSoFar: number | null; pctOfRevenue: number | null; headcountOn: number; ratePerHour: number | null; shiftCount: number }
+interface LiveData {
+  venue: string; date: string; updatedAt: string | null;
+  today: { revenueGross: number; revenueNet: number; revenueFood: number; revenueDrink: number; revenueOther: number; revenueUncategorized: number; meals: number; sales: number; spendPerMeal: number | null; foodPerMeal: number | null; drinkPerMeal: number | null };
+  lastWeek: { date: string; revenueGross: number; meals: number; spendPerMeal: number | null };
+  topProducts: { name: string; qty: number; gross: number; bucket: string }[];
+  targets: LiveTargets;
+  labour: LiveLabour | null;
+  intraday: { today: { hour: number; cum: number }[]; lastWeek: { hour: number; cum: number }[] };
+  weekToDate: { gross: number; byDay: { date: string; gross: number }[] };
+}
 
-export async function loadFinanceData() {
-  const monday = getFinanceMonday(S.financeWeekOffset);
-  const sunday = new Date(monday);
-  sunday.setDate(sunday.getDate() + 6);
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Also load the full month for summary
-  const monthStart = new Date(monday.getFullYear(), monday.getMonth(), 1);
-  const monthEnd = new Date(monday.getFullYear(), monday.getMonth() + 1, 0);
-
-  const start = fmtDate(monthStart < monday ? monthStart : monday);
-  const end = fmtDate(monthEnd > sunday ? monthEnd : sunday);
-
+// ── Data ─────────────────────────────────────────────────────────────────────
+export async function loadFinanceLive(): Promise<void> {
+  const venue = S.financeLiveVenue || 'west';
   try {
-    S.financeData = await apiGet(`/api/finance/revenue?start=${start}&end=${end}`);
+    S.financeLive = await apiGet(`/api/finance/live?venue=${venue}`) as unknown as LiveData;
   } catch (e: unknown) {
-    console.error('Failed to load finance data:', e);
-    S.financeData = [];
+    S.financeLive = null;
+    toastError('Could not load live data: ' + (e instanceof Error ? e.message : 'error'));
   }
-
-  // Also load product data
-  await loadFinanceProducts();
-}
-
-export async function loadFinanceProducts() {
-  const monday = getFinanceMonday(S.financeWeekOffset);
-  const sunday = new Date(monday);
-  sunday.setDate(sunday.getDate() + 6);
-
-  let url = `/api/finance/products?start=${fmtDate(monday)}&end=${fmtDate(sunday)}`;
-  if (S.financeProductLoc !== 'all') url += `&location=${S.financeProductLoc}`;
-  if (S.financeProductMeal !== 'all') url += `&meal=${S.financeProductMeal}`;
-
-  try {
-    S.financeProducts = await apiGet(url);
-  } catch (e: unknown) {
-    console.error('Failed to load product data:', e);
-    S.financeProducts = [];
-  }
-}
-
-export async function checkSyncStatus() {
-  try {
-    const status = await apiGet('/api/finance/sync-status');
-    S.financeSyncing = status.syncing;
-    return status;
-  } catch (e: unknown) {
-    return { syncing: false };
-  }
-}
-
-export async function triggerSync() {
-  trackEvent('finance_sync');
-  if (S.financeSyncing) return;
-
-  // Sync the last 7 days by default
-  const end = new Date();
-  end.setDate(end.getDate() - 1);
-  const start = new Date(end);
-  start.setDate(start.getDate() - 6);
-
-  try {
-    S.financeSyncing = true;
-    renderFinance();
-    await apiPost('/api/finance/sync', {
-      startDate: fmtDate(start),
-      endDate: fmtDate(end),
-    });
-
-    // Poll for completion
-    const poll = setInterval(async () => {
-      const status = await checkSyncStatus();
-      if (!status.syncing) {
-        clearInterval(poll);
-        S.financeSyncing = false;
-        await loadFinanceData();
-        renderFinance();
-        if (status.lastSyncError) {
-          toastError(status.lastSyncError);
-        } else {
-          toast('Revenue synced from Tebi');
-        }
-      }
-    }, 3000);
-
-  } catch (e: unknown) {
-    S.financeSyncing = false;
-    toastError('Sync failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
-    renderFinance();
-  }
-}
-
-// ── Render ───────────────────────────────────────────────────────────────────
-
-export async function renderFinance() {
-  const el = document.getElementById('screen-finance');
-  if (!el) return;
-
-  // Load data if empty
-  if (S.financeData.length === 0 && !S.financeSyncing) {
-    await loadFinanceData();
-  }
-
-  const monday = getFinanceMonday(S.financeWeekOffset);
-  const sunday = new Date(monday);
-  sunday.setDate(sunday.getDate() + 6);
-
-  // Build week dates array
-  const weekDates = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(monday);
-    d.setDate(d.getDate() + i);
-    weekDates.push(fmtDate(d));
-  }
-
-  // Group data by date and location
-  const financeRows = (S.financeData || []) as unknown as FinanceRow[];
-  const byDateLoc: Record<string, FinanceRow> = {};
-  financeRows.forEach(row => {
-    const key = `${row.date}|${row.location}`;
-    byDateLoc[key] = row;
-  });
-
-  // Get "all" totals for week
-  const weekTotals = weekDates.map(d => byDateLoc[`${d}|all`] || null);
-
-  // Monthly totals
-  const monthStart = new Date(monday.getFullYear(), monday.getMonth(), 1);
-  const monthEnd = new Date(monday.getFullYear(), monday.getMonth() + 1, 0);
-  let monthGross = 0, monthNet = 0, monthSales = 0, monthCovers = 0;
-  financeRows.forEach(row => {
-    if (row.location !== 'all') return;
-    if (row.date >= fmtDate(monthStart) && row.date <= fmtDate(monthEnd)) {
-      monthGross += row.grossRevenue || 0;
-      monthNet += row.netRevenue || 0;
-      monthSales += row.sales || 0;
-      monthCovers += row.covers || 0;
-    }
-  });
-
-  // Week gross total for bar chart scaling
-  const weekGrossValues = weekTotals.map(t => (t && t.grossRevenue) || 0);
-  const maxGross = Math.max(...weekGrossValues, 1);
-
-  // Month name
-  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const monthLabel = `${monthNames[monday.getMonth()]} ${monday.getFullYear()}`;
-
-  // Location rows for the table
-  const locations = ['west', 'centraal', 'testtafel'];
-  const locLabels = { west: 'Sering West', centraal: 'Sering Centraal', testtafel: 'TestTafel' };
-
-  const syncBtnText = S.financeSyncing
-    ? '<span class="fin-spinner"></span> Syncing...'
-    : 'Sync from Tebi';
-  const cancelBtn = S.financeSyncing
-    ? '<button class="fin-cancel-btn" onclick="cancelSync()">Cancel</button>'
-    : '';
-
-  el.innerHTML = `
-    <div class="fin-header">
-      <div class="fin-week-nav">
-        <button class="fin-nav-btn" onclick="changeFinanceWeek(-1)">&larr;</button>
-        <span class="fin-week-label">
-          ${fmtDateShort(weekDates[0])} — ${fmtDateShort(weekDates[6])}
-        </span>
-        <button class="fin-nav-btn" onclick="changeFinanceWeek(1)">&rarr;</button>
-      </div>
-      <button class="fin-sync-btn ${S.financeSyncing ? 'syncing' : ''}"
-              onclick="triggerSync()" ${S.financeSyncing ? 'disabled' : ''}>
-        ${syncBtnText}
-      </button>
-      ${cancelBtn}
-    </div>
-
-    <div class="fin-month-summary">
-      <h3>${monthLabel}</h3>
-      <div class="fin-cards">
-        <div class="fin-card">
-          <div class="fin-card-label">Gross revenue</div>
-          <div class="fin-card-value">${fmtEuroFull(monthGross)}</div>
-        </div>
-        <div class="fin-card">
-          <div class="fin-card-label">Net revenue</div>
-          <div class="fin-card-value">${fmtEuroFull(monthNet)}</div>
-        </div>
-        <div class="fin-card">
-          <div class="fin-card-label">Sales</div>
-          <div class="fin-card-value">${monthSales}</div>
-        </div>
-        <div class="fin-card">
-          <div class="fin-card-label">Covers</div>
-          <div class="fin-card-value">${monthCovers || '-'}</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="fin-chart-section">
-      <h3>Daily gross revenue</h3>
-      <div class="fin-chart">
-        ${weekDates.map((d: any, i: any) => {
-          const val = weekGrossValues[i];
-          const pct = Math.round((val / maxGross) * 100);
-          const isToday = d === fmtDate(new Date());
-          return `
-            <div class="fin-bar-col">
-              <div class="fin-bar-value">${val > 0 ? fmtEuro(val) : ''}</div>
-              <div class="fin-bar-track">
-                <div class="fin-bar ${isToday ? 'today' : ''}" style="height:${pct}%"></div>
-              </div>
-              <div class="fin-bar-label">${DAYS[i]}</div>
-            </div>`;
-        }).join('')}
-      </div>
-    </div>
-
-    <div class="fin-table-section">
-      <h3>Revenue by location</h3>
-      <table class="fin-table">
-        <thead>
-          <tr>
-            <th></th>
-            ${weekDates.map((d: any, i: any) => `<th>${DAYS[i]}<br><small>${fmtDateShort(d)}</small></th>`).join('')}
-            <th>Week</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${locations.map(loc => {
-            const cells = weekDates.map(d => {
-              const row = byDateLoc[`${d}|${loc}`];
-              return row && row.grossRevenue ? fmtEuro(row.grossRevenue) : '-';
-            });
-            const weekTotal = weekDates.reduce((sum: any, d: any) => {
-              const row = byDateLoc[`${d}|${loc}`];
-              return sum + ((row && row.grossRevenue) || 0);
-            }, 0);
-            return `
-              <tr>
-                <td class="fin-loc-label">${locLabels[loc] || loc}</td>
-                ${cells.map(c => `<td>${c}</td>`).join('')}
-                <td class="fin-week-total">${weekTotal > 0 ? fmtEuro(weekTotal) : '-'}</td>
-              </tr>`;
-          }).join('')}
-          <tr class="fin-total-row">
-            <td class="fin-loc-label"><strong>Total</strong></td>
-            ${weekDates.map(d => {
-              const row = byDateLoc[`${d}|all`];
-              return `<td><strong>${row && row.grossRevenue ? fmtEuro(row.grossRevenue) : '-'}</strong></td>`;
-            }).join('')}
-            <td class="fin-week-total"><strong>${fmtEuro(weekGrossValues.reduce((a: any, b: any) => a + b, 0))}</strong></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    ${S.financeData.length === 0 && !S.financeSyncing ? `
-      <div class="fin-empty">
-        No revenue data yet. Click <strong>Sync from Tebi</strong> to pull data.
-      </div>
-    ` : ''}
-
-    ${renderProductBreakdown()}
-  `;
-}
-
-// ── Product Breakdown ────────────────────────────────────────────────────────
-
-// Aggregated row shapes built locally from FinanceProductRow rows.
-interface CategoryAgg { category: string; gross: number; net: number; qty: number }
-interface ProductAgg { name: string; category: string; gross: number; net: number; qty: number }
-
-export function renderProductBreakdown() {
-  const products = (S.financeProducts || []) as unknown as FinanceProductRow[];
-
-  // Aggregate by category for the bar chart
-  const catMap: Record<string, CategoryAgg> = {};
-  let totalGross = 0;
-  for (const row of products) {
-    const cat = row.productCategory || 'Other';
-    if (!catMap[cat]) catMap[cat] = { category: cat, gross: 0, net: 0, qty: 0 };
-    catMap[cat].gross += row.grossRevenue || 0;
-    catMap[cat].net += row.netRevenue || 0;
-    catMap[cat].qty += row.quantity || 0;
-    totalGross += row.grossRevenue || 0;
-  }
-  const categories = Object.values(catMap).sort((a, b) => b.gross - a.gross);
-  const maxCatGross = categories.length > 0 ? categories[0].gross : 1;
-
-  // Aggregate by product for the table (merge across dates)
-  const prodMap: Record<string, ProductAgg> = {};
-  for (const row of products) {
-    const key = row.productName;
-    if (!prodMap[key]) {
-      prodMap[key] = { name: row.productName, category: row.productCategory || '', gross: 0, net: 0, qty: 0 };
-    }
-    prodMap[key].gross += row.grossRevenue || 0;
-    prodMap[key].net += row.netRevenue || 0;
-    prodMap[key].qty += row.quantity || 0;
-  }
-  const productList = Object.values(prodMap).sort((a, b) => b.gross - a.gross);
-
-  // Category bar colors (cycle through a palette)
-  const catColors = ['#5b6abf', '#4CAF50', '#FF9800', '#E91E63', '#00BCD4', '#9C27B0', '#FF5722', '#607D8B', '#795548', '#8BC34A'];
-
-  return `
-    <div class="fin-products-section">
-      <h3>Product breakdown</h3>
-
-      <div class="fin-product-filters">
-        <div class="fin-filter-group">
-          <label>Service</label>
-          <div class="fin-pill-group">
-            ${SERVICE_PERIODS.map(p =>
-              `<button class="fin-pill ${S.financeProductMeal === p.key ? 'active' : ''}"
-                       onclick="setFinanceProductFilter('meal','${p.key}')">${p.label}</button>`
-            ).join('')}
-          </div>
-        </div>
-        <div class="fin-filter-group">
-          <label>Location</label>
-          <div class="fin-pill-group">
-            ${FINANCE_LOCATIONS.map(l => {
-              // West/Centraal pills take the location accent when active.
-              const locCls = (l.key === 'west' || l.key === 'centraal') ? ` fin-pill-loc loc-${l.key}` : '';
-              return `<button class="fin-pill${locCls} ${S.financeProductLoc === l.key ? 'active' : ''}"
-                       onclick="setFinanceProductFilter('loc','${l.key}')">${l.label}</button>`;
-            }).join('')}
-          </div>
-        </div>
-      </div>
-
-      ${products.length === 0 ? `
-        <div class="fin-empty" style="padding:1.5rem">No product data for this period. Sync from Tebi to pull invoice details.</div>
-      ` : `
-        <div class="fin-cat-chart">
-          ${categories.map((c: any, i: any) => {
-            const pct = Math.round((c.gross / maxCatGross) * 100);
-            const color = catColors[i % catColors.length];
-            const pctOfTotal = totalGross > 0 ? Math.round((c.gross / totalGross) * 100) : 0;
-            return `
-              <div class="fin-cat-row">
-                <div class="fin-cat-label">${esc(c.category)}</div>
-                <div class="fin-cat-bar-track">
-                  <div class="fin-cat-bar" style="width:${pct}%;background:${color}"></div>
-                </div>
-                <div class="fin-cat-value">${fmtEuro(c.gross)} <span class="fin-cat-pct">${pctOfTotal}%</span></div>
-              </div>`;
-          }).join('')}
-        </div>
-
-        <div class="fin-product-table-wrap">
-          <table class="fin-table fin-product-table">
-            <thead>
-              <tr>
-                <th style="text-align:left">Product</th>
-                <th style="text-align:left">Category</th>
-                <th>Qty</th>
-                <th>Gross</th>
-                <th>%</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${productList.slice(0, 50).map(p => {
-                const pctOfTotal = totalGross > 0 ? ((p.gross / totalGross) * 100).toFixed(1) : '0';
-                return `
-                  <tr>
-                    <td style="text-align:left">${esc(p.name)}</td>
-                    <td style="text-align:left;color:#888">${esc(p.category)}</td>
-                    <td>${Math.round(p.qty)}</td>
-                    <td>${fmtEuro(p.gross)}</td>
-                    <td>${pctOfTotal}%</td>
-                  </tr>`;
-              }).join('')}
-            </tbody>
-            ${productList.length > 0 ? `
-              <tfoot>
-                <tr class="fin-total-row">
-                  <td style="text-align:left"><strong>Total</strong></td>
-                  <td></td>
-                  <td><strong>${Math.round(productList.reduce((s: any, p: any) => s + p.qty, 0))}</strong></td>
-                  <td><strong>${fmtEuro(totalGross)}</strong></td>
-                  <td><strong>100%</strong></td>
-                </tr>
-              </tfoot>
-            ` : ''}
-          </table>
-        </div>
-        ${productList.length > 50 ? `<div style="text-align:center;color:#888;padding:0.5rem">Showing top 50 of ${productList.length} products</div>` : ''}
-      `}
-    </div>
-  `;
-}
-
-export async function setFinanceProductFilter(type: any, value: any) {
-  if (type === 'meal') S.financeProductMeal = value;
-  if (type === 'loc') S.financeProductLoc = value;
-  await loadFinanceProducts();
   renderFinance();
 }
 
-export async function cancelSync() {
+export function setFinanceVenue(venue: string): void {
+  if (venue === S.financeLiveVenue) return;
+  S.financeLiveVenue = venue;
+  S.financeLive = null;
+  renderFinance();        // immediate loading state
+  void loadFinanceLive(); // then fetch
+}
+
+export async function financeRefreshNow(): Promise<void> {
+  toast('Refreshing…');
+  await loadFinanceLive();
+}
+
+// Re-poll every 60s while the finance screen is showing so wave updates appear.
+function ensurePoll(): void {
+  if (pollTimer) return;
+  pollTimer = setInterval(() => {
+    if (getCurrentScreen() !== 'finance') { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } return; }
+    void loadFinanceLive();
+  }, 60000);
+}
+
+// ── Comparison helpers ───────────────────────────────────────────────────────
+function pctDelta(now: number | null, prev: number | null): number | null {
+  if (now == null || prev == null || prev === 0) return null;
+  return Math.round(((now - prev) / prev) * 100);
+}
+function deltaChip(delta: number | null, goodIsUp = true): string {
+  if (delta == null) return '<span class="fin-chip fin-chip-neutral">– vs last wk</span>';
+  const up = delta > 0, flat = delta === 0;
+  const good = flat ? false : (up === goodIsUp);
+  const cls = flat ? 'fin-chip-neutral' : (good ? 'fin-chip-good' : 'fin-chip-bad');
+  const arrow = flat ? '→' : (up ? '↑' : '↓');
+  return `<span class="fin-chip ${cls}">${arrow} ${Math.abs(delta)}% vs last wk</span>`;
+}
+// For spend targets, higher is better → meeting/above target is good.
+function targetChip(actual: number | null, target: number | null): string {
+  if (target == null) return '';
+  if (actual == null) return `<span class="fin-chip fin-chip-neutral">target ${eur2(target)}</span>`;
+  const cls = actual >= target ? 'fin-chip-good' : 'fin-chip-bad';
+  return `<span class="fin-chip ${cls}">${actual >= target ? '✓' : '↓'} target ${eur2(target)}</span>`;
+}
+
+// ── Intraday SVG sparkline (today vs last week, cumulative) ───────────────────
+function sparkline(today: { hour: number; cum: number }[], prior: { hour: number; cum: number }[]): string {
+  const all = [...today, ...prior];
+  if (all.length === 0) return '<div class="fin-spark-empty">No hourly data yet</div>';
+  const hours = all.map((p) => p.hour);
+  const minH = Math.min(...hours), maxH = Math.max(...hours);
+  const maxV = Math.max(1, ...all.map((p) => p.cum));
+  const W = 320, H = 90, padX = 4, padY = 6;
+  const x = (h: number) => padX + (maxH === minH ? 0 : ((h - minH) / (maxH - minH)) * (W - 2 * padX));
+  const y = (v: number) => H - padY - (v / maxV) * (H - 2 * padY);
+  const path = (pts: { hour: number; cum: number }[]) => pts.length ? 'M' + pts.map((p) => `${x(p.hour).toFixed(1)},${y(p.cum).toFixed(1)}`).join(' L') : '';
+  return `<svg class="fin-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Cumulative revenue today vs last week">
+    <path d="${path(prior)}" fill="none" stroke="var(--fin-muted, #888)" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <path d="${path(today)}" fill="none" stroke="var(--fin-accent, #185FA5)" stroke-width="2"/>
+  </svg>`;
+}
+
+// ── Render ───────────────────────────────────────────────────────────────────
+export function renderFinance(): void {
+  const el = document.getElementById('screen-finance');
+  if (!el) return;
+  ensurePoll();
+  const venue = S.financeLiveVenue || 'west';
+  const tabs = VENUE_TABS.map((t) => `<button class="fin-tab ${t.key === venue ? 'active' : ''}" onclick="setFinanceVenue('${t.key}')">${esc(t.label)}</button>`).join('');
+
+  const d = S.financeLive as unknown as LiveData | null;
+  if (!d) {
+    el.innerHTML = `<div class="fin-live"><div class="fin-tabs">${tabs}</div><div class="fin-loading">Loading live numbers…</div></div>`;
+    void loadFinanceLive();
+    return;
+  }
+
+  const t = d.today, lw = d.lastWeek, tg = d.targets;
+  const updated = d.updatedAt ? new Date(d.updatedAt).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' }) : '–';
+  const editBtn = canEditScreen('finance') ? `<button class="fin-btn-ghost" onclick="openFinanceTargets()"><i class="ti ti-target"></i> Targets</button>` : '';
+
+  // Hero: pace (covers + revenue vs last week) + avg spend per cover (vs target)
+  const coversDelta = pctDelta(t.meals, lw.meals);
+  const revDelta = pctDelta(t.revenueGross, lw.revenueGross);
+  const spendDelta = pctDelta(t.spendPerMeal, lw.spendPerMeal);
+
+  el.innerHTML = `
+  <div class="fin-live">
+    <div class="fin-tabs">${tabs}</div>
+    <div class="fin-head">
+      <div class="fin-head-l"><span class="fin-live-dot"></span><span class="fin-date">${esc(d.date)}</span></div>
+      <div class="fin-head-r">
+        <span class="fin-updated">updated ${updated}</span>
+        ${editBtn}
+        <button class="fin-btn-ghost" onclick="financeRefreshNow()"><i class="ti ti-refresh"></i> Refresh</button>
+      </div>
+    </div>
+
+    <div class="fin-hero">
+      <div class="fin-hero-card">
+        <div class="fin-hero-label">Pace right now</div>
+        <div class="fin-hero-big">${t.meals} <span class="fin-hero-unit">covers · ${eur0(t.revenueGross)}</span></div>
+        <div class="fin-chips">${deltaChip(coversDelta)} ${deltaChip(revDelta)}</div>
+      </div>
+      <div class="fin-hero-card">
+        <div class="fin-hero-label">Avg spend / cover</div>
+        <div class="fin-hero-big">${eur2(t.spendPerMeal)}</div>
+        <div class="fin-chips">${targetChip(t.spendPerMeal, null)}${deltaChip(spendDelta)}</div>
+      </div>
+    </div>
+
+    <div class="fin-card">
+      <div class="fin-card-title">Spend per cover <span class="fin-card-sub">what staff influence</span></div>
+      <div class="fin-scorecard">
+        <div class="fin-score"><div class="fin-score-label">Food</div><div class="fin-score-val">${eur2(t.foodPerMeal)}</div>${targetChip(t.foodPerMeal, tg.foodPerMeal)}</div>
+        <div class="fin-score"><div class="fin-score-label">Drinks</div><div class="fin-score-val">${eur2(t.drinkPerMeal)}</div>${targetChip(t.drinkPerMeal, tg.drinkPerMeal)}</div>
+        <div class="fin-score"><div class="fin-score-label">Total</div><div class="fin-score-val">${eur2(t.spendPerMeal)}</div></div>
+      </div>
+    </div>
+
+    <div class="fin-card">
+      <div class="fin-card-title">Sales pulse</div>
+      <div class="fin-metrics">
+        <div class="fin-metric"><div class="fin-metric-label">Covers</div><div class="fin-metric-val">${t.meals}</div></div>
+        <div class="fin-metric"><div class="fin-metric-label">Revenue (net)</div><div class="fin-metric-val">${eur0(t.revenueNet)}</div><div class="fin-metric-sub">gross ${eur0(t.revenueGross)}</div></div>
+        <div class="fin-metric"><div class="fin-metric-label">Food / drink</div><div class="fin-metric-val">${eur0(t.revenueFood)} <span class="fin-sep">/</span> ${eur0(t.revenueDrink)}</div></div>
+        <div class="fin-metric"><div class="fin-metric-label">Tickets</div><div class="fin-metric-val">${t.sales}</div></div>
+      </div>
+      <div class="fin-spark-legend"><span><i class="fin-leg-today"></i>Today</span><span><i class="fin-leg-prior"></i>Last week</span></div>
+      ${sparkline(d.intraday.today, d.intraday.lastWeek)}
+    </div>
+
+    <div class="fin-row2">
+      <div class="fin-card">
+        <div class="fin-card-title">What's selling</div>
+        ${renderTopProducts(d.topProducts)}
+      </div>
+      <div class="fin-card">
+        <div class="fin-card-title">Labour <span class="fin-card-sub">planned · roster</span></div>
+        ${renderLabour(d.labour, tg.labourToday)}
+      </div>
+    </div>
+
+    <div class="fin-card">
+      <div class="fin-card-title">This week <span class="fin-card-sub">${eur0(d.weekToDate.gross)} so far</span></div>
+      ${renderWeekStrip(d.weekToDate.byDay)}
+    </div>
+  </div>`;
+}
+
+function renderTopProducts(products: LiveData['topProducts']): string {
+  if (!products.length) return '<div class="fin-empty">Nothing sold yet</div>';
+  const max = Math.max(1, ...products.map((p) => p.gross));
+  return '<div class="fin-bars">' + products.map((p) => {
+    const w = Math.round((p.gross / max) * 100);
+    return `<div class="fin-bar-row"><div class="fin-bar-head"><span>${esc(p.name)}</span><span class="fin-bar-qty">${p.qty}</span></div><div class="fin-bar-track"><div class="fin-bar fin-bar-${esc(p.bucket)}" style="width:${w}%"></div></div></div>`;
+  }).join('') + '</div>';
+}
+
+function renderLabour(l: LiveLabour | null, target: number | null): string {
+  if (!l) return '<div class="fin-empty">Labour not available<br><span class="fin-empty-sub">connect the shifts roster to enable</span></div>';
+  const pct = l.pctOfRevenue == null ? '–' : l.pctOfRevenue + '%';
+  const tgt = target != null && l.plannedCost != null
+    ? `<span class="fin-chip ${l.plannedCost <= target ? 'fin-chip-good' : 'fin-chip-bad'}">${l.plannedCost <= target ? '✓' : '↑'} target ${eur0(target)}</span>` : '';
+  return `
+    <div class="fin-labour-big">${eur0(l.costSoFar)} <span class="fin-labour-unit">so far · ${pct} of revenue</span></div>
+    <div class="fin-labour-sub">planned ${eur0(l.plannedCost)} (${l.plannedHours}h) ${tgt}</div>
+    <div class="fin-labour-foot"><span><i class="ti ti-users"></i> ${l.headcountOn} on now</span><span>${l.hoursSoFar}h worked${l.ratePerHour != null ? ` · ${eur2(l.ratePerHour)}/h` : ''}</span></div>`;
+}
+
+function renderWeekStrip(byDay: LiveData['weekToDate']['byDay']): string {
+  const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const max = Math.max(1, ...byDay.map((d) => d.gross));
+  // byDay is Mon..today; pad to 7 for the grid.
+  const cells = labels.map((lab, i) => {
+    const day = byDay[i];
+    const h = day ? Math.max(2, Math.round((day.gross / max) * 100)) : 0;
+    const filled = day && day.gross > 0;
+    return `<div class="fin-wk-cell"><div class="fin-wk-bar ${filled ? 'filled' : ''}" style="height:${h}%" title="${day ? eur0(day.gross) : ''}"></div><span class="fin-wk-lab">${lab}</span></div>`;
+  }).join('');
+  return `<div class="fin-wk">${cells}</div>`;
+}
+
+// ── Targets editor (manager-gated) ───────────────────────────────────────────
+export async function openFinanceTargets(): Promise<void> {
+  let cfg: Record<string, { foodPerMeal?: number; drinkPerMeal?: number; labourByDay?: Record<string, number> }> = {};
+  try { cfg = await apiGet('/api/finance/targets') as Record<string, { foodPerMeal?: number; drinkPerMeal?: number; labourByDay?: Record<string, number> }>; } catch { /* empty */ }
+  const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const venueBlock = (vk: string, vlabel: string) => {
+    const v = cfg[vk] || {};
+    const lbd = v.labourByDay || {};
+    return `<div class="fin-tg-venue"><div class="fin-tg-vname">${esc(vlabel)}</div>
+      <div class="fin-tg-grid">
+        <label>Food €/cover<input type="number" step="0.5" min="0" id="tg-${vk}-food" value="${v.foodPerMeal ?? ''}"></label>
+        <label>Drink €/cover<input type="number" step="0.5" min="0" id="tg-${vk}-drink" value="${v.drinkPerMeal ?? ''}"></label>
+      </div>
+      <div class="fin-tg-lab">Labour €/day
+        <div class="fin-tg-days">${wd.map((d) => `<label>${d}<input type="number" step="10" min="0" id="tg-${vk}-lab-${d}" value="${lbd[d] ?? ''}"></label>`).join('')}</div>
+      </div></div>`;
+  };
+  showModal(`<div class="fin-tg-modal">
+    <h3>Controllable targets</h3>
+    <p class="fin-tg-help">No revenue target — only what staff influence: spend per cover (food/drink) and labour per day.</p>
+    ${VENUE_TABS.map((t) => venueBlock(t.key, t.label)).join('')}
+    <div class="fin-tg-actions"><button onclick="closeModal()">Cancel</button><button class="primary" onclick="saveFinanceTargets()">Save</button></div>
+  </div>`);
+}
+
+export async function saveFinanceTargets(): Promise<void> {
+  const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const numVal = (id: string): number | undefined => {
+    const v = (document.getElementById(id) as HTMLInputElement | null)?.value;
+    if (v == null || v === '') return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+  };
+  const config: Record<string, { foodPerMeal?: number; drinkPerMeal?: number; labourByDay?: Record<string, number> }> = {};
+  for (const t of VENUE_TABS) {
+    const out: { foodPerMeal?: number; drinkPerMeal?: number; labourByDay?: Record<string, number> } = {};
+    const f = numVal(`tg-${t.key}-food`); if (f !== undefined) out.foodPerMeal = f;
+    const dr = numVal(`tg-${t.key}-drink`); if (dr !== undefined) out.drinkPerMeal = dr;
+    const lbd: Record<string, number> = {};
+    for (const day of wd) { const n = numVal(`tg-${t.key}-lab-${day}`); if (n !== undefined) lbd[day] = n; }
+    if (Object.keys(lbd).length) out.labourByDay = lbd;
+    if (Object.keys(out).length) config[t.key] = out;
+  }
   try {
-    await apiPost('/api/finance/sync-cancel', {});
-    S.financeSyncing = false;
-    renderFinance();
-    toast('Sync cancelled');
+    await apiPost('/api/finance/targets', config);
+    closeModal();
+    toast('Targets saved');
+    await loadFinanceLive();
   } catch (e: unknown) {
-    toastError('Cancel failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    toastError('Could not save: ' + (e instanceof Error ? e.message : 'error'));
   }
 }
 
-export function changeFinanceWeek(delta: any) {
-  S.financeWeekOffset += delta;
-  loadFinanceData().then(() => renderFinance());
-}
-
-// Self-register so navigate.ts can dispatch without importing every screen.
 registerRenderer('finance', renderFinance);
