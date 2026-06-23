@@ -196,7 +196,7 @@ export const FEEDBACK_TOOLS = [
 
 // ── Streaming chat loop ──
 
-const MODEL = process.env.FEEDBACK_AI_MODEL || 'claude-opus-4-8';
+const MODEL = process.env.FEEDBACK_AI_MODEL || 'claude-sonnet-4-6';
 const MAX_TOOL_LOOPS = 6;
 // Deliberately small — turns are a short clarifying line or one propose_report
 // tool call. 2048 leaves headroom so a fully-filled report JSON never truncates.
