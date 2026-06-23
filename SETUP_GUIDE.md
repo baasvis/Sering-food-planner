@@ -35,18 +35,23 @@ Create `.env` in the repo root. The file is gitignored.
 | `ANTHROPIC_API_KEY` | Optional | Enables the AI insights cron (data-quality checks summarised by Claude) and the director-only AI recipe assistant. |
 | `DIRECTOR_EMAILS` | Optional | Comma-separated emails that get director-only features (the AI recipe assistant). Defaults to Daan's email if unset; set explicitly in production. |
 | `STAFF_LEAD_EMAILS` | Optional | Comma-separated emails that get the **staff-lead** role — gates the Competencies admin actions (chunk sync, teaching-event deletion, person rename/(de)activate). Distinct from `DIRECTOR_EMAILS`; empty by default (no one has it). |
+| `MANAGER_EMAILS` | Optional | Comma-separated emails that get the drinks **manager** tier (`isManagerEmail` = directors ∪ this list). Managers own drinks catalogue CRUD, prices/costs, supplier data, ordering, assortments and menu publishing; stock counts, production and write-offs stay open to all. |
 | `AI_ANALYSIS_CRON` | Optional | Default `0 7 * * *` (daily 07:00). Standard cron syntax. |
 | `AI_ANALYSIS_MODEL` | Optional | Default `claude-sonnet-4-6`. |
 | `NOTION_TOKEN` | Optional | Notion integration token for the Competencies chunk-library sync. Required together with `NOTION_CHUNKS_DATA_SOURCE_ID`; if either is missing the sync silently no-ops. |
 | `NOTION_CHUNKS_DATA_SOURCE_ID` | Optional | Notion data source (database) ID holding the competency chunks. Paired with `NOTION_TOKEN`. |
+| `NOTION_SHIFTS_DATA_SOURCE_ID` | Optional | Notion data source ID for the "Sering Shifts" roster. Paired with `NOTION_TOKEN`; feeds the live finance dashboard's planned-labour block (`lib/notion-shifts.ts`). Degrades gracefully (labour block hidden) when unset. |
 | `COMPETENCY_SYNC_CRON` | Optional | Default `0 5 * * *` (daily 05:00). Schedules the Notion → Postgres chunk pull. Only runs when `NOTION_TOKEN` + `NOTION_CHUNKS_DATA_SOURCE_ID` are set. |
 | `TEBI_EMAIL` / `TEBI_PASSWORD` | Optional | Credentials for ledger 1 (Sering West, default ledger ID 723192). |
 | `TEBI_LEDGER_ID` | Optional | Defaults to 723192 if not set. |
 | `TEBI_LEDGER_ID_2` | Optional | Set to 724466 to also scrape the second ledger (TestTafel + Centraal). |
-| `TEBI_EMAIL_2` / `TEBI_PASSWORD_2` | Optional | Credentials for ledger 2 if it's a separate Tebi account. If unset but `TEBI_LEDGER_ID_2` is set, the worker falls back to the primary creds (one-account-spans-both-ledgers mode). |
+| `TEBI_EMAIL_2` / `TEBI_PASSWORD_2` | Optional | Credentials for ledger 2 (a separate Tebi account). If unset but `TEBI_LEDGER_ID_2` is set, the worker silently falls back to the primary creds — only valid if one Tebi account spans both ledgers, which is **no longer the case as of 2026-04-26**, so set these explicitly when scraping ledger 2. |
 | `TEBI_FORCE_LOCATION` | Optional | `west` or `centraal` to bypass profit-center auto-discovery. |
 | `TEBI_HEADLESS` | Optional | `false` to show the Playwright browser when debugging. |
-| `FINANCE_SYNC_CRON` | Optional | Default `30 4 * * *` (daily 04:30). |
+| `FINANCE_SYNC_CRON` | Optional | Default `30 4 * * *` (daily 04:30). Nightly Tebi 14-day backfill. |
+| `FINANCE_INTRADAY_CRON` | Optional | Default `0 14,18,20 * * *`. Intraday today-only Tebi sync waves (lighter than the nightly backfill). |
+| `FINANCE_INTRADAY_CRON_LATE` | Optional | Default `30 23 * * *`. The late (post-close) intraday sync wave. |
+| `FINANCE_TZ` | Optional | Default `Europe/Amsterdam`. Timezone the intraday crons are pinned to (Railway runs UTC). |
 | `HANOS_USER_WEST` / `HANOS_PASS_WEST` | Optional | Hanos OCC credentials per location. |
 | `HANOS_USER_CENTRAAL` / `HANOS_PASS_CENTRAAL` | Optional | Same for Centraal. |
 | `HANOS_CLIENT_SECRET` | Optional | Hanos OAuth client secret. |
@@ -137,7 +142,7 @@ npm start
 npm test
 ```
 
-Runs Jest with `@swc/jest` against `DATABASE_URL_TEST`. The setup at `test/setup-env.ts` will refuse to start if you accidentally point it at a production host. The suite spans 31 files in `test/` (unit + API tests).
+Runs Jest with `@swc/jest` against `DATABASE_URL_TEST`. The setup at `test/setup-env.ts` will refuse to start if you accidentally point it at a production host. The suite spans 43 files in `test/` (unit + API tests).
 
 ### End-to-end tests (Playwright)
 

@@ -314,7 +314,12 @@ identified. Not worth pursuing — `product_top` gives equivalent data.
 ## Data pipeline (live cron)
 
 ```
-Cron (server.ts, 04:30 UTC)
+Cron (server.ts):
+  • nightly  FINANCE_SYNC_CRON          (default 30 4 * * *)  → 14-day backfill
+  • intraday FINANCE_INTRADAY_CRON      (default 0 14,18,20 * * *)  → today only
+  • late     FINANCE_INTRADAY_CRON_LATE (default 30 23 * * *)       → today only
+    (intraday waves pinned to FINANCE_TZ, default Europe/Amsterdam; runTebiSync's
+     isSyncing() guard means a wave that overlaps the nightly run just no-ops)
   └─ runTebiSync (lib/tebi-sync.ts)
        └─ spawn scripts/tebi-sync-worker.js
             └─ for each configured account (TEBI_*_ + TEBI_*_2):
@@ -327,17 +332,27 @@ Cron (server.ts, 04:30 UTC)
                  │    │    ├─ formatResults                     → summary
                  │    │    ├─ formatProductRevenueFromTop        → productRows  (with reassignment + aggregation)
                  │    │    └─ deriveGuestCountsFromProductRows   → guestCounts  (30/70 staff split)
-                 │    └─ saveResults
+                 │    │    returns { summary, productRows, guestCounts, invoices, rawProductRows }
+                 │    └─ saveResults  (every upsert wrapped in withDbRetry — 3 attempts on transient DB errors)
                  │         ├─ upsert DailyRevenue ('all' + per-loc)
                  │         ├─ upsertProductRevenue
-                 │         └─ upsertGuestHistory
+                 │         ├─ upsertGuestHistory
+                 │         ├─ upsertTebiInvoices       → TebiInvoice       ⎫ raw L1 capture for the
+                 │         └─ upsertTebiProductDaily   → TebiProductDaily  ⎭ separate Sering Hub
                  └─ stats logged: allRows / perLocationRows / productRows / guestRows
+                                  / invoiceRows / rawProductRows
        └─ exit:
             - exit 1 if zero rows written for any account/date
             - exit 1 if every account failed
             - exit 1 if 'all' rows wrote but ZERO per-loc AND ZERO product rows
               (catches the silent partial-failure mode that hid 7 weeks of breakage)
+            - canary: warns at run-end if parseCurrencyStr fell back to "0.00"
+              (currencyFallbackCount > 0) — flags an upstream format change
 ```
+
+So the planner sync is also the **Sering Hub's Tebi egress**: alongside the
+three planner tables it writes raw L1 `TebiInvoice` + `TebiProductDaily` rows on
+every run, which the separate Hub app aggregates into its L2/L3 finance layer.
 
 `lib/tebi-sync.ts` keeps state for `/api/finance/sync-status` and
 persists `lastSuccessOutputTail` in telemetry so the diagnose-tebi-telemetry
@@ -385,6 +400,27 @@ we no longer have per-transaction service-period data.
 nested JSON: `{[location]: {[meal]: {[dayOfWeek]: {[5minBucket]: fraction}}}}`.
 Buckets are minute-of-day strings (`"720"` = 12:00, `"1080"` = 18:00).
 Each (location, meal, dayOfWeek) triple's bucket fractions sum to 1.
+
+### Other finance/Hub tables (don't assume the four above are the whole picture)
+
+The four models above are what the **planner** reads. Two more sets of tables
+live in `prisma/schema.prisma`:
+
+- **Live-dashboard config**: `FinanceTargets` (id="default", JSON config) backs
+  `GET/POST /api/finance/targets` — the controllable spend-per-meal / labour-per-day
+  targets for `GET /api/finance/live`.
+- **Sering Hub finance-aggregation layer** — written by this sync (the L1 raw
+  capture) or by the separate Hub app, read by the Hub, **not** by the planner UI:
+  - L1 raw: `TebiInvoice`, `TebiProductDaily`, `SupplierInvoice` (+ line items),
+    `CateringInvoice`/`FoodcostInvoice`/`ManualLineItem`, `TimeclockEntry`,
+    `HoursAdjustment`, `Lightspeed*`.
+  - L2/L3 derived: `Sales5MinBucket`, `SalesHour`, `SalesDay`, `ProductDay`,
+    `TypeDay`, `WeeklyRevenue`, `WeeklyGuests`, `WeeklyHours`, `WeeklyFoodcost`,
+    `WeeklyLineItem`, plus `Override`, `ComputedCell`, `RecurringLineItem`.
+
+> **Schema authority**: the planner runs `prisma migrate deploy`; the Hub runs
+> `prisma generate` only against the same DB. When you add/modify a Hub table,
+> follow the discipline noted in the schema comments — see `prisma/schema.prisma`.
 
 ---
 
@@ -775,7 +811,10 @@ scripts/
                                --dump-invoices --raw`. Source of truth for MEAL_ITEM_TYPE +
                                resolveLocationForItem + 30/70 staff split.
   tebi-sync-worker.js          Production cron entry point. Spawned by lib/tebi-sync.ts (manual UI sync)
-                               and by server.ts (nightly cron at 04:30 UTC).
+                               and by server.ts (nightly backfill + intraday today-only waves).
+                               Every upsert wrapped in withDbRetry (3 attempts on transient DB
+                               errors); also writes the Hub L1 tables (TebiInvoice, TebiProductDaily)
+                               and warns on a currencyFallbackCount canary.
   tebi-derive-guests.ts        No-Playwright test of guest-count derivation. Takes TEBI_BEARER_TOKEN.
   test-new-tebi-path.ts        End-to-end test of the post-rewrite pipeline (no DB writes).
 
@@ -804,13 +843,21 @@ scripts/
 lib/
   tebi-sync.ts                 Spawn helper for the worker; keeps state for /api/finance/sync-status.
                                Telemetry hydration of last-known state. MANUAL_TIMEOUT_MS = 15 min.
+  finance-live.ts              Pure classification/targets/per-meal helpers for GET /api/finance/live.
+  labour.ts                    Pure labour maths (shift length/elapsed, blended €/hr) for the live dashboard.
+  notion-shifts.ts             Reads the "Sering Shifts" Notion roster (I/O) for the labour block.
 
 routes/
-  finance.ts                   /api/finance/* endpoints.
+  finance.ts                   /api/finance/* endpoints: /revenue, /products, /revenue-per-guest,
+                               /live (live staff dashboard), /targets (GET + manager-gated POST),
+                               /sync, /sync-cancel, /sync-status.
   guests.ts                    /api/guest-history (CSV-upload path) — separate from the auto path.
 
 prisma/
-  schema.prisma                DailyRevenue, ProductRevenue, GuestHistory, GuestHistoryMeta.
+  schema.prisma                Planner: DailyRevenue, ProductRevenue, GuestHistory, GuestHistoryMeta.
+                               Live dashboard: FinanceTargets. Hub L1/L2/L3 finance-aggregation
+                               tables (TebiInvoice, TebiProductDaily, Sales*/*Day/Weekly*, Override,
+                               ComputedCell, RecurringLineItem, …) — see the Schema section.
 ```
 
 ---

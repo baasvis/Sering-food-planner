@@ -21,7 +21,7 @@ Staff: many first-job volunteers — UIs must be obvious, mobile-friendly, and f
 ### Drink
 The central entity. `mode: 'catalogue' | 'recipe'`.
 
-Common fields: name, mode, category, subtype, ABV (%), BTW rate (auto from ABV, overridable), supplier (for bought), order unit + pack description (e.g. "crate (24×200ml)"), deposit amount (statiegeld, €, default 0), `tebiProductNames: string[]`, per-location: stock, par (target), active-in-location, price overrides. Status: `draft | published`. Info fields (mainly wine): producer/winery, region/country, vintage, soil, grape(s), natural/bio flags, flavour profile, tasting notes, "extra info".
+Common fields: name, mode, category, subtype, ABV (%), BTW rate (auto from ABV, overridable), supplier (for bought), order unit + pack description (e.g. "crate (24×200ml)"), deposit amount (statiegeld, €, default 0), `tebiProductNames: string[]`, optional final-product photo (`DrinkPhoto` table, `POST/GET/DELETE /api/drinks/:id/photo`), per-location: stock, par (target), active-in-location, price overrides. Focused per-location toggles exist: `PATCH /api/drinks/:id/active` and `/:id/area`. Status: `draft | published`. Info fields (mainly wine): producer/winery, region/country, vintage, soil, grape(s), natural/bio flags, flavour profile, tasting notes, "extra info".
 
 Serving formats (1–n per drink): `{ name, volumeMl, priceByLocation, glassType }` — e.g. Pils: tap glass 250ml €3.70; House white: glass 120ml €5.50 + bottle 750ml €30; Vodka: shot 40ml €4 + mixed-drink dose 45ml (priced via recipe). A sale of a format fractionally depletes the stock unit (keg, bottle) — **math implemented, not wired to live sales until Phase 2**.
 
@@ -31,7 +31,7 @@ Recipe-mode extras: ingredient rows, prep steps (ordered list), per-serve volume
 `{ drinkId, sortOrder, ref: { kind: 'ingredient', ingredientId } | { kind: 'drink', drinkId }, amount, unit (ml/g/piece) }`. The `drink` kind is how building blocks nest (Super Sugar Syrup in Espresso Martini; Kombucha Base in Kombucha). Support ≥2 nesting levels; detect cycles.
 
 ### Categories (`category` × `mode`)
-- catalogue: `beer` (subtypes: lager, pilsner, IPA, pale ale, white, porter, weizen, 0.0), `wine` (white, red, rosé, orange, bubbles, cider, 0.0), `spirits` (vodka, gin, rum, white rum, tequila, mezcal, bourbon, liqueur, salmari, sake, NA-aperitif), `soft` (cola, lemonade, soda, juice, water, mate), `coffee-tea-stock` (beans, oat milk, tea, chai, decaf), `consumables` (straws, filters, cups — `sellable: false`), `glassware` (`sellable: false`, no depletion)
+- catalogue: `beer` (subtypes: lager, pilsner, IPA, pale ale, white, blond, porter, weizen, 0.0), `wine` (white, red, rosé, orange, bubbles, cider, 0.0), `spirits` (vodka, gin, rum, white rum, tequila, mezcal, bourbon, liqueur, salmari, sake, NA-aperitif), `soft` (cola, lemonade, soda, juice, water, mate), `coffee-tea-stock` (beans, oat milk, tea, chai, decaf — `sellable: false`), `consumables` (straws, filters, cups — `sellable: false`), `glassware` (`sellable: false`, no depletion). The full non-sellable set in code (`drinks-constants.ts NON_SELLABLE_CATEGORIES`) is `consumables`, `glassware`, `coffee-tea-stock`, `building-block`.
 - recipe: `cocktail`, `homemade-na` (ice tea, lemonade, kombucha, spritz), `coffee-drink` (espresso, cappuccino, oat latte, filter, chai), `building-block` (syrup, super-juice, infusion, tea-base, kombucha-base — stockable in litres/bottles, usually not sold directly)
 
 ### Supplier (drinks)
@@ -64,12 +64,12 @@ Assortment: named drink list per service context (`West bar`, `Centraal`, `TestT
 - **Total cost** = ingredient cost + labour. Show ex-BTW.
 - **Markup metric**: `markup = price_exBTW / totalCost`. Target markup per category (manager-set). **Suggested price** = `totalCost × targetMarkup`, converted to incl-BTW, **rounded to nearest €0.10**.
 - **Starting targets**: computed at seed time per category from the seeded real prices vs computable costs (reverse-engineered status quo); where cost unknown, leave target null and fall back to category default 4.0×.
-- Traffic-light: drink's actual markup vs category target (±10% amber band). Never block saving.
+- Traffic-light (`markupLight`, `shared/drink-cost.ts`) — asymmetric, not a single amber band: actual markup **below** target×0.9 → **red** (under-priced); **above** target×1.1 → **amber** (pricey); within the ±10% band → **green**. Never block saving.
 
 ## 5. Workflows
 
-### Stocktake (supplier-cycle)
-Primary entry: "Count for a supplier" — pick supplier (those with an order day today/tomorrow surfaced first) → list that supplier's items for this location grouped by storage area → enter counts in supplier units (`2 crates + 7 loose` style input allowed but stored as decimal supplier-units) → bulk save (timestamped `dateChecked` per item). Secondary entry: by storage area (full count). Mobile-first: big inputs, sticky save.
+### Stocktake
+Primary entry (the default mode, `drinks-stocktake.ts`): **by storage area** (full count) — pick a location's storage area → enter counts for the drinks homed there. Secondary toggle: "Count for a supplier" — pick supplier (those with an order day today/tomorrow surfaced first) → list that supplier's items for this location grouped by storage area. Either way counts are in supplier units (`2 crates + 7 loose` style input allowed but stored as decimal supplier-units), bulk-saved (timestamped `dateChecked` per item). Mobile-first: big inputs, sticky save. *(The original spec made supplier-cycle the primary entry; the 2026-06-06 feedback redesign flipped it to area-first.)*
 
 ### Ordering
 Order screen per location: suggested lines = `par − stock` per supplier (only positives), shown in order units with deposits and minimum-order warnings; **demand nudge**: if upcoming week's guest counts (existing GuestHistory/next-weeks data) exceed the trailing average by >25%, show a banner suggesting upping par-driven quantities (no auto-change). Manager publishes order → `ordered` (records who/when + expected delivery from supplier delivery window). Receiving: line-by-line, adjustable quantities, substitution picker (any drink/pack of same category), applies to stock, logs everything.
