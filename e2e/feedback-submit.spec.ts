@@ -34,7 +34,12 @@ test.describe('Feedback submit', () => {
     await expect(page.locator('#feedback-fab')).toBeVisible();
     await page.locator('#feedback-fab').click();
 
-    // The modal renders a "What kind of feedback?" form. Pick "New idea".
+    // The FAB now opens the AI intake chat. This test exercises the one-shot
+    // "quick note" form, reachable via the chat header's escape-hatch link.
+    await expect(page.locator('[data-testid="feedback-quick-note"]')).toBeVisible();
+    await page.locator('[data-testid="feedback-quick-note"]').click();
+
+    // The quick-note form renders a "What kind of feedback?" picker. Pick "New idea".
     await expect(page.locator('#ft-idea')).toBeVisible();
     await page.locator('#ft-idea').click();
 

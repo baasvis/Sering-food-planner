@@ -63,7 +63,7 @@ export function openFeedbackChat(): void {
     <div class="fb-chat">
       <div class="ai-chat-header">
         <span class="ai-chat-title">&#128172; Tell us what's up</span>
-        <button class="fb-chat-quick" onclick="openQuickFeedback()" title="Skip the chat and just type a note">Quick note &rarr;</button>
+        <button class="fb-chat-quick" data-testid="feedback-quick-note" onclick="openQuickFeedback()" title="Skip the chat and just type a note">Quick note &rarr;</button>
       </div>
       <div class="ai-chat-messages" id="fb-chat-messages">${renderMessages()}</div>
       <div id="fb-proposal"></div>
