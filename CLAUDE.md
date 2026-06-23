@@ -21,6 +21,11 @@ shared/
   drink-cost.ts        — Drinks cost engine (pure, dual-use): recursive building-block rollup, labour amortisation, BTW, markup targets, suggested price
   drink-order.ts       — Drinks ordering helpers (pure): suggested qty (par−stock), deposits, received-stock deltas, demand nudge
   drink-production.ts  — Drinks production helpers (pure): produced units (bottles/litres), consumed building blocks, expiry
+  dates.ts             — Single source of truth for "format Date as local YYYY-MM-DD" + derived date helpers (replaced 4 drifting copies)
+  location.ts          — Location display helpers (loc → "Sering West"/"Sering Centraal"), single source
+  recipe-cost.ts       — Per-100g price estimate for flexible ("open amount") recipe ingredients; shared by backend cost calc + frontend editor preview
+  supply-demand.ts     — Pure forward supply-demand + price-per-guest (prep checklist, dashboard Supplies card, Supplies screen)
+  units.ts             — Canonical unit → base-unit conversion (replaced 3 drifting toGrams copies)
 types/
   express.d.ts         — Express Request augmentation (req.user)
   globals.d.ts         — DOM type augmentations
@@ -40,6 +45,9 @@ lib/
   notion-markdown.ts   — Pure converter: Notion chunk page block tree → canonical `## `-delimited teaching-guide markdown (unit-testable, no I/O)
   drinks.ts            — Drinks normalizers (toDrink, locations/formats/info), stock-pool aggregation, config merge, validation, buildDrinkData, recalcAllDrinkCosts
   drinks-import.ts     — AI menu/price-list import: sends an uploaded PDF to Claude (native document block) → structured product+price list
+  finance-live.ts      — Pure helpers for the live staff dashboard (GET /api/finance/live): food/drink/other classification, per-meal, intraday curve, targets resolution. No I/O.
+  labour.ts            — Pure labour maths for the live dashboard's planned-labour block (shift length/elapsed, blended €/hr per venue, computeLabour). No I/O.
+  notion-shifts.ts     — Reads the "Sering Shifts" Notion roster for the labour block (I/O only; degrades to [] when unconfigured/erroring)
 routes/
   auth.ts              — Login, logout, session, requireAuth + requireDirector middleware,
                          POST /auth/request-access (self-service account request),
@@ -62,13 +70,15 @@ routes/
   events.ts            — SSE live sync: client registry, broadcast to other users on save
   health.ts            — Health check endpoint
   hanos.ts             — Hanos status, search, product lookup, add-to-cart, cart view
-  finance.ts           — Finance revenue endpoints (delegate to lib/tebi-sync.ts)
+  finance.ts           — Finance endpoints: /revenue, /products, /revenue-per-guest, /live (live staff dashboard via lib/finance-live + labour + notion-shifts), /targets (controllable targets, manager-gated), /sync(+cancel/status). Sync delegates to lib/tebi-sync.ts
   telemetry.ts         — Telemetry event ingestion (no auth, buffered writes, exports flushBuffer)
   admin.ts             — AI insights & telemetry admin endpoints
   recipe-ai.ts         — Director-only AI recipe assistant: POST /api/recipe-ai/chat (SSE stream)
   coverage.ts          — Bearer-token /api/coverage/snapshot (mounted before requireAuth so the weekly remote agent can fetch without a session cookie)
   access.ts            — Director-only account-access review: GET /api/access/requests + /pending-count,
-                         POST /api/access/requests/:id/{approve,deny,revoke}
+                         POST /api/access/requests/:id/{approve,deny,revoke}.
+                         Role-based page permissions: GET/POST/PATCH/DELETE /api/access/roles +
+                         PATCH /api/access/requests/:id/role (assign a Role to a user)
   competencies.ts      — Peer-teaching tracker: chunks, people, teaching-event ledger.
                          GET /api/competencies + POST /events, /people, PATCH /people/:id,
                          DELETE /events/:id, POST /sync-chunks (admin actions staff-lead gated)
@@ -90,7 +100,12 @@ scripts/
   tebi-scraper.js             — Playwright scraper (called by tebi-sync-worker)
   tebi-sync-worker.js         — Node child process spawned by lib/tebi-sync.ts
   mine-telemetry-journeys.ts  — CLI: scans the telemetry table for user journeys, prints uncovered trackEvent() features
-  (tebi-* / backfill-* / probe-* / diagnose-* scripts are catalogued in TEBI.md)
+  seed-toppings-recipes.js    — Seed: Toppings & bread recipes
+  sync-prod-to-staging.js     — One-shot copy of menu+guests data prod → staging (prod read-only, staging wiped)
+  dump-fmm-data.ts            — READ-ONLY dump of the exact state the Fix-My-Menu pipeline consumes (via dbReadAll)
+  show-guest-history.ts / export-guest-history-xlsx.ts — Pretty-print / XLSX-export GuestHistory pivot tables
+  recover-recipe-ingredient-fks.ts — One-off repair of recipe→ingredient foreign keys
+  (tebi-* / backfill-* / probe-* / diagnose-* / detect-pc-migrations / tebi-derive-guests / test-new-tebi-path scripts are catalogued in TEBI.md)
 e2e/                          — Playwright end-to-end test suite (run via `npm run test:e2e`)
   smoke.spec.ts               — Login + nav smoke
   navigation.spec.ts          — Each top-level screen
@@ -98,6 +113,8 @@ e2e/                          — Playwright end-to-end test suite (run via `npm
   guests.spec.ts, orders.spec.ts, recipes.spec.ts — Per-screen flows
   predictions-apply.spec.ts, stocktake-start.spec.ts, feedback-submit.spec.ts — Feature flows
   drinks-catalogue.spec.ts, drinks-stocktake.spec.ts, drinks-order.spec.ts — Drinks flows (add drink, overview auto-save, auto-shortfall order)
+  competencies.spec.ts        — Training screen flow (people × chunks grid, log teaching event)
+  inventory-served-disappear.spec.ts — Regression: served batches surviving inventory
   helpers.ts                  — Shared test setup (dev login, location chooser dismiss, deleteDrinksByNamePrefix)
   coverage-manifest.json      — Maps trackEvent() feature names to which spec covers them; consumed by lib/telemetry-coverage.ts
 public/
@@ -114,6 +131,8 @@ public/
     feedback.css       — Feedback FAB and form
     team.css           — Login "request access" affordance, dashboard "waiting for access" banner, Team screen
     drinks.css         — All drinks-screen styles (catalogue table, bar cards, stocktake areas, orders, menus, per-category accents)
+    competencies.css   — Training screen (people × chunks grid, log-event modal, ledger)
+    supplies.css       — "Toppings & bread" supplies screen styles
     tutorial.css       — Tutorial overlay and tooltips
     mobile.css         — All mobile/responsive overrides, bottom nav
   js/
@@ -132,6 +151,8 @@ public/
     planner.ts         — Week plan grid + transport + inventory modal
     transport-card.ts  — Transport card component (shipment send / mark-arrived UI)
     menu-fixer.ts      — "Fix My Menu": auto-fills week-plan gaps with generated placeholder batches
+    fmm-snapshot.ts    — Fix-My-Menu before/after/+30min planner snapshots emitted as telemetry for later comparison
+    cost.ts            — West-tab cost-per-guest engine: ingredient €/guest by dish type vs director targets (Week Plan steering bar)
     dishes.ts          — Dish list + cook workflow + CRUD
     caterings.ts       — Catering events
     recipes.ts         — Recipe library: sortable table of v2 recipes
@@ -140,7 +161,8 @@ public/
     orders.ts          — Order overview (combined, standard inventory, dish ingredients tabs) + Hanos
     stocktake.ts       — Stocktake flow (area picker → count inputs → bulk save)
     ingredient-db.ts   — Ingredient database editor + supplier import
-    finance.ts         — Finance screen (revenue dashboard, sync, week nav)
+    finance.ts         — Finance screen (revenue dashboard, live staff dashboard, sync, week nav)
+    finance-format.ts  — Pure presentation helpers for the live dashboard (eur/pct formatters, chips, sparkline, week strip); unit-tested
     feedback.ts        — Feedback form
     feedback-admin.ts  — Feedback admin screen
     team.ts            — Director-only Team screen: review/approve/deny/revoke account-access requests
@@ -159,7 +181,7 @@ public/
     today-panel.ts     — Always-on dashboard "Today" panel: renders ritual.ts as a phase-grouped, deep-linked checklist
     telemetry.ts       — Frontend telemetry collection (errors, screen views, feature usage)
     tutorial.ts        — Guided tutorial system
-test/                  — 35 *.test.ts files (run `ls test/*.test.ts`). Grouped below by area; keep new tests here.
+test/                  — 43 *.test.ts files (run `ls test/*.test.ts`). Grouped below by area; keep new tests here.
   api.test.ts          — API integration tests (Jest + @swc/jest)
   batch-recipe-stock-deduct.test.ts — Batch recipe editor stock-deduction logic
   batch-construction.test.ts — Guard: UI-built Batch literals match the canonical shape
@@ -195,6 +217,14 @@ test/                  — 35 *.test.ts files (run `ls test/*.test.ts`). Grouped
   drink-cost.test.ts   — Drinks cost engine (recursive rollup, labour, markup, suggested price)
   drink-order.test.ts  — Drinks ordering helpers (suggested qty, deposits, received deltas, nudge)
   drink-production.test.ts — Drinks production helpers (produced units, consumed blocks, write-off delta)
+  cost-engine.test.ts  — West-tab cost-per-guest engine (public/js/cost.ts)
+  data-integrity-pr1.test.ts — Regression for the 2026-06-05 data-integrity PR (CORR-2 stock double-deduct, etc.)
+  finance-dashboard.test.ts — Live-dashboard presentation helpers (public/js/finance-format.ts)
+  finance-live.test.ts — Live-dashboard classification/targets/per-meal helpers (lib/finance-live.ts)
+  ingredients-import-parse.test.ts — Supplier (Hanos) XLSX upload parsing
+  labour.test.ts       — Live-dashboard labour maths (lib/labour.ts: shift length, blended rate, computeLabour)
+  roles.test.ts        — Role-based page permissions (access roles CRUD, role assignment, default role on approve)
+  page-permissions-enforce.test.ts — Server-side enforcement of view-only via requireScreenEdit (Finance/ingredient writes)
   setup-env.ts         — Test DB guard: refuses prod hosts, swaps in DATABASE_URL_TEST
   setup-dom-stubs.ts   — DOM/localStorage stubs for frontend-logic tests
 .github/workflows/
@@ -222,7 +252,7 @@ npm run dev            # Vite on :5173 (frontend HMR) + tsx on :3000 (backend)
 npm run build          # Vite build + tsc backend → dist/
 npm run preview        # Build + serve on :3000 (single port, for Claude preview)
 npm start              # node dist/server/server.js (production)
-npm test               # Jest with @swc/jest. Unit + API tests (35 files in test/).
+npm test               # Jest with @swc/jest. Unit + API tests (43 files in test/).
                        # Requires DATABASE_URL_TEST pointing at a scratch DB —
                        # test/setup-env.ts refuses to run against production.
                        # See "Testing" section below.
@@ -250,6 +280,8 @@ Optional: `COVERAGE_API_KEY` for the weekly e2e coverage agent — required for 
 Optional (Competencies): `STAFF_LEAD_EMAILS` (comma-separated) gates the Competencies admin actions — chunk sync, teaching-event deletion, person rename/(de)activate. This is the staff-lead role, distinct from and independent of `DIRECTOR_EMAILS`; both default to no one having the role until set. The Notion chunk-library sync needs `NOTION_TOKEN` + `NOTION_CHUNKS_DATA_SOURCE_ID` (both required — `notionConfigured()` is false and the sync silently no-ops if either is missing); `COMPETENCY_SYNC_CRON` (default `0 5 * * *`) schedules the daily pull.
 Finance sync (Tebi): `TEBI_EMAIL` + `TEBI_PASSWORD` for Ledger 1 (Sering West, default ledger `723192`). For the second account/ledger (TestTafel + Centraal, `724466`), set `TEBI_LEDGER_ID_2=724466` and `TEBI_EMAIL_2` + `TEBI_PASSWORD_2`.
 Note on the `_2` env vars: only `scripts/tebi-sync-worker.js` reads them. The app-level `tebiConfigured` check (`lib/tebi-sync.ts`) and `runTebiSync` refusal logic look at the primary `TEBI_EMAIL`/`TEBI_PASSWORD` only. If `TEBI_LEDGER_ID_2` is set but the `_2` credentials are not, the worker silently falls back to primary creds — only valid if one Tebi account spans both ledgers (no longer the case as of 2026-04-26). Profit centers auto-discovered by label; set `TEBI_FORCE_LOCATION=west` to bypass discovery if needed.
+Finance cron (`server.ts`): `FINANCE_SYNC_CRON` (default `30 4 * * *`) is the nightly 14-day Tebi backfill; `FINANCE_INTRADAY_CRON` (default `0 14,18,20 * * *`) + `FINANCE_INTRADAY_CRON_LATE` (default `30 23 * * *`) are lighter today-only sync waves, pinned to `FINANCE_TZ` (default `Europe/Amsterdam`).
+Optional (Live dashboard): `GET /api/finance/live` adds a planned-labour block fed by the "Sering Shifts" Notion roster — set `NOTION_SHIFTS_DATA_SOURCE_ID` (alongside `NOTION_TOKEN`); it degrades gracefully (labour block hidden) when unset. Targets at `/api/finance/targets` are manager-gated via the per-screen `requireScreenEdit('finance')` page-permission gate.
 
 **For anything Tebi-related — auth, endpoint catalogue, the post-2026-05-07 product_top + filter pipeline, GuestHistory auto-update, common failure modes, diagnostic scripts — see [`TEBI.md`](TEBI.md).** That doc is the single source of truth for the integration; update it when you fix or extend something.
 
@@ -327,7 +359,9 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Ritual completions: `GET/POST /api/ritual-completions?loc=west&date=YYYY-MM-DD` — per-(location,date) array of done step-keys for the dashboard "Today" panel; only signal-less steps are stored (the rest are derived). Modelled on prep-checklist; rows pruned after a few days
 - Activity log: `GET /api/log` (last 50 actions, oldest first)
 - Guest history and next-weeks have their own endpoints with flat↔nested JSON conversion
-- Finance: `GET /api/finance/revenue?start=...&end=...&location=...`, `GET /api/finance/products?...`, `POST /api/finance/sync`, `POST /api/finance/sync-cancel`, `GET /api/finance/sync-status`. Status auto-hydrates from telemetry on first call after a restart.
+- Finance: `GET /api/finance/revenue?start=...&end=...&location=...`, `GET /api/finance/products?...`, `GET /api/finance/revenue-per-guest` (rolling org-wide food-revenue/guest for the planner's food-cost%), `POST /api/finance/sync`, `POST /api/finance/sync-cancel`, `GET /api/finance/sync-status`. Status auto-hydrates from telemetry on first call after a restart. `POST /sync`/`/sync-cancel` are `requireScreenEdit('finance')`-gated.
+- Finance live dashboard: `GET /api/finance/live?venue=&date=` — per-venue food/drink split, meals + spend-per-meal, top products, intraday curve, week-to-date, planned-labour block (`lib/finance-live.ts` + `lib/labour.ts` + `lib/notion-shifts.ts`). Controllable targets: `GET /api/finance/targets` (open) + `POST /api/finance/targets` (`requireScreenEdit('finance')`). The nightly Tebi sync also writes raw L1 (`TebiInvoice`, `TebiProductDaily`) consumed by the separate Sering Hub aggregation layer (Hub L1/L2/L3 tables live in `prisma/schema.prisma`; see TEBI.md).
+- Role-based page permissions: a `Role` table holds `permissions: { [screenId]: 'hidden'|'view'|'edit' }`; one role is `isDefault` (auto-assigned on approval) and `AccessRequest.roleId` links a user. `resolvePermissions(email)` (routes/auth.ts) yields the screen→permission map; the frontend hides/locks screens and `requireScreenEdit(screenId)` enforces 'edit' server-side on sensitive writes (Finance sync/targets, ingredient prices/stock). Directors and no-role users default to full edit. Managed via `/api/access/roles` (director-only).
 - Admin: `POST /api/admin/analyze`, `GET /api/admin/insights`, `PATCH /api/admin/insights/:id`, `GET /api/admin/telemetry/summary`
 - Recipe AI: `POST /api/recipe-ai/chat` — director-only SSE chat for the AI recipe assistant (gated by `DIRECTOR_EMAILS`; requires `ANTHROPIC_API_KEY`, else 503)
 - Competencies (Training): `GET /api/competencies` (chunks + people + events + `isStaffLead`), `POST /api/competencies/events`, `POST /api/competencies/people` (both open to any signed-in user — kiosk model), `PATCH /api/competencies/people/:id`, `DELETE /api/competencies/events/:id`, `POST /api/competencies/sync-chunks` (last three staff-lead gated via `STAFF_LEAD_EMAILS`). Chunk content pulls one-way from Notion (`lib/notion-sync.ts`)

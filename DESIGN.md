@@ -1,6 +1,6 @@
 # Sering Suite — Design Document & Roadmap
 
-*Last updated: 2026-06-05*
+*Last updated: 2026-06-23*
 *This is the master reference for any AI assistant working on this codebase. Read this before making changes.*
 
 ---
@@ -135,8 +135,19 @@ in git.
   target stock. Supplier price lists import from XLSX.
 
 - **Finance** — daily, per-location and per-product revenue pulled from the
-  Tebi POS, with weekly/monthly views and service-period breakdowns. The
-  Tebi integration is fragile and is documented in full in `TEBI.md`.
+  Tebi POS, with weekly/monthly views and service-period breakdowns. A
+  nightly 14-day backfill plus four intraday sync waves (14:00/18:00/20:00/23:30
+  Amsterdam) keep today current. On top of the raw revenue there is a
+  **live staff dashboard** (`GET /api/finance/live`, `lib/finance-live.ts`):
+  per-venue food/drink split, meals and spend-per-meal, top products, the
+  intraday revenue curve, week-to-date, and a **planned-labour block**
+  (`lib/labour.ts` + `lib/notion-shifts.ts`) costed from today's Notion
+  "Sering Shifts" roster against a blended €/hr — all measured against
+  **controllable targets** (`GET/POST /api/finance/targets`, manager-gated).
+  The nightly planner sync also captures raw L1 invoice/product rows
+  (`TebiInvoice`, `TebiProductDaily`) for the separate **Sering Hub**
+  finance-aggregation layer. The Tebi integration is fragile and is documented
+  in full in `TEBI.md`.
 
 - **Toppings & bread (Supplies)** — the standard accompaniments that go with
   every service: toppings, breads, ferments, pickles, sauces. A supply is
@@ -210,9 +221,12 @@ map — it is kept in sync as features land. Top-level shape:
 - `server.ts` / `app.ts` — Express entry point and app wiring
 - `routes/` — one router per module (data, batches, recipes, ingredients, guests,
   inventory, finance, hanos, telemetry, admin, recipe-ai, coverage, …)
-- `lib/` — backend helpers (Prisma/db, config, Tebi sync, Hanos client, AI analyzer,
-  recipe-ai, telemetry coverage)
-- `shared/types.ts` — interfaces shared by backend and frontend
+- `lib/` — backend helpers (Prisma/db, config, Tebi sync, finance-live + labour +
+  notion-shifts for the live dashboard, Hanos client, AI analyzer, recipe-ai,
+  notion-sync, telemetry coverage)
+- `shared/` — code shared by backend and frontend: `types.ts` (interfaces) plus
+  pure helpers (`drink-cost`, `drink-order`, `drink-production`, `dates`,
+  `location`, `recipe-cost`, `supply-demand`, `units`)
 - `public/js/` — frontend ES modules, roughly one per screen, bundled by Vite
 - `public/css/` — per-screen stylesheets
 - `prisma/` — schema, migrations, seed script
@@ -243,8 +257,10 @@ map — it is kept in sync as features land. Top-level shape:
 | Guests Next Weeks | mondayKey, location, day, meal, count | GuestsNextWeeks / guests_next_weeks |
 | Daily Revenue | date, location, grossRevenue, netRevenue, sales, covers, invoiceCount, syncedAt | DailyRevenue / daily_revenue |
 | Product Revenue | date, location, meal, productName, productCategory, quantity, grossRevenue, netRevenue, syncedAt | ProductRevenue / product_revenue |
+| Finance Targets | id="default", config (JSON: controllable spend-per-meal / labour-per-day targets for the live dashboard) | FinanceTargets / finance_targets |
 | Session | id, email, name, picture, createdAt, expiresAt | Session / sessions |
-| Access Request | id, email, name, firstName, lastName, picture, status (pending/approved/denied/revoked), requestedAt, decidedAt, decidedBy, personId (linked Training person) | AccessRequest / access_requests |
+| Access Request | id, email, name, firstName, lastName, picture, status (pending/approved/denied/revoked), requestedAt, decidedAt, decidedBy, personId (linked Training person), roleId (linked Role) | AccessRequest / access_requests |
+| Role | id, name, permissions (JSON: `{ [screenId]: "hidden" \| "view" \| "edit" }`), isDefault (assigned to newly-approved users) | Role / roles |
 | Log | id, timestamp, email, name, action, details | Log / log |
 | Telemetry Event | timestamp, source, type, name, data (JSON), userId, sessionId | TelemetryEvent / telemetry_event |
 | AI Insight | timestamp, category, severity, title, body, data (JSON), status, resolvedAt | AiInsight / ai_insight |
@@ -266,6 +282,13 @@ map — it is kept in sync as features land. Top-level shape:
 | Assortment | name, location, serviceContext, description, entries (JSON: drinkId + formats) | Assortment / assortments |
 | Drink Menu | name, assortmentId, location, sections (JSON), layout (JSON: columns/sectionStyle/typeScale), published | DrinkMenu / drink_menus |
 | Drink Config | id="default", config (JSON: labourRatePerMin, priceRounding, btwRule, markupTargets, demandNudgeThresholdPct, defaultShelfLifeDays, storageAreas per location) | DrinkConfig / drink_config |
+
+> The planner also owns a set of **Sering Hub** finance-aggregation tables — raw
+> L1 (`TebiInvoice`, `TebiProductDaily`, `SupplierInvoice` + lines) and derived
+> L2/L3 (`Sales*`/`ProductDay`/`TypeDay`/`Weekly*`, plus `Override`,
+> `ComputedCell`, `RecurringLineItem`). These are written by the nightly Tebi
+> sync but read/aggregated by the separate Hub app, not by the planner UI; see
+> `prisma/schema.prisma` and `TEBI.md` for the full list.
 
 **Recipe Sheet Template** (individual Google Sheets per recipe):
 - C1: dish name, B3: serving size (ml), D3: allergens, F3: serving temp, H3: structure
@@ -324,6 +347,7 @@ The order of everything below is flexible. Build thin slices first, deepen based
 **Basic finance tracking** (useful early even in simple form)
 - [x] v1: Daily revenue auto-pulled from Tebi POS via Playwright scraper. Finance screen with weekly revenue table, monthly summary, bar chart. Data stored in PostgreSQL DailyRevenue table.
 - [x] v2 (partial): Product-level revenue breakdown from Tebi invoice line items, with service period classification (morning/lunch/afternoon/dinner/bar) and per-location filtering. Remaining: cost tracking, cost per guest, budget vs actual.
+- [x] v2.5: **Live staff dashboard** (`GET /api/finance/live`) — per-venue food/drink split, meals & spend-per-meal vs **controllable targets** (`/api/finance/targets`), intraday revenue curve, week-to-date, and a planned-labour block costed from the Notion "Sering Shifts" roster. Nightly 14-day backfill + four intraday sync waves keep today current. The nightly sync also captures raw L1 (`TebiInvoice`/`TebiProductDaily`) for the separate **Sering Hub** finance-aggregation layer.
 - v3: Full P&L, supplier analysis, waste tracking, automated reports
 
 **Non-food inventory**
@@ -366,10 +390,23 @@ Browser (Vite-bundled TS) ←→ Express Server (TypeScript) ←→ PostgreSQL (
 - Shared type definitions between frontend and backend (`shared/types.ts`)
 - Good for: food planner + drinks + tasks + finance + non-food inventory + more
 
-### When Needed: User Roles ← triggered by scheduling or multi-location growth
+### Shipped (v1): Role-based page permissions
 ```
-Same architecture + role-based access control
+Same architecture + per-screen role-based access control
 ```
+A `Role` table holds `permissions: { [screenId]: "hidden" | "view" | "edit" }`;
+one role is flagged `isDefault` and is auto-assigned to newly-approved users.
+`AccessRequest.roleId` links a user to a role. The director manages roles via
+`GET/POST/PATCH/DELETE /api/access/roles` and assigns them with
+`PATCH /api/access/requests/:id/role` (all on the Team screen). `resolvePermissions()`
+(routes/auth.ts) turns a user into their screen→permission map; the frontend hides/
+locks screens accordingly, and `requireScreenEdit(screenId)` enforces it **server-side**
+on the sensitive write paths (Finance sync/targets, ingredient prices/stock writes) so
+view-only is a real lock, not just a UI guardrail. Directors and no-role users default
+to full edit.
+
+- The richer org tiers below remain a **future** extension — they're just
+  particular `Role` rows on the same mechanism, plus per-location scoping:
 - **Admin** (director): everything
 - **Location manager**: full access to their location, read access to others and organisation-wide
 - **Staff**: own schedule, own location's operations, read access to organisation-wide data
