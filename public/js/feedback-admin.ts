@@ -48,6 +48,7 @@ function updateFeedbackUI(el?: HTMLElement | null) {
 
   const typeLabels: Record<string, string> = { idea: 'Ideas', issue: 'Issues', confusing: 'Confusing', nice: 'Nice', general: 'General' };
   const typeIcons: Record<string, string> = { idea: '&#128161;', issue: '&#128027;', confusing: '&#128566;', nice: '&#128077;', general: '&#128172;' };
+  const sevLabels: Record<string, string> = { low: 'Minor', medium: 'Slows work', high: 'Blocks / lost work' };
 
   el.innerHTML = `
     <div id="feedback-admin-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
@@ -80,16 +81,29 @@ function updateFeedbackUI(el?: HTMLElement | null) {
           const screenLabel = screenLabels[f.screen] || f.screen || '—';
           const processedClass = f.processed ? ' feedback-processed' : '';
 
+          const sevPill = f.severity ? `<span class="feedback-card-sev fb-sev-${esc(f.severity)}">${esc(sevLabels[f.severity] || f.severity)}</span>` : '';
+          const sourceBadge = f.source === 'assistant' ? '<span class="feedback-card-source" title="Distilled by the AI intake assistant">&#10024; Assistant</span>' : '';
+          const titleHtml = f.title ? `<div class="feedback-card-title">${esc(f.title)}</div>` : '';
+          const d = (f.details && typeof f.details === 'object') ? f.details : {};
+          const detailHtml = [
+            d.doing ? `<div class="feedback-card-detail"><strong>Was doing:</strong> ${esc(d.doing)}</div>` : '',
+            d.expected ? `<div class="feedback-card-detail"><strong>Expected vs happened:</strong> ${esc(d.expected)}</div>` : '',
+          ].join('');
+
           return `<div class="section-card feedback-card${processedClass}" style="position:relative;${f.processed ? 'opacity:0.6;' : ''}">
             <div class="feedback-card-header">
               <span class="feedback-card-type">${icon} ${esc(label)}</span>
+              ${sevPill}
+              ${sourceBadge}
               <span class="feedback-card-screen">${esc(screenLabel)}</span>
               <span class="feedback-card-meta">${esc(f.user)} &middot; ${esc(date)}</span>
               <button class="btn btn-sm" style="margin-left:auto;font-size:11px;padding:3px 10px;" onclick="toggleFeedbackItemProcessed(${f.id}, ${!f.processed})">
                 ${f.processed ? '&#8634; Reopen' : '&#10003; Done'}
               </button>
             </div>
+            ${titleHtml}
             <div class="feedback-card-text">${esc(f.text)}</div>
+            ${detailHtml}
           </div>`;
         }).join('')
     }
@@ -149,7 +163,14 @@ export function copyFeedbackForClaude() {
     const screenLabels: Record<string, string> = { dashboard:'Dashboard', guests:'Guests', planner:'Week plan', 'recipe-index':'Recipes', orders:'Orders' };
     const screen = screenLabels[f.screen] || f.screen || '—';
     const status = f.processed ? ' [DONE]' : '';
-    return `[${f.type}]${status} (${screen}, ${f.user}, ${date})\n${f.text}`;
+    const sev = f.severity ? ` [${f.severity}]` : '';
+    const head = f.title ? `${f.title}\n` : '';
+    const d = (f.details && typeof f.details === 'object') ? f.details : {};
+    const extra = [
+      d.doing ? `\nWas doing: ${d.doing}` : '',
+      d.expected ? `\nExpected vs happened: ${d.expected}` : '',
+    ].join('');
+    return `[${f.type}]${sev}${status} (${screen}, ${f.user}, ${date})\n${head}${f.text}${extra}`;
   });
 
   const text = `=== Sering Food Planner Feedback (${toCopy.length} items) ===\n\n${lines.join('\n\n---\n\n')}`;

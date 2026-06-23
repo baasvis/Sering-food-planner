@@ -218,6 +218,14 @@ model Feedback {
   text      String
   userAgent String  @default("") @map("user_agent")
   processed Boolean @default(false)
+  // AI feedback-intake assistant: an `assistant` row is the structured report
+  // distilled from a clarifying chat (title + severity + details JSON holding
+  // {doing, expected, telemetry, transcript}); a `quick` row is the legacy
+  // one-shot form, where these stay at their defaults.
+  title     String  @default("")
+  severity  String  @default("") // '' | 'low' | 'medium' | 'high' (issues only)
+  source    String  @default("quick") // 'quick' | 'assistant'
+  details   Json?
 
   @@index([processed])
   @@map("feedback")

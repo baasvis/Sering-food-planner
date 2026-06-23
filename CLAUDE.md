@@ -40,6 +40,8 @@ lib/
   ai-analyzer.ts       — Data quality checks, telemetry aggregation, Claude API insights
   recipe-ai.ts         — Claude tool-use loop for the director-only AI recipe assistant (chatStream, exemplar loading)
   recipe-ai-prompt.md  — System prompt for the AI recipe assistant (loaded by lib/recipe-ai.ts)
+  feedback-ai.ts       — Claude tool-use loop for the staff-facing feedback-intake assistant (feedbackChatStream, single propose_report tool, recent-telemetry context loader, pure normalizeReport/summarizeActivity helpers)
+  feedback-ai-prompt.md — System prompt for the feedback-intake assistant (loaded by lib/feedback-ai.ts)
   telemetry-coverage.ts — Discovers trackEvent() features in public/js, mines telemetry sessions for user journeys, surfaces uncovered features for the weekly e2e coverage agent
   notion-sync.ts       — One-way sync of the competency chunk library from Notion → Postgres (notionConfigured, syncChunksFromNotion); upsert-only, never deletes
   notion-markdown.ts   — Pure converter: Notion chunk page block tree → canonical `## `-delimited teaching-guide markdown (unit-testable, no I/O)
@@ -66,7 +68,8 @@ routes/
   ingredients-import.ts — Hanos XLSX upload (POST /api/ingredients/upload-supplier) + CSV migration
   guests.ts            — Guest history + next-weeks predictions
   inventory.ts         — Standard inventory (per-location) + storage config + kitchen equipment + prep checklist + activity log + cook-rhythm + ritual-completions
-  feedback.ts          — User feedback POST/PATCH/list
+  feedback.ts          — User feedback POST/PATCH/list (POST accepts the structured assistant fields: title/severity/source/details)
+  feedback-ai.ts       — Staff-facing feedback-intake assistant: POST /api/feedback-ai/chat (SSE stream, any signed-in user, NOT director-gated; 503 without ANTHROPIC_API_KEY)
   events.ts            — SSE live sync: client registry, broadcast to other users on save
   health.ts            — Health check endpoint
   hanos.ts             — Hanos status, search, product lookup, add-to-cart, cart view
@@ -163,8 +166,9 @@ public/
     ingredient-db.ts   — Ingredient database editor + supplier import
     finance.ts         — Finance screen (revenue dashboard, live staff dashboard, sync, week nav)
     finance-format.ts  — Pure presentation helpers for the live dashboard (eur/pct formatters, chips, sparkline, week strip); unit-tested
-    feedback.ts        — Feedback form
-    feedback-admin.ts  — Feedback admin screen
+    feedback.ts        — Legacy one-shot "quick note" form (openQuickFeedback) — the escape hatch reached from the chat header
+    feedback-ai-chat.ts — Default feedback flow: AI intake chat (SSE client for /api/feedback-ai/chat) + editable "here's what I'll send Daan" proposal card → POST /api/feedback (source='assistant'). The FAB's openFeedback now points here
+    feedback-admin.ts  — Feedback admin screen (renders structured assistant cards: title, severity, source badge, was-doing/expected)
     team.ts            — Director-only Team screen: review/approve/deny/revoke account-access requests
     competencies.ts    — Training screen: people × chunks teaching grid, log-event modal, public ledger
     chunk-guide.ts     — Pure helper: split a chunk's teaching-guide markdown into `## ` sections (shared by competencies.ts)
@@ -212,6 +216,7 @@ test/                  — 43 *.test.ts files (run `ls test/*.test.ts`). Grouped
   location-state.test.ts — Frontend setGlobalLocation / restoreGlobalLocation unit tests
   stock-location.test.ts — Frontend getDbStockForLoc / hasDbStockEntryForLoc unit tests
   redact-secrets.test.ts — lib/config redactSecrets / safeErrMsg unit tests
+  feedback-ai.test.ts  — Feedback-intake assistant pure helpers (normalizeReport enum coercion, summarizeActivity telemetry formatting)
   xlsx-api-smoke.test.ts — Supplier XLSX upload smoke test
   drinks-helpers.test.ts — Drinks normalizers (formats/locations incl. area passthrough), BTW, stock map, config, validation
   drink-cost.test.ts   — Drinks cost engine (recursive rollup, labour, markup, suggested price)
@@ -273,7 +278,7 @@ npm run typecheck      # tsc --noEmit — backend (tsconfig.server.json) +
 Requires `DATABASE_URL` env var pointing to PostgreSQL.
 Without `GOOGLE_CLIENT_ID` set, runs in dev mode (no real auth).
 `AUTH_MODE=production` (set on the Railway prod env, not in dev/staging) makes server.ts refuse to boot if `GOOGLE_CLIENT_ID` or `ALLOWED_EMAILS` is empty, and disables the dev-mode bypass in `routes/auth.ts`. Decoupled from `NODE_ENV` so `npm run preview` (which sets `NODE_ENV=production`) keeps using dev login.
-Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`). `ANTHROPIC_API_KEY` also powers the director-only AI recipe assistant — `DIRECTOR_EMAILS` (comma-separated; defaults to Daan's email) controls who can use it.
+Optional: `ANTHROPIC_API_KEY` for AI analysis, `AI_ANALYSIS_CRON` (default `0 7 * * *`), `AI_ANALYSIS_MODEL` (default `claude-sonnet-4-6`). `ANTHROPIC_API_KEY` also powers the director-only AI recipe assistant — `DIRECTOR_EMAILS` (comma-separated; defaults to Daan's email) controls who can use it. The same key powers the staff-facing **feedback-intake assistant** (`POST /api/feedback-ai/chat`, open to any signed-in user; 503 without the key); `FEEDBACK_AI_MODEL` overrides its model (default `claude-sonnet-4-6` — set e.g. `claude-haiku-4-5` to cut cost further on this higher-volume all-staff feature, or `claude-opus-4-8` for max quality).
 Optional (Drinks): `MANAGER_EMAILS` (comma-separated) is the drinks **manager** tier — `isManagerEmail` = directors ∪ `MANAGER_EMAILS` (`routes/auth.ts`). Managers own catalogue CRUD, prices/costs, supplier data, ordering, assortments and menu publishing; stock counts, storage-area assignment, production, write-offs and recipe drafts are open to any signed-in user. The AI PDF import (`/api/drinks/import/*`) also needs `ANTHROPIC_API_KEY` (503 without it).
 Optional: `MAINTENANCE_MODE=1` puts the app in read-only mode (writes return 503, reads/SSE keep working) for deploy windows — see `prisma/migrations/DEPLOY.md`.
 Optional: `COVERAGE_API_KEY` for the weekly e2e coverage agent — required for `GET /api/coverage/snapshot` (returns 503 if unset). The endpoint is mounted before `requireAuth` so a remote agent can fetch with a `Bearer <key>` header instead of a session cookie.
@@ -310,7 +315,7 @@ confusion. After the page loads, click the "Dev mode login" button to bypass aut
 - Backend errors that surface to clients should use `safeErrMsg(e)` (redacts password/secret/token/Bearer/Basic patterns). Use raw `errMsg(e)` for console.* logs only.
 - Every write endpoint logs the user action with `dbAppendLog(user.email, user.name, action, details)` — surfaces in the activity log via `GET /api/log`.
 - `addBackendEvent('error'|'feature_use'|..., name, data)` (`routes/telemetry.ts`) is the side-channel for backend events. Errors that don't reach this function won't surface in AI insights.
-- `compression()` middleware in `app.ts` deliberately skips `/api/events` and `/api/recipe-ai/chat` (both stream SSE and must not be buffered). Don't break this filter.
+- `compression()` middleware in `app.ts` deliberately skips `/api/events`, `/api/recipe-ai/chat`, and `/api/feedback-ai/chat` (all stream SSE and must not be buffered). Don't break this filter.
 - Prisma schema in `prisma/schema.prisma` — run `npx prisma migrate dev` after changes
 - Navigation screens defined in `NAV_SCREENS` array (state.ts) — add new screens there, not in HTML
 - CSS split into per-screen files in `public/css/` — add new screen styles to the matching file
@@ -364,6 +369,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Role-based page permissions: a `Role` table holds `permissions: { [screenId]: 'hidden'|'view'|'edit' }`; one role is `isDefault` (auto-assigned on approval) and `AccessRequest.roleId` links a user. `resolvePermissions(email)` (routes/auth.ts) yields the screen→permission map; the frontend hides/locks screens and `requireScreenEdit(screenId)` enforces 'edit' server-side on sensitive writes (Finance sync/targets, ingredient prices/stock). Directors and no-role users default to full edit. Managed via `/api/access/roles` (director-only).
 - Admin: `POST /api/admin/analyze`, `GET /api/admin/insights`, `PATCH /api/admin/insights/:id`, `GET /api/admin/telemetry/summary`
 - Recipe AI: `POST /api/recipe-ai/chat` — director-only SSE chat for the AI recipe assistant (gated by `DIRECTOR_EMAILS`; requires `ANTHROPIC_API_KEY`, else 503)
+- Feedback: `GET/POST/PATCH /api/feedback` (list / create / mark processed). The POST takes either the legacy quick fields (`type`, `text`, `screen`) or the assistant's structured fields (`title`, `severity`, `source='assistant'`, `details` JSON `{doing, expected, transcript}`). Feedback AI: `POST /api/feedback-ai/chat` — SSE intake chat open to any signed-in user; streams `text` deltas + a `proposal` event (the editable report card) via the `propose_report` tool, grounded by a recent-telemetry hint. Requires `ANTHROPIC_API_KEY` (else 503)
 - Competencies (Training): `GET /api/competencies` (chunks + people + events + `isStaffLead`), `POST /api/competencies/events`, `POST /api/competencies/people` (both open to any signed-in user — kiosk model), `PATCH /api/competencies/people/:id`, `DELETE /api/competencies/events/:id`, `POST /api/competencies/sync-chunks` (last three staff-lead gated via `STAFF_LEAD_EMAILS`). Chunk content pulls one-way from Notion (`lib/notion-sync.ts`)
 - Supplies (Toppings & bread): `GET/POST /api/supplies`, `PATCH/DELETE /api/supplies/:id`, `POST /api/supplies/:id/prep` (add to pool + stamp lastMakeDate), `POST /api/supplies/:id/stock` (set absolute; zeroing a one-off auto-archives it). `kind` is `standard` (per-guest ratio + prep horizon) or `oneoff` (drip-feed per service)
 - Access requests: `POST /api/auth/request-access` (unauthenticated — verifies a Google token, then records/looks-up a pending request; one row per email). Director-only review: `GET /api/access/requests`, `GET /api/access/pending-count`, `PATCH /api/access/requests/:id` (edit first/last name), `POST /api/access/requests/:id/{approve,deny,revoke}`. The effective login allowlist is `ALLOWED_EMAILS` (env, the bootstrap backbone) ∪ `access_requests` rows with status `approved` — see `isEmailAllowed()` in routes/auth.ts. Approving grants access with no env edit / redeploy; the prod fail-closed boot guard is unchanged. A denied login auto-records a pending request rather than dead-ending. The request form collects first + last name (a director can edit it via PATCH); approving also creates/links a Training (competencies) `Person` — deduped by name — so approved accounts seed the training roster. Stored in the `access_requests` table (`AccessRequest` model). Surfaced by the director-only **Team** screen + a dashboard "waiting for access" badge.

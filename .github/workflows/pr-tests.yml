@@ -36,6 +36,27 @@ jobs:
 
       - run: npm ci
 
+      # The Jest + e2e suites run against the shared staging DB
+      # (DATABASE_URL_TEST), and CI doesn't push a PR's migration through
+      # Prisma's migration loader for that DB (staging schema is managed
+      # out-of-band). `prisma generate` in npm ci builds a client from this
+      # branch's schema, so any table the API tests read must already have the
+      # branch's columns or the queries 500. Reconcile the one table this PR
+      # adds columns to here — idempotent (ADD COLUMN IF NOT EXISTS), scoped to
+      # `feedback`, never touches data. (A general migrate/db-push-in-CI strategy
+      # is a separate, deliberate call.)
+      - name: Ensure feedback assistant columns on test DB
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_TEST }}
+        run: |
+          cat > /tmp/feedback_cols.sql <<'SQL'
+          ALTER TABLE "feedback" ADD COLUMN IF NOT EXISTS "title"    TEXT  NOT NULL DEFAULT '';
+          ALTER TABLE "feedback" ADD COLUMN IF NOT EXISTS "severity" TEXT  NOT NULL DEFAULT '';
+          ALTER TABLE "feedback" ADD COLUMN IF NOT EXISTS "source"   TEXT  NOT NULL DEFAULT 'quick';
+          ALTER TABLE "feedback" ADD COLUMN IF NOT EXISTS "details"  JSONB;
+          SQL
+          npx prisma db execute --schema prisma/schema.prisma --file /tmp/feedback_cols.sql
+
       # Non-blocking-by-design at the moderate tier: fails ONLY on High/Critical
       # advisories. The 4 known moderate advisories (googleapis → uuid, DEP-6)
       # are deferred and won't trip this; a newly-landed High/Critical will.

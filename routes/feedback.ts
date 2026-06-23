@@ -10,8 +10,11 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   res.json(rows);
 }));
 
+const VALID_SOURCES = new Set(['quick', 'assistant']);
+const VALID_SEVERITIES = new Set(['', 'low', 'medium', 'high']);
+
 router.post('/', asyncHandler(async (req: Request, res: Response) => {
-  const { type, text, screen, user, timestamp, userAgent } = req.body;
+  const { type, text, screen, user, timestamp, userAgent, title, severity, source, details } = req.body;
   if (!text) return res.status(400).json({ error: 'Feedback text required' });
 
   await prisma.feedback.create({
@@ -22,6 +25,14 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
       screen: screen || '',
       text,
       userAgent: userAgent || '',
+      // Structured fields from the AI intake assistant (legacy quick form omits
+      // them → defaults). Validate the enums; the JSON details ride through as-is.
+      title: typeof title === 'string' ? title.slice(0, 120) : '',
+      severity: typeof severity === 'string' && VALID_SEVERITIES.has(severity) ? severity : '',
+      source: typeof source === 'string' && VALID_SOURCES.has(source) ? source : 'quick',
+      details: details && typeof details === 'object'
+        ? (details as import('@prisma/client').Prisma.InputJsonValue)
+        : undefined,
     },
   });
   res.json({ ok: true });

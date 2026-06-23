@@ -17,6 +17,31 @@
   .feedback-textarea:focus{outline:none;border-color:var(--purple);}
   .feedback-screen-tag{display:inline-block;font-size:11px;padding:3px 8px;border-radius:10px;background:var(--bg2);color:var(--text2);}
 
+  /* ═══════════ FEEDBACK AI CHAT ═══════════ */
+  /* Reuses the .ai-chat-* message/input styles from recipe-editor.css. */
+
+  .modal:has(.fb-chat){width:520px;max-width:96vw;}
+  .fb-chat{display:flex;flex-direction:column;height:min(70vh,560px);}
+  .fb-chat .ai-chat-header{margin:-4px -4px 0;}
+  .fb-chat .ai-chat-messages{flex:1;min-height:0;}
+  .fb-chat .ai-chat-input-row{border-radius:0 0 var(--radius) var(--radius);}
+  .fb-chat-quick{background:transparent;border:none;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;padding:2px 6px;border-radius:4px;}
+  .fb-chat-quick:hover{color:var(--purple);background:var(--bg2);}
+
+  /* Proposal card — the editable "here's what I'll send Daan" summary */
+  .fb-proposal{border:2px solid var(--purple);border-radius:var(--radius);background:var(--purple-bg);padding:12px 14px;margin:0 14px 10px;}
+  .fb-prop-head{font-size:12px;font-weight:700;color:var(--purple);margin-bottom:10px;}
+  .fb-prop-label{display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;color:var(--text2);margin:8px 0 3px;}
+  .fb-prop-input,.fb-prop-select,.fb-prop-textarea{width:100%;font-size:13px;font-family:inherit;border:1px solid var(--border2);border-radius:var(--radius);padding:7px 9px;background:var(--bg);color:var(--text);box-sizing:border-box;}
+  .fb-prop-textarea{min-height:70px;resize:vertical;line-height:1.45;}
+  .fb-prop-input:focus,.fb-prop-select:focus,.fb-prop-textarea:focus{outline:none;border-color:var(--purple);}
+  .fb-prop-row{display:flex;gap:10px;}
+  .fb-prop-col{flex:1;min-width:0;}
+  .fb-prop-ctx{font-size:12px;color:var(--text2);margin-top:8px;line-height:1.45;}
+  .fb-prop-ctx strong{color:var(--text);}
+  .fb-prop-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;flex-wrap:wrap;}
+  .fb-prop-hint{font-size:11px;color:var(--text3);}
+
   /* ═══════════ FEEDBACK ADMIN ═══════════ */
 
   .feedback-card{padding:14px 16px;margin-bottom:8px;}
@@ -25,3 +50,11 @@
   .feedback-card-screen{font-size:11px;color:var(--text2);background:var(--bg2);padding:2px 8px;border-radius:10px;}
   .feedback-card-meta{font-size:11px;color:var(--text3);margin-left:auto;}
   .feedback-card-text{font-size:13px;line-height:1.6;color:var(--text);white-space:pre-wrap;}
+  .feedback-card-title{font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;}
+  .feedback-card-source{font-size:11px;font-weight:600;color:var(--purple);background:var(--purple-bg);padding:2px 8px;border-radius:10px;}
+  .feedback-card-sev{font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;}
+  .fb-sev-low{color:var(--text2);background:var(--bg2);}
+  .fb-sev-medium{color:#92600a;background:rgba(245,158,11,.15);}
+  .fb-sev-high{color:var(--red);background:var(--red-bg);}
+  .feedback-card-detail{font-size:12px;line-height:1.5;color:var(--text2);margin-top:6px;}
+  .feedback-card-detail strong{color:var(--text);}
