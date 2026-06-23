@@ -191,12 +191,13 @@ model AccessRequest {
   @@map("access_requests")
 }
 
-// Role-based page permissions — frontend guardrails only (no server-side write
-// enforcement). `permissions` maps each gateable screen id to
+// Role-based page permissions. `permissions` maps each gateable screen id to
 // "hidden" | "view" | "edit"; an AccessRequest.roleId links a user to one role.
-// Directors (DIRECTOR_EMAILS) bypass roles entirely (full edit). Resolved into
-// the AppUser at login / GET /auth/me — see routes/auth.ts (resolvePermissions)
-// and the frontend nav/view gating in public/js/navigate.ts.
+// Directors (DIRECTOR_EMAILS) and no-role users bypass roles entirely (full
+// edit). Resolved into the AppUser at login / GET /auth/me — see routes/auth.ts
+// (resolvePermissions). Enforced in the frontend nav/view gating
+// (public/js/navigate.ts) AND server-side on sensitive writes via
+// requireScreenEdit() — Finance sync/targets, ingredient price/stock writes.
 model Role {
   id          String   @id
   name        String
