@@ -11,6 +11,14 @@ import { trackEvent } from './telemetry';
 
 // Temporary state for CSV processing (only lives while page is open)
 export let _pendingUpload = null; // { aggregated, deviceMap, stats } after CSV parse
+
+// Inline `onclick="_pendingUpload=null"` only sets a `window` global (the
+// Object.assign snapshot), never this module binding — so Discard did nothing.
+// Route it through a function like the rest of the module's mutations.
+export function discardPendingUpload() {
+  _pendingUpload = null;
+  renderGuests();
+}
 export let _guestsDayOffset = 0;  // 0 = starting from today, +1 = starting from tomorrow, etc.
 
 export function changeGuestDay(delta: any) {
@@ -340,7 +348,7 @@ export function renderUploadSection() {
       </div>
       ${s.unmappedRows > 0 ? `<div style="color:var(--amber);font-size:11px;margin-bottom:8px;">${s.unmappedRows} rows skipped (register not identified as West or Centraal)</div>` : ''}
       <button class="btn btn-primary btn-sm" onclick="saveUploadedHistory()" style="font-size:12px;padding:6px 16px;">Save to history</button>
-      <button class="btn btn-sm" onclick="_pendingUpload=null;renderGuests();" style="font-size:12px;padding:6px 12px;margin-left:8px;">Discard</button>
+      <button class="btn btn-sm" onclick="discardPendingUpload()" style="font-size:12px;padding:6px 12px;margin-left:8px;">Discard</button>
     </div>`;
   }
 
