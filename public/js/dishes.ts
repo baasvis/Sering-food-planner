@@ -1,7 +1,7 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet, todayIso } from './utils';
 import { pushUndo } from './undo';
-import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, cateringActive, diffStr, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
+import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, cateringActive, diffStr, computeCoverage, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { rerenderCurrentView, getCurrentScreen } from './navigate';
 import { trackEvent } from './telemetry';
@@ -76,6 +76,33 @@ function renderInventoryBadges(d: Batch): string {
   return badges.join(' ');
 }
 
+/** Per-location coverage chips: "W 5/5" / "C 20/30" reading reachable-of-needed,
+ *  red when that location's demand can't be served in time (transport-aware —
+ *  e.g. West stock can't reach Centraal the same day). Plus a "stuck at West"
+ *  chip when spare West stock can't reach tonight's Centraal shortfall. Returns
+ *  '' when the batch has no demand, so quiet batches stay uncluttered. */
+function renderCoverageBadges(d: Batch): string {
+  const cov = computeCoverage(d);
+  const chips: string[] = [];
+  for (const [loc, lc] of [['west', cov.west], ['centraal', cov.centraal]] as const) {
+    if (lc.demand <= 0) continue;
+    const short = lc.shortfall > 0;
+    const letter = loc === 'centraal' ? 'C' : 'W';
+    const title = short
+      ? `${locName(loc)}: only ${lc.covered.toFixed(1)}L of ${lc.demand.toFixed(1)}L needed can arrive in time — ${lc.shortfall.toFixed(1)}L short`
+      : `${locName(loc)}: ${lc.demand.toFixed(1)}L needed, fully covered in time`;
+    chips.push(`<span class="cov-chip ${short ? 'cov-short' : 'cov-ok'}" title="${title}">${letter} ${lc.covered.toFixed(1)}/${lc.demand.toFixed(1)}</span>`);
+  }
+  // West stock left genuinely free AFTER the engine allocated it (excludes stock
+  // the van committed to a future Centraal service AND stock earmarked for a
+  // catering) that still can't reach tonight's Centraal shortfall — the "stranded" case.
+  const stranded = Math.min(cov.west.leftover, cov.centraal.todayShortfall);
+  if (stranded > 0.05) {
+    chips.push(`<span class="cov-chip cov-stranded" title="${stranded.toFixed(1)}L sits at West but can't reach Centraal until tomorrow's morning van — tonight's Centraal demand must be filled from Centraal stock or a fresh cook">&#9888; ${stranded.toFixed(1)}L stuck at West</span>`);
+  }
+  return chips.join(' ');
+}
+
 // ── DISH LIST ─────────────────────────────────────────────
 export let dishSort = { col: 'default', dir: 'asc' };
 
@@ -100,7 +127,10 @@ export function renderDishesOverview() {
     return true;
   });
 
-  // Sort
+  // Sort. Precompute the coverage diff once per batch when sorting by it — diffStr
+  // runs a full computeCoverage, so calling it inside the O(n log n) comparator
+  // (twice per comparison) is wasteful; the value is constant per batch here.
+  const diffCache = dishSort.col === 'diff' ? new Map(filtered.map(d => [d.id, diffStr(d).diff])) : null;
   const sorted = dishSort.col === 'default' ? filtered : [...filtered].sort((a: Batch, b: Batch) => {
     let va: string | number, vb: string | number;
     switch (dishSort.col) {
@@ -112,7 +142,7 @@ export function renderDishesOverview() {
       case 'type': va = a.type || ''; vb = b.type || ''; break;
       case 'stock': va = getTotalStock(a); vb = getTotalStock(b); break;
       case 'diff':
-        va = diffStr(a).diff; vb = diffStr(b).diff;
+        va = diffCache!.get(a.id) ?? 0; vb = diffCache!.get(b.id) ?? 0;
         break;
       default: va = 0; vb = 0;
     }
@@ -256,6 +286,7 @@ export function renderBatchTileOverview(d: Batch) {
   const cookHtml = getCookCellHtml(d);
   const logClass = logisticsRowClass(d);
   const inventoryBadges = renderInventoryBadges(d);
+  const coverageBadges = renderCoverageBadges(d);
   return `<div class="dish-row ${logClass}${isSel ? ' selected' : ''}${hasStaleEntry ? ' stale-row' : ''}${allFrozen ? ' frozen-row' : ''}">
     <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
     <div>
@@ -275,7 +306,7 @@ export function renderBatchTileOverview(d: Batch) {
     </div>
     <div class="col-diff ${cls}" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</div>
     <div class="col-logistics" style="display:flex;flex-wrap:wrap;gap:3px;">
-      ${inventoryBadges}
+      ${inventoryBadges} ${coverageBadges}
     </div>
     <div><button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button></div>
     <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
@@ -283,7 +314,7 @@ export function renderBatchTileOverview(d: Batch) {
       <span style="font-size:12px;color:var(--text2);">Stock</span>
       <span class="batch-stock-total" style="font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L</span>
       <span class="${cls}" style="font-size:12px;" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</span>
-      <span style="display:flex;flex-wrap:wrap;gap:3px;font-size:10px;">${inventoryBadges}</span>
+      <span style="display:flex;flex-wrap:wrap;gap:3px;font-size:10px;">${inventoryBadges} ${coverageBadges}</span>
       <button class="btn btn-sm served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')" style="margin-left:auto;">Served</button>
     </div>
   </div>`;
@@ -362,7 +393,7 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
       <span class="batch-tile-cook">${batchCookLabel(d)}</span>
       <span class="batch-tile-stock ${cls}" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L <small>${str}</small></span>
       ${tooBigBadge}
-      <span class="batch-tile-logistics" style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;">${renderInventoryBadges(d)}</span>
+      <span class="batch-tile-logistics" style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;">${renderInventoryBadges(d)} ${renderCoverageBadges(d)}</span>
       <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
     </div>`;
 
@@ -372,9 +403,10 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
     const cookHtml = getCookCellHtml(d);
 
     // Build structured service data split by location
-    interface SvcLine { day: string; meal: string; liters: string; served: boolean }
+    interface SvcLine { day: string; meal: string; liters: string; served: boolean; shortfall: number }
     const westSvcs: SvcLine[] = [];
     const centraalSvcs: SvcLine[] = [];
+    const cov = computeCoverage(d);
     const fullDayNames: Record<string, string> = { Mon:'Monday', Tue:'Tuesday', Wed:'Wednesday', Thu:'Thursday', Fri:'Friday', Sat:'Saturday', Sun:'Sunday' };
     (d.services || []).forEach(svc => {
       const meal = svc.meal === 'lunch' ? 'Lunch' : 'Dinner';
@@ -383,6 +415,7 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
       const short = dateToDayName(svc.date);
       const dayLabel = fullDayNames[short] || short;
       let liters = '';
+      let shortfall = 0;
       if (!past) {
         // Read from the family-aware allocator cache so this line agrees
         // with calcRequired's total and the diff badge. Doing the per-peer
@@ -390,8 +423,10 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
         // counted as raw batches, not unique families).
         const l = Math.round(calcRequiredAtService(d, svc) * 10) / 10;
         liters = `${l}L`;
+        const cs = cov.services.find(s => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal);
+        shortfall = cs ? cs.shortfall : 0;
       }
-      const line = { day: dayLabel, meal, liters, served: past };
+      const line = { day: dayLabel, meal, liters, served: past, shortfall };
       if (svc.loc === 'west') westSvcs.push(line); else centraalSvcs.push(line);
     });
 
@@ -408,7 +443,7 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
 
     const renderSvcCol = (lines: SvcLine[]) => lines.length === 0
       ? '<div class="bx-svc-empty">—</div>'
-      : lines.map(l => `<div class="bx-svc-line${l.served ? ' served' : ''}"><span class="bx-svc-day">${l.day}</span><span class="bx-svc-meal">${l.meal}</span>${l.served ? '<span class="bx-svc-liters">✓</span>' : `<span class="bx-svc-liters">${l.liters}</span>`}</div>`).join('');
+      : lines.map(l => `<div class="bx-svc-line${l.served ? ' served' : ''}"><span class="bx-svc-day">${l.day}</span><span class="bx-svc-meal">${l.meal}</span>${l.served ? '<span class="bx-svc-liters">✓</span>' : `<span class="bx-svc-liters">${l.liters}${l.shortfall > 0 ? ` <span class="bx-svc-short" title="${l.shortfall.toFixed(1)}L can't reach this service in time">&#9888;${l.shortfall.toFixed(1)}</span>` : ''}</span>`}</div>`).join('');
 
     const hasServices = westSvcs.length > 0 || centraalSvcs.length > 0;
     const hasBothLocs = westSvcs.length > 0 && centraalSvcs.length > 0;

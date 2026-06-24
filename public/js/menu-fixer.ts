@@ -17,7 +17,7 @@ import { newId, scheduleSave, toast, toastError, saveKitchenEquipment, saveCookR
 import {
   rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, getAmsterdamNow,
   isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, calcRequiredAtLocLive, getEffectiveGuests, isServiceClosed, getTotalStock, getStockAt,
-  getServeableStockAt, getServeableTotalStock,
+  getServeableStockAt, getServeableTotalStock, getServeablePendingTo, westReachesCentraal,
   consolidateInventory,
 } from './core';
 import { rerenderCurrentView } from './navigate';
@@ -440,9 +440,10 @@ export function isServableBy(
   if (slotIsoDate < cookIso) return false;
   if (slotLoc === 'west' && batchLocation === 'centraal') return false;
   if (slotLoc === 'centraal' && batchLocation === 'west') {
-    if (slotIsoDate > cookIso) return true;                       // next morning+
-    // Same-day exception: a Sunday West cook reaches Centraal's dinner shift.
-    return dateToDayName(cookIso) === 'Sun' && slotMeal === 'dinner';
+    // West→Centraal timing — next morning+, with the Sunday same-day dinner
+    // exception. Shared with the planner's coverage engine (single source of
+    // truth) so Fix My Menu and the on-screen coverage can never disagree.
+    return westReachesCentraal(cookIso, slotIsoDate, slotMeal);
   }
   if (slotIsoDate > cookIso) return true;
   return slotMeal === 'dinner';
@@ -657,14 +658,22 @@ function scoredHardConstraintsOk(
   if (totalStock <= 0) return cookIso >= todayIso;
   // Capacity + reachability (NO reverse van — Daan's rule, 2026-06). West stock
   // is delivered West→Centraal the morning after cooking, but Centraal stock NEVER
-  // comes back to West. Tentatively add the service, then require BOTH:
-  //   (1) total demand ≤ total serveable stock, AND
-  //   (2) the batch's WEST-located service demand ≤ its WEST-located serveable stock.
-  // Those are exactly the transportation constraints Dw ≤ W and Dw+Dc ≤ W+C, so (2)
-  // makes a West slot un-servable from Centraal stock for ANY split — including
-  // partial-split batches (some West, rest at Centraal) that a "zero West stock"
-  // gate would miss. The West portion is derived from the SAME calcReq (total minus
-  // demand-with-West-services-removed), so it tracks calcReq's peer-share model —
+  // comes back to West, and the morning van that's already gone can't reach
+  // TODAY's Centraal. Tentatively add the service, then require ALL THREE:
+  //   (1) total demand ≤ total serveable stock,
+  //   (2) the batch's WEST-located demand ≤ its WEST-located serveable stock, AND
+  //   (3) its "locked" Centraal demand (same-day Centraal that no future morning
+  //       van can reach — i.e. everything except tomorrow+ and the Sunday dinner
+  //       shift) ≤ its Centraal-ON-SITE serveable stock (settled + already in
+  //       transit). West stock is unreachable for those slots.
+  // For the one-directional van these three are exactly the transportation
+  // feasibility condition (Dw ≤ W, Dlocked ≤ C, total ≤ W+C). (3) uses the SAME
+  // reachability rule (westReachesCentraal) as the planner's coverage engine, so
+  // the WHICH-slots-are-locked question agrees; the two still differ on Frozen
+  // (this gate counts serveable/non-Frozen stock, the display's positionedAt counts
+  // all storage to match getTotalStock/diffStr — a pre-existing, intentional split).
+  // Each location/timing portion is derived from the SAME calcReq (total minus
+  // demand-with-those-services-removed), so it tracks calcReq's peer-share model —
   // and any unit-test stub — exactly. (Frozen stays frozen until assigned — Daan
   // smoke 2026-05-12.) try/finally so a throw can't strand the speculative service.
   batch.services.push({ loc: slot.loc, date: day.isoDate, meal: slot.meal });
@@ -678,6 +687,14 @@ function scoredHardConstraintsOk(
       batch.services = withNew;
       const westDemand = Math.round((totalDemand - nonWestDemand) * 10) / 10;
       fits = westDemand <= getServeableStockAt(batch, 'west');
+      if (fits) {
+        batch.services = withNew.filter(s => !(s.loc === 'centraal' && !westReachesCentraal(todayIso, s.date, s.meal)));
+        const reachableDemand = calcReq(batch);
+        batch.services = withNew;
+        const lockedCentraalDemand = Math.round((totalDemand - reachableDemand) * 10) / 10;
+        const centraalOnSite = getServeableStockAt(batch, 'centraal') + getServeablePendingTo(batch, 'centraal');
+        fits = lockedCentraalDemand <= centraalOnSite + 1e-9;
+      }
     }
   } finally {
     batch.services = withNew;
@@ -1062,6 +1079,13 @@ function findCombinationTeam(
     // the gate in scoredHardConstraintsOk so the fallback can't build a West
     // team out of Centraal-located stock.
     if (loc === 'west' && getTotalStock(b) > 0 && getServeableStockAt(b, 'west') <= 0) return false;
+    // Mirror for a "locked" same-day Centraal slot the morning van can't reach:
+    // a COOKED batch must have Centraal-on-site stock (settled + incoming) to
+    // join — West stock won't arrive in time. Fresh cooks (no stock yet) are
+    // gated by isServableBy above, so they pass through here.
+    if (loc === 'centraal' && !westReachesCentraal(todayIso, isoDate, meal)
+        && getTotalStock(b) > 0
+        && getServeableStockAt(b, 'centraal') + getServeablePendingTo(b, 'centraal') <= 0) return false;
     const cookIso = cookDateToIso(b.cookDate);
     if (!cookIso) return false;
     if (getTotalStock(b) > 0) {
@@ -1103,12 +1127,23 @@ function findCombinationTeam(
       if (team.length >= k) break;
       const shareLitersAtThisSlot = guestsPerPeer * (cand.serving || 280) / 1000;
       // Location-aware capacity (no reverse van): a WEST slot's share must fit the
-      // member's WEST-located stock and West-bound demand; a Centraal slot's share
-      // fits total serveable (West can ship in). Mirrors scoredHardConstraintsOk.
+      // member's WEST-located stock and West-bound demand. A Centraal slot the van
+      // can still reach (tomorrow+/Sunday dinner) fits the whole serveable batch
+      // (West can ship in); but a LOCKED same-day Centraal slot can ONLY be served
+      // from Centraal-on-site stock — mirrors scoredHardConstraintsOk(3) so a split
+      // batch's West stock isn't fictitiously credited to a slot it can't reach.
       if (loc === 'west') {
         const westStock = getServeableStockAt(cand, 'west');
         if (westStock <= 0) continue;
         if (calcRequiredAtLocLive(cand, 'west', getGuestsFn) + shareLitersAtThisSlot > westStock) continue;
+      } else if (!westReachesCentraal(todayIso, isoDate, meal)) {
+        // Locked same-day Centraal slot: only Centraal-on-site stock can serve it.
+        // Charge the member's CENTRAAL-located demand (its West demand is served by
+        // West stock) — symmetric with the West branch above and constraint (3). A
+        // fresh Centraal cook (0 stock) is exempt: its capacity is set at cook time.
+        const centraalOnSite = getServeableStockAt(cand, 'centraal') + getServeablePendingTo(cand, 'centraal');
+        if (getTotalStock(cand) > 0
+            && calcRequiredAtLocLive(cand, 'centraal', getGuestsFn) + shareLitersAtThisSlot > centraalOnSite) continue;
       } else {
         const batchStock = getTotalStock(cand);
         const projectedDemand = calcReq(cand) + shareLitersAtThisSlot;
@@ -1596,11 +1631,13 @@ export function collectWarnings(
     if (!b.cookDate || primaryLoc(b) !== 'west') continue;
     const cookIso = cookDateToIso(b.cookDate);
     if (!cookIso) continue;
-    const sundayDinnerOk = dateToDayName(cookIso) === 'Sun';
+    // Reuse the single source of truth: with s.date === cookIso this is exactly
+    // "the van can't reach this same-day Centraal slot" (incl. the Sunday-dinner
+    // exception), so it stays in lockstep with the placement gate + coverage.
     const violating = (b.services || []).filter(s =>
       s.loc === 'centraal' && s.date === cookIso && !isServicePast(s)
       && !isServiceClosed(s.loc, s.date, s.meal)
-      && !(sundayDinnerOk && s.meal === 'dinner'));
+      && !westReachesCentraal(cookIso, s.date, s.meal));
     if (violating.length > 0) {
       const meals = violating.map(s => s.meal).join(' + ');
       warnings.push({
