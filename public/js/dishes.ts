@@ -46,59 +46,51 @@ function renderInventorySummary(d: Batch): string {
   return [...invParts, ...shipParts].join(' &middot; ');
 }
 
-/** Storage-aware compact location chips for the tile. Returns one badge per
- *  inventory entry + one per pending shipment.
- *
- *  Color encoding (cook needs to read these at a glance during service):
- *   - West Gastro/Vac-packed:     amber (b-west)
- *   - Centraal Gastro/Vac-packed: green (b-centraal)
- *   - West Frozen:                light blue (b-frozen-west)
- *   - Centraal Frozen:            dark blue (b-frozen-centraal)
- *  Frozen badges also carry a ❄️ prefix so colorblind cooks have a second
- *  signal. Pending shipments stay in the destination color (green = "going
- *  to Centraal" etc.) plus the → arrow. */
-function renderInventoryBadges(d: Batch): string {
-  const inv = (d.inventory || []).filter(e => e.qty > 0);
-  const ship = (d.shipments || []).filter(s => !s.arrived);
-  const badges: string[] = [];
-  for (const e of inv) {
-    const isFrozen = e.storage === 'Frozen';
-    const cls = isFrozen
-      ? (e.loc === 'centraal' ? 'b-frozen-centraal' : 'b-frozen-west')
-      : (e.loc === 'centraal' ? 'b-centraal' : 'b-west');
-    const prefix = isFrozen ? '❄️ ' : '';
-    badges.push(`<span class="badge ${cls}" title="${e.qty.toFixed(1)}L at ${locName(e.loc)} (${e.storage})">${prefix}${e.qty.toFixed(1)}L ${e.loc === 'centraal' ? 'C' : 'W'}</span>`);
-  }
-  for (const s of ship) {
-    const cls = s.toLoc === 'centraal' ? 'b-twc' : 'b-tww';
-    badges.push(`<span class="badge ${cls}" title="${s.qty.toFixed(1)}L pending shipment to ${locName(s.toLoc)}">&rarr; ${s.qty.toFixed(1)}L ${s.toLoc === 'centraal' ? 'C' : 'W'}</span>`);
-  }
-  return badges.join(' ');
-}
-
-/** Per-location coverage chips: "W 5/5" / "C 20/30" reading reachable-of-needed,
- *  red when that location's demand can't be served in time (transport-aware —
- *  e.g. West stock can't reach Centraal the same day). Plus a "stuck at West"
- *  chip when spare West stock can't reach tonight's Centraal shortfall. Returns
- *  '' when the batch has no demand, so quiet batches stay uncluttered. */
-function renderCoverageBadges(d: Batch): string {
+/** ONE chip per location: how much food is physically there, and whether that's
+ *  too much (+) or too little (−) for that site's reachable demand. Replaces the
+ *  old split "17.0L W" stock badge + "W 6.5/6.5" reachable-of-needed ratio, which
+ *  read as two confusing numbers per site. Transport-aware via computeCoverage —
+ *  a West surplus that can't reach Centraal in time stays a Centraal shortfall,
+ *  flagged by the separate "stuck at West" chip. A batch with no stock anywhere
+ *  shows no per-site chips (the +/− cook-target badge already covers that), so
+ *  not-yet-cooked batches stay calm instead of reading red on every site. */
+function renderLocChips(d: Batch): string {
   const cov = computeCoverage(d);
+  const f1 = (n: number): string => n.toFixed(1);
   const chips: string[] = [];
   for (const [loc, lc] of [['west', cov.west], ['centraal', cov.centraal]] as const) {
-    if (lc.demand <= 0) continue;
-    const short = lc.shortfall > 0;
+    const entries = (d.inventory || []).filter(e => e.loc === loc && e.qty > 0);
+    const present = entries.reduce((s, e) => s + e.qty, 0);
+    if (present <= 0.05) continue;                       // no stock physically here → no chip
+    // Serve-ready stock = non-Frozen. Frozen must be thawed before it can serve,
+    // but computeCoverage counts it as positioned — so don't let frozen-only stock
+    // masquerade as a green "+surplus" covered site.
+    const serveable = entries.reduce((s, e) => s + (e.storage === 'Frozen' ? 0 : e.qty), 0);
     const letter = loc === 'centraal' ? 'C' : 'W';
-    const title = short
-      ? `${locName(loc)}: only ${lc.covered.toFixed(1)}L of ${lc.demand.toFixed(1)}L needed can arrive in time — ${lc.shortfall.toFixed(1)}L short`
-      : `${locName(loc)}: ${lc.demand.toFixed(1)}L needed, fully covered in time`;
-    chips.push(`<span class="cov-chip ${short ? 'cov-short' : 'cov-ok'}" title="${title}">${letter} ${lc.covered.toFixed(1)}/${lc.demand.toFixed(1)}</span>`);
+    const frozen = entries.some(e => e.storage === 'Frozen') ? '❄️ ' : '';
+    let delta = '', cls = 'cov-idle', note = ', nothing needed here';
+    if (lc.shortfall > 0.05) {                            // cooked here but still short / can't reach in time
+      delta = ` &minus;${f1(lc.shortfall)}`; cls = 'cov-short'; note = `, needs ${f1(lc.demand)}L — ${f1(lc.shortfall)}L short`;
+    } else if (lc.demand > 0.05 && serveable <= 0.05) {  // "covered" only by un-thawed frozen — a thaw todo, not a green surplus
+      note = `, needs ${f1(lc.demand)}L — frozen only, thaw before service`;
+    } else if (lc.demand > 0.05) {                        // this site's demand is covered in time by serve-ready stock
+      cls = 'cov-ok';
+      if (lc.leftover > 0.05) { delta = ` +${f1(lc.leftover)}`; note = `, needs ${f1(lc.demand)}L — ${f1(lc.leftover)}L spare`; }
+      else { note = `, needs ${f1(lc.demand)}L — just covered`; }
+    }
+    const storageBreak = entries.map(e => `${f1(e.qty)}L ${e.storage}`).join(', ');
+    chips.push(`<span class="cov-chip ${cls}" title="${locName(loc)}: ${f1(present)}L here (${storageBreak})${note}">${frozen}${letter} ${f1(present)}L${delta}</span>`);
   }
-  // West stock left genuinely free AFTER the engine allocated it (excludes stock
-  // the van committed to a future Centraal service AND stock earmarked for a
-  // catering) that still can't reach tonight's Centraal shortfall — the "stranded" case.
+  // In-transit shipments — about movement, kept as their own arrow chip.
+  for (const s of (d.shipments || []).filter(sh => !sh.arrived)) {
+    chips.push(`<span class="cov-chip cov-transit" title="${f1(s.qty)}L on the way to ${locName(s.toLoc)}">&rarr; ${f1(s.qty)}L ${s.toLoc === 'centraal' ? 'C' : 'W'}</span>`);
+  }
+  // Spare West stock that can't reach tonight's Centraal demand in time — the one
+  // genuinely actionable transport edge case (excludes stock the van already
+  // committed to a future Centraal service or a catering).
   const stranded = Math.min(cov.west.leftover, cov.centraal.todayShortfall);
   if (stranded > 0.05) {
-    chips.push(`<span class="cov-chip cov-stranded" title="${stranded.toFixed(1)}L sits at West but can't reach Centraal until tomorrow's morning van — tonight's Centraal demand must be filled from Centraal stock or a fresh cook">&#9888; ${stranded.toFixed(1)}L stuck at West</span>`);
+    chips.push(`<span class="cov-chip cov-stranded" title="${f1(stranded)}L sits at West but can't reach Centraal until tomorrow's morning van — tonight's Centraal demand must be filled from Centraal stock or a fresh cook">&#9888; ${f1(stranded)}L stuck at West</span>`);
   }
   return chips.join(' ');
 }
@@ -285,8 +277,7 @@ export function renderBatchTileOverview(d: Batch) {
   const isSel = S.selected.has(d.id);
   const cookHtml = getCookCellHtml(d);
   const logClass = logisticsRowClass(d);
-  const inventoryBadges = renderInventoryBadges(d);
-  const coverageBadges = renderCoverageBadges(d);
+  const locChips = renderLocChips(d);
   return `<div class="dish-row ${logClass}${isSel ? ' selected' : ''}${hasStaleEntry ? ' stale-row' : ''}${allFrozen ? ' frozen-row' : ''}">
     <div class="sel-box${isSel ? ' checked' : ''}" onclick="toggleSelect('${d.id}')"></div>
     <div>
@@ -306,7 +297,7 @@ export function renderBatchTileOverview(d: Batch) {
     </div>
     <div class="col-diff ${cls}" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</div>
     <div class="col-logistics" style="display:flex;flex-wrap:wrap;gap:3px;">
-      ${inventoryBadges} ${coverageBadges}
+      ${locChips}
     </div>
     <div><button class="order-toggle-btn${d.orderFor ? ' on' : ''}" onclick="event.stopPropagation();toggleOrder('${d.id}')">${d.orderFor ? 'Order' : '—'}</button></div>
     <div><button class="served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')">Served</button></div>
@@ -314,7 +305,7 @@ export function renderBatchTileOverview(d: Batch) {
       <span style="font-size:12px;color:var(--text2);">Stock</span>
       <span class="batch-stock-total" style="font-weight:500;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L</span>
       <span class="${cls}" style="font-size:12px;" title="${calcRequiredBreakdown(d).join('&#10;') || 'No services assigned'}">${str}</span>
-      <span style="display:flex;flex-wrap:wrap;gap:3px;font-size:10px;">${inventoryBadges} ${coverageBadges}</span>
+      <span style="display:flex;flex-wrap:wrap;gap:3px;font-size:10px;">${locChips}</span>
       <button class="btn btn-sm served-btn" onclick="event.stopPropagation();openServedDialog('${d.id}')" style="margin-left:auto;">Served</button>
     </div>
   </div>`;
@@ -393,7 +384,7 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
       <span class="batch-tile-cook">${batchCookLabel(d)}</span>
       <span class="batch-tile-stock ${cls}" onclick="event.stopPropagation();openInventoryEditor('${d.id}')" title="Click to edit per-location stock">${totalStock.toFixed(1)}L <small>${str}</small></span>
       ${tooBigBadge}
-      <span class="batch-tile-logistics" style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;">${renderInventoryBadges(d)} ${renderCoverageBadges(d)}</span>
+      <span class="batch-tile-logistics" style="display:inline-flex;flex-wrap:wrap;gap:3px;font-size:10px;">${renderLocChips(d)}</span>
       <span class="batch-expand-arrow">${isExpanded ? '▾' : '▸'}</span>
     </div>`;
 
