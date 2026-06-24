@@ -32,7 +32,7 @@ import { toggleRitualStep, toggleRitualWhy, ritualScrollToArrivals } from './tod
 import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals, openPackEditor, savePackEditor, resetPackEditor } from './transport-card';
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
 import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName, assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole } from './team';
-import { openCostTargets, saveCostTargetsForm, ctRecalcTotal } from './cost';
+import { openCostTargets, saveCostTargetsForm, ctRecalcTotal, setReservePercent } from './cost';
 import { renderDrinks, drinksSetTab, drinksSetCatSearch, drinksSetCatCategory, drinksSetCatLocation, drinksToggleShowInactive, drinkToggleActive, openAddDrinkChooser, openDrinkForm, saveDrinkForm, deleteDrink, openDrinkImport, drinkImportScan, drinkImportCommit, drinkFormAddFormat, drinkFormRemoveFormat, drinkFormCategoryChange, drinkFormBtwHint, openSupplierForm, saveSupplierForm, deleteSupplier } from './drinks';
 import { drinksSetRecSearch, drinksSetRecCategory, openDrinkRecipeForm, saveDrinkRecipe, deleteDrinkRecipe, recipeFormAddRow, recipeFormRemoveRow, recipeFormRowKind, recipeFormRowAmount, recipeFormRowUnit, recipeRowSearch, recipeRowPick, recipeRowHide, recipeFormAddPrep, recipeFormRemovePrep, recipeFormPrepEdit, recipeFormRecost } from './drinks-recipe';
 import { drinksStkSetMode, drinksStkPickSupplier, drinksStkPickArea, drinksStkBack, drinksStkSetArea, drinksStkInput, drinksStkSave, drinksStkStart, drinksStkExit, drinksStkSetLoc, drinksStkOvStatus, drinkStkSaveOne, drinkStkSetArea, openDrinkAreasEditor, drinkAreasAddRow, drinkAreasMoveRow, saveDrinkAreas } from './drinks-stocktake';
@@ -129,7 +129,7 @@ Object.assign(window, {
   // today-panel (daily ritual)
   toggleRitualStep, toggleRitualWhy, ritualScrollToArrivals,
   openCookRhythmModal, crUpdateField, crToggleClosed, crResetDefaults, crSave,
-  openCostTargets, saveCostTargetsForm, ctRecalcTotal,
+  openCostTargets, saveCostTargetsForm, ctRecalcTotal, setReservePercent,
 
   // transport-card
   setTransportMode, confirmTransportPlan, confirmCentraalArrivals, openPackEditor, savePackEditor, resetPackEditor,

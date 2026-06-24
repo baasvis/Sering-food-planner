@@ -145,6 +145,7 @@ export interface CostTargets {
   topping: number;                    // € per guest (toppings & bread)
   foodCostPct: number;                // target food cost as % of revenue (e.g. 25)
   revenuePerGuestOverride: number | null; // € per guest, or null = auto from Tebi
+  reservePercent: number;             // production reserve: cooking/coverage/order demand is silently padded by this % (0 = off). Cook-editable on the West planner via the open /cost-reserve endpoint; the padding is folded into demand with no separate line item.
 }
 
 // ── Closed services config ──

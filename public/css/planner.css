@@ -456,6 +456,15 @@
     #catering-dish-results{max-height:340px;}
   }
 
+  /* ── Production reserve control (West tab, cook-editable) ─── */
+  .reserve-ctl{display:inline-flex;align-items:center;gap:7px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;margin:0 0 10px;font-size:13px;color:var(--text2);}
+  .reserve-ctl.reserve-on{border-color:var(--accent,#4a8);background:color-mix(in srgb,var(--accent,#4a8) 8%,var(--bg));}
+  .reserve-ctl-lbl{font-weight:600;}
+  .reserve-ctl-input{width:54px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg2,var(--bg));color:var(--text);font-size:13px;text-align:right;}
+  .reserve-ctl-unit{color:var(--text3);}
+  .reserve-ctl-extra{margin-left:6px;padding-left:8px;border-left:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text3);}
+  .reserve-ctl.reserve-on .reserve-ctl-extra{color:var(--accent,#4a8);}
+
   /* ── Cost-per-guest bar (West tab) ───────────────────────── */
   .cost-bar{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;margin:0 0 14px;display:flex;flex-direction:column;gap:7px;}
   .cost-bar-empty{flex-direction:row;align-items:center;justify-content:space-between;color:var(--text3);font-size:13px;}

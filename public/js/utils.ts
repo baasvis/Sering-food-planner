@@ -470,6 +470,7 @@ export async function loadCostTargets(): Promise<void> {
         soup: cfg.soup, main: cfg.main, topping: cfg.topping,
         foodCostPct: typeof cfg.foodCostPct === 'number' ? cfg.foodCostPct : 25,
         revenuePerGuestOverride: typeof cfg.revenuePerGuestOverride === 'number' ? cfg.revenuePerGuestOverride : null,
+        reservePercent: typeof cfg.reservePercent === 'number' ? cfg.reservePercent : 0,
       };
     } else {
       S.costTargets = null; // no saved config → DEFAULT_COST_TARGETS
@@ -484,6 +485,16 @@ export async function saveCostTargets(): Promise<void> {
     await apiPost('/api/cost-targets', S.costTargets);
   } catch (_e: unknown) {
     toastError('Failed to save cost targets');
+  }
+}
+
+/** Persist just the production reserve %. Cook-editable (open endpoint) — does a
+ *  server-side read-modify-write so it never touches the director-only cost targets. */
+export async function saveCookReserve(reservePercent: number): Promise<void> {
+  try {
+    await apiPost('/api/cost-reserve', { reservePercent });
+  } catch (_e: unknown) {
+    toastError('Failed to save reserve');
   }
 }
 
@@ -963,7 +974,10 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     changed = true;
   }
 
-  // Cost targets (full-replace) — West-tab cost-per-guest steering
+  // Cost targets (full-replace) — West-tab cost-per-guest steering. NOTE: this row
+  // also carries reservePercent, which feeds the demand allocation cache via
+  // core.reserveFactor(), so a remote change MUST trigger rebuildPlanner — wired
+  // via needsPlanner below (same reason as closedServices).
   if (costTargets) {
     S.costTargets = costTargets;
     changed = true;
@@ -1053,7 +1067,8 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
       || recipes || deletedRecipes
       || ingredients || deletedIngredients
       || guestsNextWeeks
-      || closedServices);
+      || closedServices
+      || costTargets); // reservePercent feeds the allocation cache (reserveFactor)
     if (needsPlanner) rebuildPlanner();
     rerenderCurrentView();
     // Rebuild an open inventory modal so its embedded row indices stay valid.

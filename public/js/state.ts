@@ -59,7 +59,7 @@ export const DEFAULT_CLOSED_SERVICES: ClosedServicesConfig = { recurring: {} };
 // Persisted server-side as S.costTargets; null means "use these defaults".
 // revenuePerGuestOverride null = food-cost-% uses the rolling Tebi auto value.
 export const DEFAULT_COST_TARGETS: CostTargets = {
-  soup: 0.50, main: 0.80, topping: 0.50, foodCostPct: 25, revenuePerGuestOverride: null,
+  soup: 0.50, main: 0.80, topping: 0.50, foodCostPct: 25, revenuePerGuestOverride: null, reservePercent: 0,
 };
 
 // Mutable — rebuilt from storageConfig when loaded
