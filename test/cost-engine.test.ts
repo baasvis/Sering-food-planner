@@ -66,7 +66,7 @@ function resetState() {
   S.closedServices = null;
   // Explicit targets with topping 0 so dish-focused tests aren't shifted by the
   // "assume topping target until priced" fallback. Topping tests set their own.
-  S.costTargets = { soup: 0.50, main: 0.80, topping: 0, foodCostPct: 25, revenuePerGuestOverride: null };
+  S.costTargets = { soup: 0.50, main: 0.80, topping: 0, foodCostPct: 25, revenuePerGuestOverride: null, reservePercent: 0 };
   S.revenuePerGuest = null;
   (S as unknown as { predictions: unknown }).predictions = null;
   (S as unknown as { guestsNextWeeks: unknown }).guestsNextWeeks = {};
@@ -97,6 +97,31 @@ describe('computeCostBreakdown', () => {
     expect(b.coveragePct).toBe(100);
     expect(b.estimated).toBe(false);
     expect(b.totalPerGuest).toBeCloseTo(0.40, 5);
+  });
+
+  test('the production reserve does NOT move the cost bar (reserve stripped from cost math)', () => {
+    // Regression for the reserve-buffer review: calcRequiredAtService is reserve-
+    // padded, but cost-per-guest must steer on REAL guests. A cook bumping the
+    // reserve must leave soup/main €/guest and the food-cost % unchanged.
+    S.recipes = [recipe('r1', 'Soup', 0.40), recipe('r2', 'Main course', 0.90)];
+    S.batches = [
+      makeBatch('Soup', MON, 'dinner', { recipeId: 'r1' }),
+      makeBatch('Main course', MON, 'dinner', { recipeId: 'r2' }),
+    ];
+    S.revenuePerGuest = 10; // so foodCostPct is computed (off any .x5 rounding boundary)
+    const at = (reservePercent: number) => {
+      S.costTargets = { soup: 0.50, main: 0.80, topping: 0, foodCostPct: 25, revenuePerGuestOverride: null, reservePercent };
+      rebuildPlanner();
+      return computeCostBreakdown(new Set([MON]));
+    };
+    const base = at(0);
+    const buffered = at(20);
+    expect(base.soupPerGuest).toBeCloseTo(0.40, 5);     // sanity: real cost
+    expect(buffered.soupPerGuest).toBeCloseTo(base.soupPerGuest, 6);
+    expect(buffered.mainPerGuest).toBeCloseTo(base.mainPerGuest, 6);
+    expect(buffered.totalPerGuest).toBeCloseTo(base.totalPerGuest, 6);
+    expect(buffered.foodCostPct).toBe(base.foodCostPct);
+    expect(buffered.totalGuests).toBe(base.totalGuests);  // denominator is real guests
   });
 
   test('two soup peers in one slot → guest-weighted average over total guests', () => {

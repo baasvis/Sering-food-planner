@@ -155,7 +155,7 @@ public/
     transport-card.ts  — Transport card component (shipment send / mark-arrived UI)
     menu-fixer.ts      — "Fix My Menu": auto-fills week-plan gaps with generated placeholder batches
     fmm-snapshot.ts    — Fix-My-Menu before/after/+30min planner snapshots emitted as telemetry for later comparison
-    cost.ts            — West-tab cost-per-guest engine: ingredient €/guest by dish type vs director targets (Week Plan steering bar)
+    cost.ts            — West-tab cost-per-guest engine: ingredient €/guest by dish type vs director targets (Week Plan steering bar). Also hosts the production-reserve % control (cook-editable, top of the West planner): silently pads cooking/coverage/order demand via core.reserveFactor(); stored on the costTargets row as reservePercent but saved via the open POST /api/cost-reserve (read-modify-write, never touches the director-only targets)
     dishes.ts          — Dish list + cook workflow + CRUD
     caterings.ts       — Catering events
     recipes.ts         — Recipe library: sortable table of v2 recipes

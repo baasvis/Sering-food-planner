@@ -268,6 +268,19 @@ function recordAllocation(byBatch: Map<string, Map<string, number>>, batchId: st
 
 let _batchAllocations: { byBatch: Map<string, Map<string, number>> } = { byBatch: new Map() };
 
+/** Production-reserve multiplier on per-service cooking demand.
+ *  Cook-set on the West planner (S.costTargets.reservePercent). At 0% this
+ *  returns 1.0 — a literal no-op, so all demand math is unchanged until a reserve
+ *  is dialed in. Applied symmetrically in the cached allocator and the two FMM
+ *  live functions so calcRequired/calcRequiredLive stay identical. Catering is
+ *  NOT padded: it's a contracted exact order added as a separate term outside
+ *  the allocator. There's no label anywhere — staff just see slightly higher
+ *  demand, indistinguishable from real demand. */
+export function reserveFactor(): number {
+  const pct = S.costTargets?.reservePercent ?? 0;
+  return pct > 0 ? 1 + pct / 100 : 1;
+}
+
 export function recomputeBatchAllocations(): void {
   buildRollMap(); // refresh closed->open roll-map before any getEffectiveGuests read
   const byBatch = new Map<string, Map<string, number>>();
@@ -280,7 +293,7 @@ export function recomputeBatchAllocations(): void {
       const peerCount = Math.max(peers.length, 1);
       const guests = getEffectiveGuests(svc.loc, svc.date, svc.meal);
       const serving = (b.serving || 280) / 1000;
-      const liters = (guests / peerCount) * serving;
+      const liters = (guests / peerCount) * serving * reserveFactor();
       recordAllocation(byBatch, b.id, k, liters);
     }
   }
@@ -632,7 +645,7 @@ export function calcRequiredLive(
       }
     }
     const guests = getGuestsFn(svc.loc, svc.date, svc.meal);
-    const liters = (guests / Math.max(peerCount, 1)) * ((dish.serving || 280) / 1000);
+    const liters = (guests / Math.max(peerCount, 1)) * ((dish.serving || 280) / 1000) * reserveFactor();
     total += Math.round(liters * 10) / 10; // mirror recordAllocation's 0.1 L rounding
   });
   total += cateringDemand(dish);
@@ -659,7 +672,7 @@ export function calcRequiredAtLocLive(
       if (p.type !== dish.type) continue;
       if ((p.services || []).some((s: Service) => s.loc === svc.loc && s.date === svc.date && s.meal === svc.meal)) peerCount++;
     }
-    total += Math.round((getGuestsFn(svc.loc, svc.date, svc.meal) / Math.max(peerCount, 1)) * ((dish.serving || 280) / 1000) * 10) / 10;
+    total += Math.round((getGuestsFn(svc.loc, svc.date, svc.meal) / Math.max(peerCount, 1)) * ((dish.serving || 280) / 1000) * reserveFactor() * 10) / 10;
   });
   return Math.round(total * 10) / 10;
 }

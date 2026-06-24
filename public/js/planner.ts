@@ -5,7 +5,7 @@ import { computeSupplyDemand } from '@shared/supply-demand';
 import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, getEffectiveGuests, chipClass, getToday, dateToStr, strToDate, diffStr, serviceShortfall, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory, consolidateInventory } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
-import { renderCostBar, renderCostDrilldown, costStatus, dishTypeTarget } from './cost';
+import { renderCostBar, renderCostDrilldown, renderReserveControl, costStatus, dishTypeTarget } from './cost';
 import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, cleanCateringRefs } from './dishes';
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
 import { showModal, closeModal, esc, setOpenInventoryFn } from './modal';
@@ -132,6 +132,7 @@ export function renderLocationPlan(loc: string) {
   // plans for both sites; Centraal is serve-only). Spans the visible days.
   if (loc === 'west') {
     const costDates = new Set(days.map(d => dateToIso(d.date)));
+    html += renderReserveControl(costDates);
     html += renderCostBar(costDates);
     html += renderCostDrilldown(costDates);
   }

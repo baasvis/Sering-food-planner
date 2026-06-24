@@ -151,10 +151,12 @@ router.post('/cook-rhythm', asyncHandler(async (req: Request, res: Response) => 
 }));
 
 // ── Cost Targets (single-row config; West-tab cost-per-guest steering) ──
-// Director-only edit. Stored in the cook_rhythm table under a separate id to
+// Director-only edit of the money fields (POST /cost-targets). The production
+// reserve on the same row is cook-editable via the separate open POST
+// /cost-reserve below. Stored in the cook_rhythm table under a separate id to
 // avoid a schema migration (the worktree .env points at prod, so `migrate dev`
 // is unsafe — see reference_prisma_migration_safety). Graduate to its own table
-// later if wanted. config = { soup, main, topping, foodCostPct, revenuePerGuestOverride }
+// later if wanted. config = { soup, main, topping, foodCostPct, revenuePerGuestOverride, reservePercent }
 const COST_TARGETS_ID = 'cost_targets';
 
 router.get('/cost-targets', asyncHandler(async (_req: Request, res: Response) => {
@@ -185,9 +187,17 @@ router.post('/cost-targets', requireDirector, asyncHandler(async (req: Request, 
     }
     revenuePerGuestOverride = round2(r);
   }
+  let reservePercent = 0;
+  if (body.reservePercent != null && body.reservePercent !== '') {
+    const rp = Number(body.reservePercent);
+    if (!Number.isFinite(rp) || rp < 0 || rp > 100) {
+      return res.status(400).json({ error: 'reservePercent must be a number 0–100' });
+    }
+    reservePercent = Math.round(rp * 10) / 10;
+  }
   const config = {
     soup: fields.soup, main: fields.main, topping: fields.topping,
-    foodCostPct: round2(pct), revenuePerGuestOverride,
+    foodCostPct: round2(pct), revenuePerGuestOverride, reservePercent,
   };
   await withWriteLock(async () => {
     await prisma.cookRhythm.upsert({
@@ -200,6 +210,43 @@ router.post('/cost-targets', requireDirector, asyncHandler(async (req: Request, 
   const total = round2(config.soup + config.main + config.topping);
   dbAppendLog(user.email, user.name, 'cost-targets-update', `Updated cost targets (€${total}/guest, ${config.foodCostPct}% food cost)`);
   broadcast(user.email, 'patch', { user: user.name, costTargets: config });
+  res.json({ ok: true });
+}));
+
+// Production reserve — cook-editable (NOT director-gated). The reserve % silently
+// pads cooking/coverage/order demand so the kitchen keeps a backup margin; it's a
+// production knob every cook may turn, not a money one. Read-modify-write the
+// shared cost_targets row so the director-only target fields are preserved untouched.
+router.post('/cost-reserve', asyncHandler(async (req: Request, res: Response) => {
+  const rp = Number((req.body || {}).reservePercent);
+  if (!Number.isFinite(rp) || rp < 0 || rp > 100) {
+    return res.status(400).json({ error: 'reservePercent must be a number 0–100' });
+  }
+  const reservePercent = Math.round(rp * 10) / 10;
+  let config: {
+    soup: number; main: number; topping: number; foodCostPct: number;
+    revenuePerGuestOverride: number | null; reservePercent: number;
+  } | undefined;
+  await withWriteLock(async () => {
+    const row = await prisma.cookRhythm.findUnique({ where: { id: COST_TARGETS_ID } });
+    const cur = (row && row.config ? row.config : {}) as Record<string, unknown>;
+    config = {
+      soup: typeof cur.soup === 'number' ? cur.soup : 0.5,
+      main: typeof cur.main === 'number' ? cur.main : 0.8,
+      topping: typeof cur.topping === 'number' ? cur.topping : 0.5,
+      foodCostPct: typeof cur.foodCostPct === 'number' ? cur.foodCostPct : 25,
+      revenuePerGuestOverride: typeof cur.revenuePerGuestOverride === 'number' ? cur.revenuePerGuestOverride : null,
+      reservePercent,
+    };
+    await prisma.cookRhythm.upsert({
+      where: { id: COST_TARGETS_ID },
+      create: { id: COST_TARGETS_ID, config: config as unknown as Prisma.InputJsonValue },
+      update: { config: config as unknown as Prisma.InputJsonValue },
+    });
+  });
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'cook-reserve-update', `Set production reserve to ${reservePercent}%`);
+  if (config) broadcast(user.email, 'patch', { user: user.name, costTargets: config });
   res.json({ ok: true });
 }));
 

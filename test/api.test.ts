@@ -1854,3 +1854,60 @@ describe('Closed Services API (/api/closed-services)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ── Production reserve (cook-editable; POST /api/cost-reserve) ──
+// Regression for the reserve-buffer review: the OPEN endpoint must let a
+// non-director cook set ONLY reservePercent, preserving the director-only
+// cost-target money fields on the shared cost_targets row, and reject
+// out-of-range input. cost_targets is a singleton id — snapshot & restore it.
+describe('POST /api/cost-reserve (cook-editable reserve)', () => {
+  const CT_ID = 'cost_targets';
+  const SEED = { soup: 0.7, main: 1.1, topping: 0.6, foodCostPct: 28, revenuePerGuestOverride: 19, reservePercent: 0 };
+  let cookie;
+  let original;
+  let devIsDirector;
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/google').send({ idToken: 'dev' });
+    cookie = login.headers['set-cookie'];
+    devIsDirector = !!login.body.user.isDirector;
+    original = await prisma.cookRhythm.findUnique({ where: { id: CT_ID } });
+    await prisma.cookRhythm.upsert({
+      where: { id: CT_ID },
+      create: { id: CT_ID, config: SEED },
+      update: { config: SEED },
+    });
+  });
+
+  afterAll(async () => {
+    if (original) {
+      await prisma.cookRhythm.update({ where: { id: CT_ID }, data: { config: original.config } });
+    } else {
+      await prisma.cookRhythm.delete({ where: { id: CT_ID } }).catch(() => {});
+    }
+  });
+
+  it('dev cook is NOT a director (precondition for the open-endpoint test)', () => {
+    expect(devIsDirector).toBe(false);
+  });
+
+  it('a non-director cook sets reservePercent, leaving the money fields untouched', async () => {
+    const res = await request(app).post('/api/cost-reserve').set('Cookie', cookie).send({ reservePercent: 20 });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    const row = await prisma.cookRhythm.findUnique({ where: { id: CT_ID } });
+    const cfg = row.config;
+    expect(cfg.reservePercent).toBe(20);
+    // director-only money fields preserved byte-for-byte by the read-modify-write
+    expect(cfg.soup).toBe(0.7);
+    expect(cfg.main).toBe(1.1);
+    expect(cfg.topping).toBe(0.6);
+    expect(cfg.foodCostPct).toBe(28);
+    expect(cfg.revenuePerGuestOverride).toBe(19);
+  });
+
+  it('rejects an out-of-range reservePercent with 400', async () => {
+    const res = await request(app).post('/api/cost-reserve').set('Cookie', cookie).send({ reservePercent: 150 });
+    expect(res.status).toBe(400);
+  });
+});

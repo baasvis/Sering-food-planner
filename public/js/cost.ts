@@ -22,9 +22,9 @@
 //    A coverage % flags how much of the number is estimated vs measured.
 
 import { S, DEFAULT_COST_TARGETS } from './state';
-import { calcRequiredAtService, getEffectiveGuests, isServicePast, dateToDayName } from './core';
+import { calcRequiredAtService, getEffectiveGuests, isServicePast, dateToDayName, rebuildPlanner, reserveFactor } from './core';
 import { showModal, closeModal, esc } from './modal';
-import { toast, toastError, saveCostTargets } from './utils';
+import { toast, toastError, saveCostTargets, saveCookReserve } from './utils';
 import { rerenderCurrentView } from './navigate';
 import { supplyPricePerGuest } from '@shared/supply-demand';
 import type { Batch, CostTargets, RecipeFull } from '@shared/types';
@@ -136,6 +136,11 @@ export function computeCostBreakdown(isoDates: Set<string>): CostBreakdown {
   let costedGuests = 0;
   let estGuests = 0;
   const slotGuests = new Map<string, number>(); // distinct in-window slots → effective guests
+  // Strip the hidden production reserve back out: cost-per-guest steers on REAL
+  // guest demand, so a cook bumping the reserve must NOT move the cost bar / food
+  // cost %. calcRequiredAtService returns reserve-padded liters; ÷ reserveFactor
+  // recovers true demand. No-op at 0% reserve (factor 1).
+  const rf = reserveFactor();
 
   for (const b of (S.batches || [])) {
     if (!FOOD_TYPES.includes(b.type)) continue;
@@ -147,7 +152,7 @@ export function computeCostBreakdown(isoDates: Set<string>): CostBreakdown {
       if (!(liters > 0)) continue;
       const servingL = (b.serving || 280) / 1000;
       if (!(servingL > 0)) continue;
-      const shareGuests = liters / servingL;             // = effectiveGuests / peerCount
+      const shareGuests = liters / servingL / rf;        // = effectiveGuests / peerCount (reserve stripped)
       cost[b.type] += shareGuests * cpg;
       if (costed) costedGuests += shareGuests; else estGuests += shareGuests;
       const k = `${svc.loc}-${svc.date}-${svc.meal}`;
@@ -304,11 +309,66 @@ export async function saveCostTargetsForm(): Promise<void> {
     if (!Number.isFinite(v) || v < 0 || v > 100) { toastError(`${k} target must be 0–100 €/guest`); return; }
   }
   if (!Number.isFinite(pct) || pct <= 0 || pct > 100) { toastError('Food cost target must be 1–100%'); return; }
-  // Revenue per guest is auto (food revenue from Tebi); preserve any stored override.
-  S.costTargets = { soup, main, topping, foodCostPct: pct, revenuePerGuestOverride: getCostTargets().revenuePerGuestOverride };
+  // Revenue per guest is auto (food revenue from Tebi); preserve any stored
+  // override and the hidden production reserve (set separately on the header).
+  S.costTargets = { soup, main, topping, foodCostPct: pct, revenuePerGuestOverride: getCostTargets().revenuePerGuestOverride, reservePercent: getCostTargets().reservePercent };
   closeModal();
   rerenderCurrentView();
   await saveCostTargets();
+}
+
+// ── Production reserve (cook-editable knob; West planner header) ─────────────
+// A small % control that silently pads cooking/coverage/order demand as a backup.
+// Any signed-in cook can turn it — it saves via the open /cost-reserve endpoint,
+// never touching the director-only cost targets on the same row. The padding is
+// folded straight into the demand numbers (no separate "+reserve" line item); the
+// buffer math lives in core.reserveFactor(), this is only the UI + persistence.
+
+/** Total backup liters the reserve adds across the visible days — the guest-demand
+ *  padding only (catering is excluded, since calcRequiredAtService reads the
+ *  catering-free per-service allocation). buffered = unbuffered × (1 + pct/100), so
+ *  the extra = buffered × pct/(100 + pct). */
+export function reserveLitersInWindow(isoDates: Set<string>): number {
+  const pct = getCostTargets().reservePercent || 0;
+  if (pct <= 0) return 0;
+  let buffered = 0;
+  for (const b of (S.batches || [])) {
+    for (const svc of (b.services || [])) {
+      if (isServicePast(svc) || !isoDates.has(svc.date)) continue;
+      buffered += calcRequiredAtService(b, svc);
+    }
+  }
+  return Math.round((buffered * pct / (100 + pct)) * 10) / 10;
+}
+
+/** The reserve control for the West planner header — shown to every cook. Also
+ *  shows the concrete backup liters it's adding across the visible days, live. */
+export function renderReserveControl(isoDates: Set<string>): string {
+  const pct = getCostTargets().reservePercent || 0;
+  const on = pct > 0;
+  const extra = on ? reserveLitersInWindow(isoDates) : 0;
+  const extraStr = extra > 0
+    ? `<span class="reserve-ctl-extra" title="Total extra above guest demand the reserve is adding across the days shown. Folded silently into the dish demand &amp; orders; updates as you change the %.">≈ +${extra.toFixed(1)} L backup</span>`
+    : '';
+  return `<div class="reserve-ctl${on ? ' reserve-on' : ''}" title="Cook &amp; order this % extra above guest demand as a backup. Any cook can set it. The extra is folded into the demand numbers; catering is excluded.">
+    <span class="reserve-ctl-lbl">🛟 Reserve</span>
+    <input id="reserve-pct" class="reserve-ctl-input" type="number" min="0" max="100" step="5" value="${pct}"
+      onchange="setReservePercent(this.value)" aria-label="Production reserve percent">
+    <span class="reserve-ctl-unit">%</span>
+    ${extraStr}
+  </div>`;
+}
+
+export async function setReservePercent(v: string | number): Promise<void> {
+  let pct = Number(v);
+  if (!Number.isFinite(pct) || pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  pct = Math.round(pct * 10) / 10;
+  S.costTargets = { ...getCostTargets(), reservePercent: pct };
+  rebuildPlanner();       // re-allocate per-service demand with the new factor
+  rerenderCurrentView();  // refresh coverage badges, breakdowns, order quantities
+  toast(pct > 0 ? `Reserve set to ${pct}% extra` : 'Reserve off');
+  await saveCookReserve(pct);
 }
 
 // ── Drill-down: where is the cost concentrated? ─────────────────────────────
@@ -343,6 +403,7 @@ export function computeServiceCosts(isoDates: Set<string>): ServiceCostRow[] {
   const gMed = globalTypeMedian();
   const recipeMap = recipeMapAll();
   const tpg = toppingPerGuest(targets).value;
+  const rf = reserveFactor(); // strip the hidden reserve so cost reflects real guests (see computeCostBreakdown)
   const slot = new Map<string, { loc: string; date: string; meal: string; guests: number; cost: number }>();
   for (const b of (S.batches || [])) {
     if (!FOOD_TYPES.includes(b.type)) continue;
@@ -356,7 +417,7 @@ export function computeServiceCosts(isoDates: Set<string>): ServiceCostRow[] {
       const k = `${svc.loc}|${svc.date}|${svc.meal}`;
       let s = slot.get(k);
       if (!s) { s = { loc: svc.loc, date: svc.date, meal: svc.meal, guests: getEffectiveGuests(svc.loc, svc.date, svc.meal), cost: 0 }; slot.set(k, s); }
-      s.cost += (liters / servingL) * cpg;
+      s.cost += (liters / servingL / rf) * cpg;
     }
   }
   const rows: ServiceCostRow[] = [];
