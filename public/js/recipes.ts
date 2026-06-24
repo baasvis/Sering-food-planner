@@ -18,6 +18,14 @@ export function updateRiSearch(el: any) {
   updateRecipeResults();
 }
 
+// Type filter pills can't set the module-scoped `riTypeFilter` via an inline
+// onclick assignment — that writes to a global `window.riTypeFilter` snapshot,
+// not this binding, so the filter never changed. Route it through a function.
+export function setRiTypeFilter(t: string) {
+  riTypeFilter = t;
+  renderRecipeIndex();
+}
+
 export function parseCost(s: any) {
   if (!s) return null;
   const m = s.toString().replace(/[^0-9.,]/g,'').replace(',','.');
@@ -59,8 +67,8 @@ export function renderRecipeIndex() {
   </div>
   <input class="ri-search" id="ri-search-input" placeholder="Search recipes..." value="${esc(riSearch)}" oninput="updateRiSearch(this)" />
   <div class="ri-filter-bar">
-    <button class="fc ${riTypeFilter === 'all' ? 'on' : ''}" onclick="riTypeFilter='all';updateRecipeResults()">All types</button>
-    ${types.map(t => `<button class="fc ${riTypeFilter === t ? 'on' : ''}" onclick="riTypeFilter='${t}';updateRecipeResults()">${t}</button>`).join('')}
+    <button class="fc ${riTypeFilter === 'all' ? 'on' : ''}" onclick="setRiTypeFilter('all')">All types</button>
+    ${types.map(t => `<button class="fc ${riTypeFilter === t ? 'on' : ''}" onclick="setRiTypeFilter('${esc(t)}')">${esc(t)}</button>`).join('')}
   </div>
   <div id="ri-results"></div>`;
 

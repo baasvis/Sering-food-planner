@@ -40,6 +40,44 @@ export let ingredientDbEditId: string | null = null;   // id of ingredient being
 export function setIngredientDbEditId(id: string | null) {
   ingredientDbEditId = id;
 }
+
+// These filters/pagination are module-scoped `let`s. An inline `onclick=` that
+// assigns to them only writes a same-named global on `window` (the Object.assign
+// snapshot), never this binding — so the buttons silently did nothing. Route
+// every change through a setter, the same way setIngredientDbEditId works.
+export function setIngredientDbTypeFilter(t: string) {
+  ingredientDbTypeFilter = t;
+  ingredientDbCatFilter = 'all';
+  ingredientDbPage = 0;
+  renderOrders();
+}
+export function setIngredientDbCatFilter(c: string) {
+  ingredientDbCatFilter = c;
+  ingredientDbPage = 0;
+  renderOrders();
+}
+export function setIngredientDbStatusFilter(s: string) {
+  ingredientDbStatusFilter = s;
+  ingredientDbPage = 0;
+  renderOrders();
+}
+export function setIngredientDbSort(s: string) {
+  ingredientDbSort = s;
+  ingredientDbPage = 0;
+  renderOrders();
+}
+export function setIngredientDbPage(n: number) {
+  ingredientDbPage = n;
+  renderOrders();
+}
+export function dismissSupplierUpload() {
+  supplierUploadData = null;
+  renderOrders();
+}
+export function setStorageModalLoc(loc: string) {
+  storageModalLoc = loc;
+  renderStorageModal();
+}
 interface SupplierProduct {
   orderCode: string;
   recentOrders: number;
@@ -235,22 +273,22 @@ export function renderIngredientDbTab() {
 
     <div class="ing-filter-bar">
       <div class="ing-type-pills">
-        <button class="ing-type-pill${ingredientDbTypeFilter==='all'?' active':''}" onclick="ingredientDbTypeFilter='all';ingredientDbCatFilter='all';ingredientDbPage=0;renderOrders()">All</button>
-        <button class="ing-type-pill${ingredientDbTypeFilter==='Food'?' active':''}" onclick="ingredientDbTypeFilter='Food';ingredientDbCatFilter='all';ingredientDbPage=0;renderOrders()">Food</button>
-        <button class="ing-type-pill${ingredientDbTypeFilter==='Drinks'?' active':''}" onclick="ingredientDbTypeFilter='Drinks';ingredientDbCatFilter='all';ingredientDbPage=0;renderOrders()">Drinks</button>
-        <button class="ing-type-pill${ingredientDbTypeFilter==='Non-food'?' active':''}" onclick="ingredientDbTypeFilter='Non-food';ingredientDbCatFilter='all';ingredientDbPage=0;renderOrders()">Non-food</button>
+        <button class="ing-type-pill${ingredientDbTypeFilter==='all'?' active':''}" onclick="setIngredientDbTypeFilter('all')">All</button>
+        <button class="ing-type-pill${ingredientDbTypeFilter==='Food'?' active':''}" onclick="setIngredientDbTypeFilter('Food')">Food</button>
+        <button class="ing-type-pill${ingredientDbTypeFilter==='Drinks'?' active':''}" onclick="setIngredientDbTypeFilter('Drinks')">Drinks</button>
+        <button class="ing-type-pill${ingredientDbTypeFilter==='Non-food'?' active':''}" onclick="setIngredientDbTypeFilter('Non-food')">Non-food</button>
       </div>
       <input type="text" class="dish-search" style="flex:1;min-width:180px;margin:0;" placeholder="Search name, supplier, code..."
         id="ing-db-search" value="${esc(ingredientDbSearch)}" oninput="updateIngredientSearch(this)" />
-      <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbCatFilter=this.value;ingredientDbPage=0;renderOrders()">
+      <select class="dish-search" style="width:auto;margin:0;" onchange="setIngredientDbCatFilter(this.value)">
         ${catOptions}
       </select>
-      <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbStatusFilter=this.value;ingredientDbPage=0;renderOrders()">
+      <select class="dish-search" style="width:auto;margin:0;" onchange="setIngredientDbStatusFilter(this.value)">
         <option value="all"${ingredientDbStatusFilter==='all'?' selected':''}>All status</option>
         <option value="active"${ingredientDbStatusFilter==='active'?' selected':''}>Active only</option>
         <option value="inactive"${ingredientDbStatusFilter==='inactive'?' selected':''}>Inactive only</option>
       </select>
-      <select class="dish-search" style="width:auto;margin:0;" onchange="ingredientDbSort=this.value;ingredientDbPage=0;renderOrders()">
+      <select class="dish-search" style="width:auto;margin:0;" onchange="setIngredientDbSort(this.value)">
         <option value="name"${ingredientDbSort === 'name' ? ' selected' : ''}>Sort: Name</option>
         <option value="type"${ingredientDbSort === 'type' ? ' selected' : ''}>Sort: Type</option>
         <option value="category"${ingredientDbSort === 'category' ? ' selected' : ''}>Sort: Category</option>
@@ -332,11 +370,11 @@ function renderIngredientDbResults(filtered: Ingredient[] = getFilteredIngredien
     // Pagination controls
     if (totalPages > 1) {
       html += `<div style="display:flex;justify-content:center;align-items:center;gap:8px;padding:12px 0;">
-        <button class="btn btn-sm" ${ingredientDbPage === 0 ? 'disabled' : ''} onclick="ingredientDbPage=0;renderOrders()">&laquo;</button>
-        <button class="btn btn-sm" ${ingredientDbPage === 0 ? 'disabled' : ''} onclick="ingredientDbPage--;renderOrders()">&lsaquo; Prev</button>
+        <button class="btn btn-sm" ${ingredientDbPage === 0 ? 'disabled' : ''} onclick="setIngredientDbPage(0)">&laquo;</button>
+        <button class="btn btn-sm" ${ingredientDbPage === 0 ? 'disabled' : ''} onclick="setIngredientDbPage(${ingredientDbPage - 1})">&lsaquo; Prev</button>
         <span style="font-size:12px;color:var(--text2);">Page ${ingredientDbPage + 1} of ${totalPages} (${filtered.length} items)</span>
-        <button class="btn btn-sm" ${ingredientDbPage >= totalPages - 1 ? 'disabled' : ''} onclick="ingredientDbPage++;renderOrders()">Next &rsaquo;</button>
-        <button class="btn btn-sm" ${ingredientDbPage >= totalPages - 1 ? 'disabled' : ''} onclick="ingredientDbPage=${totalPages - 1};renderOrders()">&raquo;</button>
+        <button class="btn btn-sm" ${ingredientDbPage >= totalPages - 1 ? 'disabled' : ''} onclick="setIngredientDbPage(${ingredientDbPage + 1})">Next &rsaquo;</button>
+        <button class="btn btn-sm" ${ingredientDbPage >= totalPages - 1 ? 'disabled' : ''} onclick="setIngredientDbPage(${totalPages - 1})">&raquo;</button>
       </div>`;
     }
   }
@@ -1282,7 +1320,7 @@ export function renderSupplierImportPanel() {
   return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
       <span style="font-weight:600;">Supplier Import: ${supplierUploadData.length} products parsed</span>
-      <button class="btn btn-sm btn-danger" onclick="supplierUploadData=null;renderOrders()">Dismiss</button>
+      <button class="btn btn-sm btn-danger" onclick="dismissSupplierUpload()">Dismiss</button>
     </div>
     <p style="font-size:12px;color:var(--text2);margin:0 0 8px;">
       ${matched.length} match existing ingredients by order code.
@@ -1368,8 +1406,8 @@ export function renderStorageModal() {
   const areas = S.storageConfig[loc] || [];
 
   const locTabs = `<div style="display:flex;gap:4px;margin-bottom:14px;">
-    <button class="order-loc-btn${loc === 'west' ? ' active' : ''}" onclick="storageModalLoc='west';renderStorageModal()">Sering West</button>
-    <button class="order-loc-btn${loc === 'centraal' ? ' active' : ''}" onclick="storageModalLoc='centraal';renderStorageModal()">Sering Centraal</button>
+    <button class="order-loc-btn${loc === 'west' ? ' active' : ''}" onclick="setStorageModalLoc('west')">Sering West</button>
+    <button class="order-loc-btn${loc === 'centraal' ? ' active' : ''}" onclick="setStorageModalLoc('centraal')">Sering Centraal</button>
   </div>`;
 
   let html = areas.map((area: { name: string; color: string; spots: string[] }, idx: number) => {
