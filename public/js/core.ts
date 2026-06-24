@@ -99,6 +99,15 @@ export function getPendingFromShipments(b: Batch, loc: Location): number {
     .reduce((sum, s) => sum + (s.qty || 0), 0);
 }
 
+/** Serveable (non-Frozen) stock in-transit toward `loc`. Pairs with
+ *  getServeableStockAt for "on-site serveable" reachability checks where Frozen
+ *  in-transit must not count (it still needs thawing on arrival). */
+export function getServeablePendingTo(b: Batch, loc: Location): number {
+  return (b.shipments || [])
+    .filter(s => !s.arrived && s.toLoc === loc && s.storage !== 'Frozen')
+    .reduce((sum, s) => sum + (s.qty || 0), 0);
+}
+
 // Mirrors mergeIntoInventory in routes/batches.ts so server and client agree
 // on the (loc, storage, cookDate) merge key.
 export function consolidateInventory(b: Batch): void {
@@ -758,10 +767,191 @@ export function calcIngredientsFromRecipe(dish: Batch): Array<{ name: string; am
   }));
 }
 
+// ── Per-location, transport-time-aware stock coverage ───────────────────────
+//
+// The transport model is ONE morning van West→Centraal, no reverse van. Coverage
+// answers "can this batch's physical stock actually reach each service in time?"
+// instead of the old pooled "total stock ≥ total demand" check.
+//
+//   - West service:     only stock positioned at West can serve it. Centraal
+//                       stock NEVER comes back to West (no reverse van).
+//   - Centraal service: stock positioned at Centraal (settled + already in
+//                       transit) serves it; West stock can serve it too, but
+//                       ONLY via a future morning van — see westReachesCentraal.
+//                       Same-day Centraal demand is met from Centraal-on-site only.
+//
+// Each batch allocates its own stock across its own (non-past) services in
+// CHRONOLOGICAL order (soonest first), so Centraal-on-site stock is reserved for
+// the nearest Centraal service before West stock is allowed to flow to later
+// Centraal services. Whatever a service can't draw is its shortfall; whatever's
+// left over is surplus (possibly stranded at the wrong location).
+
+const _MEAL_RANK: Record<string, number> = { lunch: 0, dinner: 1 };
+
+/** Timing rule for the single morning West→Centraal van. Given a reference day
+ *  `refIso` (the day the stock would be loaded — cook day in Fix My Menu, or
+ *  "today" for already-cooked stock), can West stock reach a Centraal service
+ *  dated `slotIso` at `meal`? Next morning onward: always. Same day: only the
+ *  Sunday dinner shift (Sunday's cook starts very early and there's no Centraal
+ *  lunch, so the van leaves late enough to make dinner). Single source of truth
+ *  for the West→Centraal clause — isServableBy (menu-fixer) delegates here. */
+export function westReachesCentraal(refIso: string, slotIso: string, meal: Meal): boolean {
+  if (slotIso > refIso) return true;                                    // next morning+
+  if (slotIso === refIso) return dateToDayName(refIso) === 'Sun' && meal === 'dinner';
+  return false;                                                          // past
+}
+
+/** Stock physically positioned at `loc` right now: settled inventory there
+ *  (any storage, matching getTotalStock's convention) plus stock already
+ *  in-transit heading to `loc`. */
+function positionedAt(b: Batch, loc: Location): number {
+  return getStockAt(b, loc) + getPendingFromShipments(b, loc);
+}
+
+export interface CoverageService {
+  loc: Location;
+  date: string;
+  meal: Meal;
+  demand: number;     // liters this batch owes this service (peer-share)
+  covered: number;    // liters reachable in time
+  shortfall: number;  // demand − covered
+}
+
+export interface LocCoverage {
+  demand: number;        // non-past demand at this loc (liters)
+  covered: number;
+  shortfall: number;
+  todayShortfall: number;
+  positioned: number;    // stock positioned at this loc (settled + incoming transit)
+  leftover: number;      // stock still free at this loc AFTER the service allocation
+                         // (before catering) — i.e. genuinely re-routable, not just
+                         // positioned−demand (which ignores stock the van already
+                         // committed to a future cross-location service)
+}
+
+export interface BatchCoverage {
+  demand: number;          // total non-past demand incl catering
+  covered: number;
+  shortfall: number;       // total demand that can't be served in time
+  surplus: number;         // positioned stock left after covering all reachable demand
+  todayShortfall: number;  // shortfall on services dated today (the urgent bit)
+  west: LocCoverage;
+  centraal: LocCoverage;
+  services: CoverageService[];
+}
+
+const r1 = (n: number): number => Math.round(n * 10) / 10;
+
+/** Transport-aware coverage for a batch (see section header). `demandFn` is
+ *  injectable for testing / for a live (uncached) caller; it defaults to the
+ *  cached per-service allocation, so production callers must rebuildPlanner()
+ *  first (same contract as calcRequired). Catering demand is location-agnostic
+ *  (packed from whatever stock is left) so it draws from the leftover pool. */
+export function computeCoverage(
+  b: Batch,
+  demandFn: (batch: Batch, svc: Service) => number = calcRequiredAtService,
+): BatchCoverage {
+  const today = dateToIso(getToday());
+
+  const svcs = (b.services || [])
+    .filter(s => !isServicePast(s))
+    .map(s => ({ s, demand: r1(demandFn(b, s)), covered: 0 }))
+    .filter(x => x.demand > 0)
+    .sort((a, z) => a.s.date !== z.s.date
+      ? (a.s.date < z.s.date ? -1 : 1)
+      : (_MEAL_RANK[a.s.meal] ?? 0) - (_MEAL_RANK[z.s.meal] ?? 0));
+
+  let westBucket = positionedAt(b, 'west');
+  let centraalBucket = positionedAt(b, 'centraal');
+  const west: LocCoverage = { demand: 0, covered: 0, shortfall: 0, todayShortfall: 0, positioned: westBucket, leftover: 0 };
+  const centraal: LocCoverage = { demand: 0, covered: 0, shortfall: 0, todayShortfall: 0, positioned: centraalBucket, leftover: 0 };
+
+  // Two-pass allocation so a shortfall is attributed to the location that
+  // genuinely can't be covered another way (chronological — soonest first):
+  //   Pass 1 — every service draws from its OWN location's stock. A West service
+  //            can ONLY ever use West stock; here a Centraal service uses only
+  //            Centraal-on-site stock. This reserves West stock for West services
+  //            regardless of date (fixes cross-date mis-attribution).
+  //   Pass 2 — any Centraal service still short that a FUTURE morning van can
+  //            reach pulls from the West stock LEFT OVER after Pass 1.
+  for (const a of svcs) {
+    if (a.s.loc === 'west') { const t = Math.min(a.demand, westBucket); westBucket -= t; a.covered = t; }
+    else { const t = Math.min(a.demand, centraalBucket); centraalBucket -= t; a.covered = t; }
+  }
+  for (const a of svcs) {
+    if (a.s.loc !== 'centraal') continue;
+    const rem = a.demand - a.covered;
+    if (rem <= 0 || !westReachesCentraal(today, a.s.date, a.s.meal)) continue;
+    const t = Math.min(rem, westBucket); westBucket -= t; a.covered += t;
+  }
+
+  const services: CoverageService[] = [];
+  for (const a of svcs) {
+    const shortfall = r1(a.demand - a.covered);
+    const lc = a.s.loc === 'west' ? west : centraal;
+    lc.demand = r1(lc.demand + a.demand);
+    lc.covered = r1(lc.covered + a.covered);
+    lc.shortfall = r1(lc.shortfall + shortfall);
+    if (a.s.date === today) lc.todayShortfall = r1(lc.todayShortfall + shortfall);
+    services.push({ loc: a.s.loc, date: a.s.date, meal: a.s.meal, demand: a.demand, covered: r1(a.covered), shortfall });
+  }
+
+  // Catering (location-agnostic) drains the shared pool. Drain West FIRST so each
+  // location's leftover reflects what is TRULY idle — the "stuck at West" hint must
+  // not count West stock already earmarked for a catering.
+  const caterDemand = r1(cateringDemand(b));
+  let cater = caterDemand;
+  const fromWest = Math.min(cater, westBucket); westBucket = r1(westBucket - fromWest); cater = r1(cater - fromWest);
+  const fromCentraal = Math.min(cater, centraalBucket); centraalBucket = r1(centraalBucket - fromCentraal); cater = r1(cater - fromCentraal);
+  const caterShort = r1(cater);
+  const caterCovered = r1(caterDemand - caterShort);
+
+  west.leftover = r1(westBucket);
+  centraal.leftover = r1(centraalBucket);
+  const surplus = r1(west.leftover + centraal.leftover);
+
+  return {
+    demand: r1(west.demand + centraal.demand + caterDemand),
+    covered: r1(west.covered + centraal.covered + caterCovered),
+    shortfall: r1(west.shortfall + centraal.shortfall + caterShort),
+    surplus: Math.max(0, surplus),
+    todayShortfall: r1(west.todayShortfall + centraal.todayShortfall),
+    west,
+    centraal,
+    services,
+  };
+}
+
+/** This batch's unmet liters at one specific service slot (0 if fully covered or
+ *  not serving it). Used by the planner to aggregate a slot's shortfall across
+ *  all batches assigned to it ("auto-fill from other stock"). `demandFn` is
+ *  injectable for the same reason as computeCoverage. */
+export function serviceShortfall(
+  b: Batch,
+  loc: Location,
+  date: string,
+  meal: Meal,
+  demandFn: (batch: Batch, svc: Service) => number = calcRequiredAtService,
+): number {
+  const s = computeCoverage(b, demandFn).services.find(x => x.loc === loc && x.date === date && x.meal === meal);
+  return s ? s.shortfall : 0;
+}
+
+/** Map a coverage result to the batch tile's +/− badge. A real shortfall (stock
+ *  not positioned to meet demand in time) dominates — surplus stranded at the
+ *  wrong location must NOT mask it. Only when nothing is short do we show the
+ *  leftover surplus as a positive cushion. Pure, so it's unit-testable directly. */
+export function coverageBadge(cov: BatchCoverage): { diff: number; str: string; cls: string } {
+  const diff = cov.shortfall > 0 ? -cov.shortfall : r1(cov.surplus);
+  return {
+    diff,
+    str: (diff >= 0 ? '+' : '') + diff + 'L',
+    cls: cov.shortfall > 0 ? 'stock-miss' : cov.surplus < 5 ? 'stock-low' : 'stock-ok',
+  };
+}
+
 export function diffStr(d: Batch): { diff: number; str: string; cls: string } {
-  const req = calcRequired(d);
-  const diff = Math.round((getTotalStock(d) - req) * 10) / 10;
-  return { diff, str: (diff >= 0 ? '+' : '') + diff + 'L', cls: diff < 0 ? 'stock-miss' : diff < 5 ? 'stock-low' : 'stock-ok' };
+  return coverageBadge(computeCoverage(d));
 }
 
 const STORAGE_BADGE_MAP: Record<string, string> = { Gastro:'b-gastro', Frozen:'b-frozen', 'Vac-packed':'b-vacpack' };

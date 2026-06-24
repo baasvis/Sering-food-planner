@@ -2,7 +2,7 @@ import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, M
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
 import { newId, scheduleSave, doSave, toast, toastError, apiPost, todayIso } from './utils';
 import { computeSupplyDemand } from '@shared/supply-demand';
-import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, getEffectiveGuests, chipClass, getToday, dateToStr, strToDate, diffStr, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory, consolidateInventory } from './core';
+import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, getEffectiveGuests, chipClass, getToday, dateToStr, strToDate, diffStr, serviceShortfall, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory, consolidateInventory } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderCostBar, renderCostDrilldown, costStatus, dishTypeTarget } from './cost';
@@ -196,6 +196,17 @@ export function renderLocationPlan(loc: string) {
             ? `<span class="chip-from">&larr; ${loc === 'west' ? 'Centraal' : 'West'}</span>`
             : '';
           html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(dish.name)}"><span class="chip-nm">${esc(dish.name)}</span>${fromTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
+        }
+        // Slot-level shortfall: the sum of each assigned batch's OWN unmet demand
+        // here (transport-aware — a West-stocked batch credited to a same-day
+        // Centraal slot reads short). It measures each batch against ITS OWN
+        // reachable stock and does NOT pool one batch's spare into a peer's gap,
+        // so it can read short when a co-assigned pot has spare — a conservative
+        // "this slot may need more" signal, not a precise net. (The actual
+        // cross-batch fill is what Fix My Menu's team assignment performs.)
+        if (!slotClosed && !slotServed && slotDishes.length > 0) {
+          const slotShort = Math.round(slotDishes.reduce((s, dish) => s + serviceShortfall(dish, loc as Location, isoDate, meal), 0) * 10) / 10;
+          if (slotShort > 0) html += `<div class="slot-short" title="The dishes here are ${slotShort}L short of this slot's demand from their own reachable stock — add another pot, or fill from on-site stock / a fresh cook">&#9888; ${slotShort}L short</div>`;
         }
         if (!slotClosed) html += `<div class="add-slot-btn" data-testid="slot-add-btn" onclick="event.stopPropagation();openAddDishTyped('${loc}','${isoDate}','${meal}','${tg.key}')">+</div>`;
         html += `</div>`;

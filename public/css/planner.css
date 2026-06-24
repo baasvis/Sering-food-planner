@@ -245,7 +245,14 @@
   .bx-svc-day{font-weight:600;min-width:70px;}
   .bx-svc-meal{color:var(--text2);min-width:42px;}
   .bx-svc-liters{margin-left:auto;font-weight:600;font-size:11px;color:var(--text2);}
+  .bx-svc-short{color:var(--red);font-weight:700;}
   .bx-svc-empty{font-size:11px;color:var(--text3);font-style:italic;padding:2px 0;}
+  /* ── Transport-aware coverage chips (per-location demand vs reachable stock) ── */
+  .cov-chip{display:inline-flex;align-items:center;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;line-height:1.5;white-space:nowrap;}
+  .cov-chip.cov-ok{background:rgba(15,110,86,.12);color:#0F6E56;}
+  .cov-chip.cov-short{background:rgba(192,57,43,.15);color:var(--red);}
+  .cov-chip.cov-stranded{background:rgba(186,117,23,.15);color:#BA7517;}
+  .slot-short{display:block;font-size:10px;font-weight:700;color:var(--red);margin:2px 0;line-height:1.3;}
   .bx-catering-lines{margin-top:4px;padding-top:4px;border-top:1px dashed var(--border);font-size:11px;color:var(--text2);}
   .bx-note-input{flex:1;font-size:12px;border:1px solid var(--border);border-radius:4px;padding:4px 6px;background:var(--bg);color:var(--text2);}
   .bx-note-input:focus{border-color:var(--blue);outline:none;background:var(--bg);color:var(--text);}

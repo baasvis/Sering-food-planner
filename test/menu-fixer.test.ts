@@ -829,6 +829,82 @@ describe('reachability: no reverse Centraal→West move', () => {
   });
 });
 
+describe('reachability: same-day Centraal needs Centraal-on-site stock (transport timing)', () => {
+  // Clock is pinned to Fri 2026-05-01, so a slot dated 2026-05-01 is "today" — the
+  // morning van has gone and can no longer carry West stock to Centraal. A split
+  // batch (mostly West, a sliver on-site at Centraal) must NOT be credited its West
+  // stock for that locked slot (the bug the transport-coverage change fixes), but it
+  // CAN serve the SAME demand a day later, when the next morning van delivers.
+  const centraalDinner = (loc: Location, _iso: string, meal: Meal) =>
+    (loc === 'centraal' && meal === 'dinner') ? 10 : 0;
+  // 1L on-site at Centraal, 30L stranded at West. cookDate parameterized so each
+  // test keeps the batch within the 5-day freshness window of its slot.
+  const splitBatch = (cookDate: string) => makeBatch({
+    type: 'Soup', cookDate, name: 'Split today',
+    inventory: [inv(30, 'west'), inv(1, 'centraal')],
+  });
+
+  test('REJECTED for a same-day (locked) Centraal slot — West stock cannot arrive in time', () => {
+    const window = makeWindow([{ iso: '2026-05-01', dayName: 'Fri', cookDate: '01/05/2026' }]);
+    const batch = splitBatch('30/04/2026');
+    S.batches = [batch]; S.caterings = [];
+    // 2L demand at the locked Centraal slot vs only 1L Centraal-on-site → constraint (3) fails.
+    scoredGreedyAssignment([batch], window, fixedCalcRequired(2), centraalDinner, NO_POT_CAPS);
+    expect(batch.services.length).toBe(0);
+  });
+
+  test('ACCEPTED for the SAME demand a day later — the morning van delivers the West stock', () => {
+    // FMM treats window[0] as "today", so the reachable Centraal slot must be a
+    // LATER day than the window's first — there the next morning van delivers West.
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },   // = today
+      { iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' },   // van-reachable
+    ]);
+    const centraalDinnerDay2 = (loc: Location, iso: string, meal: Meal) =>
+      (loc === 'centraal' && meal === 'dinner' && iso === '2026-05-06') ? 10 : 0;
+    const batch = splitBatch('05/05/2026');
+    S.batches = [batch]; S.caterings = [];
+    scoredGreedyAssignment([batch], window, fixedCalcRequired(2), centraalDinnerDay2, NO_POT_CAPS);
+    expect(batch.services.some(s => s.loc === 'centraal' && s.date === '2026-05-06' && s.meal === 'dinner')).toBe(true);
+  });
+});
+
+describe('findCombinationTeam: locked same-day Centraal needs on-site Centraal stock', () => {
+  // window[0] = today = Tue (non-Sunday) → today's Centraal dinner is "locked".
+  test('West-only-stock candidates are NOT teamed onto a locked Centraal slot', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const bigCentraalDinner = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'centraal' && meal === 'dinner') ? 100 : 0;
+    // 16L at West, 0 at Centraal: the morning van can't reach today's Centraal, so
+    // neither may be credited to it — no team forms (the slot falls to an emergency).
+    const a = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'WestA', inventory: [inv(16, 'west')] });
+    const b = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'WestB', inventory: [inv(16, 'west')] });
+    S.batches = [a, b]; S.caterings = [];
+    const res = teamFillBigSlots([a, b], window, (x: Batch) => calcRequiredLive(x, bigCentraalDinner), bigCentraalDinner);
+    expect(res.teamsFormed).toBe(0);
+    expect(countTypeInSlot([a, b], 'Soup', 'centraal', '2026-05-05', 'dinner')).toBe(0);
+  });
+
+  test('a split batch whose West demand is covered by West stock IS still teamed for the locked slot', () => {
+    // Regression for the review fix: charging the split batch's TOTAL demand (incl.
+    // West) against Centraal-only stock wrongly excluded it. A serves a today West
+    // dinner (covered by its 50L West) and has 20L Centraal-on-site (≥ its 14L team
+    // share), so it must join the team — not be over-rejected into an emergency cook.
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    const guestsFn = (loc: Location, _iso: string, meal: Meal) =>
+      (loc === 'centraal' && meal === 'dinner') ? 100 : (loc === 'west' && meal === 'dinner') ? 36 : 0;
+    const a = makeBatch({
+      type: 'Soup', cookDate: '04/05/2026', name: 'SplitA',
+      inventory: [inv(50, 'west'), inv(20, 'centraal')],
+      services: [{ loc: 'west', date: '2026-05-05', meal: 'dinner' }],   // ~10L West demand, covered by West stock
+    });
+    const b = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'CentraalB', inventory: [inv(20, 'centraal')] });
+    S.batches = [a, b]; S.caterings = [];
+    teamFillBigSlots([a, b], window, (x: Batch) => calcRequiredLive(x, guestsFn), guestsFn);
+    expect(a.services.some(s => s.loc === 'centraal' && s.date === '2026-05-05' && s.meal === 'dinner')).toBe(true);
+  });
+});
+
 describe('teamFillBigSlots: cover a slot no single batch can fill (runs on EMPTY slots)', () => {
   afterEach(() => { S.batches = []; S.caterings = []; });
 
