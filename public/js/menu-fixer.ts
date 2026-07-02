@@ -1908,10 +1908,42 @@ export function fixMenuGoto(idx: number): void {
     }
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      target.classList.add('slot-highlight');
-      setTimeout(() => target.classList.remove('slot-highlight'), 2000);
+      // Wait for the smooth scroll to settle before measuring the cutout
+      // (same pattern as the tutorial's _tutRender delay).
+      setTimeout(() => showGotoSpotlight(target!, w.message), 380);
     }
   }, 250);
+}
+
+/** Grey out the page and cut a spotlight hole around the goto target — the
+ *  old yellow outline flash was too easy to miss. Same box-shadow cutout
+ *  trick as the tutorial overlay (tutorial.ts), with the warning text as a
+ *  caption so the context survives the modal closing. Click anywhere (or
+ *  wait a few seconds) to dismiss. */
+function showGotoSpotlight(target: Element, message: string): void {
+  document.getElementById('goto-overlay')?.remove();
+  const pad = 8;
+  const rect = target.getBoundingClientRect();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'goto-overlay';
+  overlay.className = 'goto-overlay';
+
+  // Caption below the spotlight; falls back to above near the bottom edge.
+  const capW = Math.min(340, window.innerWidth - 32);
+  const capEstH = 84;
+  let capTop = rect.bottom + pad + 12;
+  if (capTop + capEstH > window.innerHeight - 12) capTop = Math.max(12, rect.top - pad - capEstH - 12);
+  let capLeft = rect.left + rect.width / 2 - capW / 2;
+  capLeft = Math.max(16, Math.min(window.innerWidth - capW - 16, capLeft));
+
+  overlay.innerHTML = `
+    <div class="goto-spotlight" style="left:${rect.left - pad}px;top:${rect.top - pad}px;width:${rect.width + pad * 2}px;height:${rect.height + pad * 2}px;"></div>
+    <div class="goto-caption" style="left:${capLeft}px;top:${capTop}px;max-width:${capW}px;">${esc(message)}<div class="goto-caption-hint">Click anywhere to dismiss</div></div>
+  `;
+  overlay.addEventListener('click', () => overlay.remove());
+  document.body.appendChild(overlay);
+  window.setTimeout(() => overlay.remove(), 6000);
 }
 
 export function fixMenuAction(idx: number, encoded: string): void {
