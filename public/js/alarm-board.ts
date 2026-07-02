@@ -15,8 +15,9 @@
 // reports after a run.
 
 import type { Batch } from '@shared/types';
+import { addDays } from '@shared/dates';
 import { S } from './state';
-import { calcRequired, dateToDayName, dateToIso, getToday, isServiceClosed, isServicePast } from './core';
+import { calcRequired, dateToDayName, dateToIso, getTotalStock, getToday, isServiceClosed, isServicePast } from './core';
 import type { Warning } from './menu-fixer';
 import {
   PLANNING_HORIZON_DAYS, cateringNoDishesWarnings, cookDateToIso,
@@ -28,7 +29,12 @@ import { trackEvent } from './telemetry';
  *  cook" batches) still assigned to an upcoming service. Both creation sites
  *  stamp cookNotes with an 'Emergency…' marker and `generated: true`; filling
  *  in a real recipe flips `generated` off (planner.ts / recipes.ts), which
- *  clears the alarm. */
+ *  clears the alarm.
+ *
+ *  Deliberate: a COOKED emergency (stock > 0) keeps alarming until replaced —
+ *  the pot exists, but the dish still has no identity (name/recipe), so
+ *  menus, allergens and cost tracking are all broken until someone runs the
+ *  replace-placeholder flow. Only the message changes to say so. */
 export function emergencyDishAlarms(batches: Batch[], horizonEndIso: string): Warning[] {
   const alarms: Warning[] = [];
   const mealRank = { lunch: 0, dinner: 1 } as const;
@@ -41,10 +47,13 @@ export function emergencyDishAlarms(batches: Batch[], horizonEndIso: string): Wa
     if (upcoming.length === 0) continue;
     const first = upcoming[0];
     const locLabel = first.loc === 'centraal' ? 'Centraal' : 'West';
-    const more = upcoming.length > 1 ? ` (+${upcoming.length - 1} more service${upcoming.length === 2 ? '' : 's'})` : '';
+    const slot = `${dateToDayName(first.date)} ${first.meal} at ${locLabel}` +
+      (upcoming.length > 1 ? ` (+${upcoming.length - 1} more service${upcoming.length === 2 ? '' : 's'})` : '');
     alarms.push({
       category: 'emergency-dish',
-      message: `${dateToDayName(first.date)} ${first.meal} at ${locLabel}${more} is counting on "${b.name}" — an emergency stand-in with no recipe. Decide what will actually be cooked.`,
+      message: getTotalStock(b) > 0
+        ? `${slot} is serving "${b.name}" — cooked as an emergency stand-in, still no recipe. Fill in what it actually is so the menu, allergens and costs stay right.`
+        : `${slot} is counting on "${b.name}" — an emergency stand-in with no recipe. Decide what will actually be cooked.`,
       anchor: { kind: 'batch', batchId: b.id },
     });
   }
@@ -57,7 +66,9 @@ export function emergencyDishAlarms(batches: Batch[], horizonEndIso: string): Wa
 export function collectLiveAlarms(): Warning[] {
   const today = getToday();
   const todayIso = dateToIso(today);
-  const horizonEnd = dateToIso(new Date(today.getTime() + (PLANNING_HORIZON_DAYS - 1) * 86400000));
+  // addDays, not epoch math: +6×86400000 lands on day+5 across the October
+  // DST fall-back and silently shrinks the horizon by a day (review finding).
+  const horizonEnd = dateToIso(addDays(today, PLANNING_HORIZON_DAYS - 1));
   const batches = S.batches || [];
 
   const alarms: Warning[] = [];

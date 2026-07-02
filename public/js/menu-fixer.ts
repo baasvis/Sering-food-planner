@@ -12,6 +12,7 @@
 // menu options for peer-share math.
 
 import type { Batch, DishType, Location, Meal, KitchenEquipment, CookRhythmDay, Catering } from '@shared/types';
+import { addDays } from '@shared/dates';
 import { S, DEFAULT_COOK_RHYTHM } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment, saveCookRhythm, markRitualStep } from './utils';
 import {
@@ -1717,9 +1718,10 @@ export function collectWarnings(
     }
   }
 
-  // 7. Caterings in window with no dishes assigned.
+  // 7. Caterings in window with no dishes assigned. addDays, not epoch math:
+  // +6×86400000 lands on day+5 across the October DST fall-back.
   const todayIso = dateToIso(getToday());
-  const horizonEnd = dateToIso(new Date(getToday().getTime() + (PLANNING_HORIZON_DAYS - 1) * 86400000));
+  const horizonEnd = dateToIso(addDays(getToday(), PLANNING_HORIZON_DAYS - 1));
   warnings.push(...cateringNoDishesWarnings(caterings, todayIso, horizonEnd));
 
   return warnings;
@@ -1908,18 +1910,30 @@ export function fixMenuGoto(idx: number): void {
     }
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // Wait for the smooth scroll to settle before measuring the cutout
-      // (same pattern as the tutorial's _tutRender delay).
-      setTimeout(() => showGotoSpotlight(target!, w.message), 380);
+      spotlightWhenSettled(target, w.message);
     }
   }, 250);
+}
+
+/** Draw the goto spotlight once the smooth scroll has settled: poll the
+ *  target's rect until two consecutive reads match. Smooth-scroll duration
+ *  scales with distance, so a fixed delay drew the fixed-position cutout
+ *  mid-flight over the wrong rows on long planners (review finding). Caps
+ *  at ~3s in case a browser never stops reporting motion. */
+function spotlightWhenSettled(target: Element, message: string, lastTop: number | null = null, tries = 36): void {
+  const top = target.getBoundingClientRect().top;
+  if ((lastTop !== null && Math.abs(top - lastTop) < 1) || tries <= 0) {
+    showGotoSpotlight(target, message);
+    return;
+  }
+  setTimeout(() => spotlightWhenSettled(target, message, top, tries - 1), 80);
 }
 
 /** Grey out the page and cut a spotlight hole around the goto target — the
  *  old yellow outline flash was too easy to miss. Same box-shadow cutout
  *  trick as the tutorial overlay (tutorial.ts), with the warning text as a
- *  caption so the context survives the modal closing. Click anywhere (or
- *  wait a few seconds) to dismiss. */
+ *  caption so the context survives the modal closing. Click anywhere,
+ *  scroll, or wait a few seconds to dismiss. */
 function showGotoSpotlight(target: Element, message: string): void {
   document.getElementById('goto-overlay')?.remove();
   const pad = 8;
@@ -1941,9 +1955,18 @@ function showGotoSpotlight(target: Element, message: string): void {
     <div class="goto-spotlight" style="left:${rect.left - pad}px;top:${rect.top - pad}px;width:${rect.width + pad * 2}px;height:${rect.height + pad * 2}px;"></div>
     <div class="goto-caption" style="left:${capLeft}px;top:${capTop}px;max-width:${capW}px;">${esc(message)}<div class="goto-caption-hint">Click anywhere to dismiss</div></div>
   `;
-  overlay.addEventListener('click', () => overlay.remove());
+  const dismiss = () => {
+    overlay.remove();
+    window.removeEventListener('scroll', dismiss, true);
+  };
+  overlay.addEventListener('click', dismiss);
   document.body.appendChild(overlay);
-  window.setTimeout(() => overlay.remove(), 6000);
+  // A scroll would leave the fixed-position cutout hovering over the wrong
+  // rows — dismiss instead. Capture phase (scroll doesn't bubble, and the
+  // horizontal .week-scroll containers scroll too); attached after a short
+  // grace so a trailing smooth-scroll event can't kill the overlay at birth.
+  window.setTimeout(() => window.addEventListener('scroll', dismiss, true), 250);
+  window.setTimeout(dismiss, 6000);
 }
 
 export function fixMenuAction(idx: number, encoded: string): void {

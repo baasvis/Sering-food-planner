@@ -152,6 +152,40 @@ describe('emergency-dish', () => {
     expect(alarmsOf('emergency-dish')).toHaveLength(0);
   });
 
+  test('a cooked emergency stand-in keeps alarming until replaced (deliberate — no identity yet)', () => {
+    S.batches = [
+      mk('Soup', [{ loc: 'west', date: '2026-05-06', meal: 'lunch' }], {
+        name: 'Monday Soup (Emergency)',
+        generated: true,
+        cookNotes: 'Emergency morning cook',
+        cookDate: '04/05/2026',
+        // Cooked this morning: 30L covers the 28L demand, so no stockout —
+        // only the emergency alarm should fire, with the cooked wording.
+        inventory: [{ loc: 'west', storage: 'Gastro', qty: 30, cookDate: '04/05/2026' }],
+      }),
+    ];
+    rebuildPlanner();
+    const all = collectLiveAlarms();
+    expect(all).toHaveLength(1);
+    expect(all[0].category).toBe('emergency-dish');
+    expect(all[0].message).toContain('still no recipe');
+  });
+
+  test('horizon boundary: a service exactly on day 7 alarms, day 8 stays quiet', () => {
+    // Today is Mon 4 May → horizon end is Sun 10 May (7 days inclusive).
+    const atEnd = mk('Soup', [{ loc: 'west', date: '2026-05-10', meal: 'lunch' }], {
+      generated: true, cookNotes: 'Emergency morning cook', cookDate: '10/05/2026',
+    });
+    S.batches = [atEnd];
+    expect(alarmsOf('emergency-dish')).toHaveLength(1);
+
+    const dayAfter = mk('Soup', [{ loc: 'west', date: '2026-05-11', meal: 'lunch' }], {
+      generated: true, cookNotes: 'Emergency morning cook', cookDate: '11/05/2026',
+    });
+    S.batches = [dayAfter];
+    expect(alarmsOf('emergency-dish')).toHaveLength(0);
+  });
+
   test('emergencies with only past services or services beyond the 7-day horizon stay quiet', () => {
     const past = mk('Soup', [{ loc: 'west', date: '2026-05-01', meal: 'lunch' }], {
       generated: true, cookNotes: 'Emergency morning cook', cookDate: '01/05/2026',
@@ -233,5 +267,15 @@ describe('reused collectWarnings checks through the live path', () => {
     const alarms = alarmsOf('catering-no-dishes');
     expect(alarms).toHaveLength(1);
     expect(alarms[0].anchor).toEqual({ kind: 'catering', cateringId: 'c-empty' });
+  });
+
+  test('catering horizon boundary: day 7 alarms, day 8 stays quiet', () => {
+    S.caterings = [
+      { id: 'c-end', name: 'At end', date: '10/05/2026', guestCount: 30, deliveryMode: 'pickup', dishes: [], logisticsNotes: '' },
+      { id: 'c-past-end', name: 'Past end', date: '11/05/2026', guestCount: 30, deliveryMode: 'pickup', dishes: [], logisticsNotes: '' },
+    ] as Catering[];
+    const alarms = alarmsOf('catering-no-dishes');
+    expect(alarms).toHaveLength(1);
+    expect(alarms[0].anchor).toEqual({ kind: 'catering', cateringId: 'c-end' });
   });
 });

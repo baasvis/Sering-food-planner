@@ -187,7 +187,7 @@ public/
     today-panel.ts     — Always-on dashboard "Today" panel: renders ritual.ts as a phase-grouped, deep-linked checklist
     telemetry.ts       — Frontend telemetry collection (errors, screen views, feature usage)
     tutorial.ts        — Guided tutorial system
-test/                  — 43 *.test.ts files (run `ls test/*.test.ts`). Grouped below by area; keep new tests here.
+test/                  — 47 *.test.ts files (run `ls test/*.test.ts`). Grouped below by area; keep new tests here.
   api.test.ts          — API integration tests (Jest + @swc/jest)
   batch-recipe-stock-deduct.test.ts — Batch recipe editor stock-deduction logic
   batch-construction.test.ts — Guard: UI-built Batch literals match the canonical shape
