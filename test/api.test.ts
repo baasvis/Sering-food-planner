@@ -232,6 +232,44 @@ describe('Batch CRUD API', () => {
     expect(res.body.services).toHaveLength(1);
   });
 
+  it('POST /api/batches — service pinned flag round-trips (create + PATCH), non-boolean rejected', async () => {
+    const pinId = T + 'batch-pin';
+    // Create with a pinned service — the flag lives inside the services JSON.
+    const created = await request(app)
+      .post('/api/batches')
+      .send({
+        id: pinId, name: 'Pinned soup', type: 'Soup', serving: 280,
+        cookDate: '01/04/2026', inventory: [], shipments: [],
+        services: [{ loc: 'west', date: '2026-04-01', meal: 'lunch', pinned: true }],
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.services[0].pinned).toBe(true);
+
+    // PATCH replaces services — the flag survives the second write path too.
+    const patched = await request(app)
+      .patch(`/api/batches/${pinId}`)
+      .send({ services: [
+        { loc: 'west', date: '2026-04-01', meal: 'lunch', pinned: true },
+        { loc: 'west', date: '2026-04-02', meal: 'dinner' },
+      ] });
+    expect(patched.status).toBe(200);
+    const pinnedSvc = patched.body.services.find((s: { pinned?: boolean }) => s.pinned === true);
+    expect(pinnedSvc).toMatchObject({ loc: 'west', date: '2026-04-01', meal: 'lunch' });
+
+    // Validator rejects a non-boolean pinned value.
+    const bad = await request(app)
+      .post('/api/batches')
+      .send({
+        id: T + 'batch-pin-bad', name: 'Bad pin', type: 'Soup', serving: 280,
+        inventory: [], shipments: [],
+        services: [{ loc: 'west', date: '2026-04-01', meal: 'lunch', pinned: 'yes' }],
+      });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatch(/pinned/i);
+
+    await request(app).delete(`/api/batches/${pinId}`);
+  });
+
   it('POST /api/batches — rejects duplicate id', async () => {
     const res = await request(app)
       .post('/api/batches')

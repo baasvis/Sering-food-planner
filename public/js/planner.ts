@@ -202,10 +202,11 @@ export function renderLocationPlan(loc: string) {
             : '';
           // 📌 pin: lock THIS batch↔slot assignment against Fix My Menu's
           // redistribution (stripFutureServices keeps pinned entries). Only
-          // meaningful on future services, so served chips skip it.
+          // meaningful on future services, so served chips skip it — and so
+          // do closed slots, matching their no-add/no-drop treatment.
           const svcPinned = (dish.services || []).some(s =>
             s.pinned === true && s.loc === loc && s.date === isoDate && s.meal === meal);
-          const pinTag = slotServed ? '' : `<span class="chip-pin${svcPinned ? ' chip-pinned' : ''}" data-testid="chip-pin" title="${svcPinned ? 'Pinned — Fix My Menu leaves this dish on this service. Tap to unpin.' : 'Pin this dish to this service so Fix My Menu doesn’t move it'}" onclick="event.stopPropagation();toggleServicePin('${dish.id}','${loc}','${isoDate}','${meal}')">&#128204;</span>`;
+          const pinTag = (slotServed || slotClosed) ? '' : `<span class="chip-pin${svcPinned ? ' chip-pinned' : ''}" data-testid="chip-pin" title="${svcPinned ? 'Pinned — Fix My Menu leaves this dish on this service. Tap to unpin.' : 'Pin this dish to this service so Fix My Menu doesn’t move it'}" onclick="event.stopPropagation();toggleServicePin('${dish.id}','${loc}','${isoDate}','${meal}')">&#128204;</span>`;
           html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(dish.name)}"><span class="chip-nm">${esc(dish.name)}</span>${fromTag}${pinTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
         }
         // Slot-level shortfall: ONLY flag a genuine gap — cooked stock assigned
