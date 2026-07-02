@@ -56,6 +56,11 @@ export interface Service {
   loc: Location;
   date: string;        // "YYYY-MM-DD"
   meal: Meal;
+  /** Pinned by a cook via the 📌 on the planner chip: Fix My Menu must not
+   *  remove this assignment (stripFutureServices keeps it; the batch's other
+   *  services stay redistributable). Absent = not pinned. Lives inside the
+   *  batches.services JSON column — no schema migration. */
+  pinned?: boolean;
 }
 
 // Bumped on every breaking Batch shape change. Frontend SSE handler will

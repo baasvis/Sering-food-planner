@@ -353,6 +353,12 @@
   .fix-menu-warning-msg{flex:1;min-width:200px;font-size:13px;line-height:1.4;}
   .fix-menu-warning-actions{display:flex;gap:6px;flex-wrap:wrap;}
   .fix-menu-goto, .fix-menu-action{font-size:11px;padding:3px 9px;}
+  /* Chip pin — lock a batch↔service assignment against Fix My Menu. Ghosted
+     until pinned so it's discoverable without shouting on every chip. */
+  .chip-pin{cursor:pointer;font-size:10px;line-height:1;margin-left:1px;opacity:.28;filter:grayscale(1);transition:opacity .1s;}
+  .chip-pin:hover{opacity:.75;}
+  .chip-pin.chip-pinned{opacity:1;filter:none;}
+
   /* "Go to" spotlight — grey out the page and cut a hole around the target,
      same box-shadow cutout trick as the tutorial overlay (tutorial.css). The
      old .slot-highlight yellow outline flash was too easy to miss. */

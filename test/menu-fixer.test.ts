@@ -48,6 +48,7 @@ import {
   teamFillBigSlots,
   scoredGreedyAssignment,
   runFallbackLadder,
+  runFixMyMenuCore,
   getActiveRhythm,
   computeWeeklyCapacities,
   collectWarnings,
@@ -209,6 +210,39 @@ describe('stripFutureServices', () => {
     expect(b.services).toHaveLength(2);
     expect(b.services.every(s => s.date < '2026-05-01')).toBe(true);
   });
+
+  test('keeps pinned future services (📌 on the planner chip) — the pin contract', () => {
+    // stripFutureServices is the only place Fix My Menu removes INDIVIDUAL
+    // service assignments (the passes after it only add). The other removal
+    // path is whole-batch retirement — covered by the findStalePlaceholders
+    // pin test below — so together these two pin down the full contract.
+    const b = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026',
+      services: [
+        { loc: 'west', date: '2026-05-04', meal: 'lunch', pinned: true },      // future, pinned → kept
+        { loc: 'west', date: '2026-05-04', meal: 'dinner' },                   // future, unpinned → stripped
+        { loc: 'centraal', date: '2026-05-08', meal: 'dinner', pinned: true }, // future, pinned → kept
+        { loc: 'west', date: '2026-04-28', meal: 'lunch' },                    // past → kept regardless
+      ],
+    });
+    const removed = stripFutureServices([b]);
+    expect(removed).toBe(1);
+    expect(b.services).toHaveLength(3);
+    expect(b.services.filter(s => s.pinned === true)).toHaveLength(2);
+    expect(b.services.some(s => s.date === '2026-05-04' && s.meal === 'dinner')).toBe(false);
+  });
+
+  test('pinned: false and absent both strip like normal', () => {
+    const b = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026',
+      services: [
+        { loc: 'west', date: '2026-05-04', meal: 'lunch', pinned: false },
+        { loc: 'west', date: '2026-05-05', meal: 'lunch' },
+      ],
+    });
+    expect(stripFutureServices([b])).toBe(2);
+    expect(b.services).toHaveLength(0);
+  });
 });
 
 // ─── findOrphanPlaceholders ────────────────────────────────────────────────
@@ -369,6 +403,29 @@ describe('findStalePlaceholders (auto-retire dead placeholders)', () => {
       generated: true, inventory: [],
     });
     expect(findStalePlaceholders([dessert], TODAY)).toHaveLength(0);
+  });
+
+  test('does NOT retire a stale placeholder carrying a pinned upcoming service — 📌 outranks cleanup', () => {
+    // Without this guard the retire path would silently delete a pinned chip
+    // (the one hole in the pin contract — review finding). Clock is pinned to
+    // 2026-05-01, so the 2026-05-06 service is upcoming.
+    const pinned = makeBatch({
+      type: 'Soup', cookDate: '30/04/2026', name: 'Pinned stale', generated: true, inventory: [],
+      services: [{ loc: 'west', date: '2026-05-06', meal: 'lunch', pinned: true }],
+    });
+    expect(findStalePlaceholders([pinned], TODAY)).toHaveLength(0);
+  });
+
+  test('an unpinned or past-pinned service does not save a stale placeholder', () => {
+    const unpinned = makeBatch({
+      type: 'Soup', cookDate: '30/04/2026', name: 'Unpinned stale', generated: true, inventory: [],
+      services: [{ loc: 'west', date: '2026-05-06', meal: 'lunch' }],
+    });
+    const pastPinned = makeBatch({
+      type: 'Soup', cookDate: '28/04/2026', name: 'Past-pinned stale', generated: true, inventory: [],
+      services: [{ loc: 'west', date: '2026-04-28', meal: 'lunch', pinned: true }],
+    });
+    expect(findStalePlaceholders([unpinned, pastPinned], TODAY)).toHaveLength(2);
   });
 });
 
@@ -1310,5 +1367,80 @@ describe('closed services: Fix My Menu warnings', () => {
     buildRollMap();
     const wsOpen = collectWarnings([], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, getEffectiveGuests);
     expect(wsOpen.some(isClosedDinner)).toBe(true);
+  });
+});
+
+// ─── collectWarnings: use-frozen candidates vs existing assignments ────────
+
+describe('use-frozen candidates exclude batches already in the slot (pin pathway)', () => {
+  test('a frozen batch pinned to the under-filled slot is not offered for that same slot', () => {
+    // Pre-pin a frozen batch could never hold a future service at warning
+    // time (the strip removed them); the pin creates that pathway, and
+    // offering "Use frozen X" for X's own slot would double-push the service
+    // entry (review finding). The other frozen batch stays a candidate.
+    const window = makeWindow([{ iso: '2026-05-06', dayName: 'Wed', cookDate: '06/05/2026' }]);
+    const pinnedFrozen = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026', name: 'Frozen pinned',
+      inventory: [inv(10, 'west', 'Frozen', '01/05/2026')],
+      services: [{ loc: 'west', date: '2026-05-06', meal: 'lunch', pinned: true }],
+    });
+    const freeFrozen = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026', name: 'Frozen free',
+      inventory: [inv(10, 'west', 'Frozen', '01/05/2026')],
+    });
+    const ws = collectWarnings([pinnedFrozen, freeFrozen], window, [], fixedCalcRequired(1), NO_POT_CAPS, null, TEN_GUESTS);
+    const slotWarning = ws.find(w => w.category === 'under-filled-slot'
+      && w.anchor?.kind === 'slot' && w.anchor.loc === 'west'
+      && w.anchor.date === '2026-05-06' && w.anchor.meal === 'lunch');
+    expect(slotWarning).toBeDefined();
+    const offered = (slotWarning!.actions || [])
+      .filter((a): a is Extract<typeof a, { kind: 'use-frozen' }> => a.kind === 'use-frozen')
+      .map(a => a.batchId);
+    expect(offered).toEqual([freeFrozen.id]);
+  });
+});
+
+// ─── runFixMyMenuCore: end-to-end pin contract ─────────────────────────────
+
+describe('runFixMyMenuCore honors pins end-to-end', () => {
+  test('a pinned assignment survives the full run un-duplicated; a pinned stale placeholder is not retired', () => {
+    const z = () => ({ Mon: { lunch: 0, dinner: 0 }, Tue: { lunch: 0, dinner: 0 }, Wed: { lunch: 0, dinner: 0 }, Thu: { lunch: 0, dinner: 0 }, Fri: { lunch: 0, dinner: 0 }, Sat: { lunch: 0, dinner: 0 }, Sun: { lunch: 0, dinner: 0 } });
+    S.guests = { west: z(), centraal: z() } as typeof S.guests;
+    S.guests.west.Mon.lunch = 100; // Mon 4 May (clock pinned to Fri 1 May)
+    S.predictions = {} as typeof S.predictions;
+    S.guestsNextWeeks = {} as typeof S.guestsNextWeeks;
+    S.caterings = []; S.planner = {}; S.closedServices = null;
+    S.kitchenEquipment = null; S.cookRhythm = null;
+
+    const pinnedReal = makeBatch({
+      type: 'Soup', cookDate: '30/04/2026', name: 'Pinned tomato',
+      inventory: [inv(30, 'west', 'Gastro', '30/04/2026')],
+      services: [{ loc: 'west', date: '2026-05-04', meal: 'lunch', pinned: true }],
+    });
+    const pinnedStale = makeBatch({
+      type: 'Main course', cookDate: '30/04/2026', name: 'Pinned stale ph',
+      generated: true, inventory: [],
+      services: [{ loc: 'west', date: '2026-05-05', meal: 'lunch', pinned: true }],
+    });
+    S.batches = [pinnedReal, pinnedStale];
+
+    runFixMyMenuCore();
+
+    // The pinned assignment is still there, still pinned, and not duplicated
+    // by any of the assignment passes.
+    const real = S.batches.find(b => b.id === pinnedReal.id);
+    expect(real).toBeDefined();
+    const entries = (real!.services || []).filter(s =>
+      s.loc === 'west' && s.date === '2026-05-04' && s.meal === 'lunch');
+    expect(entries).toHaveLength(1);
+    expect(entries[0].pinned).toBe(true);
+
+    // The stale placeholder (past cook day, no stock) would normally be
+    // retired — the pinned upcoming service spares it.
+    const stale = S.batches.find(b => b.id === pinnedStale.id);
+    expect(stale).toBeDefined();
+    expect((stale!.services || []).some(s => s.date === '2026-05-05' && s.pinned === true)).toBe(true);
+
+    S.batches = []; S.caterings = [];
   });
 });

@@ -150,15 +150,23 @@ export function snapshotBatches(batches: Batch[], window: PlanDay[]): BatchSnaps
 
 /**
  * Remove every service entry whose date+meal is still in the future. Past
- * services (already served by `isServicePast`) are preserved as-is. Makes
- * the algorithm fully redistributive: starts from a clean slate of future
- * assignments and rebuilds from current state.
+ * services (already served by `isServicePast`) are preserved as-is, and so
+ * are PINNED assignments (📌 on the planner chip) — a cook's explicit "leave
+ * this here". Makes the algorithm redistributive for everything else: a
+ * clean slate of future assignments, rebuilt from current state. Pinned
+ * services still count as slot coverage downstream (countTypeInSlot reads
+ * live services), so the greedy passes plan around them. This is the only
+ * place Fix My Menu removes INDIVIDUAL service assignments (the passes after
+ * it only add); the other removal path is whole-batch retirement, where
+ * findSpentBatches can't hit a batch with a future service and
+ * findStalePlaceholders explicitly spares pinned ones — so together a pinned
+ * assignment survives the whole run.
  */
 export function stripFutureServices(batches: Batch[]): number {
   let removed = 0;
   for (const b of batches) {
     if (!b.services || b.services.length === 0) continue;
-    const kept = b.services.filter(s => isServicePast(s));
+    const kept = b.services.filter(s => isServicePast(s) || s.pinned === true);
     removed += b.services.length - kept.length;
     b.services = kept;
   }
@@ -217,6 +225,12 @@ export function findStalePlaceholders(batches: Batch[], todayIso: string): Batch
     if (!TYPES_TO_PLAN.includes(b.type)) return false;
     if (getTotalStock(b) > 0) return false;
     if (!(b.shipments || []).every(s => s.arrived)) return false;
+    // A cook's 📌 outranks the cleanup: a pinned upcoming assignment means
+    // "leave this here" even when the cook day slipped. Without this guard
+    // the retire path would silently delete the pinned chip — the one hole
+    // in the pin contract (review finding). The batch stays visible in the
+    // To-cook pool so the missed cook is still apparent.
+    if ((b.services || []).some(s => s.pinned === true && !isServicePast(s))) return false;
     const cookIso = cookDateToIso(b.cookDate);
     if (!cookIso) return false;
     return cookIso < todayIso;
@@ -1605,8 +1619,13 @@ export function collectWarnings(
         if (filled < SLOTS_PER_TYPE) {
           const missing = SLOTS_PER_TYPE - filled;
           // Frozen rescue candidates: batches whose entire inventory is Frozen.
+          // Exclude ones already assigned to this slot — a pinned service can
+          // survive on a frozen batch (pre-pin this was unreachable), and
+          // offering "Use frozen X" for X's own slot would double-push the
+          // service entry (review finding).
           const frozen = allBatches.filter(b =>
             b.type === type && isOnlyFrozen(b) && getTotalStock(b) > 0
+            && !alreadyInSlot(b, slot.loc, day.isoDate, slot.meal)
           );
           const actions: WarningAction[] = [];
           for (const f of frozen) {
@@ -2011,6 +2030,13 @@ function applyWarningAction(w: Warning, a: WarningAction, idx: number): void {
     case 'use-frozen': {
       const b = S.batches.find(x => x.id === a.batchId);
       if (!b || w.anchor?.kind !== 'slot') return;
+      // Belt to the candidate filter's braces: never double-push a service
+      // this batch already holds (e.g. via a pinned assignment).
+      if (alreadyInSlot(b, w.anchor.loc, w.anchor.date, w.anchor.meal)) {
+        removeWarningRow(idx);
+        toast(`${b.name} is already assigned to that service`);
+        return;
+      }
       b.services.push({ loc: w.anchor.loc, date: w.anchor.date, meal: w.anchor.meal });
       removeWarningRow(idx);
       rebuildPlanner();

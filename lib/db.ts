@@ -62,6 +62,7 @@ export function validateBatch(b: Batch, prefix = ''): string | null {
     if (!VALID_LOCATIONS.includes(svc.loc)) return `${p}invalid service location`;
     if (!svc.date || typeof svc.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(svc.date)) return `${p}invalid service date (expected YYYY-MM-DD)`;
     if (!VALID_MEALS.includes(svc.meal)) return `${p}invalid service meal`;
+    if (svc.pinned !== undefined && typeof svc.pinned !== 'boolean') return `${p}invalid service pinned flag`;
   }
   // Unified-batch model: inventory[] and shipments[] are validated strictly when
   // PRESENT. They may be absent on a /api/data/patch batch — computePatch omits
