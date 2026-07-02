@@ -150,15 +150,20 @@ export function snapshotBatches(batches: Batch[], window: PlanDay[]): BatchSnaps
 
 /**
  * Remove every service entry whose date+meal is still in the future. Past
- * services (already served by `isServicePast`) are preserved as-is. Makes
- * the algorithm fully redistributive: starts from a clean slate of future
- * assignments and rebuilds from current state.
+ * services (already served by `isServicePast`) are preserved as-is, and so
+ * are PINNED assignments (📌 on the planner chip) — a cook's explicit "leave
+ * this here". Makes the algorithm redistributive for everything else: a
+ * clean slate of future assignments, rebuilt from current state. Pinned
+ * services still count as slot coverage downstream (countTypeInSlot reads
+ * live services), so the greedy passes plan around them. This is the ONLY
+ * place Fix My Menu removes service assignments — everything after it only
+ * adds — so keeping pinned entries here protects them from the whole run.
  */
 export function stripFutureServices(batches: Batch[]): number {
   let removed = 0;
   for (const b of batches) {
     if (!b.services || b.services.length === 0) continue;
-    const kept = b.services.filter(s => isServicePast(s));
+    const kept = b.services.filter(s => isServicePast(s) || s.pinned === true);
     removed += b.services.length - kept.length;
     b.services = kept;
   }

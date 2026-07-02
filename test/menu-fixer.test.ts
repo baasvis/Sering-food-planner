@@ -209,6 +209,38 @@ describe('stripFutureServices', () => {
     expect(b.services).toHaveLength(2);
     expect(b.services.every(s => s.date < '2026-05-01')).toBe(true);
   });
+
+  test('keeps pinned future services (📌 on the planner chip) — the pin contract', () => {
+    // stripFutureServices is the ONLY place Fix My Menu removes service
+    // assignments (the passes after it only add), so surviving the strip is
+    // exactly what "pinned dishes don't get moved around" means.
+    const b = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026',
+      services: [
+        { loc: 'west', date: '2026-05-04', meal: 'lunch', pinned: true },      // future, pinned → kept
+        { loc: 'west', date: '2026-05-04', meal: 'dinner' },                   // future, unpinned → stripped
+        { loc: 'centraal', date: '2026-05-08', meal: 'dinner', pinned: true }, // future, pinned → kept
+        { loc: 'west', date: '2026-04-28', meal: 'lunch' },                    // past → kept regardless
+      ],
+    });
+    const removed = stripFutureServices([b]);
+    expect(removed).toBe(1);
+    expect(b.services).toHaveLength(3);
+    expect(b.services.filter(s => s.pinned === true)).toHaveLength(2);
+    expect(b.services.some(s => s.date === '2026-05-04' && s.meal === 'dinner')).toBe(false);
+  });
+
+  test('pinned: false and absent both strip like normal', () => {
+    const b = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026',
+      services: [
+        { loc: 'west', date: '2026-05-04', meal: 'lunch', pinned: false },
+        { loc: 'west', date: '2026-05-05', meal: 'lunch' },
+      ],
+    });
+    expect(stripFutureServices([b])).toBe(2);
+    expect(b.services).toHaveLength(0);
+  });
 });
 
 // ─── findOrphanPlaceholders ────────────────────────────────────────────────

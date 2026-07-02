@@ -200,7 +200,13 @@ export function renderLocationPlan(loc: string) {
           const fromTag = fromOther
             ? `<span class="chip-from">&larr; ${loc === 'west' ? 'Centraal' : 'West'}</span>`
             : '';
-          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(dish.name)}"><span class="chip-nm">${esc(dish.name)}</span>${fromTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
+          // 📌 pin: lock THIS batch↔slot assignment against Fix My Menu's
+          // redistribution (stripFutureServices keeps pinned entries). Only
+          // meaningful on future services, so served chips skip it.
+          const svcPinned = (dish.services || []).some(s =>
+            s.pinned === true && s.loc === loc && s.date === isoDate && s.meal === meal);
+          const pinTag = slotServed ? '' : `<span class="chip-pin${svcPinned ? ' chip-pinned' : ''}" data-testid="chip-pin" title="${svcPinned ? 'Pinned — Fix My Menu leaves this dish on this service. Tap to unpin.' : 'Pin this dish to this service so Fix My Menu doesn’t move it'}" onclick="event.stopPropagation();toggleServicePin('${dish.id}','${loc}','${isoDate}','${meal}')">&#128204;</span>`;
+          html += `<div class="dish-chip ${tg.cls}${trClass}${servedClass}${fromOther ? ' chip-cross-loc' : ''}" title="${esc(dish.name)}"><span class="chip-nm">${esc(dish.name)}</span>${fromTag}${pinTag}${servedClass ? '<span class="chip-served">✓</span>' : `<span class="chip-x" onclick="event.stopPropagation();removeDishFromSlot('${dish.id}','${loc}','${isoDate}','${meal}')">&#10005;</span>`}</div>`;
         }
         // Slot-level shortfall: ONLY flag a genuine gap — cooked stock assigned
         // here that still can't cover/reach this service (stranded at the other
@@ -644,6 +650,23 @@ export function removeDishFromSlot(dishId: string, loc: string, date: string, me
   const dish = S.batches.find(d => d.id === dishId);
   if (dish) { dish.services = (dish.services || []).filter(s => !(s.loc === loc && s.date === date && s.meal === meal)); }
   rebuildPlanner(); rerenderCurrentView(); scheduleSave();
+}
+
+/** Toggle the 📌 pin on one batch↔service assignment. Pinned assignments
+ *  survive Fix My Menu's redistribution (see stripFutureServices). The pin
+ *  protects against the algorithm only — the ✕ on the chip still works. */
+export function toggleServicePin(dishId: string, loc: string, date: string, meal: string) {
+  const dish = S.batches.find(d => d.id === dishId);
+  if (!dish) return;
+  const svc = (dish.services || []).find(s => s.loc === loc && s.date === date && s.meal === meal);
+  if (!svc) return;
+  if (svc.pinned === true) delete svc.pinned;
+  else svc.pinned = true;
+  trackEvent('service_pin_toggle', svc.pinned ? 'pin' : 'unpin');
+  toast(svc.pinned
+    ? `📌 Pinned ${dish.name} — Fix My Menu will leave it on this service`
+    : `Unpinned ${dish.name}`);
+  rerenderCurrentView(); scheduleSave();
 }
 
 /**

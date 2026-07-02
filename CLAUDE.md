@@ -118,6 +118,7 @@ e2e/                          — Playwright end-to-end test suite (run via `npm
   drinks-catalogue.spec.ts, drinks-stocktake.spec.ts, drinks-order.spec.ts — Drinks flows (add drink, overview auto-save, auto-shortfall order)
   competencies.spec.ts        — Training screen flow (people × chunks grid, log teaching event)
   alarm-board.spec.ts         — West planner issue counter → issues modal open/close
+  pin-dish.spec.ts            — Chip 📌 pin toggle + server persistence
   inventory-served-disappear.spec.ts — Regression: served batches surviving inventory
   helpers.ts                  — Shared test setup (dev login, location chooser dismiss, deleteDrinksByNamePrefix)
   coverage-manifest.json      — Maps trackEvent() feature names to which spec covers them; consumed by lib/telemetry-coverage.ts
@@ -350,6 +351,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Batch = physical container of food. Lifecycle: PLANNED → COOKED → SERVING → DONE
 - **Unified-batch model** (shipped May 2026): a batch's physical stock lives in `inventory` (array of `{loc, storage, qty, cookDate}` settled-stock entries) and `shipments` (array of in-flight transfers between locations). This replaced the old per-batch `location`/`storage`/`stock`/`inTransit` columns and the `parentId` split/merge model. `BATCH_SCHEMA_VERSION` in `shared/types.ts` bumps on every breaking Batch shape change; the SSE handler force-reloads stale clients.
 - Other key batch fields: `services` (embedded JSON), `cookDate`, `note`, `generated` (true only for Fix-My-Menu placeholders)
+- A service entry may carry `pinned: true` (📌 on the planner chip, `toggleServicePin`): Fix My Menu's `stripFutureServices` keeps pinned assignments, so the algorithm plans around them instead of redistributing them. Lives inside the `services` JSON — no schema migration.
 - Cannot delete a batch with inventory stock or pending shipments > 0 (real food exists)
 - Recipe v2: `GET /api/recipes`, `GET /api/recipes/:id`, `POST /api/recipes`, `PATCH /api/recipes/:id`, `DELETE /api/recipes/:id`. Photo: `POST/DELETE /api/recipes/:id/photo`. Versioning: `POST /api/recipes/:id/version`. Print: `GET /api/recipes/:id/print`. Cost recalc: `POST /api/recipes/recalculate-costs`.
 - Recipe ingredient suggestion: `GET /api/ingredients/suggest?category=X&loc=west` — lives in `routes/recipes.ts`, mounted under `/api`. Don't look for it in `routes/ingredients.ts`.
