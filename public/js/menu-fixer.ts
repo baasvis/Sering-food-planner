@@ -1878,12 +1878,19 @@ export function fixMenuGoto(idx: number): void {
     const anchor = w.anchor;
     const b = S.batches.find(x => x.id === anchor.batchId);
     // Switch to the planner tab where this batch's stock primarily sits.
-    // For multi-loc batches, pick the loc with more stock; tiebreak to West.
+    // For multi-loc batches, pick the loc with more stock; stockless ties
+    // (e.g. an empty emergency placeholder) follow the cook location.
     let tab: 'centraal' | 'west' = 'west';
     if (b) {
       const cQty = getStockAt(b, 'centraal');
       const wQty = getStockAt(b, 'west');
       if (cQty > wQty) tab = 'centraal';
+      else if (cQty === wQty && primaryLoc(b) === 'centraal') tab = 'centraal';
+      // The tile lives in the type's batch pool, which is collapsed by
+      // default — without expanding it the querySelector below finds nothing
+      // and the goto silently does nothing (feedback on the alarm board).
+      if (!S.openBatchPools) S.openBatchPools = new Set();
+      S.openBatchPools.add(b.type);
     }
     setTab(tab);
   } else if (w.anchor.kind === 'catering') {
