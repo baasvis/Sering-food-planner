@@ -353,7 +353,13 @@
   .fix-menu-warning-msg{flex:1;min-width:200px;font-size:13px;line-height:1.4;}
   .fix-menu-warning-actions{display:flex;gap:6px;flex-wrap:wrap;}
   .fix-menu-goto, .fix-menu-action{font-size:11px;padding:3px 9px;}
-  .slot-highlight{outline:3px solid var(--yellow,#facc15)!important;outline-offset:2px;transition:outline 0.3s ease;}
+  /* "Go to" spotlight — grey out the page and cut a hole around the target,
+     same box-shadow cutout trick as the tutorial overlay (tutorial.css). The
+     old .slot-highlight yellow outline flash was too easy to miss. */
+  .goto-overlay{position:fixed;inset:0;z-index:800;cursor:pointer;}
+  .goto-spotlight{position:fixed;border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,.62);pointer-events:none;}
+  .goto-caption{position:fixed;background:var(--bg);border:1px solid var(--border2);border-radius:10px;padding:10px 14px;font-size:13px;color:var(--text);line-height:1.45;box-shadow:0 8px 32px rgba(0,0,0,.3);pointer-events:none;}
+  .goto-caption-hint{margin-top:6px;font-size:11px;color:var(--text3);}
 
   /* Section headers grouping warnings by category */
   .fix-menu-section-hdr{margin:14px 0 6px;padding:6px 10px;background:var(--bg-3,#f3f4f6);border-radius:6px;}
@@ -473,6 +479,11 @@
   .reserve-ctl-unit{color:var(--text3);}
   .reserve-ctl-extra{margin-left:6px;padding-left:8px;border-left:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text3);}
   .reserve-ctl.reserve-on .reserve-ctl-extra{color:var(--accent,#4a8);}
+
+  /* ALARM BOARD counter — West planner header, next to the reserve control */
+  .alarm-ctl{display:inline-flex;align-items:center;font-weight:700;font-size:13px;margin:0 0 10px 8px;vertical-align:top;}
+  .alarm-ctl.alarm-clear{color:var(--text3);}
+  .alarm-ctl.alarm-urgent{border-color:var(--red) !important;background:var(--red-bg) !important;color:var(--red) !important;animation:inv-pulse 1.5s ease-in-out infinite;}
 
   /* ── Cost-per-guest bar (West tab) ───────────────────────── */
   .cost-bar{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;margin:0 0 14px;display:flex;flex-direction:column;gap:7px;}
