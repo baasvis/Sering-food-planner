@@ -28,6 +28,7 @@ import { toggleTheme, showModal, closeModal, esc, buildNav, initApp, bootstrap, 
 import { initTelemetry, trackScreenView, trackEvent, trackError } from './telemetry';
 import { executeUndo, flushUndo } from './undo';
 import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave, fixMenuGoto, fixMenuAction, openCookRhythmModal, crUpdateField, crToggleClosed, crResetDefaults, crSave } from './menu-fixer';
+import { openAlarmBoard } from './alarm-board';
 import { toggleRitualStep, toggleRitualWhy, ritualScrollToArrivals } from './today-panel';
 import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals, openPackEditor, savePackEditor, resetPackEditor } from './transport-card';
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
@@ -125,6 +126,9 @@ Object.assign(window, {
   // menu-fixer
   fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave,
   fixMenuGoto, fixMenuAction,
+
+  // alarm board (West planner issue counter)
+  openAlarmBoard,
 
   // today-panel (daily ritual)
   toggleRitualStep, toggleRitualWhy, ritualScrollToArrivals,

@@ -15,5 +15,6 @@
   "drinks-catalogue.spec.ts": ["drinks_catalogue_add"],
   "drinks-stocktake.spec.ts": ["drinks_stocktake_save"],
   "drinks-order.spec.ts": ["drinks_order_place", "drinks_order_receive"],
+  "alarm-board.spec.ts": ["alarm_board_open"],
   "shipment-flow.test.ts": ["batch_ship", "shipment_mark_arrived", "shipment_cancel", "batch_transfer"]
 }

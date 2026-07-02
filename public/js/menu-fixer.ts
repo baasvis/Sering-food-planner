@@ -368,7 +368,7 @@ export function allocatePotCaps(
 
 // ── Slot eligibility helpers ────────────────────────────────────────────────
 
-function cookDateToIso(ddmmyyyy: string | null | undefined): string | null {
+export function cookDateToIso(ddmmyyyy: string | null | undefined): string | null {
   if (!ddmmyyyy) return null;
   const parts = ddmmyyyy.split('/');
   if (parts.length !== 3) return null;
@@ -1451,6 +1451,7 @@ export function fixMyMenu(): void {
 // ── Validation ──────────────────────────────────────────────────────────────
 
 export type WarningCategory =
+  | 'emergency-dish'
   | 'under-filled-slot'
   | 'cooked-stockout'
   | 'stale-with-stock'
@@ -1483,6 +1484,102 @@ function isStaleAtSlot(cookDateDdmmyyyy: string | null, slotIsoDate: string, thr
   const cookIso = cookDateToIso(cookDateDdmmyyyy);
   if (!cookIso) return false;
   return diffDaysIso(cookIso, slotIsoDate) >= threshold;
+}
+
+/** Cooked batches whose total stock can't cover their projected demand.
+ *  Shared between collectWarnings (post-FMM modal) and the live alarm board. */
+export function stockoutWarnings(allBatches: Batch[], calcReq: (b: Batch) => number): Warning[] {
+  const warnings: Warning[] = [];
+  for (const b of allBatches) {
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (isOnlyFrozen(b)) continue;
+    const stock = getTotalStock(b);
+    if (stock <= 0) continue;
+    const demand = calcReq(b);
+    if (demand > stock) {
+      const short = (demand - stock).toFixed(1);
+      warnings.push({
+        category: 'cooked-stockout',
+        message: `${b.name} will run out — about ${short}L short across the services it covers. The last service might run dry.`,
+        anchor: { kind: 'batch', batchId: b.id },
+      });
+    }
+  }
+  return warnings;
+}
+
+/** Non-frozen batches cooked ≥3 days ago with stock left — use or freeze.
+ *  Shared between collectWarnings (post-FMM modal) and the live alarm board. */
+export function staleStockWarnings(allBatches: Batch[], todayIso: string): Warning[] {
+  const warnings: Warning[] = [];
+  for (const b of allBatches) {
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    const stock = getTotalStock(b);
+    if (stock <= 0) continue;
+    if (isOnlyFrozen(b)) continue;
+    if (!isStaleAtSlot(b.cookDate, todayIso)) continue;
+    warnings.push({
+      category: 'stale-with-stock',
+      message: `${b.name} is getting old — cooked ${b.cookDate}, ${stock}L still left. Either feature it on today's menu, or freeze it before it spoils.`,
+      anchor: { kind: 'batch', batchId: b.id },
+      actions: [
+        { kind: 'assign-anyway', batchId: b.id },
+        { kind: 'move-to-freezer', batchId: b.id },
+      ],
+    });
+  }
+  return warnings;
+}
+
+/** Batches whose projected demand exceeds the biggest pot in the kitchen.
+ *  Shared between collectWarnings (post-FMM modal) and the live alarm board. */
+export function overPotCapWarnings(
+  allBatches: Batch[],
+  calcReq: (b: Batch) => number,
+  equipment: KitchenEquipment | null,
+): Warning[] {
+  const warnings: Warning[] = [];
+  const biggestPotInKitchen = equipment && equipment.pots.length > 0
+    ? Math.max(...equipment.pots) : Infinity;
+  for (const b of allBatches) {
+    if (!TYPES_TO_PLAN.includes(b.type)) continue;
+    if (isOnlyFrozen(b)) continue;
+    if (!b.cookDate) continue;
+    const demand = calcReq(b);
+    if (demand > biggestPotInKitchen) {
+      warnings.push({
+        category: 'over-pot-cap',
+        message: `${b.name} needs ${demand.toFixed(1)}L but your biggest pot is only ${biggestPotInKitchen}L. Cook it in two pots, or scale back what it covers.`,
+        anchor: { kind: 'batch', batchId: b.id },
+      });
+    }
+  }
+  return warnings;
+}
+
+/** Dated caterings inside [todayIso, horizonEndIso] with no dishes picked.
+ *  Shared between collectWarnings (post-FMM modal) and the live alarm board. */
+export function cateringNoDishesWarnings(
+  caterings: { id: string; date: string | null; dishes: { dishId: string }[] }[],
+  todayIso: string,
+  horizonEndIso: string,
+): Warning[] {
+  const warnings: Warning[] = [];
+  for (const c of caterings) {
+    if (!c.date) continue;
+    const cIso = cookDateToIso(c.date);
+    if (!cIso) continue;
+    if (cIso < todayIso || cIso > horizonEndIso) continue;
+    if (!c.dishes || c.dishes.length === 0) {
+      const dayLabel = dateToDayName(cIso);
+      warnings.push({
+        category: 'catering-no-dishes',
+        message: `Catering on ${dayLabel} ${c.date} doesn't have any dishes picked yet. What are they getting?`,
+        anchor: { kind: 'catering', cateringId: c.id },
+      });
+    }
+  }
+  return warnings;
 }
 
 export function collectWarnings(
@@ -1537,57 +1634,14 @@ export function collectWarnings(
   // 2. Cooked stockout (per-batch in the unified model). One warning per
   // batch where total stock < total demand. Frozen-only batches are
   // excluded because they're not on the auto-rotation.
-  for (const b of allBatches) {
-    if (!TYPES_TO_PLAN.includes(b.type)) continue;
-    if (isOnlyFrozen(b)) continue;
-    const stock = getTotalStock(b);
-    if (stock <= 0) continue;
-    const demand = calcReq(b);
-    if (demand > stock) {
-      const short = (demand - stock).toFixed(1);
-      warnings.push({
-        category: 'cooked-stockout',
-        message: `${b.name} will run out — about ${short}L short across the services it covers. The last service might run dry.`,
-        anchor: { kind: 'batch', batchId: b.id },
-      });
-    }
-  }
+  warnings.push(...stockoutWarnings(allBatches, calcReq));
 
   // 3. Stale batch with leftover stock.
-  for (const b of allBatches) {
-    if (!TYPES_TO_PLAN.includes(b.type)) continue;
-    const stock = getTotalStock(b);
-    if (stock <= 0) continue;
-    if (isOnlyFrozen(b)) continue;
-    if (!isStaleAtSlot(b.cookDate, dateToIso(getToday()))) continue;
-    warnings.push({
-      category: 'stale-with-stock',
-      message: `${b.name} is getting old — cooked ${b.cookDate}, ${stock}L still left. Either feature it on today's menu, or freeze it before it spoils.`,
-      anchor: { kind: 'batch', batchId: b.id },
-      actions: [
-        { kind: 'assign-anyway', batchId: b.id },
-        { kind: 'move-to-freezer', batchId: b.id },
-      ],
-    });
-  }
+  warnings.push(...staleStockWarnings(allBatches, dateToIso(getToday())));
 
   // 4. Over-pot-cap: batch projected demand exceeds the biggest pot in the
   // kitchen. Only warn when food won't fit in ANY single pot.
-  const biggestPotInKitchen = equipment && equipment.pots.length > 0
-    ? Math.max(...equipment.pots) : Infinity;
-  for (const b of allBatches) {
-    if (!TYPES_TO_PLAN.includes(b.type)) continue;
-    if (isOnlyFrozen(b)) continue;
-    if (!b.cookDate) continue;
-    const demand = calcReq(b);
-    if (demand > biggestPotInKitchen) {
-      warnings.push({
-        category: 'over-pot-cap',
-        message: `${b.name} needs ${demand.toFixed(1)}L but your biggest pot is only ${biggestPotInKitchen}L. Cook it in two pots, or scale back what it covers.`,
-        anchor: { kind: 'batch', batchId: b.id },
-      });
-    }
-  }
+  warnings.push(...overPotCapWarnings(allBatches, calcReq, equipment));
 
   // 5. Burner overload per cook day: too many >threshold pots needed for
   // available gas burners. In the unified model each batch is one pot on
@@ -1666,20 +1720,7 @@ export function collectWarnings(
   // 7. Caterings in window with no dishes assigned.
   const todayIso = dateToIso(getToday());
   const horizonEnd = dateToIso(new Date(getToday().getTime() + (PLANNING_HORIZON_DAYS - 1) * 86400000));
-  for (const c of caterings) {
-    if (!c.date) continue;
-    const cIso = cookDateToIso(c.date);
-    if (!cIso) continue;
-    if (cIso < todayIso || cIso > horizonEnd) continue;
-    if (!c.dishes || c.dishes.length === 0) {
-      const dayLabel = dateToDayName(cIso);
-      warnings.push({
-        category: 'catering-no-dishes',
-        message: `Catering on ${dayLabel} ${c.date} doesn't have any dishes picked yet. What are they getting?`,
-        anchor: { kind: 'catering', cateringId: c.id },
-      });
-    }
-  }
+  warnings.push(...cateringNoDishesWarnings(caterings, todayIso, horizonEnd));
 
   return warnings;
 }
@@ -1726,6 +1767,7 @@ function renderWarningRow(w: Warning, idx: number): string {
 }
 
 const CATEGORY_ORDER: WarningCategory[] = [
+  'emergency-dish',          // a service is counting on a dish nobody has picked yet
   'undeliverable-centraal',  // wrong assignment, needs immediate fix
   'centraal-batch-at-west',  // wrong assignment (no reverse delivery)
   'cooked-stockout',         // real food shortage, will run out
@@ -1739,6 +1781,7 @@ const CATEGORY_ORDER: WarningCategory[] = [
 
 function categoryHeader(c: WarningCategory): { title: string; hint: string } {
   switch (c) {
+    case 'emergency-dish':         return { title: '🚨 Emergency dishes', hint: 'Auto-created stand-ins with no recipe — decide what will actually be cooked.' };
     case 'undeliverable-centraal': return { title: '🚚 Won\'t arrive in time', hint: 'Centraal gets food delivered the morning after it\'s cooked.' };
     case 'centraal-batch-at-west': return { title: '↩️ No transport back to West', hint: 'Once food is at Centraal, it stays there — there\'s no return van.' };
     case 'cooked-stockout':        return { title: '🥣 Will run out of food', hint: 'Already cooked but not enough for the planned services.' };
@@ -1751,17 +1794,14 @@ function categoryHeader(c: WarningCategory): { title: string; hint: string } {
   }
 }
 
-function showResultsModal(report: ResultsReport): void {
-  _lastReport = report;
-  const { cleaned, created, assigned, retired, placeholderNames, teamsFormed, warnings } = report;
-  const summary: string[] = [];
-  if (retired > 0) summary.push(`<div>🗑 Retired ${retired} old batch${retired === 1 ? '' : 'es'} (food used up, or a placeholder for a cook day that already passed)</div>`);
-  if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
-  if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
-  if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);
-  if (teamsFormed && teamsFormed > 0) summary.push(`<div>🤝 Combined ${teamsFormed} multi-batch team${teamsFormed === 1 ? '' : 's'} for high-demand slots</div>`);
-  if (summary.length === 0) summary.push(`<div>Menu already covers the cook rhythm — nothing to do.</div>`);
-
+/** Grouped, category-ordered warning list HTML. Row indices refer to
+ *  positions in the `warnings` array passed here, which must be the same
+ *  array stored on `_lastReport` (fixMenuGoto/fixMenuAction look rows up
+ *  by that index). */
+function warningsListHtml(warnings: Warning[]): string {
+  if (warnings.length === 0) {
+    return `<div class="fix-menu-clean">No issues — menu looks good 🎉</div>`;
+  }
   const indexed = warnings.map((w, i) => ({ w, i }));
   indexed.sort((a, b) => CATEGORY_ORDER.indexOf(a.w.category) - CATEGORY_ORDER.indexOf(b.w.category));
 
@@ -1779,16 +1819,42 @@ function showResultsModal(report: ResultsReport): void {
   }
   if (currentRows.length > 0) sections.push(currentRows.join(''));
 
-  const warningsHtml = warnings.length === 0
-    ? `<div class="fix-menu-clean">No issues — menu looks good 🎉</div>`
-    : `<div class="fix-menu-warnings-hdr">⚠️ ${warnings.length} thing${warnings.length === 1 ? '' : 's'} to look at</div>
+  return `<div class="fix-menu-warnings-hdr">⚠️ ${warnings.length} thing${warnings.length === 1 ? '' : 's'} to look at</div>
        <div class="fix-menu-warnings-list">${sections.join('')}</div>`;
+}
+
+function showResultsModal(report: ResultsReport): void {
+  _lastReport = report;
+  const { cleaned, created, assigned, retired, placeholderNames, teamsFormed, warnings } = report;
+  const summary: string[] = [];
+  if (retired > 0) summary.push(`<div>🗑 Retired ${retired} old batch${retired === 1 ? '' : 'es'} (food used up, or a placeholder for a cook day that already passed)</div>`);
+  if (created > 0) summary.push(`<div>✅ <strong>Created ${created}</strong> placeholder${created === 1 ? '' : 's'}: ${esc(placeholderNames.slice(0, 8).join(', '))}${placeholderNames.length > 8 ? ', …' : ''}</div>`);
+  if (cleaned > 0) summary.push(`<div>🧹 Cleaned ${cleaned} unused placeholder${cleaned === 1 ? '' : 's'} from previous runs</div>`);
+  if (assigned > 0) summary.push(`<div>📅 Assigned ${assigned} service slot${assigned === 1 ? '' : 's'}</div>`);
+  if (teamsFormed && teamsFormed > 0) summary.push(`<div>🤝 Combined ${teamsFormed} multi-batch team${teamsFormed === 1 ? '' : 's'} for high-demand slots</div>`);
+  if (summary.length === 0) summary.push(`<div>Menu already covers the cook rhythm — nothing to do.</div>`);
 
   const html = `
     <div class="modal-content fix-menu-results" onclick="event.stopPropagation()">
       <h2>Fix My Menu — done</h2>
       <div class="fix-menu-summary">${summary.join('')}</div>
-      ${warningsHtml}
+      ${warningsListHtml(warnings)}
+      <div class="fix-menu-actions"><button class="btn btn-primary" onclick="closeModal()">Got it</button></div>
+    </div>
+  `;
+  showModal(html);
+}
+
+/** Standalone issues modal — the same grouped warning list, go-to and quick
+ *  actions as the Fix-My-Menu results modal, minus the run summary. Used by
+ *  the live alarm board on the West planner (alarm-board.ts). Stores the
+ *  warnings on `_lastReport` so fixMenuGoto/fixMenuAction work unchanged. */
+export function showIssuesModal(warnings: Warning[], title: string): void {
+  _lastReport = { cleaned: 0, created: 0, assigned: 0, retired: 0, placeholderNames: [], warnings };
+  const html = `
+    <div class="modal-content fix-menu-results" onclick="event.stopPropagation()">
+      <h2>${esc(title)}</h2>
+      ${warningsListHtml(warnings)}
       <div class="fix-menu-actions"><button class="btn btn-primary" onclick="closeModal()">Got it</button></div>
     </div>
   `;

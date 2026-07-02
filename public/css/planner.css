@@ -474,6 +474,11 @@
   .reserve-ctl-extra{margin-left:6px;padding-left:8px;border-left:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text3);}
   .reserve-ctl.reserve-on .reserve-ctl-extra{color:var(--accent,#4a8);}
 
+  /* ALARM BOARD counter — West planner header, next to the reserve control */
+  .alarm-ctl{display:inline-flex;align-items:center;font-weight:700;font-size:13px;margin:0 0 10px 8px;vertical-align:top;}
+  .alarm-ctl.alarm-clear{color:var(--text3);}
+  .alarm-ctl.alarm-urgent{border-color:var(--red) !important;background:var(--red-bg) !important;color:var(--red) !important;animation:inv-pulse 1.5s ease-in-out infinite;}
+
   /* ── Cost-per-guest bar (West tab) ───────────────────────── */
   .cost-bar{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;margin:0 0 14px;display:flex;flex-direction:column;gap:7px;}
   .cost-bar-empty{flex-direction:row;align-items:center;justify-content:space-between;color:var(--text3);font-size:13px;}

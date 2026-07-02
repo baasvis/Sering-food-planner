@@ -117,6 +117,7 @@ e2e/                          — Playwright end-to-end test suite (run via `npm
   predictions-apply.spec.ts, stocktake-start.spec.ts, feedback-submit.spec.ts — Feature flows
   drinks-catalogue.spec.ts, drinks-stocktake.spec.ts, drinks-order.spec.ts — Drinks flows (add drink, overview auto-save, auto-shortfall order)
   competencies.spec.ts        — Training screen flow (people × chunks grid, log teaching event)
+  alarm-board.spec.ts         — West planner issue counter → issues modal open/close
   inventory-served-disappear.spec.ts — Regression: served batches surviving inventory
   helpers.ts                  — Shared test setup (dev login, location chooser dismiss, deleteDrinksByNamePrefix)
   coverage-manifest.json      — Maps trackEvent() feature names to which spec covers them; consumed by lib/telemetry-coverage.ts
@@ -154,6 +155,7 @@ public/
     planner.ts         — Week plan grid + transport + inventory modal
     transport-card.ts  — Transport card component (shipment send / mark-arrived UI)
     menu-fixer.ts      — "Fix My Menu": auto-fills week-plan gaps with generated placeholder batches
+    alarm-board.ts     — Live "issues" counter on the West planner header (next to the reserve control): reuses menu-fixer's exported warning checks (stockout/stale/over-pot-cap/catering-no-dishes) + its own emergency-dish check over a 7-day horizon; opens menu-fixer's grouped issues modal (showIssuesModal) with go-to + quick actions
     fmm-snapshot.ts    — Fix-My-Menu before/after/+30min planner snapshots emitted as telemetry for later comparison
     cost.ts            — West-tab cost-per-guest engine: ingredient €/guest by dish type vs director targets (Week Plan steering bar). Also hosts the production-reserve % control (cook-editable, top of the West planner): silently pads cooking/coverage/order demand via core.reserveFactor(); stored on the costTargets row as reservePercent but saved via the open POST /api/cost-reserve (read-modify-write, never touches the director-only targets)
     dishes.ts          — Dish list + cook workflow + CRUD
@@ -198,6 +200,7 @@ test/                  — 43 *.test.ts files (run `ls test/*.test.ts`). Grouped
   migration.test.ts    — Unified-batch data-migration script
   maintenance.test.ts  — MAINTENANCE_MODE write-gate
   menu-fixer.test.ts   — "Fix My Menu" placeholder algorithm
+  alarm-board.test.ts  — Live alarm board (West planner issue counter): emergency-dish semantics + reused warning checks
   core-demand.test.ts  — Fix-My-Menu demand-calc equivalence guard
   fmm-bench.test.ts    — Fix-My-Menu scored-engine regression bench
   planner-pool.test.ts — getPoolBatches location-tab visibility unit tests

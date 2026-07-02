@@ -6,6 +6,7 @@ import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateT
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderCostBar, renderCostDrilldown, renderReserveControl, costStatus, dishTypeTarget } from './cost';
+import { renderAlarmCounter } from './alarm-board';
 import { renderBatchTile, confirmCooked, calcRequiredForLoc, setCookDay, openNewDish, renderDishesOverview, cleanCateringRefs } from './dishes';
 import { calcLitersForService, getMenuDishes, renderDashboard } from './dashboard';
 import { showModal, closeModal, esc, setOpenInventoryFn } from './modal';
@@ -130,9 +131,12 @@ export function renderLocationPlan(loc: string) {
 
   // Cost-per-guest steering bar — West only (West is the kitchen that cooks +
   // plans for both sites; Centraal is serve-only). Spans the visible days.
+  // The alarm counter sits next to the reserve control: West production owns
+  // fixing planning issues at both locations.
   if (loc === 'west') {
     const costDates = new Set(days.map(d => dateToIso(d.date)));
     html += renderReserveControl(costDates);
+    html += renderAlarmCounter();
     html += renderCostBar(costDates);
     html += renderCostDrilldown(costDates);
   }
