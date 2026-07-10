@@ -413,6 +413,22 @@ function attachIngDbReadyListener() {
 }
 
 export function renderOrders() {
+  // Mid-stocktake, a live-sync patch (applyRemotePatch → rerenderCurrentView)
+  // used to re-render the order tabs over the count view — the user was
+  // "kicked out" and restarting the stocktake wiped everything they had
+  // typed (feedback #471). Leave the DOM alone instead: replacing the inputs
+  // would also dismiss the mobile keyboard mid-count. The patch is already
+  // merged into S; the next render after save/exit picks it up. The one case
+  // where staying put would be wrong is a location switch mid-stocktake
+  // (counts would silently save to the other location's items), so that
+  // exits the stocktake like it always did.
+  if (stocktakeActive) {
+    if (S.currentLoc === stocktakeLoc) return;
+    stocktakeActive = false;
+    stocktakeArea = null;
+    stocktakeValues = {};
+    stocktakeSavedAreas = [];
+  }
   // showScreen used to call rebuildPlanner() before dispatching here.
   // Each renderer that needs planner state now does it itself.
   rebuildPlanner();
@@ -1659,6 +1675,7 @@ export let stocktakeActive = false;
 export let stocktakeArea = null;       // currently displayed storage area name
 export let stocktakeValues = {};       // { ingredientId: orderUnitsValue } — accumulated across areas
 export let stocktakeSavedAreas = [];   // area names that have been saved already
+export let stocktakeLoc = null;        // location the stocktake was started at (guards mid-count loc switches)
 
 /** Build combined order data (shared between render and stocktake) */
 export function buildCombinedOrderData() {
@@ -1756,6 +1773,7 @@ export function startStocktake() {
   stocktakeArea = null;
   stocktakeValues = {};
   stocktakeSavedAreas = [];
+  stocktakeLoc = S.currentLoc;
   renderStocktakeAreaPicker();
 }
 
@@ -1947,7 +1965,10 @@ export function updateStocktakeToOrder(input: HTMLInputElement) {
  *  Persistence delegated to public/js/stocktake.ts (shared with the
  *  dashboard modal flow). */
 export async function saveStocktakeArea(goToNext: boolean) {
-  const loc = S.currentLoc;
+  // Counts belong to the location the stocktake was started at — renderOrders
+  // exits the stocktake on a mid-count location switch, so these should always
+  // agree; the fallback is defensive.
+  const loc = stocktakeLoc || S.currentLoc;
   const items = getIngredientsForArea(stocktakeArea);
 
   // Collect values from DOM inputs (don't rely solely on oninput handler — unreliable on mobile)
@@ -1990,6 +2011,7 @@ export function exitStocktake() {
   stocktakeArea = null;
   stocktakeValues = {};
   stocktakeSavedAreas = [];
+  stocktakeLoc = null;
   renderOrders();
 }
 

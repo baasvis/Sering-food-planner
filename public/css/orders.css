@@ -56,6 +56,11 @@
   .order-stock-input{width:70px;font-size:12px;height:28px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 6px;background:var(--bg);color:var(--text);text-align:right;}
   .order-stock-input:focus{border-color:var(--blue);outline:none;}
   select.order-stock-input{text-align:left;}
+  /* No spinner buttons on count inputs — too small to tap, eat field width,
+     and cooks type counts anyway (feedback #460). */
+  .order-stock-input::-webkit-outer-spin-button,
+  .order-stock-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+  input.order-stock-input{appearance:textfield;-moz-appearance:textfield;}
   .to-order-positive{color:var(--red);font-weight:600;}
   .to-order-zero{color:var(--green);font-weight:500;}
 

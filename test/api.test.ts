@@ -1416,6 +1416,10 @@ describe('Recipe v2 CRUD', () => {
     expect(res.body.prepSteps).toHaveLength(2);
     expect(res.body.ingredients[2].isFlexible).toBe(true);
     expect(res.body.ingredients[2].flexLabel).toBe('Any vegetables');
+    // Regression (feedback #468): the create/update responses replace the
+    // denormalized copy in every client's S.recipes, so they must carry
+    // ingredientName — otherwise the UI shows every ingredient as "Unknown".
+    expect(res.body.ingredients[0].ingredientName).toBe('Red lentils (test)');
   });
 
   it('GET /api/recipes — lists recipes', async () => {
@@ -1456,6 +1460,8 @@ describe('Recipe v2 CRUD', () => {
     expect(res.status).toBe(200);
     expect(res.body.ingredients).toHaveLength(1);
     expect(res.body.ingredients[0].rawAmount).toBe(800);
+    // Regression (feedback #468): PATCH response must be denormalized too.
+    expect(res.body.ingredients[0].ingredientName).toBe('Red lentils (test)');
   });
 
   it('POST /api/recipes/:id/version — save version snapshot', async () => {
@@ -1524,12 +1530,15 @@ describe('Recipe v2 CRUD', () => {
     expect(Array.isArray(res.body)).toBe(true);
   });
 
+  // The endpoint loops a per-recipe update over every recipe in the DB —
+  // staging has accumulated ~700 recipes, so 30s started flaking (2026-07).
+  // The test asserts correctness, not latency; give it real headroom.
   it('POST /api/recipes/recalculate-costs — recalculates all', async () => {
     const res = await request(app).post('/api/recipes/recalculate-costs');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(typeof res.body.total).toBe('number');
-  }, 30000);
+  }, 120000);
 
   it('GET /api/data — includes recipes array', async () => {
     const res = await request(app).get('/api/data');

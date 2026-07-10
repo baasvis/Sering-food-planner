@@ -1486,8 +1486,12 @@ function renderInventoryModal(loc: string) {
 
 /** Re-render the Do-inventory modal if it is the modal currently on screen.
  *  Called after a live-sync patch so the modal's embedded row indices are
- *  rebuilt from fresh state instead of pointing at stale array positions. */
-export function refreshInventoryModalIfOpen(): void {
+ *  rebuilt from fresh state instead of pointing at stale array positions.
+ *  Skipped when the patch didn't touch batches/supplies (the only data the
+ *  modal renders): the rebuild replaces a focused count input and dismisses
+ *  the mobile keyboard, which made counting miserable (feedback #460). */
+export function refreshInventoryModalIfOpen(invDataChanged = true): void {
+  if (!invDataChanged) return;
   const root = document.getElementById('modal-root');
   // .inv-modal-marker sits on the mode-toggle, present in every inventory-modal
   // state (loc-scoped / power, populated / empty) — so an empty modal refreshes

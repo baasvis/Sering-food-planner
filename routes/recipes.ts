@@ -177,6 +177,12 @@ router.post('/recipes', asyncHandler(async (req: Request, res: Response) => {
 
   dbAppendLog(user.email, user.name, 'recipe-create', `created "${body.name}"`);
   const result = toRecipeFull(recipe);
+  // Denormalize ingredient names before this recipe replaces the (already
+  // denormalized) copy in every client's local state — the editor puts the
+  // response straight into S.recipes and the broadcast does the same on every
+  // other connected client. Skipping this rendered all ingredients as
+  // "Unknown" until a full reload (feedback #468).
+  await denormalizeRecipeIngredients([result]);
   broadcast(user.email, 'patch', { user: user.name, recipes: [result] });
   res.json(result);
 }));
@@ -428,6 +434,9 @@ router.patch('/recipes/:id', asyncHandler(async (req: Request, res: Response) =>
 
   dbAppendLog(user.email, user.name, 'recipe-update', `updated "${recipe.name}"`);
   const result = toRecipeFull(recipe);
+  // See POST /recipes: without this, the response/broadcast strips
+  // ingredientName from every client's copy → "Unknown" ingredients (#468).
+  await denormalizeRecipeIngredients([result]);
   broadcast(user.email, 'patch', { user: user.name, recipes: [result] });
   res.json(result);
 }));
@@ -493,6 +502,8 @@ router.post('/recipes/:id/version', asyncHandler(async (req: Request, res: Respo
   if (result.notFound) return res.status(404).json({ error: 'Recipe not found' });
   dbAppendLog(user.email, user.name, 'recipe-version', `saved version ${result.nextVersion} of "${result.recipe.name}"`);
   const recipeFull = toRecipeFull(result.updated);
+  // See POST /recipes: denormalize before the broadcast/response (#468).
+  await denormalizeRecipeIngredients([recipeFull]);
   broadcast(user.email, 'patch', { user: user.name, recipes: [recipeFull] });
   res.json(recipeFull);
 }));
@@ -557,7 +568,12 @@ router.post('/recipes/:id/photo', upload.single('photo'), asyncHandler(async (re
 
   // Re-fetch with ingredients so the broadcast carries the canonical RecipeFull shape
   const updated = await prisma.recipe.findUnique({ where: { id }, include: includeIngredients });
-  if (updated) broadcast(user.email, 'patch', { user: user.name, recipes: [toRecipeFull(updated)] });
+  if (updated) {
+    const full = toRecipeFull(updated);
+    // See POST /recipes: denormalize before the broadcast (#468).
+    await denormalizeRecipeIngredients([full]);
+    broadcast(user.email, 'patch', { user: user.name, recipes: [full] });
+  }
 
   res.json({ ok: true, photoUrl });
 }));
@@ -591,7 +607,12 @@ router.delete('/recipes/:id/photo', asyncHandler(async (req: Request, res: Respo
   });
 
   const updated = await prisma.recipe.findUnique({ where: { id }, include: includeIngredients });
-  if (updated) broadcast(user.email, 'patch', { user: user.name, recipes: [toRecipeFull(updated)] });
+  if (updated) {
+    const full = toRecipeFull(updated);
+    // See POST /recipes: denormalize before the broadcast (#468).
+    await denormalizeRecipeIngredients([full]);
+    broadcast(user.email, 'patch', { user: user.name, recipes: [full] });
+  }
 
   res.json({ ok: true });
 }));

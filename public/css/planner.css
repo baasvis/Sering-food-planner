@@ -34,6 +34,11 @@
   .inv-controls{display:flex;align-items:center;gap:6px;flex-shrink:0;}
   .inv-stock-input{width:70px;font-size:13px;height:32px;border:1px solid var(--border2);border-radius:var(--radius);padding:0 8px;background:var(--bg);color:var(--text);text-align:right;}
   .inv-stock-input:focus{border-color:var(--blue);outline:none;}
+  /* No spinner buttons on count inputs — too small to tap, eat field width,
+     and cooks type counts anyway (feedback #460). */
+  .inv-stock-input::-webkit-outer-spin-button,
+  .inv-stock-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+  input.inv-stock-input{appearance:textfield;-moz-appearance:textfield;}
   .inv-served-btn{font-size:11px;color:var(--text2);border-color:var(--border2);}
   /* "Did you cook these today?" section at the top of the inventory pass */
   .inv-cook-confirm{background:var(--green-bg);border:1px solid var(--green);border-radius:var(--radius);padding:10px 12px;margin-bottom:14px;}

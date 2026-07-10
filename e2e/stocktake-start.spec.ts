@@ -28,4 +28,29 @@ test.describe('Stocktake', () => {
     // Read-only — no cleanup needed. The stocktake state lives only in the
     // page module's memory until exitStocktake() runs or the page reloads.
   });
+
+  test('a live-sync re-render does not kick the user out of an active stocktake (feedback #471)', async ({ page }) => {
+    await loginAsDev(page);
+
+    await page.locator('.nav-btn[data-screen="orders"]').click();
+    await expect(page.locator('.order-tab-bar')).toBeVisible({ timeout: 10_000 });
+    await page.locator('[data-testid="stocktake-start-btn"]').click();
+    await expect(page.locator('#screen-orders').getByRole('heading', { name: /Stocktake/ })).toBeVisible();
+
+    // Simulate what an incoming SSE patch does: applyRemotePatch →
+    // rerenderCurrentView → renderOrders. Before the #471 fix this replaced
+    // the stocktake view with the order tabs (and a restart wiped all typed
+    // counts). An empty-but-changed patch is enough to trigger the re-render.
+    await page.evaluate(() => {
+      (window as never as { rerenderCurrentView: () => void }).rerenderCurrentView();
+    });
+
+    // Still in the stocktake — the area picker heading survives the re-render.
+    await expect(page.locator('#screen-orders').getByRole('heading', { name: /Stocktake/ })).toBeVisible();
+    await expect(page.locator('.order-tab-bar')).toHaveCount(0);
+
+    // Leaving via "Back to orders" restores the normal orders screen.
+    await page.getByRole('button', { name: '← Back to orders' }).click();
+    await expect(page.locator('.order-tab-bar')).toBeVisible();
+  });
 });

@@ -150,9 +150,9 @@ export function updateRecipeResults() {
         <td>${cost != null ? `<span class="ri-cost-cell" style="${cStyle}">&euro;${cost.toFixed(2)}</span>` : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
         <td style="font-size:12px;">${esc(r.seasonality || '—')}</td>
         <td>${ags || '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
-        <td><span style="color:var(--text2);font-size:11px;">—</span></td>
-        <td><span style="color:var(--text2);font-size:11px;">—</span></td>
-        <td style="text-align:center;">—</td>
+        <td style="text-align:center;">${r.avgBanger ? r.avgBanger.toFixed(1) : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
+        <td style="text-align:center;">${avgRating(r) ? avgRating(r).toFixed(1) : '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
+        <td style="text-align:center;">${r.timesServed || '<span style="color:var(--text2);font-size:11px;">—</span>'}</td>
         <td style="white-space:nowrap;">
           <button class="btn btn-sm" onclick="openRecipeEditor('${esc(r.id)}')">Edit</button>
           ${r.type === 'Topping' || r.type === 'Bread'

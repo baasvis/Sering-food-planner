@@ -36,7 +36,9 @@
 .re-ing-table thead th{text-align:left;font-size:11px;font-weight:600;color:var(--text2);padding:4px 6px;border-bottom:2px solid var(--border);white-space:nowrap;}
 .re-th-num{width:24px;text-align:center !important;}
 .re-th-name{min-width:120px;}
-.re-th-amt{width:60px;}
+/* Wide enough for 5-digit gram amounts (feedback #467/#452 — "28000" was
+   visually clipped to "2800", which a cook can misread as a real amount). */
+.re-th-amt{width:76px;}
 .re-th-unit{width:70px;}
 .re-th-cost{width:50px;text-align:right !important;}
 .re-th-actions{width:76px;}
@@ -51,6 +53,10 @@
 .re-td-num{text-align:center;font-size:11px;font-weight:600;color:var(--text2);padding:4px 2px;}
 .re-td-name{padding:4px 6px;position:relative;}
 .re-td-amt{padding:4px 4px;}
+/* Auto table layout ignores the th width when other columns push — a hard
+   min-width on the input itself keeps 5-digit gram amounts readable
+   (feedback #467/#452: "28000" clipped, readable as a smaller amount). */
+.re-td-amt input{min-width:60px;}
 .re-td-unit{padding:4px 4px;}
 .re-td-cost{padding:4px 6px;text-align:right;font-size:12px;font-weight:600;color:var(--green);white-space:nowrap;}
 .re-td-actions{padding:4px 2px;white-space:nowrap;text-align:right;}
@@ -59,6 +65,12 @@
 .re-inline-input{width:100%;font-size:13px;height:26px;border:1px solid var(--border);border-radius:3px;padding:0 4px;background:transparent;color:var(--text);}
 .re-inline-input:focus{border-color:var(--text3);outline:none;background:var(--bg);}
 .re-inline-num{text-align:right;width:100%;}
+/* No spinner buttons on the compact number inputs: they eat ~20px of an
+   already narrow field (clipping 5-digit amounts, feedback #467) and are
+   useless for kitchen quantities (feedback #460). */
+.re-inline-num::-webkit-outer-spin-button,
+.re-inline-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.re-inline-num{appearance:textfield;-moz-appearance:textfield;}
 .re-inline-name{font-weight:500;}
 .re-inline-select{font-size:12px;height:28px;border:1px solid var(--border);border-radius:3px;padding:0 2px;background:transparent;color:var(--text);width:100%;}
 .re-inline-select:focus{border-color:var(--text3);outline:none;}
@@ -187,7 +199,7 @@
 .br-editor .re-ing-table{table-layout:auto;}
 .br-editor .re-th-name{min-width:0;}
 .br-editor .re-td-name{word-break:break-word;}
-.br-editor .re-td-amt input{min-width:48px;}
+/* (amount-input min-width now set globally on .re-td-amt input, see above) */
 .br-editor .re-ing-flex-row .re-td-name{padding-right:4px;}
 .br-editor .re-ing-flex-row .re-ing-search{font-size:12px;}
 
