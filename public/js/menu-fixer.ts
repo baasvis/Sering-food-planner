@@ -1492,8 +1492,10 @@ export type WarningAction =
   | { kind: 'assign-anyway'; batchId: string }
   | { kind: 'move-to-freezer'; batchId: string };
 
-/** Gastro shelf-life days — used for the stale-with-stock warning. */
-const STALE_THRESHOLD_DAYS = 3;
+/** Age (days since cook) at which the stale-with-stock warning fires. 4+ days
+ *  (Daan, 2026-07-10; was 3) — the day AFTER the 3-day Gastro shelf life ends,
+ *  matching the dish tile's "Stale" status (isStaleEntry: daysOld > limit). */
+const STALE_THRESHOLD_DAYS = 4;
 
 function isStaleAtSlot(cookDateDdmmyyyy: string | null, slotIsoDate: string, threshold = STALE_THRESHOLD_DAYS): boolean {
   const cookIso = cookDateToIso(cookDateDdmmyyyy);
@@ -1523,7 +1525,7 @@ export function stockoutWarnings(allBatches: Batch[], calcReq: (b: Batch) => num
   return warnings;
 }
 
-/** Non-frozen batches cooked ≥3 days ago with stock left — the chef's cue to
+/** Non-frozen batches cooked ≥4 days ago with stock left — the chef's cue to
  *  taste-check and decide. Fix My Menu keeps old food IN the rotation (oldest
  *  first, no age cutoff), so pulling it — freeze, write off, or unassign — is
  *  a deliberate chef action, prompted here.

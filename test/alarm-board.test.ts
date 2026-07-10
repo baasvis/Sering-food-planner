@@ -217,10 +217,16 @@ describe('reused collectWarnings checks through the live path', () => {
     expect(alarms[0].message).toContain('Short soup');
   });
 
-  test('stale-with-stock: 3+ day old unfrozen stock alarms; frozen and fresh stock do not', () => {
+  test('stale-with-stock: 4+ day old unfrozen stock alarms; 3-day, frozen and fresh stock do not', () => {
+    // Today is 2026-05-04. 30/04 = 4 days old (alarms); 01/05 = 3 days old
+    // (inside the threshold since the 2026-07-10 bump 3 → 4 — no alarm).
     const stale = mk('Soup', [], {
       name: 'Old soup', cookDate: '30/04/2026',
       inventory: [{ loc: 'west', storage: 'Gastro', qty: 6, cookDate: '30/04/2026' }],
+    });
+    const threeDays = mk('Soup', [], {
+      name: 'Three-day soup', cookDate: '01/05/2026',
+      inventory: [{ loc: 'west', storage: 'Gastro', qty: 6, cookDate: '01/05/2026' }],
     });
     const frozen = mk('Soup', [], {
       name: 'Frozen soup', cookDate: '30/04/2026',
@@ -230,7 +236,7 @@ describe('reused collectWarnings checks through the live path', () => {
       name: 'Fresh soup', cookDate: '03/05/2026',
       inventory: [{ loc: 'west', storage: 'Gastro', qty: 6, cookDate: '03/05/2026' }],
     });
-    S.batches = [stale, frozen, fresh];
+    S.batches = [stale, threeDays, frozen, fresh];
     const alarms = alarmsOf('stale-with-stock');
     expect(alarms).toHaveLength(1);
     expect(alarms[0].message).toContain('Old soup');

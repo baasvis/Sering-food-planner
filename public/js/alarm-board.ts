@@ -7,7 +7,7 @@
 // Checks (7-day horizon, both locations — West production fixes them all):
 //   • emergency-dish     — auto-created Emergency stand-ins still serving a slot
 //   • cooked-stockout    — cooked batches whose stock won't cover their demand
-//   • stale-with-stock   — 3+ day-old unfrozen stock that must be used or frozen
+//   • stale-with-stock   — 4+ day-old unfrozen stock: taste-check, keep serving, freeze, or write off
 //   • over-pot-cap       — upcoming cooks whose demand won't fit the biggest pot
 //   • catering-no-dishes — dated caterings this week with nothing picked
 // The last four reuse the exact collectWarnings check functions from

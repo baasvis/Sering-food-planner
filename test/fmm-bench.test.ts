@@ -93,8 +93,8 @@ describe('Fix-My-Menu bench (regression guard)', () => {
     // chef pulls it by hand. Removing the 5-day FRESH_LIMIT_DAYS wall (engine +
     // scorer eligibility) un-strands the aging stock the 2026-06-02 dissection
     // identified as the only remaining surplus. Deterministic per-fixture
-    // scores are now
-    //   26272 / 32396 / 20998 / 26440 / 25252  → mean ~26.3k (was ~23.0k).
+    // scores are now (incl. the stale-threshold bump 3d → 4d, same session)
+    //   26872 / 32646 / 21598 / 26440 / 26022  → mean ~26.7k (was ~23.0k).
     // wed-03/06 gains most (+9.8k): by Wednesday the fixture's 29-31 May stock
     // used to hit the wall and rot as leftover-surplus penalty; now it's
     // planned. mon-01/06 and mon-highdem are unchanged (their stock was young

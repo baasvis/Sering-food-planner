@@ -22,7 +22,7 @@ const W_OLDEST_FIRST = 10;
 const W_VARIETY = 2;
 
 const MAX_GUEST_FRACTION_PER_BATCH = 0.6;
-const STALE_THRESHOLD_DAYS = 3;
+const STALE_THRESHOLD_DAYS = 4; // in lockstep with menu-fixer's stale-with-stock threshold
 
 function cookIsoOf(b: Batch): string | null {
   const cd = b.cookDate;
