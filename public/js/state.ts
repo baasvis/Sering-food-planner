@@ -6,7 +6,9 @@ export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
 export const STORAGE: StorageType[] = ['Gastro','Frozen','Vac-packed'];
 export const LOCATIONS: Location[] = ['west','centraal'];
-export const ALLERGENS = ['Gluten','Soy','Nuts','Peanuts','Sesame','Celery','Mustard','Sulphites','Lupin','Onion','Garlic','Paprika'] as const;
+// Not all of these are legal allergens — the list also carries house dietary
+// flags staff asked to track (Onion, Garlic, Paprika, Alcohol — feedback #445).
+export const ALLERGENS = ['Gluten','Soy','Nuts','Peanuts','Sesame','Celery','Mustard','Sulphites','Lupin','Onion','Garlic','Paprika','Alcohol'] as const;
 
 // Ingredient database constants
 export const INGREDIENT_TYPES = ['Food','Drinks','Kitchen Equipment','Cleaning','FOH Supplies','FOH Equipment','Office'] as const;
