@@ -497,11 +497,11 @@ export function alreadyInSlot(batch: Batch, loc: Location, isoDate: string, meal
 
 // ── Scored algorithm constants ─────────────────────────────────────────────
 
-/** Hard cutoff for cooked stock: a batch is stale when the slot date is
- *  this many days or more after the cook date. Legal ages 0-4 days; 5+ is
- *  excluded. Within the legal range, staleness is a graduated score
- *  penalty (see scoreCandidate). */
-const FRESH_LIMIT_DAYS = 5;
+// There is deliberately NO hard age cutoff for cooked stock (Daan's rule,
+// 2026-07-10 — replaced the old 5-day FRESH_LIMIT_DAYS wall): old food is
+// planned FIRST (FIFO, tier 3) and stays in the rotation until a chef pulls
+// it — freeze it, write it off, or remove the service by hand. The
+// stale-with-stock warning (staleStockWarnings) is the chef's cue to decide.
 
 /** Floor for forced-assignment lock-in. A unique-candidate slot is pre-locked
  *  only if it fills a real coverage tier (any in-window slot does). Set to the
@@ -637,8 +637,8 @@ interface AbandonedSlot {
  *
  * Unified-batch model:
  *   - Pure-frozen batches (every inventory entry is Frozen) are excluded.
- *   - Staleness uses batch.cookDate + FRESH_LIMIT_DAYS as 5-day hard
- *     cutoff. Within 5 days, scoreCandidate applies a graduated penalty.
+ *   - Cooked stock has NO age cutoff — old food is planned first (FIFO,
+ *     scoreCandidate tier 3) and chefs pull it out of rotation by hand.
  *   - Capacity check: getTotalStock(b) >= calcReqLive(b) for cooked
  *     batches. Empty-inventory placeholders pass on capacity (the cook
  *     decides at confirm-cooked time) — but only if their cook day is today
@@ -665,8 +665,6 @@ function scoredHardConstraintsOk(
   if (!cookIso) return false;
   const totalStock = getTotalStock(batch);
   const serveableStock = getServeableTotalStock(batch);
-  // 5-day hard cutoff for cooked stock.
-  if (totalStock > 0 && diffDaysIso(cookIso, day.isoDate) >= FRESH_LIMIT_DAYS) return false;
   // Empty placeholder: capacity is whatever the cook decides at confirm time,
   // but only eligible if its cook day hasn't already passed (no retroactive
   // cooking — a stale empty placeholder must not be slotted into the future).
@@ -765,9 +763,12 @@ function scoreCandidate(
   }
 
   // ── tier 3: secondary — Centraal coverage priority + FIFO (oldest first) ──
+  // FIFO cap 14 days (was 7): with no hard age cutoff, genuinely old stock now
+  // competes here, so keep discriminating past a week. 200 + 40·14 = 760 < 999
+  // keeps the tier inside its band.
   let secondary = slot.loc === 'centraal' ? SCORE.CENTRAAL_PRIORITY : 0;
   if (serveableStock > 0) {
-    const ageDays = Math.max(0, Math.min(7, diffDaysIso(cookIso, todayIso)));
+    const ageDays = Math.max(0, Math.min(14, diffDaysIso(cookIso, todayIso)));
     secondary += SCORE.READY_FIFO_PER_DAY * ageDays;
   }
 
@@ -1103,9 +1104,8 @@ function findCombinationTeam(
         && getServeableStockAt(b, 'centraal') + getServeablePendingTo(b, 'centraal') <= 0) return false;
     const cookIso = cookDateToIso(b.cookDate);
     if (!cookIso) return false;
-    if (getTotalStock(b) > 0) {
-      if (diffDaysIso(cookIso, isoDate) >= FRESH_LIMIT_DAYS) return false;
-    } else if (cookIso < todayIso) {
+    // Cooked stock has no age cutoff (old food serves first; chefs pull it).
+    if (getTotalStock(b) <= 0 && cookIso < todayIso) {
       return false;  // empty placeholder for a cook day that has already passed
     }
     return true;
@@ -1492,8 +1492,10 @@ export type WarningAction =
   | { kind: 'assign-anyway'; batchId: string }
   | { kind: 'move-to-freezer'; batchId: string };
 
-/** Gastro shelf-life days — used for the stale-with-stock warning. */
-const STALE_THRESHOLD_DAYS = 3;
+/** Age (days since cook) at which the stale-with-stock warning fires. 4+ days
+ *  (Daan, 2026-07-10; was 3) — the day AFTER the 3-day Gastro shelf life ends,
+ *  matching the dish tile's "Stale" status (isStaleEntry: daysOld > limit). */
+const STALE_THRESHOLD_DAYS = 4;
 
 function isStaleAtSlot(cookDateDdmmyyyy: string | null, slotIsoDate: string, threshold = STALE_THRESHOLD_DAYS): boolean {
   const cookIso = cookDateToIso(cookDateDdmmyyyy);
@@ -1523,7 +1525,10 @@ export function stockoutWarnings(allBatches: Batch[], calcReq: (b: Batch) => num
   return warnings;
 }
 
-/** Non-frozen batches cooked ≥3 days ago with stock left — use or freeze.
+/** Non-frozen batches cooked ≥4 days ago with stock left — the chef's cue to
+ *  taste-check and decide. Fix My Menu keeps old food IN the rotation (oldest
+ *  first, no age cutoff), so pulling it — freeze, write off, or unassign — is
+ *  a deliberate chef action, prompted here.
  *  Shared between collectWarnings (post-FMM modal) and the live alarm board. */
 export function staleStockWarnings(allBatches: Batch[], todayIso: string): Warning[] {
   const warnings: Warning[] = [];
@@ -1535,7 +1540,7 @@ export function staleStockWarnings(allBatches: Batch[], todayIso: string): Warni
     if (!isStaleAtSlot(b.cookDate, todayIso)) continue;
     warnings.push({
       category: 'stale-with-stock',
-      message: `${b.name} is getting old — cooked ${b.cookDate}, ${stock}L still left. Either feature it on today's menu, or freeze it before it spoils.`,
+      message: `${b.name} is getting old — cooked ${b.cookDate}, ${stock}L still left. It stays in the rotation (oldest first) until you pull it: taste-check, then keep serving, freeze, or write it off.`,
       anchor: { kind: 'batch', batchId: b.id },
       actions: [
         { kind: 'assign-anyway', batchId: b.id },
