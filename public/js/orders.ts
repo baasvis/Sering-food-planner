@@ -219,6 +219,23 @@ export function getStorageCategory(db: IngredientRuntime | null | undefined, bui
   return s.category || '';
 }
 
+/** Spot within a storage area ("" when unset). Used to order lists in
+ *  physical walk order — area, then spot, then name — matching the stocktake
+ *  view (feedback #469/#470). */
+export function getStorageSpot(db: IngredientRuntime | null | undefined, building: string): string {
+  if (!db || !db.storageLocations) return '';
+  const s = db.storageLocations[building];
+  if (!s || typeof s === 'string') return '';
+  return s.location || '';
+}
+
+/** Comparator: spot first (unset spots first, like the stocktake's
+ *  "No spot assigned" group), then name. */
+function bySpotThenName(aSpot: string, aName: string, bSpot: string, bName: string): number {
+  if (aSpot !== bSpot) return aSpot.localeCompare(bSpot);
+  return aName.localeCompare(bName);
+}
+
 export function renderStorageBadge(db: IngredientRuntime | null | undefined, loc?: string) {
   if (!db || !db.storageLocations) return '';
   const building = loc || S.currentLoc;
@@ -514,7 +531,9 @@ export function renderStandardInventoryTab() {
       deficit,
       orderCalc,
     };
-  }).sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name));
+  }).sort((a, b) =>
+    // Physical walk order within each storage group: spot, then name (#469).
+    bySpotThenName(getStorageSpot(a, curLoc), a.name, getStorageSpot(b, curLoc), b.name));
 
   // Calculate total estimated order cost
   let totalValue = 0;
@@ -997,7 +1016,7 @@ export function renderCombinedOrderTab() {
       </div>`;
   }
 
-  const ingList = Object.values(combined).sort((a: CombinedOrderEntry, b: CombinedOrderEntry) => a.name.localeCompare(b.name)).map(ing => {
+  const ingList = Object.values(combined).map(ing => {
     const db = lookupIngredient(ing.name);
     return {
       ...ing,
@@ -1006,7 +1025,9 @@ export function renderCombinedOrderTab() {
       orderCode: db ? db.orderCode : '',
       orderCalc: db ? calcOrderUnits(ing.totalGrams, db) : null,
     };
-  });
+  }).sort((a, b) =>
+    // Physical walk order within each storage group: spot, then name (#469).
+    bySpotThenName(getStorageSpot(a.db, curLoc), a.name, getStorageSpot(b.db, curLoc), b.name));
 
   // Group by storage category (current building) instead of supplier
   const byStorage: Record<string, typeof ingList> = {};
@@ -1726,16 +1747,19 @@ export function getIngredientsForArea(areaName: string) {
   const combinedByKey: Record<string, (typeof combinedData)[number]> = {};
   combinedData.forEach(c => { combinedByKey[c.name.toLowerCase().trim()] = c; });
 
-  // Get ingredients that are needed (standard inventory or batch) and stored in this area
+  // Every active ingredient assigned to this area is countable — NOT just the
+  // ones with current demand. Filtering to the combined order meant items with
+  // no target/batch demand never appeared in a stocktake, so their stock went
+  // stale and staff fell back to typing counts into the Set Standard Inventory
+  // tab (feedback #470/#438). Items without demand show "—" in the to-order
+  // column; the demand info still comes from the combined-order lookup.
   return ingredientDb().filter(ing => {
+    if (ing.active === false) return false;
     if (!ing.storageLocations) return false;
     const sl = ing.storageLocations[loc];
     if (!sl) return false;
     const slCat = typeof sl === 'string' ? sl : sl.category;
-    if (slCat !== areaName) return false;
-    // Only include if this item is in the combined order (has demand)
-    const key = ing.name.toLowerCase().trim();
-    return !!combinedByKey[key];
+    return slCat === areaName;
   }).map(ing => {
     const key = ing.name.toLowerCase().trim();
     const combined = combinedByKey[key];
