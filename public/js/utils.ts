@@ -25,9 +25,13 @@ export function setFlushUndo(fn: () => void) { _flushUndo = fn; }
 
 // Callback fired after a remote SSE patch is applied — refreshes an open
 // inventory modal so its embedded row indices don't go stale. Registered by
-// main.ts to avoid a utils → planner circular import.
-let _onRemotePatchApplied: (() => void) | null = null;
-export function setOnRemotePatchApplied(fn: () => void) { _onRemotePatchApplied = fn; }
+// main.ts to avoid a utils → planner circular import. The boolean says
+// whether the patch touched data the modal actually renders (batches /
+// supplies); for anything else the rebuild is skipped so a cook typing a
+// count doesn't lose the input (and the mobile keyboard) to an unrelated
+// patch like a prep-checklist tick (feedback #460).
+let _onRemotePatchApplied: ((invDataChanged: boolean) => void) | null = null;
+export function setOnRemotePatchApplied(fn: (invDataChanged: boolean) => void) { _onRemotePatchApplied = fn; }
 
 // Callback to load the full (rich) ingredient shape (avoids circular import with ingredient-db.ts).
 // Used by the bulk-reload path: when the user has the rich shape loaded, we
@@ -1071,8 +1075,13 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
       || costTargets); // reservePercent feeds the allocation cache (reserveFactor)
     if (needsPlanner) rebuildPlanner();
     rerenderCurrentView();
-    // Rebuild an open inventory modal so its embedded row indices stay valid.
-    if (_onRemotePatchApplied) _onRemotePatchApplied();
+    // Rebuild an open inventory modal so its embedded row indices stay valid —
+    // but only when the patch touched what the modal renders (see the hook
+    // declaration for why).
+    if (_onRemotePatchApplied) {
+      _onRemotePatchApplied(!!((batches && batches.length) || (deletedBatches && deletedBatches.length)
+        || (supplies && supplies.length) || (deletedSupplies && deletedSupplies.length)));
+    }
     toast(`${user || 'Someone'} made changes — updated live`);
   }
 }

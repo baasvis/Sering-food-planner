@@ -7,7 +7,9 @@
 // again. (Triage U1, audit §2.4.)
 //
 // The cookie's `maxAge` (7 days, see lib/config.ts#cookieOpts) is mirrored on
-// the row's `expiresAt`. Stale rows are pruned by a daily cron in server.ts.
+// the row's `expiresAt`, and both slide forward on activity (see
+// getSessionUser) so active users are never logged out mid-shift. Stale rows
+// are pruned by a daily cron in server.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import express, { Request, Response, NextFunction, RequestHandler } from 'express';
@@ -22,6 +24,13 @@ const authClient = new OAuth2Client(CONFIG.GOOGLE_CLIENT_ID);
 
 // 7 days, matches cookieOpts().maxAge in lib/config.ts.
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Sliding renewal: once a session has burned >1 day of its TTL, the next
+// authenticated request extends it back to the full 7 days (and re-sets the
+// cookie so its maxAge slides too). Active users therefore never hit the
+// hard 7-days-after-login logout that kicked cooks out mid-shift (feedback
+// #471/#423/#369); a device idle for 7 straight days still expires. The
+// 1-day threshold caps the extra writes at one per session per day.
+const SESSION_RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
 
 function generateSessionId(): string {
   return crypto.randomBytes(32).toString('hex');
@@ -252,8 +261,14 @@ function parseCookie(cookieHeader: string, name: string): string | null {
 /** Resolve a request's session cookie to a user record, or null if the
  *  cookie is missing/unknown/expired. Expired rows are deleted lazily on
  *  read so a stale cookie can't be reused after expiry even if the daily
- *  cleanup hasn't run yet. */
-async function getSessionUser(req: Request): Promise<AppUser | null> {
+ *  cleanup hasn't run yet.
+ *
+ *  When `res` is provided and the session has burned through more than
+ *  SESSION_RENEW_AFTER_MS of its TTL, the expiry slides forward: the cookie
+ *  is re-set synchronously (before any handler can send headers) and the
+ *  row's expiresAt is extended best-effort — a failed DB write must never
+ *  fail the request; the old server-side expiry still bounds the session. */
+async function getSessionUser(req: Request, res?: Response): Promise<AppUser | null> {
   const sessionId = parseCookie(req.headers.cookie || '', 'session');
   if (!sessionId) return null;
   const row = await prisma.session.findUnique({ where: { id: sessionId } });
@@ -263,6 +278,13 @@ async function getSessionUser(req: Request): Promise<AppUser | null> {
     // request either. Safe to ignore failures — daily cron will sweep.
     prisma.session.delete({ where: { id: sessionId } }).catch(() => {});
     return null;
+  }
+  if (res && !res.headersSent && row.expiresAt.getTime() - Date.now() < SESSION_TTL_MS - SESSION_RENEW_AFTER_MS) {
+    res.cookie('session', sessionId, cookieOpts());
+    prisma.session.update({
+      where: { id: sessionId },
+      data: { expiresAt: new Date(Date.now() + SESSION_TTL_MS) },
+    }).catch(() => { /* renew on a later request instead */ });
   }
   return withDirector({ email: row.email, name: row.name, picture: row.picture });
 }
@@ -380,7 +402,7 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 router.get('/me', asyncHandler(async (req: Request, res: Response) => {
-  const user = await getSessionUser(req);
+  const user = await getSessionUser(req, res);
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
   const permissions = await resolvePermissions(user.email);
   res.json({ user: { ...user, permissions } });
@@ -401,7 +423,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   // role checks (e.g. requireDirector) and audit-log helpers see who's
   // logged in. Dev mode only relaxes the "must have a session to proceed"
   // requirement; it doesn't deliberately strip identity.
-  getSessionUser(req).then(user => {
+  getSessionUser(req, res).then(user => {
     if (user) {
       req.user = user;
       next();
