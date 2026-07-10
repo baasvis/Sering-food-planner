@@ -93,7 +93,9 @@ export function scoreSolution(today: string, all: Batch[]): ScoreReport {
             // a cooked batch can fill a WEST slot only from serveable West stock;
             // Centraal-stranded stock can't reach West, so it isn't a "missed match".
             if (slot.loc === 'west' && getServeableStockAt(b, 'west') <= 0) return false;
-            if (daysBetween(ci, day.isoDate) >= 5) return false; // stale-hard
+            // No age cutoff (2026-07-10 rule): old stock with spare capacity IS
+            // eligible, so leaving it stranded while a slot sits empty counts
+            // as a missed match. Chefs, not the planner, retire old food.
             return serveable - calcRequired(b) > 1;
           });
           if (eligible) r.missedMatches++;

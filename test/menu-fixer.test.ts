@@ -634,16 +634,42 @@ describe('scoredGreedyAssignment', () => {
     }
   });
 
-  test('past-stale batch (>5d cookDate) is excluded from assignment', () => {
+  test('old cooked stock (9d) has NO age cutoff — still assigned; chefs pull it by hand', () => {
+    // 2026-07-10 rule: old food serves first and stays in the rotation until a
+    // chef removes it (freeze / write-off / unassign). The old 5-day hard wall
+    // stranded aging stock — this pins its removal.
     const window = makeWindow([
       { iso: '2026-05-10', dayName: 'Sun', cookDate: '10/05/2026' },
     ]);
     const old = makeBatch({
-      type: 'Soup', cookDate: '01/05/2026', name: 'Stale',
+      type: 'Soup', cookDate: '01/05/2026', name: 'Old but edible',
       inventory: [inv(100, 'west')],
     });
     scoredGreedyAssignment([old], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
-    expect(old.services.length).toBe(0);
+    expect(old.services.length).toBeGreaterThan(0);
+  });
+
+  test('old food serves FIRST: 9d-old stock claims the soonest slot, 1d-old gets the later one', () => {
+    // Two west dinners; each batch has capacity for exactly ONE service
+    // (stock 1L, calcReq 1L/service). Tier 3 FIFO must hand the soonest
+    // slot to the OLDER batch, pushing the younger one to the later day.
+    const window = makeWindow([
+      { iso: '2026-05-10', dayName: 'Sun', cookDate: '10/05/2026' },
+      { iso: '2026-05-11', dayName: 'Mon', cookDate: '11/05/2026' },
+    ]);
+    const westDinnerOnly = (loc: Location, _iso: string, meal: Meal) =>
+      loc === 'west' && meal === 'dinner' ? 10 : 0;
+    const oldB = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026', name: 'Nine days',
+      inventory: [inv(1, 'west')],
+    });
+    const young = makeBatch({
+      type: 'Soup', cookDate: '09/05/2026', name: 'One day',
+      inventory: [inv(1, 'west')],
+    });
+    scoredGreedyAssignment([young, oldB], window, fixedCalcRequired(1), westDinnerOnly, NO_POT_CAPS);
+    expect(oldB.services).toEqual([{ loc: 'west', date: '2026-05-10', meal: 'dinner' }]);
+    expect(young.services).toEqual([{ loc: 'west', date: '2026-05-11', meal: 'dinner' }]);
   });
 
   test('0-stock placeholder with a past cookDate is not recycled into a future slot', () => {
@@ -651,10 +677,9 @@ describe('scoredGreedyAssignment', () => {
       { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' },
     ]);
     // Leftover placeholder from a previous run: its cook day (Sun 03/05) has
-    // already passed and nothing was cooked. Only 2 days before the window —
-    // well inside the 5-day freshness cutoff, so the staleness rule alone
-    // would NOT catch it. An empty placeholder for a dead cook day must not
-    // be recycled into a future slot.
+    // already passed and nothing was cooked. An empty placeholder for a dead
+    // cook day must not be recycled into a future slot — distinct from COOKED
+    // old stock, which has no age cutoff and stays in the rotation.
     const stalePlaceholder = makeBatch({
       type: 'Soup', cookDate: '03/05/2026', name: 'Stale placeholder',
       generated: true, inventory: [],

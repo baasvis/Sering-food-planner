@@ -88,19 +88,19 @@ describe('Fix-My-Menu bench (regression guard)', () => {
 
   test('mean objective score holds above the post-fix floor', () => {
     const mean = results.reduce((s, r) => s + r.score, 0) / results.length;
-    // Re-baselined for the transport-aware coverage change (2026-06): Fix My Menu
-    // no longer credits West stock to SAME-DAY Centraal slots (the morning van has
-    // gone) — in BOTH the placement gate and the fallback team — so plans that used
-    // to look complete on paper now surface the real shortfall, covered by honest
-    // emergency cooks. Deterministic per-fixture scores are now
-    //   26272 / 26716 / 20998 / 25580 / 15459  → mean ~23.0k (was ~25.7k).
-    // The objective dips because it rewarded "ready-stock coverage" that was partly
-    // fictitious. The fill + missed-match guards above ALSO moved and are now the
-    // TIGHT ones: mon-01/06 sits exactly at missed==1 (was 0) / fill 97% (was 100%),
-    // and mon-highdem dips to fill 92% / missed 3 — both still inside their bands
-    // (fill ≥90%, mean missed ≤1.5 = 1.2 here). 22000 is the looser score-floor
-    // guard (~4% under the live mean): enough to catch a real scoring regression,
-    // loose enough for a legitimate fixture refresh. Scores are deterministic.
-    expect(mean).toBeGreaterThanOrEqual(22000);
+    // Re-baselined for the no-age-cutoff rule (2026-07-10, Daan): cooked stock
+    // is never too old for the rotation — old food serves FIRST (FIFO) and a
+    // chef pulls it by hand. Removing the 5-day FRESH_LIMIT_DAYS wall (engine +
+    // scorer eligibility) un-strands the aging stock the 2026-06-02 dissection
+    // identified as the only remaining surplus. Deterministic per-fixture
+    // scores are now
+    //   26272 / 32396 / 20998 / 26440 / 25252  → mean ~26.3k (was ~23.0k).
+    // wed-03/06 gains most (+9.8k): by Wednesday the fixture's 29-31 May stock
+    // used to hit the wall and rot as leftover-surplus penalty; now it's
+    // planned. mon-01/06 and mon-highdem are unchanged (their stock was young
+    // enough already). 25000 is the loose score-floor guard (~5% under the live
+    // mean): enough to catch a real scoring regression, loose enough for a
+    // legitimate fixture refresh. Scores are deterministic.
+    expect(mean).toBeGreaterThanOrEqual(25000);
   });
 });
