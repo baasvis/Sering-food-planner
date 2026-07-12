@@ -40,6 +40,7 @@ import {
   markFixMyMenuRun,
   countPendingUncookedForCentraal,
   roundUpPack,
+  planRowDraws,
 } from '../public/js/transport-card';
 import { recomputeBatchAllocations } from '../public/js/core';
 import { S } from '../public/js/state';
@@ -719,5 +720,67 @@ describe('roundUpPack — Centraal pack rounding', () => {
   it('returns 0 for non-positive input', () => {
     expect(roundUpPack(0)).toBe(0);
     expect(roundUpPack(-3)).toBe(0);
+  });
+});
+
+describe('planRowDraws — which West inventory entries a pack row ships from', () => {
+  it('draws from a single Gastro entry (the common case)', () => {
+    const b = makeBatch({ type: 'Soup', inventory: [inv(20, 'west', 'Gastro')] });
+    expect(planRowDraws(b, 8)).toEqual([{ fromInventoryIdx: 0, qty: 8 }]);
+  });
+
+  it('draws from Frozen West stock when that is all the batch has (pack-editor bug)', () => {
+    // Regression: the confirm used to hardcode storage 'Gastro' on /ship, so a
+    // hand-added frozen batch failed with "no source inventory available" —
+    // silently: no toast, and the hand-edited pack list was wiped.
+    const b = makeBatch({ type: 'Main course', inventory: [inv(10, 'west', 'Frozen')] });
+    expect(planRowDraws(b, 5)).toEqual([{ fromInventoryIdx: 0, qty: 5 }]);
+  });
+
+  it('prefers Gastro, then Vac-packed, then Frozen', () => {
+    const b = makeBatch({
+      type: 'Soup',
+      inventory: [
+        inv(4, 'west', 'Frozen'),
+        inv(3, 'west', 'Gastro'),
+        inv(2, 'west', 'Vac-packed'),
+      ],
+    });
+    expect(planRowDraws(b, 8)).toEqual([
+      { fromInventoryIdx: 1, qty: 3 },
+      { fromInventoryIdx: 2, qty: 2 },
+      { fromInventoryIdx: 0, qty: 3 },
+    ]);
+  });
+
+  it('within one storage, draws oldest cookDate first (FIFO)', () => {
+    const b = makeBatch({
+      type: 'Soup',
+      inventory: [
+        inv(10, 'west', 'Gastro', '03/05/2026'),
+        inv(10, 'west', 'Gastro', '28/04/2026'),
+      ],
+    });
+    expect(planRowDraws(b, 12)).toEqual([
+      { fromInventoryIdx: 1, qty: 10 },
+      { fromInventoryIdx: 0, qty: 2 },
+    ]);
+  });
+
+  it('caps at available West stock and ignores Centraal / zero-qty entries', () => {
+    const b = makeBatch({
+      type: 'Soup',
+      inventory: [
+        inv(0, 'west', 'Gastro'),
+        inv(6, 'west', 'Gastro'),
+        inv(50, 'centraal', 'Gastro'),
+      ],
+    });
+    expect(planRowDraws(b, 20)).toEqual([{ fromInventoryIdx: 1, qty: 6 }]);
+  });
+
+  it('returns no draws when the batch has no West stock', () => {
+    const b = makeBatch({ type: 'Soup', inventory: [inv(30, 'centraal', 'Gastro')] });
+    expect(planRowDraws(b, 5)).toEqual([]);
   });
 });
