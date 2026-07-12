@@ -4,9 +4,10 @@
 // Lives on the West dashboard only. Surfaces what should leave Sering West for
 // Sering Centraal in the next 3 Centraal service slots, after subtracting
 // stock that's already at Centraal. "Pack and send" calls
-// POST /api/batches/:id/ship per row — backend handles pack-accumulation
-// (same toLoc + storage + cookDate folds into an existing pending shipment)
-// so the frontend doesn't need to dedupe.
+// POST /api/batches/:id/ship per West inventory entry a row draws from
+// (planRowDraws) — backend handles pack-accumulation (same toLoc + storage +
+// cookDate folds into an existing pending shipment) so the frontend doesn't
+// need to dedupe.
 //
 // Pure logic (computeTransportPlan, readiness helpers) is exported separately
 // from the DOM render/confirm so the same code can be unit-tested without a
@@ -14,7 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Batch, Service, Location, DishType } from '@shared/types';
 import { S } from './state';
-import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner, getStockAt, getServeableStockAt, getPendingFromShipments } from './core';
+import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, strToDate, rebuildPlanner, getStockAt, getServeableStockAt, getPendingFromShipments } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { trackEvent } from './telemetry';
 import { rerenderCurrentView, getCurrentScreen } from './navigate';
@@ -652,13 +653,49 @@ export function renderTransportCard(): string {
 
 // ── Confirm action ───────────────────────────────────────────────────────
 
+// Storage preference when drawing a pack row from West inventory: serve-ready
+// Gastro first, then Vac-packed, then Frozen (frozen travels frozen — /ship
+// carries the source entry's storage to the destination, so it arrives at
+// Centraal still marked Frozen and has to thaw before serving).
+const STORAGE_SHIP_ORDER: Record<string, number> = { 'Gastro': 0, 'Vac-packed': 1, 'Frozen': 2 };
+
+/** Plan which West inventory entries a pack row draws `qty` litres from:
+ *  Gastro before Vac-packed before Frozen, oldest cookDate first within a
+ *  storage (old food serves first). Returns index+qty pairs against the
+ *  batch's CURRENT inventory array — safe across the sequential /ship calls
+ *  because /ship decrements an entry's qty in place and never removes
+ *  entries, so indices hold. A batch whose West stock isn't in Gastro (e.g.
+ *  frozen for later, hand-added via the pack editor) previously made the
+ *  ship fail outright: the old code hardcoded storage 'Gastro'. */
+export function planRowDraws(b: Batch, qty: number): Array<{ fromInventoryIdx: number; qty: number }> {
+  const entries = (b.inventory || [])
+    .map((e, idx) => ({ e, idx }))
+    .filter(x => x.e.loc === 'west' && (x.e.qty || 0) > 0);
+  entries.sort((a, b2) =>
+    (STORAGE_SHIP_ORDER[a.e.storage] ?? 9) - (STORAGE_SHIP_ORDER[b2.e.storage] ?? 9)
+    || (strToDate(a.e.cookDate || '')?.getTime() || 0) - (strToDate(b2.e.cookDate || '')?.getTime() || 0));
+  const draws: Array<{ fromInventoryIdx: number; qty: number }> = [];
+  let remaining = qty;
+  for (const { e, idx } of entries) {
+    if (remaining <= 0.05) break;
+    const take = round1(Math.min(remaining, e.qty));
+    if (take <= 0) continue;
+    draws.push({ fromInventoryIdx: idx, qty: take });
+    remaining -= take;
+  }
+  return draws;
+}
+
 /** Iterate the current plan rows and call POST /api/batches/:id/ship per
- *  batch. Backend handles auto-cap, pack-accumulate (same toLoc+storage+
- *  cookDate folds into an existing pending shipment), and broadcasts the
- *  updated batch via SSE. We update S.batches[idx] from each response (the
- *  sender doesn't get its own SSE patch — see lead's clarification A).
+ *  West inventory entry the row draws from (see planRowDraws). Backend
+ *  handles auto-cap, pack-accumulate (same toLoc+storage+cookDate folds into
+ *  an existing pending shipment), and broadcasts the updated batch via SSE.
+ *  We update S.batches[idx] from each response (the sender doesn't get its
+ *  own SSE patch — see lead's clarification A).
  *
- *  Errors on individual rows don't abort the loop. */
+ *  Errors on individual rows don't abort the loop, but they DO surface in a
+ *  toast, and a failed row keeps its hand-edited pack entry so the cook can
+ *  retry instead of silently losing the list. */
 export async function confirmTransportPlan(): Promise<void> {
   if (S.currentLoc !== 'west') return;
   rebuildPlanner();
@@ -672,32 +709,61 @@ export async function confirmTransportPlan(): Promise<void> {
 
   let okCount = 0;
   let cappedCount = 0;
+  const failedNames: string[] = [];
+  const shippedIds = new Set<string>();
   for (const row of rows) {
-    try {
-      const res = await apiPost(`/api/batches/${row.batchId}/ship`, {
-        toLoc: 'centraal',
-        qty: row.sendQty,
-        storage: 'Gastro',
-      });
-      if (res && res.batch) {
-        const idx = S.batches.findIndex(b => b.id === row.batchId);
-        if (idx >= 0) S.batches[idx] = res.batch;
+    const b = S.batches.find(x => x.id === row.batchId);
+    const draws = b ? planRowDraws(b, row.sendQty) : [];
+    if (draws.length === 0) {
+      failedNames.push(row.name);
+      console.error('transport-card: no West stock to ship for batch', row.batchId);
+      continue;
+    }
+    const planned = round1(draws.reduce((s, d) => s + d.qty, 0));
+    let rowCapped = planned < row.sendQty - 0.05;
+    let rowOk = true;
+    for (const d of draws) {
+      try {
+        const res = await apiPost(`/api/batches/${row.batchId}/ship`, {
+          toLoc: 'centraal',
+          qty: d.qty,
+          fromInventoryIdx: d.fromInventoryIdx,
+        });
+        if (res && res.batch) {
+          const idx = S.batches.findIndex(x => x.id === row.batchId);
+          if (idx >= 0) S.batches[idx] = res.batch;
+        }
+        if (res && res.warning) rowCapped = true;
+      } catch (e: unknown) {
+        rowOk = false;
+        const message = e instanceof Error ? e.message : 'Unknown error';
+        console.error('transport-card: /ship failed for batch', row.batchId, message);
+        break;
       }
-      if (res && res.warning) cappedCount++;
+    }
+    if (rowOk) {
       okCount++;
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : 'Unknown error';
-      // Don't break the whole loop on a single failure — log and move on.
-      console.error('transport-card: /ship failed for batch', row.batchId, message);
+      shippedIds.add(row.batchId);
+      if (rowCapped) cappedCount++;
+    } else {
+      failedNames.push(row.name);
     }
   }
-  if (okCount > 0) {
+  if (okCount > 0 && failedNames.length === 0) {
     const cappedNote = cappedCount > 0 ? ` (${cappedCount} capped to available)` : '';
     toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for Centraal${cappedNote}`);
+  } else if (okCount > 0) {
+    toastError(`Packed ${okCount}, but couldn't pack ${failedNames.join(', ')} — check the pack list and try again.`);
+  } else {
+    toastError(`Nothing was packed — couldn't ship ${failedNames.join(', ')}. Check the dishes still have stock at West.`);
   }
-  // The pack is done — drop any hand-edited override so the card returns to the
-  // live auto plan for the next pack.
-  _packEdits = null;
+  // Drop hand edits only for rows that actually shipped. Failed rows keep
+  // their entry so the "Hand-edited pack list" survives for a retry — the old
+  // code wiped it unconditionally, so a failed pack lost the cook's list.
+  if (_packEdits) {
+    for (const id of shippedIds) _packEdits.delete(id);
+    if (_packEdits.size === 0 || failedNames.length === 0) _packEdits = null;
+  }
   // Refresh the card so the just-shipped rows drop off immediately. Without
   // this it keeps showing the old plan (and its action button) until the next
   // 60s tick — long enough to accidentally submit the same pack twice. Mirrors
@@ -741,9 +807,13 @@ export function openPackEditor(): void {
 
   const rowsHtml = candidates.map(b => {
     const avail = round1(getStockAt(b, 'west'));
+    // Frozen stock ships as Frozen (it thaws at Centraal) — tell the cook
+    // when part of what they're packing is frozen.
+    const frozen = round1(getStockAt(b, 'west', 'Frozen'));
+    const availTxt = frozen > 0 ? `${avail} L at West — ${frozen} L frozen` : `${avail} L at West`;
     const val = current.get(b.id);
     return `<div class="pack-edit-row">
-      <div class="pack-edit-name">${esc(b.name)} <span class="pack-edit-avail">${avail} L at West</span></div>
+      <div class="pack-edit-name">${esc(b.name)} <span class="pack-edit-avail">${availTxt}</span></div>
       <div class="pack-edit-qty">
         <input type="number" min="0" step="0.5" max="${avail}" value="${val != null ? val : ''}"
           placeholder="0" data-pack-edit="${esc(b.id)}" class="re-inline-input re-inline-num" style="width:80px;" />
