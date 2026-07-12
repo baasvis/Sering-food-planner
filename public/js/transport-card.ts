@@ -807,9 +807,13 @@ export function openPackEditor(): void {
 
   const rowsHtml = candidates.map(b => {
     const avail = round1(getStockAt(b, 'west'));
+    // Frozen stock ships as Frozen (it thaws at Centraal) — tell the cook
+    // when part of what they're packing is frozen.
+    const frozen = round1(getStockAt(b, 'west', 'Frozen'));
+    const availTxt = frozen > 0 ? `${avail} L at West — ${frozen} L frozen` : `${avail} L at West`;
     const val = current.get(b.id);
     return `<div class="pack-edit-row">
-      <div class="pack-edit-name">${esc(b.name)} <span class="pack-edit-avail">${avail} L at West</span></div>
+      <div class="pack-edit-name">${esc(b.name)} <span class="pack-edit-avail">${availTxt}</span></div>
       <div class="pack-edit-qty">
         <input type="number" min="0" step="0.5" max="${avail}" value="${val != null ? val : ''}"
           placeholder="0" data-pack-edit="${esc(b.id)}" class="re-inline-input re-inline-num" style="width:80px;" />
