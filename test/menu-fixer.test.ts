@@ -40,6 +40,7 @@ import {
   findOrphanPlaceholders,
   findSpentBatches,
   findStalePlaceholders,
+  cateringReferencedBatchIds,
   dropRetiredDishesFromCaterings,
   generateMissingPlaceholders,
   snapshotBatches,
@@ -269,6 +270,41 @@ describe('findOrphanPlaceholders', () => {
     const found = findOrphanPlaceholders([orphan, cookCreated, placeholderWithService, placeholderWithRecipe]);
     expect(found.map(b => b.id)).toEqual([orphan.id]);
   });
+
+  test('spares a placeholder held by an active catering (protectedIds)', () => {
+    // Picking a placeholder as a catering dish adds a catering.dishes ref, NOT
+    // a Batch service — so a placeholder referenced only by a catering looks
+    // exactly like an orphan. The protected set (from cateringReferencedBatchIds)
+    // keeps it alive.
+    const held = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Held by catering', generated: true });
+    const orphan = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'True orphan', generated: true });
+    const found = findOrphanPlaceholders([held, orphan], new Set([held.id]));
+    expect(found.map(b => b.id)).toEqual([orphan.id]);
+  });
+});
+
+// ─── cateringReferencedBatchIds ────────────────────────────────────────────
+
+describe('cateringReferencedBatchIds', () => {
+  function ct(id: string, date: string | null, dishIds: string[]): Catering {
+    return {
+      id, name: id, date, guestCount: 50, deliveryMode: 'pickup',
+      dishes: dishIds.map(d => ({ dishId: d, name: d, type: 'Soup' as DishType })), logisticsNotes: '',
+    };
+  }
+  test('collects dish ids from active (today/future/undated) caterings, skips delivered', () => {
+    // Clock pinned to Fri 2026-05-01.
+    const future = ct('c-future', '2026-05-08', ['b-future']);
+    const undated = ct('c-undated', null, ['b-undated']);
+    const past = ct('c-past', '2026-04-20', ['b-past']);
+    const ids = cateringReferencedBatchIds([future, undated, past]);
+    expect(ids.has('b-future')).toBe(true);
+    expect(ids.has('b-undated')).toBe(true);
+    expect(ids.has('b-past')).toBe(false);
+  });
+  test('empty / missing caterings → empty set', () => {
+    expect(cateringReferencedBatchIds([]).size).toBe(0);
+  });
 });
 
 // ─── findSpentBatches (NEW) ────────────────────────────────────────────────
@@ -426,6 +462,15 @@ describe('findStalePlaceholders (auto-retire dead placeholders)', () => {
       services: [{ loc: 'west', date: '2026-04-28', meal: 'lunch', pinned: true }],
     });
     expect(findStalePlaceholders([unpinned, pastPinned], TODAY)).toHaveLength(2);
+  });
+
+  test('spares a stale placeholder held by an active catering (protectedIds)', () => {
+    // A cook pinned this placeholder to an upcoming catering, then its cook day
+    // slipped. The active-catering guard keeps it — the event still needs it.
+    const stale = makeBatch({
+      type: 'Main course', cookDate: '02/05/2026', name: 'Catering main', generated: true, inventory: [],
+    });
+    expect(findStalePlaceholders([stale], TODAY, new Set([stale.id]))).toHaveLength(0);
   });
 });
 
@@ -1467,5 +1512,68 @@ describe('runFixMyMenuCore honors pins end-to-end', () => {
     expect((stale!.services || []).some(s => s.date === '2026-05-05' && s.pinned === true)).toBe(true);
 
     S.batches = []; S.caterings = [];
+  });
+});
+
+// ─── runFixMyMenuCore: catering-held placeholders survive ───────────────────
+
+describe('runFixMyMenuCore keeps catering-held placeholders', () => {
+  function zeroWeek() {
+    return { Mon: { lunch: 0, dinner: 0 }, Tue: { lunch: 0, dinner: 0 }, Wed: { lunch: 0, dinner: 0 }, Thu: { lunch: 0, dinner: 0 }, Fri: { lunch: 0, dinner: 0 }, Sat: { lunch: 0, dinner: 0 }, Sun: { lunch: 0, dinner: 0 } };
+  }
+  beforeEach(() => {
+    S.guests = { west: zeroWeek(), centraal: zeroWeek() } as typeof S.guests;
+    S.predictions = {} as typeof S.predictions;
+    S.guestsNextWeeks = {} as typeof S.guestsNextWeeks;
+    S.planner = {}; S.closedServices = null; S.kitchenEquipment = null; S.cookRhythm = null;
+  });
+  afterEach(() => { S.batches = []; S.caterings = []; });
+
+  function ctFor(dishId: string, name: string, date: string | null): Catering {
+    return {
+      id: 'c-1', name: 'Protest march', date, guestCount: 50, deliveryMode: 'pickup',
+      dishes: [{ dishId, name, type: 'Soup' }], logisticsNotes: '',
+    };
+  }
+
+  test('a generated placeholder picked for a FUTURE catering is NOT retired or dropped', () => {
+    // Clock pinned to Fri 2026-05-01. The placeholder has no service (a catering
+    // pick isn't a service) and no recipe — pre-fix it was retired as an orphan
+    // AND stripped from the catering. The active-catering guard keeps both.
+    const ph = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Mon soup 04/05', generated: true, inventory: [] });
+    S.batches = [ph];
+    S.caterings = [ctFor(ph.id, ph.name, '2026-05-08')];
+
+    const res = runFixMyMenuCore();
+
+    expect(S.batches.some(b => b.id === ph.id)).toBe(true);
+    expect((S.caterings[0].dishes || []).some(d => d.dishId === ph.id)).toBe(true);
+    expect(res.warnings.some(w => w.category === 'catering-dish-retired')).toBe(false);
+  });
+
+  test('a stale placeholder (slipped cook day) held by a future catering survives', () => {
+    // cookDate 30/04 is already past relative to the 01/05 clock, so findStale
+    // would retire it — the active catering keeps it.
+    const ph = makeBatch({ type: 'Soup', cookDate: '30/04/2026', name: 'Slipped soup', generated: true, inventory: [] });
+    S.batches = [ph];
+    S.caterings = [ctFor(ph.id, ph.name, '2026-05-09')];
+
+    runFixMyMenuCore();
+
+    expect(S.batches.some(b => b.id === ph.id)).toBe(true);
+    expect((S.caterings[0].dishes || []).some(d => d.dishId === ph.id)).toBe(true);
+  });
+
+  test('a placeholder held only by a DELIVERED (past) catering is still cleaned up', () => {
+    // A delivered catering pulls no demand (cateringActive=false), so its dead
+    // placeholder is fair game — cleanup drops the dangling ref as before.
+    const ph = makeBatch({ type: 'Soup', cookDate: '04/05/2026', name: 'Mon soup 04/05', generated: true, inventory: [] });
+    S.batches = [ph];
+    S.caterings = [ctFor(ph.id, ph.name, '2026-04-20')];
+
+    runFixMyMenuCore();
+
+    expect(S.batches.some(b => b.id === ph.id)).toBe(false);
+    expect((S.caterings[0].dishes || []).some(d => d.dishId === ph.id)).toBe(false);
   });
 });
