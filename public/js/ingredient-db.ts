@@ -1,5 +1,5 @@
 import type { Ingredient, StorageLocationMap } from '@shared/types';
-import { S, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, rebuildStorageCategories, getStorageConfigForLoc, getStorageColor, DEFAULT_STORAGE_CONFIG } from './state';
+import { S, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, rebuildStorageCategories, getStorageConfigForLoc, getStorageColor, DEFAULT_STORAGE_CONFIG, allActiveLocations } from './state';
 import { toast, toastError, apiGet, apiPost, saveStorageConfig, loadIngredientDb, todayIso } from './utils';
 import { chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
@@ -1405,9 +1405,11 @@ export function renderStorageModal() {
   const loc = storageModalLoc;
   const areas = S.storageConfig[loc] || [];
 
-  const locTabs = `<div style="display:flex;gap:4px;margin-bottom:14px;">
-    <button class="order-loc-btn${loc === 'west' ? ' active' : ''}" onclick="setStorageModalLoc('west')">Sering West</button>
-    <button class="order-loc-btn${loc === 'centraal' ? ' active' : ''}" onclick="setStorageModalLoc('centraal')">Sering Centraal</button>
+  // One tab per active location — this modal is where an event location's
+  // storage areas get edited after the create-time seed.
+  const locTabs = `<div style="display:flex;gap:4px;margin-bottom:14px;flex-wrap:wrap;">
+    ${allActiveLocations().map(l =>
+      `<button class="order-loc-btn${loc === l ? ' active' : ''}" onclick="setStorageModalLoc('${esc(l)}')">${esc(locName(l))}</button>`).join('')}
   </div>`;
 
   let html = areas.map((area: { name: string; color: string; spots: string[] }, idx: number) => {

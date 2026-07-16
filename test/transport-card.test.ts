@@ -40,6 +40,8 @@ import {
   markFixMyMenuRun,
   countPendingUncookedForCentraal,
   roundUpPack,
+  pendingArrivalsFor,
+  pendingCentraalArrivals,
 } from '../public/js/transport-card';
 import { recomputeBatchAllocations } from '../public/js/core';
 import { S } from '../public/js/state';
@@ -719,5 +721,33 @@ describe('roundUpPack — Centraal pack rounding', () => {
   it('returns 0 for non-positive input', () => {
     expect(roundUpPack(0)).toBe(0);
     expect(roundUpPack(-3)).toBe(0);
+  });
+});
+
+// ── pendingArrivalsFor (event-locations generalization) ──────────────────────
+
+describe('pendingArrivalsFor', () => {
+  const EV = 'ev-landjuweel-2026';
+  const ship = (toLoc: string, qty: number, arrived = false) => ({
+    id: `s-${toLoc}-${qty}`, fromLoc: 'west', toLoc, storage: 'Gastro' as const,
+    qty, sentAt: '2026-05-25T06:00:00.000Z', arrived, cookDate: '24/05/2026',
+  });
+
+  it('collects only shipments heading to the requested location', () => {
+    const batches = [
+      makeBatch({ type: 'Soup', id: 'b1', shipments: [ship(EV, 12), ship('centraal', 5)] }),
+      makeBatch({ type: 'Soup', id: 'b2', shipments: [ship(EV, 8, true), ship(EV, 3)] }),
+    ];
+    const ev = pendingArrivalsFor(batches, EV);
+    expect(ev.refs.map(r => r.batchId)).toEqual(['b1', 'b2']);
+    expect(ev.liters).toBe(15);
+    const cen = pendingArrivalsFor(batches, 'centraal');
+    expect(cen.refs).toHaveLength(1);
+    expect(cen.liters).toBe(5);
+  });
+
+  it('pendingCentraalArrivals stays a Centraal-scoped wrapper', () => {
+    const batches = [makeBatch({ type: 'Soup', id: 'b1', shipments: [ship('centraal', 7), ship(EV, 9)] })];
+    expect(pendingCentraalArrivals(batches).liters).toBe(7);
   });
 });

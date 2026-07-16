@@ -10,11 +10,12 @@
 // from non-directors in buildNav.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { AccessRequestDTO, RoleDTO, PagePermission } from '@shared/types';
-import { NAV_SCREENS } from './state';
-import { apiGet, apiPost, toast } from './utils';
-import { registerRenderer } from './navigate';
+import type { AccessRequestDTO, RoleDTO, PagePermission, EventLocationDTO, StorageArea } from '@shared/types';
+import { NAV_SCREENS, S, DEFAULT_STORAGE_CONFIG, setEventLocationsState } from './state';
+import { apiGet, apiPost, toast, saveStorageConfig } from './utils';
+import { registerRenderer, rerenderCurrentView } from './navigate';
 import { esc, showModal, closeModal } from './modal';
+import { isServicePast, rebuildPlanner } from './core';
 
 interface TeamData { requests: AccessRequestDTO[]; envEmails: string[]; }
 let _data: TeamData | null = null;
@@ -173,6 +174,13 @@ function paintTeam(): void {
 
       ${closedHtml ? `<section class="team-section">${closedHtml}</section>` : ''}
       ${envHtml ? `<section class="team-section">${envHtml}</section>` : ''}
+
+      <section class="team-section">
+        <h3>Event locations</h3>
+        <p class="team-intro">Temporary locations for festivals and big caterings. An active event gets its own planner tab, guest counts, transport, orders and stocktake. Archive it when the event is over — its data stays.</p>
+        ${eventLocationsHtml()}
+        <button class="team-btn" data-testid="evloc-new-btn" onclick="evlocCreate()">+ New event location</button>
+      </section>
 
       <section class="team-section">
         <h3>Roles &amp; page access</h3>
@@ -370,6 +378,179 @@ export async function duplicateRole(roleId: string): Promise<void> {
     await loadTeam();
   } catch (e: unknown) {
     toast('Could not duplicate role');
+  }
+}
+
+// ── Event locations (temporary festival/catering sites) ─────────────────────
+//
+// The registry lives in S.eventLocations (bootstrapped by GET /api/data, kept
+// live by SSE). Writes go through the director-gated /api/event-locations
+// CRUD; after every mutation the fresh list is re-fetched into state so the
+// planner tabs / pickers everywhere update immediately.
+
+// Starter storage areas for an on-site kitchen (editable afterwards via the
+// Storage Locations modal on the Orders screen).
+const EVENT_DEFAULT_AREAS: StorageArea[] = [
+  { name: 'Koelwagen', color: '#4CAF50', spots: ['Shelf 1', 'Shelf 2'] },
+  { name: 'Dry storage', color: '#FF9800', spots: ['Crate 1', 'Crate 2'] },
+  { name: 'Freezer', color: '#2196F3', spots: ['Chest 1'] },
+];
+
+function eventLocationsHtml(): string {
+  const rows = S.eventLocations || [];
+  const active = rows.filter(e => !e.archived);
+  const archived = rows.filter(e => e.archived);
+
+  const activeHtml = active.length
+    ? active.map(e => `
+        <div class="team-row" data-evloc="${esc(e.slug)}">
+          <span class="team-avatar team-avatar-fallback">🎪</span>
+          <div class="team-person">
+            <div class="team-name">${esc(e.name)}</div>
+            <div class="team-email">${esc(e.startDate)} &rarr; ${esc(e.endDate)} &middot; Hanos: ${e.hanosAccount === 'centraal' ? 'Centraal' : 'West'} account</div>
+          </div>
+          <div class="team-actions">
+            <button class="team-btn team-btn-revoke" data-testid="evloc-archive-btn" onclick="evlocArchive('${esc(e.slug)}')">Archive</button>
+          </div>
+        </div>`).join('')
+    : `<p class="team-empty">No active event locations.</p>`;
+
+  const archivedHtml = archived.length
+    ? `<details class="team-fold"><summary>Archived (${archived.length})</summary>${
+        archived.map(e => `
+          <div class="team-row team-row-muted" data-evloc="${esc(e.slug)}">
+            <span class="team-avatar team-avatar-fallback">🎪</span>
+            <div class="team-person">
+              <div class="team-name">${esc(e.name)}</div>
+              <div class="team-email">${esc(e.startDate)} &rarr; ${esc(e.endDate)}</div>
+            </div>
+            <div class="team-actions">
+              <button class="team-btn team-btn-approve" onclick="evlocUnarchive('${esc(e.slug)}')">Unarchive</button>
+            </div>
+          </div>`).join('')
+      }</details>`
+    : '';
+
+  return activeHtml + archivedHtml;
+}
+
+async function refreshEventLocations(): Promise<void> {
+  try {
+    const rows = await apiGet('/api/event-locations');
+    if (Array.isArray(rows)) setEventLocationsState(rows as EventLocationDTO[]);
+  } catch (_e) { /* SSE will catch us up */ }
+  rebuildPlanner();
+  rerenderCurrentView();
+}
+
+export function evlocCreate(): void {
+  const today = new Date();
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const inWeek = new Date(today); inWeek.setDate(today.getDate() + 7);
+  showModal(`
+    <div data-testid="evloc-create-modal">
+      <h3>New event location</h3>
+      <div class="modal-note">A temporary site (festival, big catering) with its own planner tab, guest counts, transport and stocktake.</div>
+      <div class="fr"><label for="evloc-name">Name</label><input type="text" id="evloc-name" placeholder="e.g. Landjuweel 2026" maxlength="60" autocomplete="off"></div>
+      <div class="fr"><label for="evloc-start">First day</label><input type="date" id="evloc-start" value="${iso(today)}"></div>
+      <div class="fr"><label for="evloc-end">Last day</label><input type="date" id="evloc-end" value="${iso(inWeek)}"></div>
+      <div class="fr"><label for="evloc-hanos">Hanos account for on-site orders</label>
+        <select id="evloc-hanos"><option value="west" selected>Sering West</option><option value="centraal">Sering Centraal</option></select></div>
+      <div class="fr"><label for="evloc-areas">Storage areas to start with</label>
+        <select id="evloc-areas"><option value="event" selected>Event default (Koelwagen / Dry / Freezer)</option><option value="west">Copy from Sering West</option></select></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-purple" data-testid="evloc-create-confirm" onclick="saveNewEventLocation()">Create</button>
+      </div>
+    </div>
+  `);
+  setTimeout(() => { const i = document.getElementById('evloc-name') as HTMLInputElement | null; if (i) i.focus(); }, 50);
+}
+
+export async function saveNewEventLocation(): Promise<void> {
+  const val = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null)?.value || '';
+  const name = val('evloc-name').trim();
+  const startDate = val('evloc-start');
+  const endDate = val('evloc-end');
+  const hanosAccount = val('evloc-hanos') === 'centraal' ? 'centraal' : 'west';
+  const areasSeed = val('evloc-areas');
+  if (!name) { toast('Enter a name'); return; }
+  if (!startDate || !endDate) { toast('Pick the first and last day'); return; }
+  try {
+    const created = await apiPost('/api/event-locations', { name, startDate, endDate, hanosAccount });
+    closeModal();
+    // Seed the on-site storage areas so stocktake doesn't silently inherit
+    // West's walk-in shelves (getStorageConfigForLoc falls back to west).
+    if (created && created.slug) {
+      const seed: StorageArea[] = areasSeed === 'west'
+        ? ((S.storageConfig?.west || DEFAULT_STORAGE_CONFIG).map(a => ({ ...a, spots: [...(a.spots || [])] })))
+        : EVENT_DEFAULT_AREAS.map(a => ({ ...a, spots: [...a.spots] }));
+      if (!S.storageConfig) S.storageConfig = {};
+      S.storageConfig[created.slug] = seed;
+      await saveStorageConfig();
+    }
+    toast(`Created ${name} — it now has its own planner tab`);
+    await refreshEventLocations();
+  } catch (e: unknown) {
+    toast('Could not create: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+export function evlocArchive(slug: string): void {
+  const ev = (S.eventLocations || []).find(e => e.slug === slug);
+  if (!ev) return;
+  // Client-side soft warnings (the server hard-blocks only in-transit food):
+  // stock still on site and upcoming services are legitimate but worth a look.
+  let stockL = 0, stockBatches = 0, upcoming = 0;
+  for (const b of S.batches || []) {
+    const atLoc = (b.inventory || []).filter(e => e.loc === slug).reduce((s, e) => s + (e.qty || 0), 0);
+    if (atLoc > 0) { stockL += atLoc; stockBatches++; }
+    upcoming += (b.services || []).filter(s => s.loc === slug && !isServicePast(s)).length;
+  }
+  const warnings: string[] = [];
+  if (stockBatches > 0) warnings.push(`${Math.round(stockL * 10) / 10} L of food is still at ${esc(ev.name)} (${stockBatches} batch${stockBatches === 1 ? '' : 'es'}) — use "Return leftovers" on its planner tab first if any real food remains.`);
+  if (upcoming > 0) warnings.push(`${upcoming} upcoming service assignment${upcoming === 1 ? '' : 's'} will be hidden.`);
+  const warnHtml = warnings.length
+    ? `<ul class="modal-note" style="margin:8px 0 0 16px;">${warnings.map(w => `<li>${w}</li>`).join('')}</ul>`
+    : `<div class="modal-note">Nothing is left on site — safe to archive.</div>`;
+  showModal(`
+    <div data-testid="evloc-archive-modal">
+      <h3>Archive "${esc(ev.name)}"?</h3>
+      <div class="modal-note">The location disappears from tabs and pickers. All its history (batches, guest counts, stock records) is kept, and you can unarchive any time.</div>
+      ${warnHtml}
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-danger" data-testid="evloc-archive-confirm" onclick="confirmEvlocArchive('${esc(slug)}')">Archive</button>
+      </div>
+    </div>
+  `);
+}
+
+export async function confirmEvlocArchive(slug: string): Promise<void> {
+  try {
+    await apiPost(`/api/event-locations/${slug}/archive`, {});
+    closeModal();
+    toast('Event location archived');
+    // If the user is currently AT the archived location, move them home.
+    if (S.currentLoc === slug) {
+      const { switchGlobalLocation } = await import('./init');
+      switchGlobalLocation('west');
+    }
+    if (S.plannerSubTab === slug) S.plannerSubTab = S.currentLoc;
+    await refreshEventLocations();
+  } catch (e: unknown) {
+    closeModal();
+    toast('Could not archive: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
+}
+
+export async function evlocUnarchive(slug: string): Promise<void> {
+  try {
+    await apiPost(`/api/event-locations/${slug}/unarchive`, {});
+    toast('Event location restored');
+    await refreshEventLocations();
+  } catch (e: unknown) {
+    toast('Could not unarchive: ' + (e instanceof Error ? e.message : 'Unknown error'));
   }
 }
 

@@ -1,4 +1,4 @@
-import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS, rebuildStorageCategories } from './state';
+import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS, rebuildStorageCategories, isEventLoc } from './state';
 import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ingredientDbLoaded, ingredientDbError, todayIso } from './utils';
 import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, batchHasRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
@@ -49,7 +49,17 @@ function ingredientDb(): IngredientRuntime[] {
  * default to 'west' which matches the default cook location.
  */
 function batchCookLoc(b: Batch): Location {
-  return (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west');
+  if (b.inventory && b.inventory.length > 0) return b.inventory[0].loc;
+  // Uncooked batch whose services are ALL at one event location → it will be
+  // cooked on-site there, so its ingredient demand belongs on that location's
+  // Orders tab. Restricted to event locations so west/centraal tab contents
+  // are provably unchanged (any all-west or mixed batch still defaults west).
+  const svcs = b.services || [];
+  if (svcs.length > 0) {
+    const first = svcs[0].loc;
+    if (isEventLoc(first) && svcs.every(s => s.loc === first)) return first;
+  }
+  return 'west';
 }
 
 /** A single item in a Hanos cart request */
@@ -106,7 +116,7 @@ interface StocktakeOrderInfo {
 export let orderStock: Record<string, number> = {};
 export let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'batches' | 'ingredientDb'
 export let siSearchQuery = '';
-export let hanosStatus = { configured: false, west: false, centraal: false };
+export let hanosStatus: { configured: boolean; west: boolean; centraal: boolean; locations?: Record<string, { configured: boolean; account: 'west' | 'centraal' }> } = { configured: false, west: false, centraal: false };
 export let hanosStatusChecked = false;
 export let combinedIncludeDishes = true; // toggle: include dish ingredients in combined order
 export let batchIngredientToggles = {}; // { batchId: true/false } for Batch Ingredients tab
@@ -168,9 +178,11 @@ export function lookupIngredient(name: string): IngredientRuntime | null {
 
 export function getDbStockTotal(db: IngredientRuntime | null | undefined) {
   if (!db || !db.stock) return 0;
+  // Sum every location key — event-location stocktakes write their own keys.
   let total = 0;
-  if (db.stock.west) total += (db.stock.west.amount || 0);
-  if (db.stock.centraal) total += (db.stock.centraal.amount || 0);
+  for (const entry of Object.values(db.stock as Record<string, { amount?: number } | undefined>)) {
+    if (entry) total += (entry.amount || 0);
+  }
   return total;
 }
 
@@ -193,8 +205,10 @@ export function getDbStockForLoc(db: IngredientRuntime | null | undefined, loc: 
 /** Check if stock has been explicitly counted (even if amount is 0) */
 export function hasDbStockEntry(db: IngredientRuntime | null | undefined) {
   if (!db || !db.stock) return false;
-  // Stock entries have a `date` field when explicitly counted via stocktake
-  return !!(db.stock.west?.date || db.stock.centraal?.date);
+  // Stock entries have a `date` field when explicitly counted via stocktake —
+  // any location's count (incl. an event location's) qualifies.
+  return Object.values(db.stock as Record<string, { date?: string } | undefined>)
+    .some(entry => !!entry?.date);
 }
 
 /** Whether stock for a specific location has been explicitly counted */
@@ -1294,7 +1308,12 @@ export async function checkHanosStatus() {
 
 export function isHanosEnabled() {
   const loc = S.currentLoc;
-  return hanosStatus[loc] || false;
+  // Per-location map covers event locations (they resolve to a permanent
+  // account server-side); the flat west/centraal fields remain the fallback
+  // for a mid-deploy stale server that doesn't send `locations` yet.
+  const perLoc = hanosStatus.locations?.[loc]?.configured;
+  if (perLoc !== undefined) return perLoc;
+  return (hanosStatus as unknown as Record<string, boolean>)[loc] || false;
 }
 
 /** Collect all Hanos items from the combined order table that need ordering */

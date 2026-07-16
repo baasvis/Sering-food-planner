@@ -283,6 +283,32 @@ export function showLocationChooser() {
       </div>
     </div>
   `;
+  // The chooser renders before loadData, so the event-location registry isn't
+  // in S yet — fetch the active list directly and append a button per event.
+  // On any error the chooser silently stays a two-button affair.
+  fetch('/api/event-locations?activeOnly=1', { credentials: 'same-origin' })
+    .then(r => (r.ok ? r.json() : []))
+    .then((rows: Array<{ slug: string; name: string }>) => {
+      if (!Array.isArray(rows) || rows.length === 0) return;
+      const wrap = content.querySelector('.location-chooser-buttons');
+      if (!wrap) return; // user already picked — chooser gone
+      for (const row of rows) {
+        if (!row || typeof row.slug !== 'string') continue;
+        const btn = document.createElement('button');
+        btn.className = 'loc-choose-btn loc-choose-event';
+        btn.setAttribute('data-testid', `loc-choose-${row.slug}`);
+        btn.addEventListener('click', () => selectLocation(row.slug));
+        const icon = document.createElement('span');
+        icon.className = 'loc-choose-icon';
+        icon.textContent = '🎪';
+        const label = document.createElement('span');
+        label.className = 'loc-choose-label';
+        label.textContent = row.name || row.slug;
+        btn.append(icon, label);
+        wrap.appendChild(btn);
+      }
+    })
+    .catch(() => { /* degrade silently */ });
 }
 
 export function selectLocation(loc: Location) {

@@ -337,10 +337,18 @@ export function setGlobalLocation(loc: Location): void {
   localStorage.setItem(LOC_STORAGE_KEY, loc);
 }
 
-/** Restore location from localStorage. Returns true if a saved value was found. */
+/** Restore location from localStorage. Returns true if a saved value was found.
+ *  Permanent keys are accepted immediately. An event-location slug ("ev-…")
+ *  is TENTATIVELY accepted — this runs before loadData, so the registry isn't
+ *  known yet; initApp re-validates after data load and falls back to west when
+ *  the saved slug turns out archived/unknown. Anything else is rejected. */
 export function restoreGlobalLocation(): boolean {
   const saved = localStorage.getItem(LOC_STORAGE_KEY);
   if (saved === 'west' || saved === 'centraal') {
+    S.currentLoc = saved;
+    return true;
+  }
+  if (saved && saved.startsWith('ev-')) {
     S.currentLoc = saved;
     return true;
   }

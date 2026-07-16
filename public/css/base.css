@@ -177,8 +177,10 @@
   /* West = amber, Centraal = green (canonical location colours) */
   .loc-choose-west .loc-choose-icon{background:var(--amber);}
   .loc-choose-centraal .loc-choose-icon{background:var(--green);}
+  .loc-choose-event .loc-choose-icon{background:var(--purple);}
   .loc-choose-west:hover{border-color:var(--amber);background:var(--amber-bg);}
   .loc-choose-centraal:hover{border-color:var(--green);background:var(--green-bg);}
+  .loc-choose-event:hover{border-color:var(--purple);background:var(--purple-bg);}
   .loc-choose-label{font-size:1rem;font-weight:600;color:var(--text);}
 
   /* ── Per-location accent colours (canonical: West = amber, Centraal = green) ──
@@ -189,6 +191,9 @@
      location's class). Built on --amber/--green so dark mode adapts for free. */
   .loc-west{--loc-accent:var(--amber);--loc-accent-bg:var(--amber-bg);}
   .loc-centraal{--loc-accent:var(--green);--loc-accent-bg:var(--green-bg);}
+  /* Every temporary event location shares one accent (purple) — per-event
+     colours aren't worth the plumbing for a ~10-day/year feature. */
+  .loc-event{--loc-accent:var(--purple);--loc-accent-bg:var(--purple-bg);}
 
   /* Accent strip along the very top edge — visible on every screen */
   .top-bar{border-top:3px solid var(--loc-accent);}

@@ -1,5 +1,5 @@
 import type { Batch, Location, Meal, DishType, Supply } from '@shared/types';
-import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS } from './state';
+import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, allActiveLocations, isEventLoc } from './state';
 
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
 type DashBatch = Batch & { starch?: string | null };
@@ -17,7 +17,7 @@ import { trackScreenView } from './telemetry';
 import { showModal, closeModal } from './modal';
 import { getStorageConfigForLoc } from './state';
 import { locName } from '@shared/location';
-import { renderTransportCard, renderCentraalArrivalBlock } from './transport-card';
+import { renderTransportCard, renderArrivalBlock } from './transport-card';
 import { renderTodayPanel } from './today-panel';
 import { openBatchRecipe } from './recipe-editor';
 import { computeSupplyDemand, supplyPricePerGuest } from '@shared/supply-demand';
@@ -695,12 +695,13 @@ export function startCookConfirm(dishId: string) {
     confirmCooked(dishId);
     return;
   }
+  const locBtns = allActiveLocations().map(l =>
+    `<button class="btn btn-primary" onclick="cookConfirmAt('${esc(dishId)}','${esc(l)}')">${esc(locName(l))}</button>`).join('');
   showModal(`<h3>Where did you cook "${esc(d.name)}"?</h3>
     <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Pick the kitchen — this sets where the cooked stock lands.</p>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="cookConfirmAt('${esc(dishId)}','west')">Sering West</button>
-      <button class="btn btn-primary" onclick="cookConfirmAt('${esc(dishId)}','centraal')">Sering Centraal</button>
+      ${locBtns}
     </div>`);
 }
 
@@ -921,7 +922,12 @@ function _latestCompletion(loc: Location): string | null {
 }
 
 export function renderInventoryFreshness(): string {
-  const items = (['west', 'centraal'] as Location[]).map(loc => {
+  // Both permanent locations, plus the current location when it's an event —
+  // the event's own freshness matters on-site without cluttering the
+  // permanent dashboards with every festival chip.
+  const locs: Location[] = ['west', 'centraal'];
+  if (isEventLoc(S.currentLoc)) locs.push(S.currentLoc);
+  const items = locs.map(loc => {
     const ts = _latestCompletion(loc);
     const rel = formatRelativeTime(ts);
     let stale = false;
@@ -982,8 +988,8 @@ function renderSuppliesCard(loc: Location, todayStr: string): string {
     const lastMake = s.stock?.[loc]?.lastMakeDate;
     if (s.kind === 'standard') {
       const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
-      const need = loc === 'west' ? demand.west : demand.centraal;
-      // Centralized supplies only prep at West; show West demand at both locations
+      const need = demand[loc] ?? 0;
+      // Centralized supplies only prep at West; show West demand at all locations
       // so cooks can see "we need 5kg aioli" regardless of which dashboard they're on
       const showNeed = s.prepMode === 'centralized' ? demand.west : need;
       const deficit = Math.max(0, Math.round(showNeed - stockHere));
@@ -1093,7 +1099,7 @@ export function renderDashboardContent() {
     </div>
 
     <!-- ═══ CENTRAAL TRANSPORT ARRIVAL ═══ -->
-    ${renderCentraalArrivalBlock()}
+    ${renderArrivalBlock()}
 
     <!-- ═══ SERVICE BLOCK ═══ -->
     <div class="dash-service-cols">
@@ -1118,9 +1124,9 @@ export function renderDashboardContent() {
           <span class="dash-guest-num">${mealGuests}</span>
           <span class="dash-guest-label">guests expected</span>
         </div>
-        <div class="dash-flow-wrap">
+        ${isEventLoc(loc) ? '' : `<div class="dash-flow-wrap">
           <div class="dash-flow-canvas-wrap"><canvas id="guest-flow-canvas"></canvas></div>
-        </div>
+        </div>`}
       </div>
     </div>
 
@@ -1240,9 +1246,7 @@ function computeSupplyPrepTasks(loc: Location, todayStr: string): SupplyPrepTask
     if (s.archived || s.kind !== 'standard') continue;
     if (s.prepMode === 'centralized' && loc !== 'west') continue;
     const demand = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
-    const need = s.prepMode === 'centralized'
-      ? demand.west
-      : (loc === 'centraal' ? demand.centraal : demand.west);
+    const need = s.prepMode === 'centralized' ? demand.west : (demand[loc] ?? 0);
     const have = s.stock?.[loc]?.amount ?? 0;
     const make = need - have;
     if (make > 0.0001) tasks.push({ supply: s, make, have, need });

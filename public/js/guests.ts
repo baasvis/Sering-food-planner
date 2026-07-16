@@ -1,5 +1,5 @@
 import type { GuestDay, Meal, Location, ClosedServiceOverride } from '@shared/types';
-import { S, DAYS, MEALS, LOCATIONS } from './state';
+import { S, DAYS, MEALS, LOCATIONS, activeEventLocations } from './state';
 import { scheduleSave, toast, apiGet, apiPost, scheduleNextWeeksSave, toastError, saveClosedServices } from './utils';
 import { getGuests, calcTotalGuests, getToday, isServiceClosed, previousOpenService, rolledInto, rolledFromMeal, rollWarning, rebuildPlanner } from './core';
 import { parseCSV, categorizeUploadedFiles, predictGuests, getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav } from './predictions';
@@ -27,7 +27,16 @@ export function changeGuestDay(delta: any) {
 }
 
 export function renderGuests() {
-  const locs = [{ key:'west', label:'Sering West' }, { key:'centraal', label:'Sering Centraal' }];
+  // Permanent pair + one card per active event location. Event cards show
+  // the event's date window; cells outside it are greyed (getGuests clamps
+  // them to 0 anyway) and events get no open/closed control (an unused
+  // festival service is simply 0 guests — closures are a weekly-rhythm tool).
+  type LocCard = { key: string; label: string; ev?: { startDate: string; endDate: string } };
+  const locs: LocCard[] = [
+    { key: 'west', label: 'Sering West' },
+    { key: 'centraal', label: 'Sering Centraal' },
+    ...activeEventLocations().map(e => ({ key: e.slug, label: e.name, ev: { startDate: e.startDate, endDate: e.endDate } })),
+  ];
   const days = getVisibleDays(_guestsDayOffset);
 
   // Build header actions
@@ -62,9 +71,12 @@ export function renderGuests() {
       });
     });
 
-    html += `<div class="card guests-loc-card loc-${loc.key}">
+    const rangeNote = loc.ev
+      ? `<span style="font-size:11px;color:var(--text3);margin-left:8px;">${loc.ev.startDate} &rarr; ${loc.ev.endDate}</span>`
+      : '';
+    html += `<div class="card guests-loc-card ${loc.ev ? 'loc-event' : `loc-${loc.key}`}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border);">
-        <h3 class="loc-accent-text" style="font-size:14px;margin:0;">${loc.label}</h3>
+        <h3 class="loc-accent-text" style="font-size:14px;margin:0;">${esc(loc.label)}${rangeNote}</h3>
         <span style="font-size:12px;color:var(--text2);">Total: <strong class="loc-accent-text">${weekTotal}</strong></span>
       </div>
       <div style="overflow-x:auto;">
@@ -105,10 +117,14 @@ export function renderGuests() {
         const staffKey = meal === 'lunch' ? 'staff_lunch' : 'staff_dinner';
         const staffVal = vals[staffKey] || 0;
 
-        html += `<td class="${cellClass}${closed ? ' gt-closed-cell' : ''}">
-          <input class="gt-input" type="number" min="0" value="${v}" onchange="${onchange}" />`;
-        // Open/closed control — future cells only (closing a past service is moot).
-        if (!d.isPast) html += renderStatusControl(loc.key, iso, d.dayName, meal, closed);
+        // Event locations: cells outside the event window are greyed +
+        // disabled (getGuests clamps them to 0, so typing there would lie).
+        const outsideWindow = !!(loc.ev && (iso < loc.ev.startDate || iso > loc.ev.endDate));
+        html += `<td class="${cellClass}${closed ? ' gt-closed-cell' : ''}${outsideWindow ? ' gt-past-cell' : ''}">
+          <input class="gt-input" type="number" min="0" value="${outsideWindow ? 0 : v}" onchange="${onchange}"${outsideWindow ? ' disabled title="Outside the event\'s dates"' : ''} />`;
+        // Open/closed control — future cells only (closing a past service is
+        // moot), and never for event locations (0 guests = no demand there).
+        if (!d.isPast && !loc.ev) html += renderStatusControl(loc.key, iso, d.dayName, meal, closed);
         if (closed) {
           const tgt = previousOpenService(loc.key, iso, meal);
           const tgtLabel = tgt ? tgt.meal.charAt(0).toUpperCase() + tgt.meal.slice(1) : null;

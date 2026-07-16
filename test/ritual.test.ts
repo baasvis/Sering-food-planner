@@ -257,3 +257,46 @@ describe('computeRitual — Centraal', () => {
     expect(stepOf(pending, 'arrivals').done).toBe(false);
   });
 });
+
+// ── Event locations (EVENT_STEPS + per-loc arrivals) ─────────────────────────
+
+import { stepsForLocation } from '../public/js/ritual';
+
+describe('event-location ritual', () => {
+  const EV = 'ev-landjuweel-2026';
+
+  it('stepsForLocation: event slugs get the trimmed serve-side list', () => {
+    const keys = stepsForLocation(EV).map(s => s.key);
+    expect(keys).toEqual(['arrivals', 'service-lunch', 'inv-lunch', 'service-dinner', 'stocktake', 'inv-dinner', 'hanos-order']);
+    // No pack-for-Centraal, no Fix-My-Menu steps — FMM never plans events.
+    expect(keys).not.toContain('pack-send');
+    expect(keys.some(k => k.startsWith('fmm'))).toBe(false);
+    // West/Centraal lists unchanged.
+    expect(stepsForLocation('west').some(s => s.key === 'pack-send')).toBe(true);
+    expect(stepsForLocation('centraal').map(s => s.key)).toContain('arrivals');
+  });
+
+  it('arrivals step reads shipments heading to THIS location, not Centraal', () => {
+    const inbound = mkBatch({
+      id: 'b-ev', name: 'Festival soup',
+      shipments: [{ id: 's1', fromLoc: 'west', toLoc: EV, storage: 'Gastro', qty: 20, sentAt: '2026-05-25T06:00:00.000Z', arrived: false, cookDate: '24/05/2026' }],
+    });
+    const ctxPending = mkCtx({ loc: EV, batches: [inbound] });
+    expect(stepOf(computeRitual(ctxPending), 'arrivals').done).toBe(false);
+
+    const arrived = mkBatch({
+      id: 'b-ev2', name: 'Festival soup',
+      shipments: [{ id: 's1', fromLoc: 'west', toLoc: EV, storage: 'Gastro', qty: 20, sentAt: '2026-05-25T06:00:00.000Z', arrived: true, cookDate: '24/05/2026' }],
+    });
+    expect(stepOf(computeRitual(mkCtx({ loc: EV, batches: [arrived] })), 'arrivals').done).toBe(true);
+
+    // A Centraal-bound shipment does NOT block the event's arrivals step.
+    const centraalBound = mkBatch({
+      id: 'b-c', name: 'Centraal soup',
+      shipments: [{ id: 's2', fromLoc: 'west', toLoc: 'centraal', storage: 'Gastro', qty: 10, sentAt: '2026-05-25T06:00:00.000Z', arrived: false, cookDate: '24/05/2026' }],
+    });
+    expect(stepOf(computeRitual(mkCtx({ loc: EV, batches: [centraalBound] })), 'arrivals').done).toBe(true);
+    // …and Centraal's own step still sees it (behaviour preserved).
+    expect(stepOf(computeRitual(mkCtx({ loc: 'centraal', batches: [centraalBound] })), 'arrivals').done).toBe(false);
+  });
+});
