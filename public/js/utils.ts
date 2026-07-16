@@ -1,7 +1,7 @@
 // UUID GENERATION
 // ═══════════════════════════════════════════════════════════════════
 
-import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen } from './state';
+import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen, setEventLocationsState } from './state';
 import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply, Drink, DrinkSupplier, DrinkConfig, EventLocationDTO } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { setLocationRegistry } from '@shared/location';
@@ -296,10 +296,7 @@ export async function loadData(): Promise<void> {
     if (data.caterings) S.caterings = data.caterings;
     if (data.transportItems) S.transportItems = data.transportItems;
     if (data.supplies) S.supplies = data.supplies;
-    if (data.eventLocations) {
-      S.eventLocations = data.eventLocations;
-      setLocationRegistry(data.eventLocations);
-    }
+    if (data.eventLocations) setEventLocationsState(data.eventLocations);
     takeSnapshot();
     rebuildPlanner();
     // Cold loaders (ingredient DB, storage config, kitchen equipment, guest
@@ -1007,8 +1004,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   // broadcasts the whole fresh list on every registry write). Feeds demand
   // via event-window clamps and the planner tab bar, so rebuild + rerender.
   if (eventLocations) {
-    S.eventLocations = eventLocations;
-    setLocationRegistry(eventLocations);
+    setEventLocationsState(eventLocations);
     changed = true;
   }
 
@@ -1171,7 +1167,9 @@ export async function loadInventoryCompletions(): Promise<void> {
   try {
     const data = await apiGet('/api/inventory-completions/latest');
     if (data && typeof data === 'object') {
-      for (const loc of ['west', 'centraal'] as const) {
+      // Server scaffolds permanent + active event locations — mirror its keys
+      // so an event location's freshness counter works on its own dashboard.
+      for (const loc of Object.keys(data)) {
         const slot = data[loc] || {};
         S.inventoryCompletions[loc] = {
           lunch: typeof slot.lunch === 'string' ? slot.lunch : null,

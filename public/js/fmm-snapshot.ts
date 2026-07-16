@@ -48,6 +48,9 @@ export function captureMenuSnapshot(): MenuSnapshot {
       recipeId: b.recipeId,
       generated: !!b.generated,
       liters: Math.round(getTotalStock(b) * 10) / 10,
+      // Captures ALL services generically — event-location assignments ride
+      // along in the before/after diff (and should read identical across a
+      // run: Fix My Menu never touches event locations).
       services: (b.services || []).map(s => ({ loc: s.loc, date: s.date, meal: s.meal })),
     })),
     caterings: (S.caterings || []).map(c => ({

@@ -1,7 +1,7 @@
 // CORE LOGIC
 // ═══════════════════════════════════════════════════════════════════
 
-import { S, DAYS, LOCATIONS } from './state';
+import { S, DAYS, allActiveLocations, eventLocById } from './state';
 import type { InventoryDone } from './state';
 import type { Batch, Service, Catering, CateringDish, Location, Meal, DishType, StorageType, BatchRatings, InventoryEntry } from '@shared/types';
 import { scheduleSave, apiPost } from './utils';
@@ -204,9 +204,11 @@ export function isServicePast(svc: Service): boolean {
   const svcDay = new Date(svcDate.getFullYear(), svcDate.getMonth(), svcDate.getDate());
   if (svcDay < today) return true;       // past date
   if (svcDay > today) return false;      // future date
-  // Today — check time and inventory state
+  // Today — check time and inventory state. Each location (incl. event
+  // locations) reads its OWN inventory-done state; the old `west-or-else-
+  // centraal` normalizer made a third location read Centraal's numbers.
   const mins = now.getHours() * 60 + now.getMinutes();
-  const lk: Location = svc.loc === 'west' ? 'west' : 'centraal';
+  const lk: Location = svc.loc;
   const todayStr = dateToIso(now);
   const inv: Partial<InventoryDone> = S.inventoryDone[lk] || {};
   if (svc.meal === 'lunch') {
@@ -342,7 +344,12 @@ export function sortByCookDate(dishes: Batch[]): Batch[] {
 
 // Get guest count for a location, date string, and meal
 export function getGuests(loc: string, dateStr: string, meal: Meal | string): number {
-  const lk = loc === 'west' ? 'west' : 'centraal';
+  // Event locations only have guests inside their date window — a stray base
+  // weekday pattern must not generate phantom demand (supplies, coverage,
+  // FMM capacity) across the whole planning horizon outside the festival.
+  const ev = eventLocById(loc);
+  if (ev && (dateStr < ev.startDate || dateStr > ev.endDate)) return 0;
+  const lk = loc;
   const dn = dateToDayName(dateStr);
 
   // Determine if dateStr falls in the current week
@@ -423,7 +430,7 @@ export function isServiceClosed(loc: string, dateStr: string, meal: Meal | strin
 function closedSlotDemand(loc: string, dateStr: string, meal: Meal | string): number {
   const entered = getGuests(loc, dateStr, meal);
   if (entered > 0) return entered;
-  const lk = loc === 'west' ? 'west' : 'centraal';
+  const lk = loc; // predictions have no event-location keys — reads fall to 0
   const dn = dateToDayName(dateStr);
   if (S.predictions && S.predictions[lk] && S.predictions[lk][dn] && S.predictions[lk][dn][meal] !== undefined) {
     const p = S.predictions[lk][dn][meal];
@@ -492,7 +499,7 @@ export function buildRollMap(): void {
   const end = new Date(maxTime + CLOSED_WALK_DAYS * 86400000);
   while (cur <= end) {
     const iso = dateToIso(cur);
-    for (const loc of LOCATIONS) {
+    for (const loc of allActiveLocations()) {
       for (const meal of MEAL_ORDER) {
         if (!isServiceClosed(loc, iso, meal)) continue;
         const svc: Service = { loc, date: iso, meal };
@@ -814,6 +821,18 @@ export function westReachesCentraal(refIso: string, slotIso: string, meal: Meal)
   return false;                                                          // past
 }
 
+/** Generalized "can West stock reach a service at `loc` in time?" for the
+ *  hub-and-spoke model. Centraal keeps its exact van rule (incl. the Sunday
+ *  dinner exception — that encodes Centraal's specific logistics). EVENT
+ *  locations get plain next-morning-only: their transport schedule is
+ *  unknown, so same-day is never assumed — a genuine same-day run is handled
+ *  by manually shipping + marking arrived (the stock then counts as
+ *  positioned on-site). Only meaningful for non-west `loc`. */
+export function westReaches(loc: string, refIso: string, slotIso: string, meal: Meal): boolean {
+  if (loc === 'centraal') return westReachesCentraal(refIso, slotIso, meal);
+  return slotIso > refIso;
+}
+
 /** Stock physically positioned at `loc` right now: settled inventory there
  *  (any storage, matching getTotalStock's convention) plus stock already
  *  in-transit heading to `loc`. */
@@ -848,6 +867,12 @@ export interface BatchCoverage {
   shortfall: number;       // total demand that can't be served in time
   surplus: number;         // positioned stock left after covering all reachable demand
   todayShortfall: number;  // shortfall on services dated today (the urgent bit)
+  /** Per-location coverage keyed by loc string — west/centraal always
+   *  present; event locations appear when the batch touches them (stock,
+   *  in-flight shipment, or service). New consumers iterate this. */
+  byLoc: Record<string, LocCoverage>;
+  /** ALIASES of byLoc.west / byLoc.centraal (same objects) — kept so the 30+
+   *  legacy `.west`/`.centraal` reads stay bit-identical. */
   west: LocCoverage;
   centraal: LocCoverage;
   services: CoverageService[];
@@ -874,34 +899,55 @@ export function computeCoverage(
       ? (a.s.date < z.s.date ? -1 : 1)
       : (_MEAL_RANK[a.s.meal] ?? 0) - (_MEAL_RANK[z.s.meal] ?? 0));
 
-  let westBucket = positionedAt(b, 'west');
-  let centraalBucket = positionedAt(b, 'centraal');
-  const west: LocCoverage = { demand: 0, covered: 0, shortfall: 0, todayShortfall: 0, positioned: westBucket, leftover: 0 };
-  const centraal: LocCoverage = { demand: 0, covered: 0, shortfall: 0, todayShortfall: 0, positioned: centraalBucket, leftover: 0 };
+  // One bucket per location: west/centraal always, plus any event location
+  // the batch touches (stock, in-flight shipment, or service). Insertion
+  // order (west, centraal, events) is also the render + catering-drain order.
+  const locs: string[] = ['west', 'centraal'];
+  const seen = new Set(locs);
+  const addLoc = (loc: string) => { if (!seen.has(loc)) { seen.add(loc); locs.push(loc); } };
+  for (const e of (b.inventory || [])) addLoc(e.loc);
+  for (const s of (b.shipments || [])) if (!s.arrived) addLoc(s.toLoc);
+  for (const a of svcs) addLoc(a.s.loc);
+
+  const buckets = new Map<string, number>();
+  const byLoc: Record<string, LocCoverage> = {};
+  for (const loc of locs) {
+    const positioned = positionedAt(b, loc);
+    buckets.set(loc, positioned);
+    byLoc[loc] = { demand: 0, covered: 0, shortfall: 0, todayShortfall: 0, positioned, leftover: 0 };
+  }
 
   // Two-pass allocation so a shortfall is attributed to the location that
   // genuinely can't be covered another way (chronological — soonest first):
   //   Pass 1 — every service draws from its OWN location's stock. A West service
-  //            can ONLY ever use West stock; here a Centraal service uses only
-  //            Centraal-on-site stock. This reserves West stock for West services
+  //            can ONLY ever use West stock; a Centraal/event service uses only
+  //            its on-site stock. This reserves West stock for West services
   //            regardless of date (fixes cross-date mis-attribution).
-  //   Pass 2 — any Centraal service still short that a FUTURE morning van can
-  //            reach pulls from the West stock LEFT OVER after Pass 1.
+  //   Pass 2 — any NON-WEST service still short that West stock can reach in
+  //            time (westReaches: Centraal keeps its van rule incl. the Sunday
+  //            exception; event locations are next-morning only) pulls from
+  //            the West stock LEFT OVER after Pass 1. Nothing ever flows back
+  //            to West, and nothing flows between non-West locations.
   for (const a of svcs) {
-    if (a.s.loc === 'west') { const t = Math.min(a.demand, westBucket); westBucket -= t; a.covered = t; }
-    else { const t = Math.min(a.demand, centraalBucket); centraalBucket -= t; a.covered = t; }
+    const cur = buckets.get(a.s.loc) ?? 0;
+    const t = Math.min(a.demand, cur);
+    buckets.set(a.s.loc, cur - t);
+    a.covered = t;
   }
   for (const a of svcs) {
-    if (a.s.loc !== 'centraal') continue;
+    if (a.s.loc === 'west') continue;
     const rem = a.demand - a.covered;
-    if (rem <= 0 || !westReachesCentraal(today, a.s.date, a.s.meal)) continue;
-    const t = Math.min(rem, westBucket); westBucket -= t; a.covered += t;
+    if (rem <= 0 || !westReaches(a.s.loc, today, a.s.date, a.s.meal)) continue;
+    const westBucket = buckets.get('west') ?? 0;
+    const t = Math.min(rem, westBucket);
+    buckets.set('west', westBucket - t);
+    a.covered += t;
   }
 
   const services: CoverageService[] = [];
   for (const a of svcs) {
     const shortfall = r1(a.demand - a.covered);
-    const lc = a.s.loc === 'west' ? west : centraal;
+    const lc = byLoc[a.s.loc];
     lc.demand = r1(lc.demand + a.demand);
     lc.covered = r1(lc.covered + a.covered);
     lc.shortfall = r1(lc.shortfall + shortfall);
@@ -911,26 +957,41 @@ export function computeCoverage(
 
   // Catering (location-agnostic) drains the shared pool. Drain West FIRST so each
   // location's leftover reflects what is TRULY idle — the "stuck at West" hint must
-  // not count West stock already earmarked for a catering.
+  // not count West stock already earmarked for a catering. Event buckets drain
+  // last (leftover festival food is packable for a catering too).
   const caterDemand = r1(cateringDemand(b));
   let cater = caterDemand;
-  const fromWest = Math.min(cater, westBucket); westBucket = r1(westBucket - fromWest); cater = r1(cater - fromWest);
-  const fromCentraal = Math.min(cater, centraalBucket); centraalBucket = r1(centraalBucket - fromCentraal); cater = r1(cater - fromCentraal);
+  for (const loc of locs) {
+    if (cater <= 0) break;
+    const cur = buckets.get(loc) ?? 0;
+    const t = Math.min(cater, cur);
+    buckets.set(loc, r1(cur - t));
+    cater = r1(cater - t);
+  }
   const caterShort = r1(cater);
   const caterCovered = r1(caterDemand - caterShort);
 
-  west.leftover = r1(westBucket);
-  centraal.leftover = r1(centraalBucket);
-  const surplus = r1(west.leftover + centraal.leftover);
+  let demand = caterDemand, covered = caterCovered, shortfall = caterShort;
+  let todayShortfall = 0, surplus = 0;
+  for (const loc of locs) {
+    const lc = byLoc[loc];
+    lc.leftover = r1(buckets.get(loc) ?? 0);
+    demand = r1(demand + lc.demand);
+    covered = r1(covered + lc.covered);
+    shortfall = r1(shortfall + lc.shortfall);
+    todayShortfall = r1(todayShortfall + lc.todayShortfall);
+    surplus = r1(surplus + lc.leftover);
+  }
 
   return {
-    demand: r1(west.demand + centraal.demand + caterDemand),
-    covered: r1(west.covered + centraal.covered + caterCovered),
-    shortfall: r1(west.shortfall + centraal.shortfall + caterShort),
+    demand,
+    covered,
+    shortfall,
     surplus: Math.max(0, surplus),
-    todayShortfall: r1(west.todayShortfall + centraal.todayShortfall),
-    west,
-    centraal,
+    todayShortfall,
+    byLoc,
+    west: byLoc.west,
+    centraal: byLoc.centraal,
     services,
   };
 }

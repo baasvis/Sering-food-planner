@@ -16,8 +16,8 @@
  */
 
 import type { Batch, Catering, DishType, InventoryEntry, Location, Meal, Service, Shipment } from '../shared/types';
-import { S } from '../public/js/state';
-import { computeCoverage, coverageBadge, serviceShortfall, westReachesCentraal } from '../public/js/core';
+import { S, setEventLocationsState } from '../public/js/state';
+import { computeCoverage, coverageBadge, serviceShortfall, westReachesCentraal, westReaches, getGuests, isServicePast } from '../public/js/core';
 
 const TODAY = '2026-05-04';     // Monday
 const TOMORROW = '2026-05-05';  // Tuesday
@@ -379,5 +379,157 @@ describe('Sunday dinner exception', () => {
       expect(cov.west.shortfall).toBe(0);
       expect(cov.centraal.shortfall).toBe(10);
     }
+  });
+});
+
+// ── Event locations: hub-and-spoke coverage + normalizers ────────────────────
+// (event-locations build, phase E). With no event data every path above is
+// bit-identical — these cases exercise the third spoke. NOTE the fake clock
+// only ever moves FORWARD (see the header note): the Sunday block above left
+// it on 2026-05-10, so these tests advance to Monday 2026-05-11 and use their
+// own local dates.
+
+const D0 = '2026-05-11';  // "today" for this block (Monday)
+const D1 = '2026-05-12';  // tomorrow
+
+describe('event-location coverage', () => {
+  const EV = 'ev-covfest-2026';
+  beforeAll(() => { jest.setSystemTime(new Date('2026-05-11T08:00:00Z')); }); // forward from the Sunday block
+  beforeEach(() => {
+    setEventLocationsState([{
+      slug: EV, name: 'Covfest 2026', startDate: '2026-05-11', endDate: '2026-05-20',
+      hanosAccount: 'west', archived: false, createdAt: '2026-05-01T00:00:00.000Z', archivedAt: null,
+    }]);
+  });
+  afterEach(() => { setEventLocationsState([]); });
+
+  test('westReaches: Centraal keeps its van rule (Sunday exception); events are next-morning only', () => {
+    const SUN = '2026-05-10';
+    expect(westReaches('centraal', SUN, SUN, 'dinner')).toBe(true);   // delegates incl. exception
+    expect(westReaches(EV, SUN, SUN, 'dinner')).toBe(false);          // no exception for events
+    expect(westReaches(EV, D0, D1, 'lunch')).toBe(true);
+    expect(westReaches(EV, D0, D0, 'dinner')).toBe(false);
+  });
+
+  test('an event service draws its OWN bucket first, then West leftovers (next-morning only)', () => {
+    const b = mk({
+      inventory: [inv('west', 10), inv(EV as Location, 4)],
+      services: [svc(EV as Location, D1, 'lunch')],
+    });
+    const cov = computeCoverage(b, demander({ [`${EV}-${D1}-lunch`]: 9 }));
+    expect(cov.byLoc[EV].demand).toBe(9);
+    expect(cov.byLoc[EV].covered).toBe(9);      // 4 on-site + 5 from West (tomorrow = reachable)
+    expect(cov.byLoc[EV].shortfall).toBe(0);
+    expect(cov.west.leftover).toBe(5);
+  });
+
+  test('same-day event demand cannot pull from West (locked to on-site stock)', () => {
+    const b = mk({
+      inventory: [inv('west', 10), inv(EV as Location, 4)],
+      services: [svc(EV as Location, D0, 'dinner')],
+    });
+    const cov = computeCoverage(b, demander({ [`${EV}-${D0}-dinner`]: 9 }));
+    expect(cov.byLoc[EV].covered).toBe(4);
+    expect(cov.byLoc[EV].shortfall).toBe(5);
+    expect(cov.byLoc[EV].todayShortfall).toBe(5);
+    expect(cov.west.leftover).toBe(10);          // untouched — unreachable in time
+  });
+
+  test('event stock NEVER covers west/centraal demand', () => {
+    const b = mk({
+      inventory: [inv(EV as Location, 50)],
+      services: [svc('west', D1, 'lunch'), svc('centraal', D1, 'dinner')],
+    });
+    const cov = computeCoverage(b, demander({
+      [`west-${D1}-lunch`]: 10,
+      [`centraal-${D1}-dinner`]: 10,
+    }));
+    expect(cov.west.shortfall).toBe(10);
+    expect(cov.centraal.shortfall).toBe(10);
+    expect(cov.byLoc[EV].leftover).toBe(50);
+    expect(cov.shortfall).toBe(20);
+  });
+
+  test('west/centraal split of a shared batch is unchanged by an extra event service', () => {
+    const plain = mk({
+      inventory: [inv('west', 20)],
+      services: [svc('west', D1, 'lunch'), svc('centraal', D1, 'dinner')],
+    });
+    const demands = { [`west-${D1}-lunch`]: 8, [`centraal-${D1}-dinner`]: 6 };
+    const base = computeCoverage(plain, demander(demands));
+
+    const withEvent = mk({
+      inventory: [inv('west', 20), inv(EV as Location, 5)],
+      services: [svc('west', D1, 'lunch'), svc('centraal', D1, 'dinner'), svc(EV as Location, D1, 'lunch')],
+    });
+    const cov = computeCoverage(withEvent, demander({ ...demands, [`${EV}-${D1}-lunch`]: 5 }));
+    expect(cov.west).toEqual(base.west);
+    expect(cov.centraal.demand).toEqual(base.centraal.demand);
+    expect(cov.centraal.covered).toEqual(base.centraal.covered);
+    expect(cov.byLoc[EV].covered).toBe(5);
+    // Aliases hold: byLoc.west IS the west field.
+    expect(cov.byLoc.west).toBe(cov.west);
+    expect(cov.byLoc.centraal).toBe(cov.centraal);
+  });
+
+  test('catering drains west → centraal → event buckets, in that order', () => {
+    const b = mk({ inventory: [inv('west', 2), inv('centraal', 3), inv(EV as Location, 4)] });
+    S.caterings = [{
+      id: 'c-1', name: 'Big order', date: '12/05/2026', guestCount: 50,
+      deliveryMode: 'pickup', dishes: [{ dishId: b.id, name: 'x', type: 'Soup' }],
+      logisticsNotes: '',
+    } as Catering];
+    const cov = computeCoverage(b, demander({}));
+    // 50 guests x 0.28L = 14L: 2 from west, 3 from centraal, 4 from event → 5 short.
+    expect(cov.west.leftover).toBe(0);
+    expect(cov.centraal.leftover).toBe(0);
+    expect(cov.byLoc[EV].leftover).toBe(0);
+    expect(cov.shortfall).toBe(5);
+    S.caterings = [];
+  });
+});
+
+describe('event-location normalizers', () => {
+  const EV = 'ev-normfest-2026';
+  beforeEach(() => {
+    setEventLocationsState([{
+      slug: EV, name: 'Normfest 2026', startDate: '2026-05-11', endDate: '2026-05-15',
+      hanosAccount: 'west', archived: false, createdAt: '2026-05-01T00:00:00.000Z', archivedAt: null,
+    }]);
+    S.guests[EV] = {
+      Mon: { lunch: 400, dinner: 700 }, Tue: { lunch: 400, dinner: 700 },
+      Wed: { lunch: 400, dinner: 700 }, Thu: { lunch: 400, dinner: 700 },
+      Fri: { lunch: 400, dinner: 700 }, Sat: { lunch: 400, dinner: 700 }, Sun: { lunch: 400, dinner: 700 },
+    };
+  });
+  afterEach(() => {
+    setEventLocationsState([]);
+    delete S.guests[EV];
+  });
+
+  test('getGuests reads the event key inside the window and clamps to 0 outside it', () => {
+    expect(getGuests(EV, '2026-05-11', 'lunch')).toBe(400);   // start day
+    expect(getGuests(EV, '2026-05-15', 'dinner')).toBe(700);  // end day
+    expect(getGuests(EV, '2026-05-16', 'lunch')).toBe(0);     // day after end → clamped
+    expect(getGuests(EV, '2026-05-10', 'lunch')).toBe(0);     // day before start → clamped
+  });
+
+  test('getGuests for west/centraal is untouched by the registry', () => {
+    const withRegistry = getGuests('west', D1, 'lunch');
+    setEventLocationsState([]);
+    expect(getGuests('west', D1, 'lunch')).toBe(withRegistry);
+  });
+
+  test('isServicePast reads the EVENT location own inventoryDone, not Centraal', () => {
+    // Move to 13:00 Amsterdam (past the 12:45 urgentFrom, before the 13:45
+    // deadline): Centraal marked lunch-inventory-done → its lunch is "past";
+    // the event's lunch, same date, must NOT inherit that.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    S.inventoryDone = { centraal: { lunch: D0, dinner: null } } as any;
+    jest.setSystemTime(new Date('2026-05-11T11:00:00Z')); // forward only
+    expect(isServicePast({ loc: 'centraal', date: D0, meal: 'lunch' })).toBe(true);
+    expect(isServicePast({ loc: EV as Location, date: D0, meal: 'lunch' })).toBe(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    S.inventoryDone = {} as any;
   });
 });

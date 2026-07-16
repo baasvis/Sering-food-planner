@@ -53,6 +53,7 @@ import {
   getActiveRhythm,
   computeWeeklyCapacities,
   collectWarnings,
+  stockoutWarnings,
   COOK_RHYTHM,
   SLOTS_PER_TYPE,
   PLANNING_HORIZON_DAYS,
@@ -1575,5 +1576,176 @@ describe('runFixMyMenuCore keeps catering-held placeholders', () => {
 
     expect(S.batches.some(b => b.id === ph.id)).toBe(false);
     expect((S.caterings[0].dishes || []).some(d => d.dishId === ph.id)).toBe(false);
+  });
+});
+
+// ─── Event locations: Fix My Menu must never touch them ─────────────────────
+//
+// Contract (event-locations build, phase D): FMM plans west/centraal ONLY.
+// Event-location assignments are hand-planned and must survive every FMM
+// pass like pins do; event-parked stock must never masquerade as coverage
+// for west/centraal slots. With S.eventLocations empty (the default for
+// every other suite in this file) all guards are inert.
+
+describe('event-location exclusion guards', () => {
+  const EV = 'ev-testfest-2026';
+  const evRow = (over: Record<string, unknown> = {}) => ({
+    slug: EV, name: 'Testfest 2026', startDate: '2026-05-01', endDate: '2026-05-15',
+    hanosAccount: 'west' as const, archived: false,
+    createdAt: '2026-05-01T00:00:00.000Z', archivedAt: null, ...over,
+  });
+
+  beforeEach(() => { S.eventLocations = [evRow()]; });
+  afterEach(() => { S.eventLocations = []; });
+
+  test('stripFutureServices spares event-location services, active AND archived', () => {
+    const mk = () => makeBatch({
+      type: 'Soup', cookDate: '01/05/2026',
+      services: [
+        { loc: 'west', date: '2026-05-06', meal: 'lunch' },            // future -> stripped
+        { loc: EV, date: '2026-05-06', meal: 'lunch' },                // event -> kept
+        { loc: 'centraal', date: '2026-05-07', meal: 'dinner', pinned: true }, // pin -> kept
+      ],
+    });
+    const b1 = mk();
+    stripFutureServices([b1]);
+    expect(b1.services.map(s => s.loc)).toEqual([EV, 'centraal']);
+
+    S.eventLocations = [evRow({ archived: true, archivedAt: '2026-05-20T00:00:00.000Z' })];
+    const b2 = mk();
+    stripFutureServices([b2]);
+    expect(b2.services.map(s => s.loc)).toEqual([EV, 'centraal']);
+  });
+
+  test('findStalePlaceholders spares a placeholder held only by an upcoming event service', () => {
+    const stale = makeBatch({
+      type: 'Soup', cookDate: '25/04/2026', generated: true, name: 'Slipped cook',
+      services: [{ loc: EV, date: '2026-05-06', meal: 'lunch' }],
+    });
+    expect(findStalePlaceholders([stale], '2026-05-01')).toEqual([]);
+    // Same placeholder with only a PAST event service is retired normally.
+    const spent = makeBatch({
+      type: 'Soup', cookDate: '25/04/2026', generated: true, name: 'Event done',
+      services: [{ loc: EV, date: '2026-04-28', meal: 'lunch' }],
+    });
+    expect(findStalePlaceholders([spent], '2026-05-01').map(b => b.id)).toEqual([spent.id]);
+  });
+
+  test('the planning window never contains event slots', () => {
+    const window = buildPlanningWindow(new Date('2026-05-01T12:00:00'));
+    for (const day of window) {
+      expect(day.slots.map(s => s.loc).sort()).toEqual(['centraal', 'centraal', 'west', 'west']);
+    }
+  });
+
+  test('isServableBy: event slot reachable from West next-morning only; never from Centraal; event food stays put', () => {
+    // West cook Wed -> event slot Thu OK, Wed (same-day) NO — even dinner, even Sunday.
+    expect(isServableBy('06/05/2026', '2026-05-07', 'lunch', EV, 'west')).toBe(true);
+    expect(isServableBy('06/05/2026', '2026-05-06', 'dinner', EV, 'west')).toBe(false);
+    expect(isServableBy('03/05/2026', '2026-05-03', 'dinner', EV, 'west')).toBe(false); // Sunday — no exception
+    // Centraal-cooked never reaches an event.
+    expect(isServableBy('06/05/2026', '2026-05-08', 'dinner', EV, 'centraal')).toBe(false);
+    // Event-cooked serves its own location (standard same-day-dinner rule)…
+    expect(isServableBy('06/05/2026', '2026-05-06', 'dinner', EV, EV)).toBe(true);
+    expect(isServableBy('06/05/2026', '2026-05-06', 'lunch', EV, EV)).toBe(false);
+    // …and never anywhere else.
+    expect(isServableBy('06/05/2026', '2026-05-08', 'dinner', 'west', EV)).toBe(false);
+    expect(isServableBy('06/05/2026', '2026-05-08', 'dinner', 'centraal', EV)).toBe(false);
+  });
+
+  test('capacity gate: event-parked stock cannot admit a west/centraal slot', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    // 100L, but ALL of it sits at the festival — unreachable for Centraal.
+    const parked = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Festival pot',
+      inventory: [inv(100, EV as Location)],
+    });
+    scoredGreedyAssignment([parked], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    expect(parked.services.length).toBe(0);
+  });
+
+  test('capacity gate: west stock still serves west/centraal when event demand is covered on-site', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    // 5L at the festival covering its own 2 services (1L each via stub) +
+    // 50L at West — the west/centraal slots must still be admitted.
+    const mixed = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Mixed pot',
+      inventory: [inv(50, 'west'), inv(5, EV as Location)],
+      services: [
+        { loc: EV, date: '2026-05-06', meal: 'lunch' },
+        { loc: EV, date: '2026-05-06', meal: 'dinner' },
+      ],
+    });
+    scoredGreedyAssignment([mixed], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    expect(mixed.services.length).toBeGreaterThan(2);
+  });
+
+  test('capacity gate: same-day event demand must be covered on-site, not from West', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    // Fake "today" is 2026-05-01 (system time pinned) -> an event service dated
+    // 2026-05-01 is LOCKED (no future van can reach it). All stock at West ->
+    // locked event demand uncoverable -> the batch must not take new slots.
+    const locked = makeBatch({
+      type: 'Soup', cookDate: '30/04/2026', name: 'Locked event demand',
+      inventory: [inv(50, 'west')],
+      services: [{ loc: EV, date: '2026-05-01', meal: 'dinner' }],
+    });
+    scoredGreedyAssignment([locked], window, fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+    expect(locked.services.length).toBe(1);
+  });
+
+  test('stockoutWarnings: festival-parked stock does not mask a west shortfall', () => {
+    // 3 west services (3L demand) vs 1L at West + 100L at the festival:
+    // pre-guard math said 101L >= 3L -> silent; the residual check must warn.
+    const masked = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026', name: 'Masked shortfall',
+      inventory: [inv(1, 'west'), inv(100, EV as Location)],
+      services: [
+        { loc: 'west', date: '2026-05-06', meal: 'lunch' },
+        { loc: 'west', date: '2026-05-06', meal: 'dinner' },
+        { loc: 'west', date: '2026-05-07', meal: 'lunch' },
+      ],
+    });
+    const warnings = stockoutWarnings([masked], fixedCalcRequired(1));
+    expect(warnings.map(w => w.category)).toEqual(['cooked-stockout']);
+
+    // Mirror: event demand fully covered on-site must NOT false-alarm.
+    const covered = makeBatch({
+      type: 'Soup', cookDate: '01/05/2026', name: 'Covered festival',
+      inventory: [inv(2, 'west'), inv(10, EV as Location)],
+      services: [
+        { loc: 'west', date: '2026-05-06', meal: 'lunch' },
+        { loc: EV, date: '2026-05-06', meal: 'lunch' },
+        { loc: EV, date: '2026-05-06', meal: 'dinner' },
+      ],
+    });
+    expect(stockoutWarnings([covered], fixedCalcRequired(1))).toEqual([]);
+  });
+
+  test('pure west/centraal fixtures behave identically with a populated registry', () => {
+    const build = () => [
+      makeBatch({
+        type: 'Soup', cookDate: '03/05/2026', name: 'Plain',
+        inventory: [inv(50, 'west')],
+        services: [{ loc: 'west', date: '2026-05-04', meal: 'lunch' }],
+      }),
+      makeBatch({
+        type: 'Main course', cookDate: '25/04/2026', generated: true, name: 'Stale',
+        services: [],
+      }),
+    ];
+    const window = () => makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+
+    const run = (batches: Batch[]) => {
+      stripFutureServices(batches);
+      const stale = findStalePlaceholders(batches, '2026-05-01').map(b => b.id);
+      scoredGreedyAssignment(batches, window(), fixedCalcRequired(1), TEN_GUESTS, NO_POT_CAPS);
+      return { stale, services: batches.map(b => b.services) };
+    };
+
+    _idCounter = 100; const withRegistry = run(build());
+    S.eventLocations = [];
+    _idCounter = 100; const withoutRegistry = run(build());
+    expect(withRegistry).toEqual(withoutRegistry);
   });
 });

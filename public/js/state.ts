@@ -1,6 +1,7 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
 import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, CostTargets, Supply, PagePermission, Drink, DrinkSupplier, DrinkConfig, DrinkOrder, Assortment, DrinkMenu, EventLocationDTO } from '@shared/types';
+import { setLocationRegistry } from '@shared/location';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -297,6 +298,15 @@ export let S: AppState = {
 // ── Event-location registry helpers ──────────────────────────────
 // LOCATIONS above stays the PERMANENT pair (west/centraal) — sites that mean
 // "every location a user can currently work at" should use allActiveLocations().
+
+/** THE way to replace the event-location registry on the client: keeps
+ *  S.eventLocations and the shared display-name registry (locName /
+ *  shortLocName in shared/location.ts) in lockstep. Setting S.eventLocations
+ *  directly leaves locName resolving raw slugs. */
+export function setEventLocationsState(rows: EventLocationDTO[]): void {
+  S.eventLocations = rows;
+  setLocationRegistry(rows);
+}
 
 /** Non-archived event locations, in registry order. */
 export function activeEventLocations(): EventLocationDTO[] {

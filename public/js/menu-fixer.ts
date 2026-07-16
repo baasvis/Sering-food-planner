@@ -11,14 +11,15 @@
 // same-recipe peers are intentional (audit S7) and counted as distinct
 // menu options for peer-share math.
 
-import type { Batch, DishType, Location, Meal, KitchenEquipment, CookRhythmDay, Catering } from '@shared/types';
+import type { Batch, DishType, Location, Meal, KitchenEquipment, CookRhythmDay, Catering, Service } from '@shared/types';
 import { addDays } from '@shared/dates';
-import { S, DEFAULT_COOK_RHYTHM } from './state';
+import { S, DEFAULT_COOK_RHYTHM, isEventLoc } from './state';
 import { newId, scheduleSave, toast, toastError, saveKitchenEquipment, saveCookRhythm, markRitualStep } from './utils';
 import {
   rebuildPlanner, getToday, dateToIso, dateToStr, dateToDayName, getAmsterdamNow,
   isServicePast, isServiceDatePast, calcRequired, calcRequiredLive, calcRequiredAtLocLive, getEffectiveGuests, isServiceClosed, cateringActive, getTotalStock, getStockAt,
-  getServeableStockAt, getServeableTotalStock, getServeablePendingTo, westReachesCentraal,
+  getServeableStockAt, getServeableTotalStock, getServeablePendingTo, westReachesCentraal, westReaches,
+  getPendingFromShipments,
   consolidateInventory,
 } from './core';
 import { rerenderCurrentView } from './navigate';
@@ -169,7 +170,10 @@ export function stripFutureServices(batches: Batch[]): number {
   let removed = 0;
   for (const b of batches) {
     if (!b.services || b.services.length === 0) continue;
-    const kept = b.services.filter(s => isServicePast(s) || s.pinned === true);
+    // Event-location services are treated like pins: Fix My Menu never plans
+    // event locations (SLOT list is west/centraal only), so it must never
+    // remove a festival assignment either — those are planned by hand.
+    const kept = b.services.filter(s => isServicePast(s) || s.pinned === true || isEventLoc(s.loc));
     removed += b.services.length - kept.length;
     b.services = kept;
   }
@@ -266,7 +270,10 @@ export function findStalePlaceholders(batches: Batch[], todayIso: string, protec
     // the retire path would silently delete the pinned chip — the one hole
     // in the pin contract (review finding). The batch stays visible in the
     // To-cook pool so the missed cook is still apparent.
-    if ((b.services || []).some(s => s.pinned === true && !isServicePast(s))) return false;
+    // Event-location services get the same protection (exact analogue of the
+    // pin/catering bugs): a placeholder held only by an upcoming festival
+    // service must survive a slipped cook day.
+    if ((b.services || []).some(s => (s.pinned === true || isEventLoc(s.loc)) && !isServicePast(s))) return false;
     const cookIso = cookDateToIso(b.cookDate);
     if (!cookIso) return false;
     return cookIso < todayIso;
@@ -454,6 +461,38 @@ function primaryLoc(b: Batch): Location {
   return (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west');
 }
 
+/** Distinct event-location slugs this batch touches — via a service, settled
+ *  stock, or an in-flight shipment heading there. Empty for the overwhelming
+ *  majority of batches, which is what keeps the event-aware capacity paths
+ *  below on their exact pre-event fast path (bench bit-identical). */
+function eventLocsTouching(b: Batch): string[] {
+  const set = new Set<string>();
+  for (const s of (b.services || [])) if (isEventLoc(s.loc)) set.add(s.loc);
+  for (const e of (b.inventory || [])) if (e.qty > 0 && isEventLoc(e.loc)) set.add(e.loc);
+  for (const sh of (b.shipments || [])) if (!sh.arrived && isEventLoc(sh.toLoc)) set.add(sh.toLoc);
+  return [...set];
+}
+
+/** Demand (liters) of the services EXCLUDED by `keep`, derived through the
+ *  injected calcReq (total minus demand-with-them-removed) so it tracks
+ *  calcReq's peer-share model — and any unit-test stub — exactly. Mirrors the
+ *  service-filter trick the capacity gate already uses for West/Centraal.
+ *  Restores b.services before returning. */
+function demandOfExcluded(
+  b: Batch,
+  all: Service[],
+  calcReq: (b: Batch) => number,
+  totalDemand: number,
+  keep: (s: Service) => boolean,
+): number {
+  b.services = all.filter(keep);
+  try {
+    return Math.round((totalDemand - calcReq(b)) * 10) / 10;
+  } finally {
+    b.services = all;
+  }
+}
+
 /**
  * Whether this batch has only Frozen inventory entries. Pure-frozen
  * batches are excluded from the auto-rotation; cooks can force-assign
@@ -489,6 +528,17 @@ export function isServableBy(
   const cookIso = cookDateToIso(cookDateDdmmyyyy);
   if (!cookIso) return false;
   if (slotIsoDate < cookIso) return false;
+  // Event locations (FMM never generates event slots, but planner drag
+  // validation may ask): food cooked AT an event never leaves it except by
+  // manual shipping, and an event slot is reachable only from West (next
+  // morning — no Sunday exception, that's Centraal's van) or cooked on-site.
+  if (isEventLoc(batchLocation)) {
+    if (slotLoc !== batchLocation) return false;
+    // same-location: fall through to the standard same-day-dinner rule below
+  } else if (isEventLoc(slotLoc)) {
+    if (batchLocation !== 'west') return false;
+    return westReaches(slotLoc, cookIso, slotIsoDate, slotMeal);
+  }
   if (slotLoc === 'west' && batchLocation === 'centraal') return false;
   if (slotLoc === 'centraal' && batchLocation === 'west') {
     // West→Centraal timing — next morning+, with the Sunday same-day dinner
@@ -730,20 +780,63 @@ function scoredHardConstraintsOk(
   let fits = false;
   try {
     const totalDemand = calcReq(batch);
-    if (totalDemand <= serveableStock) {
-      batch.services = withNew.filter(s => s.loc !== 'west');
-      const nonWestDemand = calcReq(batch);
-      batch.services = withNew;
-      const westDemand = Math.round((totalDemand - nonWestDemand) * 10) / 10;
-      fits = westDemand <= getServeableStockAt(batch, 'west');
-      if (fits) {
-        batch.services = withNew.filter(s => !(s.loc === 'centraal' && !westReachesCentraal(todayIso, s.date, s.meal)));
-        const reachableDemand = calcReq(batch);
+    const evLocs = eventLocsTouching(batch);
+    if (evLocs.length === 0) {
+      // Fast path — the exact pre-event-locations checks (bench-guarded).
+      if (totalDemand <= serveableStock) {
+        batch.services = withNew.filter(s => s.loc !== 'west');
+        const nonWestDemand = calcReq(batch);
         batch.services = withNew;
-        const lockedCentraalDemand = Math.round((totalDemand - reachableDemand) * 10) / 10;
-        const centraalOnSite = getServeableStockAt(batch, 'centraal') + getServeablePendingTo(batch, 'centraal');
-        fits = lockedCentraalDemand <= centraalOnSite + 1e-9;
+        const westDemand = Math.round((totalDemand - nonWestDemand) * 10) / 10;
+        fits = westDemand <= getServeableStockAt(batch, 'west');
+        if (fits) {
+          batch.services = withNew.filter(s => !(s.loc === 'centraal' && !westReachesCentraal(todayIso, s.date, s.meal)));
+          const reachableDemand = calcReq(batch);
+          batch.services = withNew;
+          const lockedCentraalDemand = Math.round((totalDemand - reachableDemand) * 10) / 10;
+          const centraalOnSite = getServeableStockAt(batch, 'centraal') + getServeablePendingTo(batch, 'centraal');
+          fits = lockedCentraalDemand <= centraalOnSite + 1e-9;
+        }
       }
+    } else {
+      // Event path — hub-and-spoke generalization for the rare batch that
+      // touches an event location. Event stock can only serve ITS OWN
+      // location's services (no van off an event site; leftovers return by
+      // manual shipping), and an event slot's same-day demand can only use
+      // on-site stock (westReaches: next morning, no Sunday exception).
+      //   (0) per event loc E: locked (same-day) demand at E ≤ E's on-site
+      //       serveable stock (settled + in transit to E);
+      //   (1) total demand MINUS what event on-site stock covers ≤ the
+      //       west/centraal-reachable serveable stock (event-parked stock
+      //       must never masquerade as coverage for west/centraal slots);
+      //   (2) West demand ≤ West serveable stock (as the fast path);
+      //   (3) locked Centraal demand ≤ Centraal on-site (as the fast path).
+      let ok = true;
+      let coveredByEvents = 0;
+      for (const ev of evLocs) {
+        const dEv = demandOfExcluded(batch, withNew, calcReq, totalDemand, s => s.loc !== ev);
+        const onSite = getServeableStockAt(batch, ev) + getServeablePendingTo(batch, ev);
+        const lockedEv = demandOfExcluded(batch, withNew, calcReq, totalDemand,
+          s => !(s.loc === ev && !westReaches(ev, todayIso, s.date, s.meal)));
+        if (lockedEv > onSite + 1e-9) { ok = false; break; }
+        coveredByEvents += Math.min(dEv, onSite);
+      }
+      if (ok) {
+        const reachable = getServeableStockAt(batch, 'west') + getServeablePendingTo(batch, 'west')
+          + getServeableStockAt(batch, 'centraal') + getServeablePendingTo(batch, 'centraal');
+        ok = totalDemand - coveredByEvents <= reachable + 1e-9;
+      }
+      if (ok) {
+        const westDemand = demandOfExcluded(batch, withNew, calcReq, totalDemand, s => s.loc !== 'west');
+        ok = westDemand <= getServeableStockAt(batch, 'west');
+      }
+      if (ok) {
+        const lockedCentraalDemand = demandOfExcluded(batch, withNew, calcReq, totalDemand,
+          s => !(s.loc === 'centraal' && !westReachesCentraal(todayIso, s.date, s.meal)));
+        const centraalOnSite = getServeableStockAt(batch, 'centraal') + getServeablePendingTo(batch, 'centraal');
+        ok = lockedCentraalDemand <= centraalOnSite + 1e-9;
+      }
+      fits = ok;
     }
   } finally {
     batch.services = withNew;
@@ -1557,8 +1650,25 @@ export function stockoutWarnings(allBatches: Batch[], calcReq: (b: Batch) => num
     const stock = getTotalStock(b);
     if (stock <= 0) continue;
     const demand = calcReq(b);
-    if (demand > stock) {
-      const short = (demand - stock).toFixed(1);
+    // Event-aware residuals (identity when the batch touches no event
+    // location): stock parked at an event site can only serve that site's
+    // services, so subtract each event bucket and the demand it covers —
+    // otherwise festival-parked liters would silently mask a West/Centraal
+    // shortfall (or festival demand would false-alarm against West stock).
+    let effDemand = demand;
+    let effStock = stock;
+    const evLocs = eventLocsTouching(b);
+    if (evLocs.length > 0) {
+      const all = b.services || [];
+      for (const ev of evLocs) {
+        const dEv = demandOfExcluded(b, all, calcReq, demand, s => s.loc !== ev);
+        const onSite = getStockAt(b, ev) + getPendingFromShipments(b, ev);
+        effDemand -= Math.min(dEv, onSite);
+        effStock -= onSite;
+      }
+    }
+    if (effDemand > effStock) {
+      const short = (effDemand - effStock).toFixed(1);
       warnings.push({
         category: 'cooked-stockout',
         message: `${b.name} will run out — about ${short}L short across the services it covers. The last service might run dry.`,
