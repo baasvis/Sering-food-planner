@@ -484,7 +484,10 @@ export async function dbReadAll(): Promise<DataResponse> {
 
   const supplies: Supply[] = supplyRows.map(toSupply);
 
-  return { batches, guests, recipes, caterings, transportItems, supplies };
+  // Placeholder until the event-locations registry lands (Phase C of the
+  // event-locations build): dbReadAll will read prisma.eventLocation and
+  // refresh the lib/locations.ts cache here.
+  return { batches, guests, recipes, caterings, transportItems, supplies, eventLocations: [] };
 }
 
 function normalizeSupplyStock(raw: Prisma.JsonValue): SupplyStock {

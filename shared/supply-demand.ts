@@ -4,14 +4,17 @@
 // and the Supplies screen. No DB access, no req/res.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Supply, GuestsData, Catering, Location } from './types';
+import type { Supply, GuestsData, Catering } from './types';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-const LOCATIONS: ReadonlyArray<Location> = ['west', 'centraal'];
 
+// Per-location demand in the supply's own unit. `west`/`centraal` are always
+// present; event-location slugs appear as extra keys when the `guests` input
+// carries them. Consumers read `demand[loc] ?? 0`.
 export interface SupplyDemand {
   west: number;
   centraal: number;
+  [loc: string]: number;
 }
 
 /** Convert ISO 'YYYY-MM-DD' to a Date in local time (no UTC drift). */
@@ -68,7 +71,12 @@ export function computeSupplyDemand(
   today: string,
   effectiveGuests?: (loc: string, iso: string, meal: 'lunch' | 'dinner') => number,
 ): SupplyDemand {
+  // Location buckets come from the `guests` input itself (west/centraal plus
+  // any event-location keys), keeping this module pure and registry-free.
   const result: SupplyDemand = { west: 0, centraal: 0 };
+  for (const k of Object.keys(guests || {})) {
+    if (!(k in result)) result[k] = 0;
+  }
   if (supply.archived) return result;
   if (supply.kind !== 'standard') return result;
   if (!supply.prepHorizonDays || supply.prepHorizonDays <= 0) return result;
@@ -82,7 +90,7 @@ export function computeSupplyDemand(
     const iso = dateToIso(d);
     const dn = dayName(d);
 
-    for (const loc of LOCATIONS) {
+    for (const loc of Object.keys(result)) {
       let lunch: number;
       let dinner: number;
       if (effectiveGuests) {
@@ -115,8 +123,14 @@ export function computeSupplyDemand(
   }
 
   if (supply.prepMode === 'centralized') {
-    result.west += result.centraal;
-    result.centraal = 0;
+    // All non-west buckets fold into West — it is the production/dispatch
+    // kitchen for centralized prep (identical to the old west+=centraal for
+    // two-key input; event locations collapse the same way).
+    for (const k of Object.keys(result)) {
+      if (k === 'west') continue;
+      result.west += result[k];
+      result[k] = 0;
+    }
   }
 
   return result;

@@ -1,6 +1,6 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, CostTargets, Supply, PagePermission, Drink, DrinkSupplier, DrinkConfig, DrinkOrder, Assortment, DrinkMenu } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, CostTargets, Supply, PagePermission, Drink, DrinkSupplier, DrinkConfig, DrinkOrder, Assortment, DrinkMenu, EventLocationDTO } from '@shared/types';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -218,6 +218,11 @@ export interface AppState {
   drinksSubTab: string;
   drinksFilters: { mode: string; category: string; location: string };
   drinksSearch: string;
+  /** Event-location registry (temporary festival/catering sites), hydrated
+   *  from GET /api/data and replaced wholesale by SSE `eventLocations`
+   *  patches. Includes archived rows — use activeEventLocations() for
+   *  picker/tab surfaces. */
+  eventLocations: EventLocationDTO[];
   archive?: Array<Record<string, unknown>>;
   openBatchPools?: Set<string>;
   _addModalState?: { loc: string; date: string; meal: string; existing: string[]; typeFilter: string; tab: string; locFilter: string } | null;
@@ -286,7 +291,33 @@ export let S: AppState = {
   drinksSubTab: 'catalogue',
   drinksFilters: { mode: 'all', category: 'all', location: 'west' },
   drinksSearch: '',
+  eventLocations: [],
 };
+
+// ── Event-location registry helpers ──────────────────────────────
+// LOCATIONS above stays the PERMANENT pair (west/centraal) — sites that mean
+// "every location a user can currently work at" should use allActiveLocations().
+
+/** Non-archived event locations, in registry order. */
+export function activeEventLocations(): EventLocationDTO[] {
+  return S.eventLocations.filter((e: EventLocationDTO) => !e.archived);
+}
+
+/** Every location a user can currently select/work at:
+ *  ['west', 'centraal', ...active event slugs]. */
+export function allActiveLocations(): string[] {
+  return [...LOCATIONS, ...activeEventLocations().map((e: EventLocationDTO) => e.slug)];
+}
+
+/** True when `loc` is an event-location slug — active OR archived. (Guards
+ *  like Fix My Menu's must spare archived-event data too.) */
+export function isEventLoc(loc: string): boolean {
+  return S.eventLocations.some((e: EventLocationDTO) => e.slug === loc);
+}
+
+export function eventLocById(loc: string): EventLocationDTO | undefined {
+  return S.eventLocations.find((e: EventLocationDTO) => e.slug === loc);
+}
 
 // ── Global location helpers ──────────────────────────────────────
 const LOC_STORAGE_KEY = 'sering-location';

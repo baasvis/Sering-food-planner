@@ -1258,7 +1258,7 @@ export function getInventoryState(loc: string) {
   const lunchDeadline = 13 * 60 + 45; // 13:45
   const dinnerDeadline = 20 * 60 + 15; // 20:15
   const todayStr = dateToIso(now);
-  const inv = S.inventoryDone[loc] || {};
+  const inv = S.inventoryDone[loc] || { lunch: null, dinner: null };
   const lunchDone = inv.lunch === todayStr;
   const dinnerDone = inv.dinner === todayStr;
 

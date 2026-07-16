@@ -2,8 +2,9 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply, Drink, DrinkSupplier, DrinkConfig } from '@shared/types';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply, Drink, DrinkSupplier, DrinkConfig, EventLocationDTO } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
+import { setLocationRegistry } from '@shared/location';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
@@ -295,6 +296,10 @@ export async function loadData(): Promise<void> {
     if (data.caterings) S.caterings = data.caterings;
     if (data.transportItems) S.transportItems = data.transportItems;
     if (data.supplies) S.supplies = data.supplies;
+    if (data.eventLocations) {
+      S.eventLocations = data.eventLocations;
+      setLocationRegistry(data.eventLocations);
+    }
     takeSnapshot();
     rebuildPlanner();
     // Cold loaders (ingredient DB, storage config, kitchen equipment, guest
@@ -800,6 +805,7 @@ interface RemotePatchMessage {
   cookRhythm?: CookRhythmConfig;
   costTargets?: CostTargets;
   closedServices?: ClosedServicesConfig;
+  eventLocations?: EventLocationDTO[];
   // Partial slot-keyed
   prepChecklist?: { loc: string; date: string; checked: string[] };
   inventoryCompletion?: { loc: string; window: 'lunch' | 'dinner'; completedAt: string };
@@ -843,6 +849,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           supplies, deletedSupplies,
           drinks, deletedDrinks, drinkSuppliers, deletedDrinkSuppliers, drinkConfig, drinksReload,
           storageConfig, kitchenEquipment, cookRhythm, costTargets, closedServices,
+          eventLocations,
           prepChecklist, inventoryCompletion, ritualCompletion,
           guestsNextWeeks,
           ingredientsBulkReload, guestHistoryReload, recipesReload } = msg;
@@ -865,9 +872,11 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     changed = true;
   }
 
-  // Merge guests
+  // Merge guests. Iterate the payload's own keys (not a fixed location list)
+  // so event-location guest edits from other users merge too — the server
+  // already validated every key against the registry.
   if (guests) {
-    for (const loc of ['west', 'centraal']) {
+    for (const loc of Object.keys(guests)) {
       if (!guests[loc]) continue;
       if (!S.guests[loc]) S.guests[loc] = {};
       for (const day of Object.keys(guests[loc])) {
@@ -994,6 +1003,15 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     changed = true;
   }
 
+  // Event-location registry (full-replace — the table is tiny, the server
+  // broadcasts the whole fresh list on every registry write). Feeds demand
+  // via event-window clamps and the planner tab bar, so rebuild + rerender.
+  if (eventLocations) {
+    S.eventLocations = eventLocations;
+    setLocationRegistry(eventLocations);
+    changed = true;
+  }
+
   // Prep checklist (only apply if the patch is for today's date)
   if (prepChecklist && prepChecklist.date === todayIso()) {
     S.prepChecklist[prepChecklist.loc] = new Set(prepChecklist.checked);
@@ -1072,6 +1090,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
       || ingredients || deletedIngredients
       || guestsNextWeeks
       || closedServices
+      || eventLocations // event-window clamps feed getGuests; tab bar/pickers rerender
       || costTargets); // reservePercent feeds the allocation cache (reserveFactor)
     if (needsPlanner) rebuildPlanner();
     rerenderCurrentView();
