@@ -1,7 +1,7 @@
 import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories, restoreGlobalLocation, screenPermission, allActiveLocations, isEventLoc } from './state';
 import { locName, isPermanentLocation } from '@shared/location';
 import type { Location } from '@shared/types';
-import { loadData, connectLiveSync, saveState, toast,
+import { loadData, connectLiveSync, saveState, toast, setOnRegistryChanged,
          loadIngredientDb, loadStorageConfig, loadKitchenEquipment, loadCookRhythm, loadCostTargets, loadRevenuePerGuest, loadClosedServices,
          loadGuestHistory, loadGuestsNextWeeks, loadInventoryCompletions,
          loadRitualCompletions, loadDrinks, loadDrinkSuppliers, loadDrinkConfig } from './utils';
@@ -96,9 +96,15 @@ export function confirmSwitchLocation() {
  *  passes the exact target it displayed so the two can't drift). Falls back to
  *  toggling the current location if called without a valid target. */
 export function switchGlobalLocation(target?: Location) {
-  const newLoc: Location = (target && allActiveLocations().includes(target))
-    ? target
-    : (S.currentLoc === 'west' ? 'centraal' : 'west');
+  if (target && !allActiveLocations().includes(target)) {
+    // The picked location vanished under us (archived via SSE while the
+    // picker modal was open). Falling back to the binary toggle here would
+    // silently send the user to the WRONG restaurant — stay put and say so.
+    closeModal();
+    toast(`${locName(target)} is no longer active`);
+    return;
+  }
+  const newLoc: Location = target ?? (S.currentLoc === 'west' ? 'centraal' : 'west');
   setGlobalLocation(newLoc);
   applyLocationTheme(newLoc);
 
@@ -223,7 +229,26 @@ window.addEventListener('popstate', () => {
 // INIT
 // ═══════════════════════════════════════════════════════════════════
 
+/** Move the user home when their current location stops being active —
+ *  shared by the post-loadData boot check and the SSE registry-replace hook
+ *  (a director archiving the festival must not strand the on-site cook on a
+ *  location whose ritual/prep/inventory writes now silently 400). */
+function revalidateCurrentLocation(): void {
+  if (allActiveLocations().includes(S.currentLoc)) return;
+  const staleName = locName(S.currentLoc);
+  setGlobalLocation('west');
+  applyLocationTheme('west');
+  if (S.plannerSubTab && !allActiveLocations().includes(S.plannerSubTab)) S.plannerSubTab = 'west';
+  buildNav();
+  rerenderCurrentView();
+  toast(`Location "${staleName}" is archived — switched to Sering West`);
+}
+
 export async function initApp() {
+  // Registered at runtime (not module load): utils ↔ init sit in an import
+  // cycle, and a top-level call here runs while utils' module-level `let`s
+  // are still in their temporal dead zone.
+  setOnRegistryChanged(revalidateCurrentLocation);
   await loadData();
   // Re-validate a tentatively-restored location now the registry is loaded
   // (restoreGlobalLocation accepts "ev-…" slugs before loadData): a saved

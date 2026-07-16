@@ -188,14 +188,25 @@ router.post('/:id/ship', asyncHandler(async (req: Request, res: Response) => {
     const inv = parseInventory(existing.inventory);
     const ship = parseShipments(existing.shipments);
 
-    // TODO(checkpoint-3): refine multi-entry source selection if cook UX
-    // needs it — frontend currently passes fromInventoryIdx explicitly.
+    // Re-validate the destination INSIDE the write lock: a ship queued behind
+    // a concurrent archive must not create a pending shipment to a location
+    // that just became archived (the exact stranded-in-transit state the
+    // archive guard exists to prevent).
+    if (!isActiveLocation(toLoc)) throw new AppError(400, 'invalid toLoc');
+
     let srcIdx = -1;
     if (typeof fromInventoryIdx === 'number') {
       const candidate = inv[fromInventoryIdx];
       if (candidate && candidate.loc !== toLoc && candidate.qty > 0
           && (storage === undefined || candidate.storage === storage)) {
         srcIdx = fromInventoryIdx;
+      } else {
+        // An explicit source that no longer matches is a STALE reference
+        // (concurrent edit / double-send). With 3+ locations, silently
+        // auto-picking "any entry whose loc differs" could drain a DIFFERENT
+        // site's stock and mint a phantom cross-site shipment — fail instead
+        // so the client refreshes and retries.
+        throw new AppError(400, 'stale inventory reference — refresh and retry');
       }
     }
     if (srcIdx < 0) {
@@ -358,6 +369,9 @@ router.post('/:id/transfer', asyncHandler(async (req: Request, res: Response) =>
   const result = await withWriteLock(async () => {
     const existing = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
     if (!existing) throw new AppError(404, 'Batch not found');
+
+    // Same in-lock destination re-check as /ship (concurrent archive race).
+    if (!isActiveLocation(toLoc)) throw new AppError(400, 'invalid toLoc');
 
     const inv = parseInventory(existing.inventory);
     // Source selection mirrors /ship: explicit fromInventoryIdx wins (lets a

@@ -257,13 +257,17 @@ const EVENT_STEPS: RitualStep[] = [
   { key: 'service-dinner', label: 'Set up dinner service', phase: 'afternoon', overdueAfter: null, action: null, manual: true, window: 'dinner',
     why: 'Set up dinner before the evening.',
     done: (c) => c.ritualDone('service-dinner') },
-  { key: 'stocktake', label: 'Ingredient stocktake', phase: 'afternoon', overdueAfter: null, orderDayOnly: true, action: 'orders', manual: true,
+  // NOT orderDayOnly (unlike west/centraal): the permanent kitchens order on
+  // the fixed Mon/Tue/Thu rhythm, but a festival takes deliveries most days
+  // and may run entirely over a weekend — gating these on ORDER_DAYS hid the
+  // ordering steps for weekend-run events altogether.
+  { key: 'stocktake', label: 'Ingredient stocktake', phase: 'afternoon', overdueAfter: null, action: 'orders', manual: true,
     why: 'Count your ingredients before you order. Then the amount to order is correct.',
     done: (c) => c.ritualDone('stocktake') },
   { key: 'inv-dinner', label: 'Cooked-food inventory', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'inventory', window: 'dinner',
     why: 'At the end of the day, count the cooked food that is left. The plan for tomorrow — and what West ships next — depends on these numbers.',
     done: (c) => inventoryFresh(c, 'dinner') },
-  { key: 'hanos-order', label: 'Place Hanos order', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, orderDayOnly: true, action: 'orders', manual: true,
+  { key: 'hanos-order', label: 'Place Hanos order', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'orders', manual: true,
     why: 'Order now. The ingredients arrive on location the next day.',
     done: (c) => c.ritualDone('hanos-order') },
 ];

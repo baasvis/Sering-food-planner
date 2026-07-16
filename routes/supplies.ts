@@ -31,10 +31,13 @@ function normalizeStock(raw: unknown): SupplyStock {
   const s = emptyStock();
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
-  // Permanent keys always present; KNOWN event-location keys are preserved
-  // (festival stock must survive read-write round-trips); junk keys dropped.
+  // Permanent keys always present; event-location keys are preserved. The
+  // "ev-" prefix test (not just isKnownLocation) is deliberate fail-safety:
+  // if the registry cache is legitimately empty (boot hydration failed and no
+  // /api/data has run yet), a /prep or /stock write must NOT strip and
+  // permanently erase festival stock keys. Junk keys are still dropped.
   for (const loc of Object.keys(r)) {
-    if (loc !== 'west' && loc !== 'centraal' && !isKnownLocation(loc)) continue;
+    if (loc !== 'west' && loc !== 'centraal' && !loc.startsWith('ev-') && !isKnownLocation(loc)) continue;
     const e = r[loc];
     if (e && typeof e === 'object') {
       const entry = e as Record<string, unknown>;
@@ -284,7 +287,11 @@ router.post('/:id/stock', asyncHandler(async (req: Request, res: Response) => {
   const idErr = checkId(req.params.id, 'id');
   if (idErr) throw new AppError(400, idErr);
   const { location, amount } = req.body as PrepInput;
-  if (typeof location !== 'string' || !isActiveLocation(location)) throw new AppError(400, 'invalid location');
+  // Absolute stocktake SET accepts KNOWN (incl. archived events): zeroing
+  // leftover stock at a closed festival is legitimate cleanup, and without it
+  // a supply with archived-event stock could never pass the delete guard.
+  // /prep (additive) stays ACTIVE-only above.
+  if (typeof location !== 'string' || !isKnownLocation(location)) throw new AppError(400, 'invalid location');
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt < 0 || amt > 1_000_000) throw new AppError(400, 'invalid amount');
 

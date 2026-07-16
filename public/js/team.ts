@@ -487,7 +487,14 @@ export async function saveNewEventLocation(): Promise<void> {
         : EVENT_DEFAULT_AREAS.map(a => ({ ...a, spots: [...a.spots] }));
       if (!S.storageConfig) S.storageConfig = {};
       S.storageConfig[created.slug] = seed;
-      await saveStorageConfig();
+      try {
+        await saveStorageConfig();
+      } catch (_e: unknown) {
+        // The event exists but the areas seed didn't stick — without this
+        // warning the location silently inherits West's walk-in shelves for
+        // everyone else (getStorageConfigForLoc west-fallback).
+        toast(`Created ${name}, but saving its storage areas failed — set them via Orders → Storage Locations`);
+      }
     }
     toast(`Created ${name} — it now has its own planner tab`);
     await refreshEventLocations();

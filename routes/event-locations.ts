@@ -17,7 +17,9 @@ import { prisma, dbAppendLog, dbLoadEventLocations, withWriteLock } from '../lib
 import { asyncHandler, AppError } from '../lib/config';
 import { broadcast } from './events';
 import { requireDirector } from './auth';
+import { invalidateClient } from '../lib/hanos-client';
 import { RESERVED_LOCATION_KEYS } from '../shared/location';
+import { todayIso } from '../shared/dates';
 import type { EventLocationDTO, Shipment } from '../shared/types';
 
 const router = express.Router();
@@ -56,6 +58,15 @@ function cleanInput(body: EventLocationInput, partial = false): {
   if (body.name !== undefined || !partial) {
     if (typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > 60) {
       throw new AppError(400, 'invalid name (1-60 characters)');
+    }
+    // The name is rendered by locName()/shortLocName() into innerHTML all
+    // over the frontend (planner tabs, transport rows, modals, toasts), and
+    // not every legacy sink escapes. Reject markup-capable characters at the
+    // source so a name can never carry stored XSS or break a double-quoted
+    // attribute. Apostrophes stay allowed ("Daan's Fest") — names are never
+    // interpolated into single-quoted JS contexts (only slugs are).
+    if (/[<>"&]/.test(body.name)) {
+      throw new AppError(400, 'invalid name — the characters < > " & are not allowed');
     }
     out.name = body.name.trim();
   }
@@ -102,7 +113,10 @@ async function pendingShipmentBlockers(slug: string): Promise<string[]> {
  *  West after archive), surfaced so the director archives with open eyes. */
 async function archiveWarnings(slug: string): Promise<string[]> {
   const batches = await prisma.batch.findMany({ select: { name: true, inventory: true, services: true } });
-  const today = new Date().toISOString().slice(0, 10);
+  // Local date, not UTC (repo rule — see shared/dates): between 00:00 and
+  // ~02:00 Amsterdam a UTC "today" would count yesterday's served services
+  // as upcoming.
+  const today = todayIso();
   const warnings: string[] = [];
   let stockL = 0, stockBatches = 0, upcoming = 0;
   for (const b of batches) {
@@ -176,6 +190,9 @@ router.patch('/:slug', requireDirector, asyncHandler(async (req: Request, res: R
     assertDateOrder(startDate, endDate);
     await prisma.eventLocation.update({ where: { id: slug }, data: input });
   });
+  // A changed hanosAccount must not keep add-to-cart going to the OLD
+  // account's cart for the pooled client's remaining TTL (up to 10 min).
+  if (input.hanosAccount !== undefined) invalidateClient(slug);
 
   const rows = await dbLoadEventLocations();
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
@@ -243,6 +260,11 @@ router.delete('/:slug', requireDirector, asyncHandler(async (req: Request, res: 
     const existing = await prisma.eventLocation.findUnique({ where: { id: slug } });
     if (!existing) throw new AppError(404, 'Event location not found');
     if (!existing.archived) throw new AppError(400, 'Archive it first — delete is only for archived locations');
+
+    // Zero-reference scan. Deleting frees the slug for reuse, so EVERY store
+    // that references it must either block the delete (meaningful data) or be
+    // purged below (this location's own rows) — otherwise a recreated
+    // same-name event silently inherits the dead event's data.
     const batches = await prisma.batch.findMany({ select: { name: true, inventory: true, shipments: true, services: true } });
     for (const b of batches) {
       const inv = (b.inventory ?? []) as unknown as { loc: string }[];
@@ -253,13 +275,67 @@ router.delete('/:slug', requireDirector, asyncHandler(async (req: Request, res: 
         throw new AppError(400, `Cannot delete: batch "${b.name}" still references this location. Archived is the right end state for a used location.`);
       }
     }
+    // Supplies: a one-off pointing here, or any stock recorded here, blocks —
+    // deleting the registry row would silently erase that stock on the next
+    // normalize-and-write cycle (isKnownLocation would drop the key).
+    const supplies = await prisma.supply.findMany({ select: { name: true, oneoffLocation: true, stock: true } });
+    for (const s of supplies) {
+      const stock = (s.stock ?? {}) as Record<string, { amount?: number } | undefined>;
+      if (s.oneoffLocation === slug) {
+        throw new AppError(400, `Cannot delete: supply "${s.name}" is a one-off at this location. Re-point or delete the supply first.`);
+      }
+      if ((stock[slug]?.amount ?? 0) > 0) {
+        throw new AppError(400, `Cannot delete: supply "${s.name}" still has stock recorded at this location. Zero it first.`);
+      }
+    }
+    // Ingredient DB: counted stock or order targets at this location block —
+    // same silent-inheritance risk for a recreated slug.
+    const ingredients = await prisma.ingredient.findMany({ select: { name: true, stock: true, targetStock: true } });
+    for (const ing of ingredients) {
+      const stock = (ing.stock ?? {}) as Record<string, { amount?: number } | undefined>;
+      const target = (ing.targetStock ?? {}) as Record<string, number | undefined>;
+      if ((stock[slug]?.amount ?? 0) > 0 || (target[slug] ?? 0) > 0) {
+        throw new AppError(400, `Cannot delete: ingredient "${ing.name}" still has stock or an order target at this location. Zero it first (or leave the event archived).`);
+      }
+    }
+
+    // Purge this location's own side rows + JSON keys so nothing is orphaned
+    // and a reused slug starts clean.
     await prisma.guest.deleteMany({ where: { location: slug } });
+    await prisma.guestsNextWeeks.deleteMany({ where: { location: slug } });
     await prisma.standardInventory.deleteMany({ where: { location: slug } });
     await prisma.prepChecklist.deleteMany({ where: { loc: slug } });
     await prisma.ritualCompletion.deleteMany({ where: { loc: slug } });
+    const storageCfg = await prisma.storageConfig.findUnique({ where: { id: 'default' } });
+    if (storageCfg && storageCfg.config && typeof storageCfg.config === 'object' && !Array.isArray(storageCfg.config)) {
+      const cfg = { ...(storageCfg.config as Record<string, unknown>) };
+      if (slug in cfg) {
+        delete cfg[slug];
+        await prisma.storageConfig.update({ where: { id: 'default' }, data: { config: cfg as object } });
+      }
+    }
+    // Zero-amount stock keys (0 blocks nothing above) are cleaned too.
+    for (const s of await prisma.supply.findMany({ select: { id: true, stock: true } })) {
+      const stock = (s.stock ?? {}) as Record<string, unknown>;
+      if (slug in stock) {
+        const next = { ...stock };
+        delete next[slug];
+        await prisma.supply.update({ where: { id: s.id }, data: { stock: next as object } });
+      }
+    }
+    for (const ing of await prisma.ingredient.findMany({ select: { id: true, stock: true, targetStock: true } })) {
+      const stock = (ing.stock ?? {}) as Record<string, unknown>;
+      const target = (ing.targetStock ?? {}) as Record<string, unknown>;
+      if (slug in stock || slug in target) {
+        const nextStock = { ...stock }; delete nextStock[slug];
+        const nextTarget = { ...target }; delete nextTarget[slug];
+        await prisma.ingredient.update({ where: { id: ing.id }, data: { stock: nextStock as object, targetStock: nextTarget as object } });
+      }
+    }
     await prisma.eventLocation.delete({ where: { id: slug } });
   });
 
+  invalidateClient(slug); // drop any pooled Hanos client for the dead slug
   const rows = await dbLoadEventLocations();
   const user = req.user || { email: 'anonymous', name: 'Anonymous' };
   dbAppendLog(user.email, user.name, 'event-location-delete', slug);

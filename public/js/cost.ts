@@ -27,6 +27,7 @@ import { showModal, closeModal, esc } from './modal';
 import { toast, toastError, saveCostTargets, saveCookReserve } from './utils';
 import { rerenderCurrentView } from './navigate';
 import { supplyPricePerGuest } from '@shared/supply-demand';
+import { shortLocName } from '@shared/location';
 import type { Batch, CostTargets, RecipeFull } from '@shared/types';
 
 // Batch dish types that carry cooked cost (toppings/bread are Supplies, handled
@@ -438,7 +439,7 @@ export function renderCostDrilldown(isoDates: Set<string>): string {
     + `<span class="cost-opt cost-${d.status}">${fmtEur(d.costPerGuest)}${d.costed ? '' : '<small> ~</small>'}</span></div>`,
   ).join('');
   const svcRows = services.map(s =>
-    `<div class="drill-row"><span class="drill-name">${dateToDayName(s.date)} ${esc(s.meal)} <small>${s.loc === 'west' ? 'W' : 'C'}</small></span>`
+    `<div class="drill-row"><span class="drill-name">${dateToDayName(s.date)} ${esc(s.meal)} <small>${esc(shortLocName(s.loc))}</small></span>`
     + `<span class="cost-opt cost-${costStatus(s.costPerGuest, totalTarget)}">${fmtEur(s.costPerGuest)}</span></div>`,
   ).join('');
   return `<details class="cost-drill">

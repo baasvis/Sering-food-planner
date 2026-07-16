@@ -1749,3 +1749,54 @@ describe('event-location exclusion guards', () => {
     expect(withRegistry).toEqual(withoutRegistry);
   });
 });
+
+// ── Review-round additions (ultracode deep review of PR #125) ────────────────
+
+describe('event-location capacity gate — review-round cases', () => {
+  const EV = 'ev-testfest-2026';
+  beforeEach(() => {
+    S.eventLocations = [{
+      slug: EV, name: 'Testfest 2026', startDate: '2026-05-01', endDate: '2026-05-15',
+      hanosAccount: 'west', archived: false,
+      createdAt: '2026-05-01T00:00:00.000Z', archivedAt: null,
+    }];
+  });
+  afterEach(() => { S.eventLocations = []; });
+
+
+
+  test('an UN-ARRIVED shipment to an event is enough to leave the fast path (its liters are unreachable)', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    // 100L at West + 50L in transit to the festival. Total serveable = 150,
+    // but only the 100 at West can ever serve west/centraal. Demand 120 via
+    // stub: the fast path would admit (120 <= 150); the event path must
+    // reject (120 > 100 reachable). Deleting the shipment leg of
+    // eventLocsTouching turns this red.
+    const b = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'In transit to fest',
+      inventory: [inv(100, 'west')],
+      shipments: [{ id: 's1', fromLoc: 'west', toLoc: EV as Location, storage: 'Gastro', qty: 50, sentAt: '2026-05-04T06:00:00.000Z', arrived: false, cookDate: '03/05/2026' }],
+    });
+    scoredGreedyAssignment([b], window, fixedCalcRequired(120), TEN_GUESTS, NO_POT_CAPS);
+    expect(b.services.length).toBe(0);
+  });
+
+  test('event residual demand can only be fed from West — Centraal stock must not pool against it', () => {
+    const window = makeWindow([{ iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }]);
+    // 50L at Centraal, nothing at West or on site at the festival, and a
+    // hand-planned reachable festival service needing 30L. Centraal never
+    // ships to an event, so no new west/centraal slot may be admitted on the
+    // strength of that Centraal stock.
+    const b = makeBatch({
+      type: 'Soup', cookDate: '03/05/2026', name: 'Centraal-heavy',
+      inventory: [inv(50, 'centraal')],
+      services: [
+        { loc: EV, date: '2026-05-06', meal: 'lunch' },
+        { loc: EV, date: '2026-05-06', meal: 'dinner' },
+        { loc: EV, date: '2026-05-07', meal: 'lunch' },
+      ],
+    });
+    scoredGreedyAssignment([b], window, fixedCalcRequired(10), TEN_GUESTS, NO_POT_CAPS);
+    expect(b.services.length).toBe(3); // nothing added
+  });
+});

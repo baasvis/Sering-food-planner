@@ -222,8 +222,10 @@ describe('location validation across write paths', () => {
     const base = { west: week(), centraal: week() };
     expect(validateGuests(base)).toBeNull();
     expect(validateGuests({ ...base, [created.slug]: week() })).toBeNull();
-    // A KNOWN event key with a broken shape is rejected...
-    expect(validateGuests({ ...base, [created.slug]: { Mon: { lunch: 1, dinner: 1 } } })).toMatch(/missing/);
+    // A KNOWN event key may be SPARSE (review fix: SSE sessions build the
+    // block one edited day at a time) — but present days must be well-shaped.
+    expect(validateGuests({ ...base, [created.slug]: { Mon: { lunch: 1, dinner: 1 } } })).toBeNull();
+    expect(validateGuests({ ...base, [created.slug]: { Mon: { lunch: 'x', dinner: 1 } } } as never)).toMatch(/Invalid guest count/);
     // ...but an UNKNOWN key is tolerated and skipped, even with garbage shape:
     // the whole guests object round-trips on save, and a stray DB key must
     // never brick the pipeline (it just isn't written by the merge).
@@ -349,13 +351,21 @@ describe('supply stock at an event location', () => {
     expect(prep.body.stock[created.slug].amount).toBe(4);
 
     await request(app).post(`/api/event-locations/${created.slug}/archive`).set('Cookie', cookie);
-    // Event stock preserved on read after archive (KNOWN key), but new moves rejected:
+    // Event stock preserved on read after archive (KNOWN key):
     const after = await request(app).get('/api/supplies?includeArchived=1').set('Cookie', cookie);
     const row = (after.body as Array<{ id: string; stock: Record<string, { amount: number }> }>).find(s => s.id === supplyId);
     expect(row!.stock[created.slug].amount).toBe(4);
-    const move = await request(app).post(`/api/supplies/${supplyId}/stock`).set('Cookie', cookie)
+    // Additive /prep stays ACTIVE-only…
+    const prep2 = await request(app).post(`/api/supplies/${supplyId}/prep`).set('Cookie', cookie)
+      .send({ location: created.slug, amount: 2 });
+    expect(prep2.status).toBe(400);
+    // …but the absolute stocktake SET accepts KNOWN — zeroing leftover stock
+    // at a closed festival is legitimate cleanup (and required before the
+    // supply-delete guard or a registry hard-delete can pass).
+    const zero = await request(app).post(`/api/supplies/${supplyId}/stock`).set('Cookie', cookie)
       .send({ location: created.slug, amount: 0 });
-    expect(move.status).toBe(400);
+    expect(zero.status).toBe(200);
+    expect(zero.body.stock[created.slug].amount).toBe(0);
   });
 });
 
@@ -405,5 +415,77 @@ describe('DELETE /api/event-locations/:slug', () => {
 
   it('403 without a director session', async () => {
     expect((await request(app).delete('/api/event-locations/ev-nope')).status).toBe(403);
+  });
+});
+
+// ── Review-round additions (ultracode deep review of PR #125) ────────────────
+
+describe('validateGuests sparse event blocks', () => {
+  it('accepts a single-day event block (SSE sessions save one edited day at a time)', async () => {
+    const cookie = await loginDirector();
+    const created = await createEventLoc(cookie);
+    const week = () => {
+      const w: Record<string, { lunch: number; dinner: number }> = {};
+      for (const d of ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']) w[d] = { lunch: 0, dinner: 0 };
+      return w;
+    };
+    const base = { west: week(), centraal: week() };
+    // Sparse event block: valid. Bad day name / bad shape inside it: rejected.
+    expect(validateGuests({ ...base, [created.slug]: { Mon: { lunch: 400, dinner: 700 } } })).toBeNull();
+    expect(validateGuests({ ...base, [created.slug]: { Funday: { lunch: 1, dinner: 1 } } })).toMatch(/not a weekday/);
+    expect(validateGuests({ ...base, [created.slug]: { Mon: { lunch: -1, dinner: 0 } } })).toMatch(/Invalid guest count/);
+    // Permanent keys still require the full week.
+    expect(validateGuests({ west: { Mon: { lunch: 1, dinner: 1 } }, centraal: week() } as never)).toMatch(/missing/);
+
+    // End-to-end: a sparse patch merges into the scaffold instead of 400ing.
+    const save = await request(app).post('/api/data/patch').set('Cookie', cookie)
+      .send({ guests: { ...base, [created.slug]: { Tue: { lunch: 150, dinner: 300 } } } });
+    expect(save.status).toBe(200);
+    const data = await request(app).get('/api/data').set('Cookie', cookie);
+    expect(data.body.guests[created.slug].Tue).toEqual({ lunch: 150, dinner: 300 });
+    expect(data.body.guests[created.slug].Mon).toEqual({ lunch: 0, dinner: 0 }); // scaffold intact
+  });
+});
+
+describe('event-location name hygiene (stored-XSS guard)', () => {
+  it('rejects names with markup-capable characters, allows apostrophes', async () => {
+    const cookie = await loginDirector();
+    const base = { startDate: '2026-07-20', endDate: '2026-07-30' };
+    expect((await request(app).post('/api/event-locations').set('Cookie', cookie)
+      .send({ ...base, name: '<script>alert(1)</script>' })).status).toBe(400);
+    expect((await request(app).post('/api/event-locations').set('Cookie', cookie)
+      .send({ ...base, name: 'Fest "quoted"' })).status).toBe(400);
+    expect((await request(app).post('/api/event-locations').set('Cookie', cookie)
+      .send({ ...base, name: 'Fish & Chips Fest' })).status).toBe(400);
+    const ok = await request(app).post('/api/event-locations').set('Cookie', cookie)
+      .send({ ...base, name: `${NAME} Daan's Fest` });
+    expect(ok.status).toBe(201);
+  });
+});
+
+describe('phase-C inventory-route widenings', () => {
+  it('ritual-completions, prep-checklist and inventory-completions accept ACTIVE event locs and reject archived ones', async () => {
+    const cookie = await loginDirector();
+    const created = await createEventLoc(cookie);
+    const date = '2026-07-21';
+
+    expect((await request(app).post('/api/ritual-completions').set('Cookie', cookie)
+      .send({ loc: created.slug, date, completed: ['service-lunch'] })).status).toBe(200);
+    expect((await request(app).post('/api/prep-checklist').set('Cookie', cookie)
+      .send({ loc: created.slug, date, checked: ['x'] })).status).toBe(200);
+    expect((await request(app).post('/api/inventory-completions').set('Cookie', cookie)
+      .send({ loc: created.slug, window: 'lunch' })).status).toBe(200);
+    const latest = await request(app).get('/api/inventory-completions/latest').set('Cookie', cookie);
+    expect(latest.body[created.slug]).toBeTruthy();
+    expect((await request(app).post('/api/standard-inventory').set('Cookie', cookie)
+      .send({ location: 'ev-not-a-loc', items: [] })).status).toBe(400);
+
+    await request(app).post(`/api/event-locations/${created.slug}/archive`).set('Cookie', cookie);
+    expect((await request(app).post('/api/ritual-completions').set('Cookie', cookie)
+      .send({ loc: created.slug, date, completed: [] })).status).toBe(400);
+    // Cleanup the rows this test created (hard-delete purges them too, but
+    // keep the shared DB tidy even when later assertions change).
+    await prisma.ritualCompletion.deleteMany({ where: { loc: created.slug } });
+    await prisma.prepChecklist.deleteMany({ where: { loc: created.slug } });
   });
 });

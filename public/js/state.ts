@@ -306,6 +306,16 @@ export let S: AppState = {
 export function setEventLocationsState(rows: EventLocationDTO[]): void {
   S.eventLocations = rows;
   setLocationRegistry(rows);
+  // Seed a zero guest week for any ACTIVE event missing from S.guests: a
+  // client that learns about a new event via SSE (no full reload) must be
+  // able to render its guest card and build a valid (sparse-merging) save
+  // payload without waiting for the next GET /api/data.
+  for (const e of rows) {
+    if (e.archived || S.guests[e.slug]) continue;
+    const week: Record<string, { lunch: number; dinner: number }> = {};
+    for (const d of DAYS) week[d] = { lunch: 0, dinner: 0 };
+    S.guests[e.slug] = week;
+  }
 }
 
 /** Non-archived event locations, in registry order. */

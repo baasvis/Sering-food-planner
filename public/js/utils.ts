@@ -1,7 +1,7 @@
 // UUID GENERATION
 // ═══════════════════════════════════════════════════════════════════
 
-import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen, setEventLocationsState } from './state';
+import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen, setEventLocationsState, allActiveLocations } from './state';
 import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply, Drink, DrinkSupplier, DrinkConfig, EventLocationDTO } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
 import { setLocationRegistry } from '@shared/location';
@@ -23,6 +23,14 @@ export function setOnBatchesChanged(fn: () => void) { _onBatchesChanged = fn; }
 // Callback to flush pending undo before remote patch (avoids circular import with undo.ts)
 let _flushUndo: (() => void) | null = null;
 export function setFlushUndo(fn: () => void) { _flushUndo = fn; }
+
+// Callback fired after an SSE eventLocations patch replaces the registry —
+// init.ts registers a revalidator that moves the user home (with a toast)
+// when their CURRENT location was just archived, so their ritual/prep/
+// inventory writes don't silently 400 for the rest of the session. Setter
+// pattern avoids a utils → init circular import.
+let _onRegistryChanged: (() => void) | null = null;
+export function setOnRegistryChanged(fn: () => void) { _onRegistryChanged = fn; }
 
 // Callback fired after a remote SSE patch is applied — refreshes an open
 // inventory modal so its embedded row indices don't go stale. Registered by
@@ -1005,6 +1013,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
   // via event-window clamps and the planner tab bar, so rebuild + rerender.
   if (eventLocations) {
     setEventLocationsState(eventLocations);
+    if (_onRegistryChanged) _onRegistryChanged();
     changed = true;
   }
 
@@ -1122,7 +1131,10 @@ function updateSnapshotForRemote(msg: RemotePatchMessage): void {
   }
   if (msg.guests) {
     const snapshotGuests = JSON.parse(_lastSaved.guests);
-    for (const loc of ['west', 'centraal']) {
+    // Mirror applyRemotePatch: iterate the payload's own keys. Merging only
+    // west/centraal here while S.guests gained an event key left a permanent
+    // phantom diff — the client re-sent the whole guests object on every save.
+    for (const loc of Object.keys(msg.guests)) {
       if (!msg.guests[loc]) continue;
       if (!snapshotGuests[loc]) snapshotGuests[loc] = {};
       for (const day of Object.keys(msg.guests[loc])) {
@@ -1240,7 +1252,11 @@ export function schedulePrepSave(loc: string): void {
 /** Hydrate S.ritualCompletions for both locations from today's rows. */
 export async function loadRitualCompletions(): Promise<void> {
   const date = todayIso();
-  await Promise.all((['west', 'centraal'] as const).map(async (loc) => {
+  // All active locations, not just the permanent pair: at an event location
+  // a west/centraal-only hydration left the Today panel unticked after every
+  // reload, and the next manual tick wholesale-overwrote the server row —
+  // erasing the location's saved ritual steps for every device.
+  await Promise.all(allActiveLocations().map(async (loc) => {
     try {
       const data = await apiGet(`/api/ritual-completions?loc=${loc}&date=${date}`);
       S.ritualCompletions[loc] = new Set(Array.isArray(data) ? data : []);

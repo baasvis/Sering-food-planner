@@ -981,8 +981,10 @@ export async function confirmManualShip(): Promise<void> {
   trackEvent('manual_ship_confirmed', toLoc, { rowCount: rows.length, fromLoc });
 
   let okCount = 0;
+  let failCount = 0;
   let cappedCount = 0;
   for (const row of rows) {
+    let sentAny = false;
     try {
       const b = S.batches.find(x => x.id === row.batchId);
       const entries = (b?.inventory || [])
@@ -1002,15 +1004,22 @@ export async function confirmManualShip(): Promise<void> {
         }
         if (res && res.warning) cappedCount++;
         remaining = Math.round((remaining - sendQty) * 10) / 10;
+        sentAny = true;
       }
-      okCount++;
+      // A row that issued NO POST (stale modal — stock changed under us)
+      // must not count as sent: the cook typed litres expecting them shipped.
+      if (sentAny) okCount++; else failCount++;
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown error';
       console.error('manual ship failed for batch', row.batchId, message);
+      if (sentAny) okCount++; // partial: some litres of this row did ship
+      failCount++;
     }
   }
   _manualShip = null;
-  if (okCount > 0) {
+  if (failCount > 0) {
+    toastError(`${okCount > 0 ? `Sent ${okCount}, but ` : ''}${failCount} batch${failCount > 1 ? 'es' : ''} could not be sent — refresh and check the Transport tab before retrying.`);
+  } else if (okCount > 0) {
     const cappedNote = cappedCount > 0 ? ' (some capped to available)' : '';
     toast(`Sent ${okCount} batch${okCount > 1 ? 'es' : ''} to ${locName(toLoc)}${cappedNote}`);
   }

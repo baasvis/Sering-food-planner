@@ -347,8 +347,11 @@ export function getGuests(loc: string, dateStr: string, meal: Meal | string): nu
   // Event locations only have guests inside their date window — a stray base
   // weekday pattern must not generate phantom demand (supplies, coverage,
   // FMM capacity) across the whole planning horizon outside the festival.
+  // An ARCHIVED event has no demand at all: a festival archived mid-window
+  // (cancelled, or closed early) must stop feeding cook/supply/order demand
+  // even for dates inside its window.
   const ev = eventLocById(loc);
-  if (ev && (dateStr < ev.startDate || dateStr > ev.endDate)) return 0;
+  if (ev && (ev.archived || dateStr < ev.startDate || dateStr > ev.endDate)) return 0;
   const lk = loc;
   const dn = dateToDayName(dateStr);
 

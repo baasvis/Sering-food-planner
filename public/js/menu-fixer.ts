@@ -809,10 +809,15 @@ function scoredHardConstraintsOk(
       //   (1) total demand MINUS what event on-site stock covers ≤ the
       //       west/centraal-reachable serveable stock (event-parked stock
       //       must never masquerade as coverage for west/centraal slots);
-      //   (2) West demand ≤ West serveable stock (as the fast path);
+      //   (2) West demand PLUS the event residuals ≤ West serveable stock —
+      //       an event's demand beyond its on-site stock can ONLY be fed from
+      //       West (Centraal never ships to an event), so pooling Centraal
+      //       stock against it would admit assignments that starve a
+      //       hand-planned festival service;
       //   (3) locked Centraal demand ≤ Centraal on-site (as the fast path).
       let ok = true;
       let coveredByEvents = 0;
+      let eventResidual = 0; // event demand only West can still feed
       for (const ev of evLocs) {
         const dEv = demandOfExcluded(batch, withNew, calcReq, totalDemand, s => s.loc !== ev);
         const onSite = getServeableStockAt(batch, ev) + getServeablePendingTo(batch, ev);
@@ -820,6 +825,7 @@ function scoredHardConstraintsOk(
           s => !(s.loc === ev && !westReaches(ev, todayIso, s.date, s.meal)));
         if (lockedEv > onSite + 1e-9) { ok = false; break; }
         coveredByEvents += Math.min(dEv, onSite);
+        eventResidual += Math.max(0, dEv - onSite);
       }
       if (ok) {
         const reachable = getServeableStockAt(batch, 'west') + getServeablePendingTo(batch, 'west')
@@ -828,7 +834,7 @@ function scoredHardConstraintsOk(
       }
       if (ok) {
         const westDemand = demandOfExcluded(batch, withNew, calcReq, totalDemand, s => s.loc !== 'west');
-        ok = westDemand <= getServeableStockAt(batch, 'west');
+        ok = westDemand + eventResidual <= getServeableStockAt(batch, 'west') + 1e-9;
       }
       if (ok) {
         const lockedCentraalDemand = demandOfExcluded(batch, withNew, calcReq, totalDemand,
@@ -1289,9 +1295,29 @@ function findCombinationTeam(
         if (getTotalStock(cand) > 0
             && calcRequiredAtLocLive(cand, 'centraal', getGuestsFn) + shareLitersAtThisSlot > centraalOnSite) continue;
       } else {
-        const batchStock = getTotalStock(cand);
-        const projectedDemand = calcReq(cand) + shareLitersAtThisSlot;
-        if (batchStock > 0 && projectedDemand > batchStock) continue;
+        // Reachable Centraal slot: West can ship in, so the west/centraal
+        // pool counts — but liters parked at (or bound for) an EVENT
+        // location never do, and demand owed to an event is only offset by
+        // that event's own on-site stock (mirrors the gate's event path).
+        // hasAnyStock (not the reachable figure) keeps the fresh-cook
+        // exemption: an all-at-event batch must be capacity-checked, not
+        // waved through as an uncooked placeholder.
+        const hasAnyStock = getTotalStock(cand) > 0;
+        const evLocs = eventLocsTouching(cand);
+        let batchStock = getTotalStock(cand);
+        let projectedDemand = calcReq(cand) + shareLitersAtThisSlot;
+        if (evLocs.length > 0) {
+          batchStock = getServeableStockAt(cand, 'west') + getServeablePendingTo(cand, 'west')
+            + getServeableStockAt(cand, 'centraal') + getServeablePendingTo(cand, 'centraal');
+          const all = cand.services || [];
+          const total = calcReq(cand);
+          for (const ev of evLocs) {
+            const dEv = demandOfExcluded(cand, all, calcReq, total, s => s.loc !== ev);
+            const onSite = getServeableStockAt(cand, ev) + getServeablePendingTo(cand, ev);
+            projectedDemand -= Math.min(dEv, onSite);
+          }
+        }
+        if (hasAnyStock && projectedDemand > batchStock) continue;
       }
       team.push(cand);
       coverageGuests += guestsPerPeer;

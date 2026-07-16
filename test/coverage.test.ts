@@ -473,18 +473,21 @@ describe('event-location coverage', () => {
   });
 
   test('catering drains west → centraal → event buckets, in that order', () => {
-    const b = mk({ inventory: [inv('west', 2), inv('centraal', 3), inv(EV as Location, 4)] });
+    // Stock EXCEEDS the catering demand so the drain ORDER is observable in
+    // the leftovers (a fully-consumed fixture ends at all-zero regardless of
+    // order — review finding). 50 guests x 0.28L = 14L demand against
+    // 10 + 10 + 10: west drains fully, centraal partially, event untouched.
+    const b = mk({ inventory: [inv('west', 10), inv('centraal', 10), inv(EV as Location, 10)] });
     S.caterings = [{
       id: 'c-1', name: 'Big order', date: '12/05/2026', guestCount: 50,
       deliveryMode: 'pickup', dishes: [{ dishId: b.id, name: 'x', type: 'Soup' }],
       logisticsNotes: '',
     } as Catering];
     const cov = computeCoverage(b, demander({}));
-    // 50 guests x 0.28L = 14L: 2 from west, 3 from centraal, 4 from event → 5 short.
-    expect(cov.west.leftover).toBe(0);
-    expect(cov.centraal.leftover).toBe(0);
-    expect(cov.byLoc[EV].leftover).toBe(0);
-    expect(cov.shortfall).toBe(5);
+    expect(cov.west.leftover).toBe(0);        // drained first, fully
+    expect(cov.centraal.leftover).toBe(6);    // 10 − remaining 4
+    expect(cov.byLoc[EV].leftover).toBe(10);  // drained last — untouched
+    expect(cov.shortfall).toBe(0);
     S.caterings = [];
   });
 });

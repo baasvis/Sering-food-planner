@@ -152,6 +152,51 @@ test.describe.serial('event location lifecycle', () => {
     await expect(page.locator('.dish-chip', { hasText: BATCH }).first()).toBeVisible();
   });
 
+  test('Fix My Menu leaves the festival assignment alone', async () => {
+    // The headline invariant, full-stack: run FMM on West, then confirm the
+    // hand-planned event chip is still there (event services are spared like
+    // pins — unit tests pin the functions, this pins the wiring).
+    await page.locator('.sub-tab[data-tab="west"]').click();
+    // fixMyMenu() opens a NATIVE confirm() first — Playwright auto-dismisses
+    // native dialogs (returns false), which silently aborts the run.
+    page.once('dialog', d => void d.accept());
+    await page.locator('.btn-fix-menu').click();
+    // FMM ends with a results modal — wait for it, then dismiss.
+    await expect(page.locator('#modal-root .modal')).toBeVisible({ timeout: 30_000 });
+    await page.keyboard.press('Escape');
+    await page.locator(`.sub-tab[data-tab="${SLUG}"]`).click();
+    await expect(page.locator('.dish-chip', { hasText: BATCH }).first()).toBeVisible();
+  });
+
+  test('an ingredient stocktake at the event writes the event key', async () => {
+    // Stocktake flows are loc-parameterized — verify an on-site count lands
+    // under the event's own stock key, not west's.
+    const result = await page.evaluate(async (slug) => {
+      const list = await (await fetch('/api/ingredients')).json();
+      const ing = Array.isArray(list) && list[0];
+      if (!ing) return { skipped: true };
+      const r = await fetch('/api/ingredients/stock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ingredientId: ing.id, location: slug, amount: 7 }),
+      });
+      if (!r.ok) return { status: r.status };
+      const fresh = await (await fetch('/api/ingredients')).json();
+      const mine = fresh.find((x: { id: string }) => x.id === ing.id);
+      // Restore west/centraal untouched; zero our key again for cleanup.
+      await fetch('/api/ingredients/stock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ingredientId: ing.id, location: slug, amount: 0 }),
+      });
+      return { status: r.status, amount: mine?.stock?.[slug]?.amount, west: mine?.stock?.west?.amount };
+    }, SLUG);
+    if (!('skipped' in result)) {
+      expect(result.status).toBe(200);
+      expect(result.amount).toBe(7);
+    }
+  });
+
   test('guest counts for the event are edited on their own card', async () => {
     await page.locator('.nav-btn[data-screen="guests"]').click();
     const card = page.locator('.guests-loc-card.loc-event', { hasText: RUN });
@@ -203,14 +248,19 @@ test.describe.serial('event location lifecycle', () => {
     await expect(qty).toBeVisible();
     await qty.fill('5');
     await page.getByTestId('manual-ship-confirm').click();
-    // West confirms the return via its own arrival block.
+    // West confirms the return via the Transport tab's PER-ROW button — the
+    // dashboard block confirms EVERY pending west-bound shipment at once,
+    // which on the shared staging DB would mutate unrelated batches.
     await page.locator('#app-title').click();
     await page.getByTestId('loc-pick-west').click();
-    await page.locator('.nav-btn[data-screen="dashboard"]').click();
-    const block = page.locator('.dash-arrival-block');
-    await expect(block).toBeVisible();
-    await block.click();
-    await expect(block).toHaveCount(0);
+    await page.locator('.nav-btn[data-screen="planner"]').click();
+    await page.locator('.sub-tab[data-tab="transport"]').click();
+    const card = page.locator('.ship-batch-card', { hasText: BATCH });
+    await expect(card).toBeVisible();
+    const returned = page.waitForResponse(r => r.url().includes('/arrived') && r.request().method() === 'POST');
+    await card.locator('.ship-row button', { hasText: 'Mark arrived' }).first().click();
+    expect((await returned).status()).toBe(200);
+    await expect(page.locator('.ship-batch-card', { hasText: BATCH })).toHaveCount(0);
 
     // Archive from the Team screen (soft warnings modal → confirm).
     await page.locator('.nav-btn[data-screen="team"]').click();

@@ -1,4 +1,4 @@
-import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
+import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor, allActiveLocations } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet, todayIso } from './utils';
 import { pushUndo } from './undo';
 import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, cateringActive, diffStr, computeCoverage, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
@@ -35,6 +35,17 @@ interface BatchWithLegacy extends Batch {
 // In the unified-batch model a single Batch can carry stock at multiple
 // (loc, storage) pairs PLUS pending shipments. These helpers produce the
 // short, compact strings tile rendering uses everywhere.
+
+/** <option> list for a location select: every ACTIVE location plus the
+ *  currently-selected value (so stock at an ARCHIVED event still displays as
+ *  itself instead of silently rendering — and on any touch, teleporting — as
+ *  "Sering West"). The old permanent-only LOCATIONS list did exactly that to
+ *  festival stock. */
+function locOptions(selected: string): string {
+  const locs = allActiveLocations();
+  if (selected && !locs.includes(selected)) locs.push(selected);
+  return locs.map(l => `<option value="${esc(l)}"${l === selected ? ' selected' : ''}>${esc(locName(l))}</option>`).join('');
+}
 
 /** Compact "where the food is" line, e.g. "55L West/Gastro · 25L Centraal/Gastro · +10L → Centraal pending". */
 function renderInventorySummary(d: Batch): string {
@@ -1020,7 +1031,7 @@ function renderSendModal(id: string, toLoc: Location) {
     </div>
     <div class="fr"><label>To</label>
       <select id="send-to-loc" onchange="rerenderSendModal('${id}',this.value)">
-        ${LOCATIONS.map(l => `<option value="${l}"${l === toLoc ? ' selected' : ''}>${locName(l)}</option>`).join('')}
+        ${locOptions(toLoc)}
       </select>
     </div>
     <div class="fr"><label>Storage at destination</label>
@@ -1457,7 +1468,7 @@ function renderInventoryEditor(id: string) {
         return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--bg);">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <select onchange="updateInventoryField('${id}',${i},'loc',this.value)" style="min-width:130px;">
-              ${LOCATIONS.map(l => `<option value="${l}"${e.loc === l ? ' selected' : ''}>${locName(l)}</option>`).join('')}
+              ${locOptions(e.loc)}
             </select>
             <select onchange="updateInventoryField('${id}',${i},'storage',this.value)" style="min-width:110px;">
               ${STORAGE.map(s => `<option value="${s}"${e.storage === s ? ' selected' : ''}>${s}</option>`).join('')}
@@ -1603,7 +1614,7 @@ function renderEditDish(id: string) {
         </tr></thead>
         <tbody>
           ${inv.length === 0 ? '<tr><td colspan="5" style="padding:8px;color:var(--text3);">No inventory</td></tr>' : inv.map((e, i) => `<tr>
-            <td style="padding:4px;"><select onchange="updateInventoryField('${id}',${i},'loc',this.value)">${LOCATIONS.map(l => `<option value="${l}"${e.loc === l ? ' selected' : ''}>${locName(l)}</option>`).join('')}</select></td>
+            <td style="padding:4px;"><select onchange="updateInventoryField('${id}',${i},'loc',this.value)">${locOptions(e.loc)}</select></td>
             <td style="padding:4px;"><select onchange="updateInventoryField('${id}',${i},'storage',this.value)">${STORAGE.map(s => `<option value="${s}"${e.storage === s ? ' selected' : ''}>${s}</option>`).join('')}</select></td>
             <td style="padding:4px;"><input type="number" value="${e.qty}" step="0.5" min="0" style="width:70px;" onchange="updateInventoryField('${id}',${i},'qty',this.value)" /></td>
             <td style="padding:4px;font-family:monospace;font-size:11px;">${esc(e.cookDate)}</td>
@@ -1617,7 +1628,7 @@ function renderEditDish(id: string) {
       ${ship.filter(s => !s.arrived).length === 0
         ? '<div style="font-size:12px;color:var(--text3);">No pending shipments</div>'
         : `<ul style="margin:0;padding-left:16px;font-size:12px;">${ship.filter(s => !s.arrived).map(s => `<li style="margin:4px 0;">
-            ${s.qty.toFixed(1)}L ${s.fromLoc === 'centraal' ? 'Centraal' : 'West'} → ${s.toLoc === 'centraal' ? 'Centraal' : 'West'}, ${s.storage} (cooked ${esc(s.cookDate)})
+            ${s.qty.toFixed(1)}L ${esc(locName(s.fromLoc))} → ${esc(locName(s.toLoc))}, ${s.storage} (cooked ${esc(s.cookDate)})
             <button class="btn btn-sm btn-danger" style="margin-left:8px;" onclick="cancelShipmentFromEdit('${id}','${s.id}')">Cancel</button>
           </li>`).join('')}</ul>`
       }

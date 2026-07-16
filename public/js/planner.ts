@@ -1571,7 +1571,9 @@ function renderSuppliesInvSection(loc: string): string {
     let hint = '';
     if (s.kind === 'standard') {
       const d = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
-      const need = s.prepMode === 'centralized' ? d.west : (loc === 'centraal' ? d.centraal : d.west);
+      // Per-location demand for THIS location (event locs have their own
+      // bucket); centralized supplies always show West's roll-up.
+      const need = s.prepMode === 'centralized' ? d.west : (d[loc] ?? 0);
       if (need > 0) hint = `<span style="font-size:11px;color:var(--text2);">need ~${Math.ceil(need)}</span>`;
     }
     html += `<div class="inv-row" data-supply="${esc(s.id)}">

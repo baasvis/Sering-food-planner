@@ -61,6 +61,8 @@ export function blendedRate(rows: { hours: number; total: number }[]): number | 
   return hours > 0 ? r2(total / hours) : null;
 }
 
+// DELIBERATELY permanent-only: the labour block covers the fixed venues;
+// temporary event locations have no Notion roster mapping (v1).
 const NOTION_VENUE_TO_ORG: Record<string, string> = {
   'Sering West': 'west',
   'West-Event': 'west',

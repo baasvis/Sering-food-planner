@@ -14,7 +14,7 @@
 import express, { Request, Response } from 'express';
 import { errMsg, safeErrMsg, AppError, asyncHandler } from '../lib/config';
 import { OCC_BASE, getCredentials, getClient, invalidateClient, formatProduct, resolveHanosAccount } from '../lib/hanos-client';
-import { activeEventSlugs } from '../lib/locations';
+import { activeEventSlugs, isActiveLocation } from '../lib/locations';
 
 const router = express.Router();
 
@@ -76,6 +76,13 @@ router.post('/add-to-cart', asyncHandler(async (req: Request, res: Response) => 
     throw new AppError(400, 'items array required');
   }
   const loc = (location as string) || 'west';
+  // Only ACTIVE locations may order: resolveHanosAccount falls back to the
+  // WEST account for unknown keys, so without this gate a stale client at a
+  // deleted/archived event location would silently land items in West's
+  // real Hanos cart with a success toast.
+  if (!isActiveLocation(loc)) {
+    throw new AppError(400, 'invalid location — this location is archived or unknown');
+  }
 
   try {
     const client = await getClient(loc);

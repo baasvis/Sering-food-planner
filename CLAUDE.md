@@ -45,7 +45,9 @@ lib/
                          dbReadAll's guest scaffold includes every event-location slug (incl. archived) —
                          load-bearing: writeGuests is deleteMany-then-createMany, so a key missing from the
                          scaffold is destroyed on the next save. validateGuests TOLERATES unknown keys
-                         (whole-object round-trips must never brick on a stray row)
+                         (whole-object round-trips must never brick on a stray row) and accepts SPARSE
+                         event-location blocks (permanent keys still require the full 7 days) — an SSE
+                         session builds an event's block one edited day at a time
   recipe-sheets.ts     — Google Sheets client (legacy recipe import only)
   hanos-parser.ts      — Hanos quantity parser (hoeveelheid → grams)
   hanos-client.ts      — Hanos OCC v2 OAuth client class (login pool, cart, product lookup)

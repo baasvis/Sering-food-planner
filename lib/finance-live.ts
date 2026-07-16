@@ -94,6 +94,8 @@ export function isoWeekDates(dateStr: string): string[] {
 }
 
 // ── Controllable targets (live dashboard step 2) ────────────────────────────
+// DELIBERATELY permanent-only: finance has no event-location POS in v1 —
+// temporary event locations (lib/locations.ts) are out of scope here.
 export const VENUES = ['west', 'centraal', 'testtafel'] as const;
 export const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; // getUTCDay() index → labourByDay key
 

@@ -136,7 +136,16 @@ export function validateGuests(guests: GuestsData): string | null {
   for (const loc of Object.keys(guests)) {
     if (!isKnownLocation(loc)) continue; // isKnownLocation includes the permanent pair
     if (!guests[loc] || typeof guests[loc] !== 'object') return `guests.${loc} missing`;
-    for (const day of VALID_DAYS) {
+    // Permanent keys must carry the full 7-day shape (unchanged contract).
+    // Event-location keys may be SPARSE: a client that learned about the
+    // event via SSE (no full reload) builds its block one edited day at a
+    // time, and requiring all 7 days would 400 — and thereby brick — every
+    // save from that session. The merge in routes/data.ts is day-level, so
+    // sparse blocks merge cleanly over the dbReadAll scaffold.
+    const isPermanent = loc === 'west' || loc === 'centraal';
+    const days = isPermanent ? VALID_DAYS : Object.keys(guests[loc]);
+    for (const day of days) {
+      if (!isPermanent && !VALID_DAYS.includes(day)) return `guests.${loc}.${day} is not a weekday`;
       if (!guests[loc][day]) return `guests.${loc}.${day} missing`;
       const g = guests[loc][day];
       if (typeof g.lunch !== 'number' || g.lunch < 0 || g.lunch > 9999) return `Invalid guest count`;
@@ -555,11 +564,13 @@ function normalizeSupplyStock(raw: Prisma.JsonValue): SupplyStock {
   };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   const r = raw as Record<string, unknown>;
-  // Permanent keys always present; KNOWN event-location keys (incl. archived)
-  // are PRESERVED, not dropped — festival stock must survive a read-write
-  // round-trip. Unknown junk keys are still discarded.
+  // Permanent keys always present; event-location keys (incl. archived) are
+  // PRESERVED, not dropped — festival stock must survive a read-write
+  // round-trip. The "ev-" prefix test is deliberate fail-safety for a
+  // legitimately-empty registry cache (boot hydration failure before the
+  // first /api/data). Unknown junk keys are still discarded.
   for (const loc of Object.keys(r)) {
-    if (loc !== 'west' && loc !== 'centraal' && !isKnownLocation(loc)) continue;
+    if (loc !== 'west' && loc !== 'centraal' && !loc.startsWith('ev-') && !isKnownLocation(loc)) continue;
     const e = r[loc];
     if (e && typeof e === 'object' && !Array.isArray(e)) {
       const entry = e as Record<string, unknown>;
