@@ -97,6 +97,10 @@ router.post('/guest-history', asyncHandler(async (req: Request, res: Response) =
     ]);
     const existing = guestHistoryToJson(existingHist, existingMeta);
 
+    // DELIBERATELY permanent-only: POS history ingest doesn't exist for
+    // temporary event locations (v1) — their guest counts are entered by hand
+    // on the Guests screen. The scoped deleteMany below already protects any
+    // event-keyed rows the same way it protects the Hub's 'testtafel' rows.
     for (const loc of ['west', 'centraal']) {
       if (!incoming[loc]) continue;
       if (!existing[loc]) existing[loc] = {};

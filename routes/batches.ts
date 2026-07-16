@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import express, { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma, validateBatch, withWriteLock, dbAppendLog, toBatchRow, mapBatchRow } from '../lib/db';
+import { isActiveLocation, isKnownLocation } from '../lib/locations';
 import { asyncHandler, AppError } from '../lib/config';
 import { broadcast } from './events';
 import { addBackendEvent } from './telemetry';
@@ -9,7 +10,9 @@ import type { Batch, InventoryEntry, Shipment, Location, StorageType } from '../
 
 const router = express.Router();
 
-const VALID_LOCATIONS: Location[] = ['west', 'centraal'];
+// Location validity: ship/transfer DESTINATIONS must be ACTIVE (permanent ∪
+// non-archived event locations); a transfer SOURCE only needs to be KNOWN so
+// leftover stock can still be evacuated from a just-archived event location.
 const VALID_STORAGE: StorageType[] = ['Gastro', 'Frozen', 'Vac-packed'];
 
 // ── Inventory / shipment helpers (private to this router) ──
@@ -165,7 +168,7 @@ router.post('/:id/ship', asyncHandler(async (req: Request, res: Response) => {
   const storage = body.storage;
   const fromInventoryIdx = body.fromInventoryIdx;
 
-  if (typeof toLoc !== 'string' || !VALID_LOCATIONS.includes(toLoc as Location)) {
+  if (typeof toLoc !== 'string' || !isActiveLocation(toLoc)) {
     throw new AppError(400, 'invalid toLoc');
   }
   if (typeof qty !== 'number' || !Number.isFinite(qty) || qty <= 0 || qty > 99999) {
@@ -330,13 +333,13 @@ router.post('/:id/transfer', asyncHandler(async (req: Request, res: Response) =>
   const body = req.body as TransferBody;
   const { fromLoc, fromStorage, toLoc, toStorage, qty, fromInventoryIdx } = body;
 
-  if (typeof fromLoc !== 'string' || !VALID_LOCATIONS.includes(fromLoc as Location)) {
+  if (typeof fromLoc !== 'string' || !isKnownLocation(fromLoc)) {
     throw new AppError(400, 'invalid fromLoc');
   }
   if (typeof fromStorage !== 'string' || !VALID_STORAGE.includes(fromStorage as StorageType)) {
     throw new AppError(400, 'invalid fromStorage');
   }
-  if (typeof toLoc !== 'string' || !VALID_LOCATIONS.includes(toLoc as Location)) {
+  if (typeof toLoc !== 'string' || !isActiveLocation(toLoc)) {
     throw new AppError(400, 'invalid toLoc');
   }
   if (typeof toStorage !== 'string' || !VALID_STORAGE.includes(toStorage as StorageType)) {

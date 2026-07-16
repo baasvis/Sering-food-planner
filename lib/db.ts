@@ -3,9 +3,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { PrismaClient, Prisma } from '@prisma/client';
-import type { Batch, GuestsData, Catering, CateringTopping, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient, Ingredient, InventoryEntry, Shipment, Supply, SupplyKind, SupplyPrepMode, SupplyStock } from '../shared/types';
+import type { Batch, GuestsData, Catering, CateringTopping, TransportItem, DataResponse, Service, RecipeFull, RecipeIngredientFull, PrepStep, RecipeVersionSnapshot, NutritionInfo, ActualIngredient, Ingredient, InventoryEntry, Shipment, Supply, SupplyKind, SupplyPrepMode, SupplyStock, EventLocationDTO } from '../shared/types';
 import { toGrams } from '../shared/units';
 import { flexPricePer100g } from '../shared/recipe-cost';
+import { isKnownLocation, setEventLocations, allEventSlugs } from './locations';
 
 export const prisma = new PrismaClient();
 
@@ -22,7 +23,9 @@ const VALID_TYPES = ['Soup', 'Main course', 'Dessert'];
 // VALID_TYPES means a topping recipe can never be created as a planner batch.
 const VALID_RECIPE_TYPES = [...VALID_TYPES, 'Topping', 'Bread'];
 const VALID_STORAGE = ['Gastro', 'Frozen', 'Vac-packed'];
-const VALID_LOCATIONS = ['west', 'centraal'];
+// Location validity comes from lib/locations.ts (permanent pair ∪ event-location
+// registry): isKnownLocation — persisted state stays valid after an event is
+// archived. The old two-value VALID_LOCATIONS const is gone.
 const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const VALID_MEALS = ['lunch', 'dinner'];
 
@@ -59,7 +62,7 @@ export function validateBatch(b: Batch, prefix = ''): string | null {
   if (typeof b.note !== 'undefined' && (typeof b.note !== 'string' || b.note.length > 1000)) return `${p}invalid note`;
   if (!Array.isArray(b.services)) return `${p}services must be an array`;
   for (const svc of b.services) {
-    if (!VALID_LOCATIONS.includes(svc.loc)) return `${p}invalid service location`;
+    if (!isKnownLocation(svc.loc)) return `${p}invalid service location`;
     if (!svc.date || typeof svc.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(svc.date)) return `${p}invalid service date (expected YYYY-MM-DD)`;
     if (!VALID_MEALS.includes(svc.meal)) return `${p}invalid service meal`;
     if (svc.pinned !== undefined && typeof svc.pinned !== 'boolean') return `${p}invalid service pinned flag`;
@@ -75,7 +78,7 @@ export function validateBatch(b: Batch, prefix = ''): string | null {
     for (let i = 0; i < b.inventory.length; i++) {
       const e = b.inventory[i] as InventoryEntry;
       if (!e || typeof e !== 'object') return `${p}inventory[${i}]: must be an object`;
-      if (!VALID_LOCATIONS.includes(e.loc)) return `${p}inventory[${i}]: invalid loc`;
+      if (!isKnownLocation(e.loc)) return `${p}inventory[${i}]: invalid loc`;
       if (!VALID_STORAGE.includes(e.storage)) return `${p}inventory[${i}]: invalid storage`;
       if (typeof e.qty !== 'number' || !Number.isFinite(e.qty) || e.qty < 0 || e.qty > 99999) return `${p}inventory[${i}]: invalid qty`;
       if (typeof e.cookDate !== 'string' || !DDMMYYYY_PATTERN.test(e.cookDate)) return `${p}inventory[${i}]: invalid cookDate (expected DD/MM/YYYY)`;
@@ -88,8 +91,8 @@ export function validateBatch(b: Batch, prefix = ''): string | null {
       const s = b.shipments[i] as Shipment;
       if (!s || typeof s !== 'object') return `${p}shipments[${i}]: must be an object`;
       if (typeof s.id !== 'string' || !VALID_ID_PATTERN.test(s.id)) return `${p}shipments[${i}]: invalid id`;
-      if (!VALID_LOCATIONS.includes(s.fromLoc)) return `${p}shipments[${i}]: invalid fromLoc`;
-      if (!VALID_LOCATIONS.includes(s.toLoc)) return `${p}shipments[${i}]: invalid toLoc`;
+      if (!isKnownLocation(s.fromLoc)) return `${p}shipments[${i}]: invalid fromLoc`;
+      if (!isKnownLocation(s.toLoc)) return `${p}shipments[${i}]: invalid toLoc`;
       if (!VALID_STORAGE.includes(s.storage)) return `${p}shipments[${i}]: invalid storage`;
       if (typeof s.qty !== 'number' || !Number.isFinite(s.qty) || s.qty < 0 || s.qty > 99999) return `${p}shipments[${i}]: invalid qty`;
       if (typeof s.sentAt !== 'string' || !ISO_TIMESTAMP_PATTERN.test(s.sentAt)) return `${p}shipments[${i}]: invalid sentAt (expected ISO 8601)`;
@@ -117,8 +120,22 @@ export function validateBatches(batches: Batch[]): string | null {
 
 export function validateGuests(guests: GuestsData): string | null {
   if (!guests || typeof guests !== 'object') return 'guests must be an object';
-  for (const loc of VALID_LOCATIONS) {
+  // Permanent locations: required, full 7-day shape (unchanged contract).
+  // KNOWN event-location keys (registry, incl. archived): optional, same full
+  // 7-day shape when present. UNKNOWN keys are TOLERATED and skipped — never
+  // an error. The frontend round-trips the WHOLE guests object on save, and
+  // dbReadAll's defensive scaffold surfaces any stray DB key (junk rows, a
+  // deleted registry slug), so rejecting unknown keys would brick every guest
+  // save until the stray row was hand-deleted. The merge in routes/data.ts
+  // only writes ACTIVE keys, so a tolerated unknown key is a no-op on write
+  // (matching the old two-location loop's silent-ignore semantics) while the
+  // scaffold keeps its stored values intact.
+  for (const loc of ['west', 'centraal']) {
     if (!guests[loc]) return `guests.${loc} missing`;
+  }
+  for (const loc of Object.keys(guests)) {
+    if (!isKnownLocation(loc)) continue; // isKnownLocation includes the permanent pair
+    if (!guests[loc] || typeof guests[loc] !== 'object') return `guests.${loc} missing`;
     for (const day of VALID_DAYS) {
       if (!guests[loc][day]) return `guests.${loc}.${day} missing`;
       const g = guests[loc][day];
@@ -283,6 +300,35 @@ export function validateIdList(ids: unknown, fieldName: string, max = 500): stri
   return null;
 }
 
+// ── Event-location registry ──
+
+function toEventLocationDTO(row: {
+  id: string; name: string; startDate: string; endDate: string;
+  hanosAccount: string; archived: boolean; createdAt: Date; archivedAt: Date | null;
+}): EventLocationDTO {
+  return {
+    slug: row.id,
+    name: row.name,
+    startDate: row.startDate,
+    endDate: row.endDate,
+    hanosAccount: row.hanosAccount === 'centraal' ? 'centraal' : 'west',
+    archived: row.archived,
+    createdAt: row.createdAt.toISOString(),
+    archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
+  };
+}
+
+/** Read the event_locations table and refresh the lib/locations.ts cache
+ *  (+ the shared display-name registry). Called at boot (server.ts), after
+ *  every registry write (routes/event-locations.ts), and passively from
+ *  dbReadAll so the cache self-heals on the most-called endpoint. */
+export async function dbLoadEventLocations(): Promise<EventLocationDTO[]> {
+  const rows = await prisma.eventLocation.findMany({ orderBy: { createdAt: 'asc' } });
+  const dtos = rows.map(toEventLocationDTO);
+  setEventLocations(dtos);
+  return dtos;
+}
+
 // ── Default data ──
 
 export function getDefaultGuests(): GuestsData {
@@ -443,7 +489,7 @@ export async function dbReadAll(): Promise<DataResponse> {
   // install. Throw instead, asyncHandler routes to the global 500 handler,
   // and the frontend's apiGet shows the persistent error banner via
   // showDataError (public/js/utils.ts).
-  const [batchRows, guestRows, cateringRows, transportRows, recipeV2Rows, supplyRows] = await Promise.all([
+  const [batchRows, guestRows, cateringRows, transportRows, recipeV2Rows, supplyRows, eventLocations] = await Promise.all([
     prisma.batch.findMany(),
     prisma.guest.findMany(),
     // Legacy recipeIndex table kept in DB as backup but no longer served to frontend
@@ -451,13 +497,28 @@ export async function dbReadAll(): Promise<DataResponse> {
     prisma.transportItem.findMany(),
     prisma.recipe.findMany({ include: { ingredients: { orderBy: { sortOrder: 'asc' } } } }),
     prisma.supply.findMany({ orderBy: [{ archived: 'asc' }, { name: 'asc' }] }),
+    dbLoadEventLocations(), // also refreshes the lib/locations.ts cache
   ]);
 
   const batches: Batch[] = batchRows.map(b => mapBatchRow(b));
 
+  // Guest scaffold: permanent defaults ∪ zero blocks for EVERY registry slug
+  // (incl. archived) ∪ (defensive) any DB row location not already present.
+  // LOAD-BEARING: dbWriteGuests is deleteMany-then-createMany from the merged
+  // object, so any guest key absent from this scaffold would be DESTROYED on
+  // the next save. Archived event locations must round-trip.
   const guests = getDefaultGuests();
+  const zeroWeek = (): GuestsData[string] => {
+    const week: GuestsData[string] = {};
+    for (const d of VALID_DAYS) week[d] = { lunch: 0, dinner: 0 };
+    return week;
+  };
+  for (const slug of allEventSlugs()) {
+    if (!guests[slug]) guests[slug] = zeroWeek();
+  }
   for (const row of guestRows) {
-    if (guests[row.location] && guests[row.location][row.day]) {
+    if (!guests[row.location]) guests[row.location] = zeroWeek();
+    if (guests[row.location][row.day]) {
       guests[row.location][row.day].lunch = row.lunch;
       guests[row.location][row.day].dinner = row.dinner;
     }
@@ -484,10 +545,7 @@ export async function dbReadAll(): Promise<DataResponse> {
 
   const supplies: Supply[] = supplyRows.map(toSupply);
 
-  // Placeholder until the event-locations registry lands (Phase C of the
-  // event-locations build): dbReadAll will read prisma.eventLocation and
-  // refresh the lib/locations.ts cache here.
-  return { batches, guests, recipes, caterings, transportItems, supplies, eventLocations: [] };
+  return { batches, guests, recipes, caterings, transportItems, supplies, eventLocations };
 }
 
 function normalizeSupplyStock(raw: Prisma.JsonValue): SupplyStock {
@@ -497,7 +555,11 @@ function normalizeSupplyStock(raw: Prisma.JsonValue): SupplyStock {
   };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   const r = raw as Record<string, unknown>;
-  for (const loc of ['west', 'centraal']) {
+  // Permanent keys always present; KNOWN event-location keys (incl. archived)
+  // are PRESERVED, not dropped — festival stock must survive a read-write
+  // round-trip. Unknown junk keys are still discarded.
+  for (const loc of Object.keys(r)) {
+    if (loc !== 'west' && loc !== 'centraal' && !isKnownLocation(loc)) continue;
     const e = r[loc];
     if (e && typeof e === 'object' && !Array.isArray(e)) {
       const entry = e as Record<string, unknown>;

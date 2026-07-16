@@ -266,3 +266,57 @@ describe('computeSupplyDemand: closed-service roll (audit CORR-3)', () => {
       .toEqual(computeSupplyDemand(supply, guests, [], '2026-05-11', raw(guests)));
   });
 });
+
+// ── Event locations (extra guest keys beyond west/centraal) ─────────────────
+
+describe('computeSupplyDemand with event-location guest keys', () => {
+  const EV = 'ev-landjuweel-2026';
+
+  function guestsWithEvent(lunch: number, dinner: number): GuestsData {
+    const g = makeGuests();
+    g[EV] = {};
+    for (const d of ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']) {
+      g[EV][d] = { lunch, dinner };
+    }
+    return g;
+  }
+
+  it('per-location mode: the event key gets its own bucket', () => {
+    const supply = makeStandardSupply({ prepMode: 'per-location', guestsPerUnit: 10, prepHorizonDays: 2 });
+    const guests = guestsWithEvent(500, 1000);
+    // 2026-05-11 is a Monday: Mon+Tue → (500+1000)*2 / 10 = 300 units.
+    const d = computeSupplyDemand(supply, guests, [], '2026-05-11');
+    expect(d[EV]).toBeCloseTo(300, 5);
+    // west/centraal buckets identical to a run WITHOUT the event key:
+    const base = computeSupplyDemand(supply, makeGuests(), [], '2026-05-11');
+    expect(d.west).toBeCloseTo(base.west, 5);
+    expect(d.centraal).toBeCloseTo(base.centraal, 5);
+  });
+
+  it('centralized mode: the event bucket folds into west (production hub)', () => {
+    const supply = makeStandardSupply({ prepMode: 'centralized', guestsPerUnit: 10, prepHorizonDays: 2 });
+    const withEvent = computeSupplyDemand(supply, guestsWithEvent(500, 1000), [], '2026-05-11');
+    const without = computeSupplyDemand(supply, makeGuests(), [], '2026-05-11');
+    expect(withEvent[EV]).toBe(0);
+    expect(withEvent.centraal).toBe(0);
+    expect(withEvent.west).toBeCloseTo(without.west + 300, 5);
+  });
+
+  it('catering toppings still land on west, never on the event bucket', () => {
+    const supply = makeStandardSupply({ prepMode: 'per-location', guestsPerUnit: 10, prepHorizonDays: 2 });
+    const caterings: Catering[] = [{
+      id: 'c-ev', name: 'Festival side order', date: '12/05/2026', guestCount: 100,
+      deliveryMode: 'delivery', dishes: [], toppings: [{ supplyId: supply.id, amount: 7 }], logisticsNotes: '',
+    }];
+    const d = computeSupplyDemand(supply, guestsWithEvent(0, 0), caterings, '2026-05-11');
+    const base = computeSupplyDemand(supply, guestsWithEvent(0, 0), [], '2026-05-11');
+    expect(d.west).toBeCloseTo(base.west + 7, 5);
+    expect(d[EV]).toBe(0);
+  });
+
+  it('archived/oneoff early-returns still carry a zero bucket for every guest key', () => {
+    const supply = makeStandardSupply({ archived: true });
+    const d = computeSupplyDemand(supply, guestsWithEvent(500, 1000), [], '2026-05-11');
+    expect(d).toEqual({ west: 0, centraal: 0, [EV]: 0 });
+  });
+});

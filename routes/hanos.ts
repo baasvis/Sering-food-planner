@@ -13,7 +13,8 @@
 
 import express, { Request, Response } from 'express';
 import { errMsg, safeErrMsg, AppError, asyncHandler } from '../lib/config';
-import { OCC_BASE, getCredentials, getClient, invalidateClient, formatProduct } from '../lib/hanos-client';
+import { OCC_BASE, getCredentials, getClient, invalidateClient, formatProduct, resolveHanosAccount } from '../lib/hanos-client';
+import { activeEventSlugs } from '../lib/locations';
 
 const router = express.Router();
 
@@ -22,10 +23,24 @@ const router = express.Router();
 router.get('/status', (_req: Request, res: Response) => {
   const west = getCredentials('west');
   const centraal = getCredentials('centraal');
+  const westOk = !!(west.user && west.pass);
+  const centraalOk = !!(centraal.user && centraal.pass);
+  // Per-location map covering permanent + active event locations (an event
+  // slug is configured iff the account it resolves to has credentials). The
+  // flat west/centraal fields above it stay byte-identical for old clients.
+  const locations: Record<string, { configured: boolean; account: 'west' | 'centraal' }> = {
+    west: { configured: westOk, account: 'west' },
+    centraal: { configured: centraalOk, account: 'centraal' },
+  };
+  for (const slug of activeEventSlugs()) {
+    const account = resolveHanosAccount(slug);
+    locations[slug] = { configured: account === 'centraal' ? centraalOk : westOk, account };
+  }
   res.json({
-    configured: !!(west.user && west.pass) || !!(centraal.user && centraal.pass),
-    west: !!(west.user && west.pass),
-    centraal: !!(centraal.user && centraal.pass),
+    configured: westOk || centraalOk,
+    west: westOk,
+    centraal: centraalOk,
+    locations,
     // Diagnostic: show credential presence only. Length removed to avoid
     // a side-channel signal about the client secret value.
     _diag: {

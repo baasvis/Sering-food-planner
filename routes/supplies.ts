@@ -8,6 +8,7 @@ import express, { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { asyncHandler, AppError } from '../lib/config';
 import { prisma, dbAppendLog, withWriteLock, checkId } from '../lib/db';
+import { isActiveLocation, isKnownLocation } from '../lib/locations';
 import { broadcast } from './events';
 import type { Supply, SupplyKind, SupplyPrepMode, SupplyStock } from '../shared/types';
 
@@ -15,7 +16,9 @@ const router = express.Router();
 
 const VALID_KINDS: SupplyKind[] = ['standard', 'oneoff'];
 const VALID_PREP_MODES: SupplyPrepMode[] = ['centralized', 'per-location'];
-const VALID_LOCATIONS = ['west', 'centraal'];
+// Location validity comes from lib/locations.ts: new writes (prep/stock moves,
+// one-off creation) target ACTIVE locations; PATCH of an existing row accepts
+// KNOWN (incl. archived events) so edits don't brick after an event closes.
 
 function emptyStock(): SupplyStock {
   return {
@@ -28,7 +31,10 @@ function normalizeStock(raw: unknown): SupplyStock {
   const s = emptyStock();
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
-  for (const loc of VALID_LOCATIONS) {
+  // Permanent keys always present; KNOWN event-location keys are preserved
+  // (festival stock must survive read-write round-trips); junk keys dropped.
+  for (const loc of Object.keys(r)) {
+    if (loc !== 'west' && loc !== 'centraal' && !isKnownLocation(loc)) continue;
     const e = r[loc];
     if (e && typeof e === 'object') {
       const entry = e as Record<string, unknown>;
@@ -111,7 +117,11 @@ function validateSupplyInput(input: SupplyInput, requireId = false): void {
     if (typeof h !== 'number' || !Number.isInteger(h) || h < 1 || h > 60) throw new AppError(400, 'invalid prepHorizonDays');
     if (typeof input.prepMode !== 'string' || !VALID_PREP_MODES.includes(input.prepMode as SupplyPrepMode)) throw new AppError(400, 'invalid prepMode');
   } else if (input.kind === 'oneoff') {
-    if (typeof input.oneoffLocation !== 'string' || !VALID_LOCATIONS.includes(input.oneoffLocation)) throw new AppError(400, 'invalid oneoffLocation');
+    // Create (requireId=true) targets an ACTIVE location; edits of an existing
+    // row (PATCH) accept KNOWN so a row pointing at an archived event can
+    // still be renamed/repriced without tripping on its location.
+    const locValid = requireId ? isActiveLocation : isKnownLocation;
+    if (typeof input.oneoffLocation !== 'string' || !locValid(input.oneoffLocation)) throw new AppError(400, 'invalid oneoffLocation');
     const u = input.unitsPerService;
     if (typeof u !== 'number' || !Number.isFinite(u) || u <= 0 || u > 100000) throw new AppError(400, 'invalid unitsPerService');
     if (typeof input.oneoffStartDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.oneoffStartDate)) throw new AppError(400, 'invalid oneoffStartDate');
@@ -211,7 +221,7 @@ router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
     const existing = await prisma.supply.findUnique({ where: { id: req.params.id as string } });
     if (!existing) return { notFound: true } as const;
     const stock = normalizeStock(existing.stock);
-    const hasStock = (stock.west?.amount ?? 0) > 0 || (stock.centraal?.amount ?? 0) > 0;
+    const hasStock = Object.values(stock).some(e => (e?.amount ?? 0) > 0);
     if (hasStock) return { hasStock: true, name: existing.name } as const;
     await prisma.supply.delete({ where: { id: req.params.id as string } });
     return { ok: true, name: existing.name } as const;
@@ -236,7 +246,7 @@ router.post('/:id/prep', asyncHandler(async (req: Request, res: Response) => {
   const idErr = checkId(req.params.id, 'id');
   if (idErr) throw new AppError(400, idErr);
   const { location, amount } = req.body as PrepInput;
-  if (typeof location !== 'string' || !VALID_LOCATIONS.includes(location)) throw new AppError(400, 'invalid location');
+  if (typeof location !== 'string' || !isActiveLocation(location)) throw new AppError(400, 'invalid location');
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt <= 0 || amt > 1_000_000) throw new AppError(400, 'invalid amount');
 
@@ -274,7 +284,7 @@ router.post('/:id/stock', asyncHandler(async (req: Request, res: Response) => {
   const idErr = checkId(req.params.id, 'id');
   if (idErr) throw new AppError(400, idErr);
   const { location, amount } = req.body as PrepInput;
-  if (typeof location !== 'string' || !VALID_LOCATIONS.includes(location)) throw new AppError(400, 'invalid location');
+  if (typeof location !== 'string' || !isActiveLocation(location)) throw new AppError(400, 'invalid location');
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt < 0 || amt > 1_000_000) throw new AppError(400, 'invalid amount');
 

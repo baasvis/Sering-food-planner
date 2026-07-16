@@ -45,6 +45,7 @@ router.get('/revenue', asyncHandler(async (req: Request, res: Response) => {
 // (location, date) where BOTH exist, so a sparse revenue history can't divide
 // the fuller guest history and read too low. null when there's no overlap yet.
 router.get('/revenue-per-guest', asyncHandler(async (_req: Request, res: Response) => {
+  // DELIBERATELY permanent-only: finance/Tebi has no event-location POS in v1.
   const LOCS = ['west', 'centraal'];
   const FOOD_MEALS = ['lunch', 'dinner'];
   const DAYS = 28;

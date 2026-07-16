@@ -420,6 +420,26 @@ model Supply {
   @@map("supplies")
 }
 
+// Temporary event locations (festivals, pop-up caterings — e.g. Landjuweel).
+// The id is the location SLUG ("ev-<name>") referenced as a plain string by
+// batch services/inventory/shipments, guest rows, supply stock JSON, standard
+// inventory and prep checklists — so it is IMMUTABLE and never reused, even
+// after archive. Registry cached in lib/locations.ts (single-replica).
+model EventLocation {
+  id           String    @id                                    // slug "ev-<name>"
+  name         String
+  startDate    String    @map("start_date")                     // ISO YYYY-MM-DD
+  endDate      String    @map("end_date")                       // ISO YYYY-MM-DD
+  hanosAccount String    @default("west") @map("hanos_account") // 'west' | 'centraal'
+  archived     Boolean   @default(false)
+  createdBy    String    @default("") @map("created_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  archivedAt   DateTime? @map("archived_at")
+
+  @@index([archived])
+  @@map("event_locations")
+}
+
 model RecipeIngredientRow {
   id             String      @id
   recipeId       String      @map("recipe_id")

@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { dbReadAll, dbAppendLog, validateBatches, validateGuests, validateCaterings, validateTransportItems, validateIdList, withWriteLock, dbWriteGuests, dbUpsertBatches, dbDeleteBatchIds, dbUpsertCaterings, dbDeleteCateringIds, dbUpsertTransportItems, dbDeleteTransportItemIds } from '../lib/db';
+import { isActiveLocation } from '../lib/locations';
 import { broadcast } from './events';
 import { asyncHandler, AppError } from '../lib/config';
 
@@ -89,14 +90,19 @@ router.post('/patch', asyncHandler(async (req: Request, res: Response) => {
       }
     }
 
-    // Guests: read current, merge changed days, write back
+    // Guests: read current, merge changed days, write back. Edits are accepted
+    // for ACTIVE locations only (permanent ∪ non-archived events) — a stale tab
+    // resending an archived event's counts is silently skipped, mirroring the
+    // old silent-drop for unknown keys. Archived keys still survive the write:
+    // dbReadAll's scaffold includes them in `merged`.
     if (guests) {
       const current = await dbReadAll();
       const merged = current.guests;
-      for (const loc of ['west', 'centraal']) {
+      for (const loc of Object.keys(guests)) {
+        if (!isActiveLocation(loc)) continue;
         if (!guests[loc]) continue;
         for (const day of Object.keys(guests[loc])) {
-          if (!merged[loc][day]) continue;
+          if (!merged[loc] || !merged[loc][day]) continue;
           merged[loc][day] = guests[loc][day];
         }
       }

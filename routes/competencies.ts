@@ -91,6 +91,8 @@ router.post('/people', asyncHandler(async (req: Request, res: Response) => {
   if (idErr) return res.status(400).json({ error: idErr });
   const personName = String(name).trim();
   if (personName.length > 100) return res.status(400).json({ error: 'name too long (max 100)' });
+  // DELIBERATELY permanent-only: Training people belong to a home restaurant,
+  // not a temporary event location (v1 of the event-locations feature).
   if (location !== undefined && location !== 'west' && location !== 'centraal') {
     return res.status(400).json({ error: 'invalid location' });
   }

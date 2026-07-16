@@ -6,7 +6,7 @@ try { require('dotenv').config(); } catch (_e) { /* dotenv optional in productio
 
 import fs from 'fs';
 import { CONFIG, INGREDIENTS_SEED, STD_INV_SEED, errMsg } from './lib/config';
-import { prisma } from './lib/db';
+import { prisma, dbLoadEventLocations } from './lib/db';
 import app from './app';
 import { startFlushTimer, stopFlushTimer, flushBuffer } from './routes/telemetry';
 import { runTebiSync } from './lib/tebi-sync';
@@ -81,6 +81,13 @@ app.listen(PORT, () => {
   console.log('  ALLOWED_EMAILS:', CONFIG.ALLOWED_EMAILS.length ? CONFIG.ALLOWED_EMAILS.join(', ') : 'NOT SET (anyone can log in)');
   console.log('  ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? 'set' : 'NOT SET');
   seedIfNeeded();
+
+  // Hydrate the event-location registry cache (lib/locations.ts) so location
+  // validators accept event slugs from the first request. dbReadAll also
+  // refreshes it passively on every /api/data, so a failure here self-heals.
+  dbLoadEventLocations()
+    .then(rows => { if (rows.length) console.log(`  Event locations: ${rows.length} (${rows.filter(r => !r.archived).length} active)`); })
+    .catch(e => console.error('Event-location registry load failed:', errMsg(e)));
 
   // Start telemetry buffer flushing (writes buffered events to DB every 60s)
   startFlushTimer();
