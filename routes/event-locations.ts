@@ -232,5 +232,40 @@ router.post('/:slug/unarchive', requireDirector, asyncHandler(async (req: Reques
   res.json({ ok: true, eventLocation: rows.find(r => r.slug === slug) });
 }));
 
+// Hard delete (director-only) — an ARCHIVED, zero-reference location only.
+// Exists for e2e/staging hygiene ("E2E Fest …" rows) and genuine mistakes; a
+// USED location is archived, never deleted — its slug is referenced by batch
+// history. Removes the location's own per-loc side rows (guest pattern,
+// standard inventory, prep checklists, ritual completions) with it.
+router.delete('/:slug', requireDirector, asyncHandler(async (req: Request, res: Response) => {
+  const slug = req.params.slug as string;
+  await withWriteLock(async () => {
+    const existing = await prisma.eventLocation.findUnique({ where: { id: slug } });
+    if (!existing) throw new AppError(404, 'Event location not found');
+    if (!existing.archived) throw new AppError(400, 'Archive it first — delete is only for archived locations');
+    const batches = await prisma.batch.findMany({ select: { name: true, inventory: true, shipments: true, services: true } });
+    for (const b of batches) {
+      const inv = (b.inventory ?? []) as unknown as { loc: string }[];
+      const ships = (b.shipments ?? []) as unknown as Shipment[];
+      const svcs = (b.services ?? []) as unknown as { loc: string }[];
+      if (inv.some(e => e.loc === slug) || svcs.some(s => s.loc === slug)
+          || ships.some(s => s.toLoc === slug || s.fromLoc === slug)) {
+        throw new AppError(400, `Cannot delete: batch "${b.name}" still references this location. Archived is the right end state for a used location.`);
+      }
+    }
+    await prisma.guest.deleteMany({ where: { location: slug } });
+    await prisma.standardInventory.deleteMany({ where: { location: slug } });
+    await prisma.prepChecklist.deleteMany({ where: { loc: slug } });
+    await prisma.ritualCompletion.deleteMany({ where: { loc: slug } });
+    await prisma.eventLocation.delete({ where: { id: slug } });
+  });
+
+  const rows = await dbLoadEventLocations();
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'event-location-delete', slug);
+  broadcast(user.email, 'patch', { user: user.name, eventLocations: rows });
+  res.json({ ok: true });
+}));
+
 export default router;
 export type { EventLocationDTO };

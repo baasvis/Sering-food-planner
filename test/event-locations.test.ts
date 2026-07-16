@@ -358,3 +358,52 @@ describe('supply stock at an event location', () => {
     expect(move.status).toBe(400);
   });
 });
+
+// ── Hard delete (archived + zero-reference only) ─────────────────────────────
+
+describe('DELETE /api/event-locations/:slug', () => {
+  it('refuses while active, refuses while referenced, then deletes cleanly (incl. guest rows)', async () => {
+    const cookie = await loginDirector();
+    const created = await createEventLoc(cookie);
+
+    // Active → 400.
+    expect((await request(app).delete(`/api/event-locations/${created.slug}`).set('Cookie', cookie)).status).toBe(400);
+
+    // Reference it from a batch + enter guest counts.
+    const b = fullBatch(tid('delref'), {
+      inventory: [{ loc: created.slug, storage: 'Gastro', qty: 3, cookDate: '01/05/2026' }],
+    });
+    expect((await request(app).post('/api/batches').send(b)).status).toBe(201);
+    const data = await request(app).get('/api/data').set('Cookie', cookie);
+    const guests = data.body.guests;
+    guests[created.slug].Tue = { lunch: 111, dinner: 222 };
+    expect((await request(app).post('/api/data/patch').set('Cookie', cookie).send({ guests })).status).toBe(200);
+
+    await request(app).post(`/api/event-locations/${created.slug}/archive`).set('Cookie', cookie);
+
+    // Archived but still referenced by a batch → 400.
+    const blocked = await request(app).delete(`/api/event-locations/${created.slug}`).set('Cookie', cookie);
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.error).toMatch(/still references/);
+
+    // Drop the reference (zero the stock via transfer, then delete the batch).
+    await request(app).post(`/api/batches/${b.id}/transfer`).send({
+      fromLoc: created.slug, fromStorage: 'Gastro', toLoc: 'west', toStorage: 'Gastro', qty: 3,
+    });
+    // The transfer leaves a 0-qty entry at the slug; PATCH the inventory clean.
+    await request(app).patch(`/api/batches/${b.id}`).send({ inventory: [], shipments: [], services: [] });
+    expect((await request(app).delete(`/api/batches/${b.id}`)).status).toBe(200);
+
+    const ok = await request(app).delete(`/api/event-locations/${created.slug}`).set('Cookie', cookie);
+    expect(ok.status).toBe(200);
+
+    // Registry row gone (KNOWN no longer), guest rows purged.
+    expect(isKnownLocation(created.slug)).toBe(false);
+    const rows = await prisma.guest.findMany({ where: { location: created.slug } });
+    expect(rows).toHaveLength(0);
+  });
+
+  it('403 without a director session', async () => {
+    expect((await request(app).delete('/api/event-locations/ev-nope')).status).toBe(403);
+  });
+});

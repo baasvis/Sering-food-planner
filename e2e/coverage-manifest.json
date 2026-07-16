@@ -4,18 +4,58 @@
   "smoke.spec.ts": [],
   "guests.spec.ts": [],
   "orders.spec.ts": [],
-  "batch-create.spec.ts": ["batch_create"],
-  "batch-cooked.spec.ts": ["batch_create", "batch_confirm_cooked"],
-  "batch-delete.spec.ts": ["batch_delete"],
-  "batch-assign-modal.spec.ts": ["batch_assign_modal"],
-  "feedback-submit.spec.ts": ["feedback_submit"],
-  "stocktake-start.spec.ts": ["stocktake_start"],
-  "predictions-apply.spec.ts": ["predictions_apply"],
-  "recipes.spec.ts": ["recipe_save"],
-  "drinks-catalogue.spec.ts": ["drinks_catalogue_add"],
-  "drinks-stocktake.spec.ts": ["drinks_stocktake_save"],
-  "drinks-order.spec.ts": ["drinks_order_place", "drinks_order_receive"],
-  "alarm-board.spec.ts": ["alarm_board_open"],
-  "pin-dish.spec.ts": ["service_pin_toggle"],
-  "shipment-flow.test.ts": ["batch_ship", "shipment_mark_arrived", "shipment_cancel", "batch_transfer"]
+  "batch-create.spec.ts": [
+    "batch_create"
+  ],
+  "batch-cooked.spec.ts": [
+    "batch_create",
+    "batch_confirm_cooked"
+  ],
+  "batch-delete.spec.ts": [
+    "batch_delete"
+  ],
+  "batch-assign-modal.spec.ts": [
+    "batch_assign_modal"
+  ],
+  "feedback-submit.spec.ts": [
+    "feedback_submit"
+  ],
+  "stocktake-start.spec.ts": [
+    "stocktake_start"
+  ],
+  "predictions-apply.spec.ts": [
+    "predictions_apply"
+  ],
+  "recipes.spec.ts": [
+    "recipe_save"
+  ],
+  "drinks-catalogue.spec.ts": [
+    "drinks_catalogue_add"
+  ],
+  "drinks-stocktake.spec.ts": [
+    "drinks_stocktake_save"
+  ],
+  "drinks-order.spec.ts": [
+    "drinks_order_place",
+    "drinks_order_receive"
+  ],
+  "alarm-board.spec.ts": [
+    "alarm_board_open"
+  ],
+  "pin-dish.spec.ts": [
+    "service_pin_toggle"
+  ],
+  "shipment-flow.test.ts": [
+    "batch_ship",
+    "shipment_mark_arrived",
+    "shipment_cancel",
+    "batch_transfer"
+  ],
+  "event-location.spec.ts": [
+    "manual_ship_confirmed",
+    "centraal_arrivals_confirmed",
+    "batch_ship",
+    "shipment_mark_arrived"
+  ],
+  "test/event-locations.test.ts": []
 }

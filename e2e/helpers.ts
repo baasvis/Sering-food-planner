@@ -14,6 +14,16 @@ import { expect, type Page } from '@playwright/test';
  * silently dropping the test's local edit before the debounced save fires.
  */
 export async function loginAsDev(page: Page): Promise<void> {
+  // The cooked-food inventory nag (planner.ts checkInventoryReminder) fires
+  // on a clock deadline — after 13:45 / 20:15 local — once per fresh browser
+  // context, and its overlay intercepts whatever the test clicks next. That
+  // made any planner-touching spec fail when the suite ran in the afternoon
+  // or evening (CI usually dodges it via timing + retries). Auto-dismiss it
+  // whenever it appears so specs are independent of the wall clock.
+  await page.addLocatorHandler(page.locator('.inv-reminder'), async () => {
+    await page.locator('.inv-reminder').getByRole('button', { name: 'Later' }).click();
+  });
+
   await page.goto('/');
   await page.locator('#dev-login-btn').click();
 
