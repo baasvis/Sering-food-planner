@@ -218,6 +218,17 @@ router.post('/:id/ship', asyncHandler(async (req: Request, res: Response) => {
     if (srcIdx < 0) throw new AppError(400, 'no source inventory available to ship from');
 
     const source = inv[srcIdx];
+
+    // Hub-and-spoke transport rule: West is the production hub. Stock may move
+    // West <-> a spoke (Centraal or an event location) in either direction, but
+    // NEVER directly between two spokes. In particular an event location's food
+    // can only be returned to West — never shipped onward to Centraal or another
+    // event. Festival stock must not silently leave the festival except back to
+    // the hub. (The UI hides these lanes; this is the hard guarantee.)
+    if (source.loc !== 'west' && toLoc !== 'west') {
+      throw new AppError(400, `Can't ship directly from ${source.loc} to ${toLoc} — route it through Sering West.`);
+    }
+
     const sendQty = Math.min(qty, source.qty);
     const warning = sendQty < qty
       ? `Capped to ${sendQty} L (only ${source.qty} L available)`
@@ -364,6 +375,13 @@ router.post('/:id/transfer', asyncHandler(async (req: Request, res: Response) =>
   }
   if (fromLoc === toLoc && fromStorage === toStorage) {
     throw new AppError(400, 'Nothing to transfer (source and destination are identical)');
+  }
+  // Hub-and-spoke: a CROSS-location transfer (an instant move, no in-transit
+  // leg) is only legal West <-> spoke. Block a direct spoke->spoke move (e.g.
+  // Landjuweel -> Centraal) that would smuggle festival food out sideways.
+  // Same-location transfers (freeze / thaw / redistribute) are unaffected.
+  if (fromLoc !== toLoc && fromLoc !== 'west' && toLoc !== 'west') {
+    throw new AppError(400, `Can't move directly from ${fromLoc} to ${toLoc} — route it through Sering West.`);
   }
 
   const result = await withWriteLock(async () => {

@@ -329,6 +329,17 @@ export function allActiveLocations(): string[] {
   return [...LOCATIONS, ...activeEventLocations().map((e: EventLocationDTO) => e.slug)];
 }
 
+/** Hub-and-spoke transport rule (mirrors the /ship backend guard): West is the
+ *  production hub. Stock may move West <-> a spoke (Centraal or an event
+ *  location) in either direction, but NEVER between two spokes. So the legal
+ *  ship destinations FROM a location are: from West, every other active
+ *  location; from a spoke, West only (e.g. return festival leftovers). This is
+ *  why event food can never be sent onward to Centraal — only back to West. */
+export function shipDestinationsFrom(loc: string): string[] {
+  if (loc === 'west') return allActiveLocations().filter(l => l !== 'west');
+  return ['west'];
+}
+
 /** True when `loc` is an event-location slug — active OR archived. (Guards
  *  like Fix My Menu's must spare archived-event data too.) */
 export function isEventLoc(loc: string): boolean {
