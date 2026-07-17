@@ -108,6 +108,9 @@ routes/
                          hard-blocks on un-arrived shipments, soft-warns on stock/services),
                          DELETE /:slug (archived + zero-reference only — e2e/test hygiene).
                          Every write refreshes lib/locations.ts and SSE-broadcasts the full list
+  orders.ts            — POST /api/orders/export: builds a downloadable .xlsx order sheet (xlsx lib)
+                         from a posted item list. The "download as Excel" alternative to the Hanos
+                         cart in the order-confirm modal — no prisma, DB-free
   drinks.ts            — Drinks module, all under /api/drinks: drink CRUD (+ /:id/photo, /:id/active,
                          /:id/area), /config + /storage-areas (editable areas; renames cascade to stock
                          rows + drink homes), /suppliers, /stock + /stock/bulk (per-area counts; consumes
@@ -377,7 +380,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Cannot delete a batch with inventory stock or pending shipments > 0 (real food exists)
 - Recipe v2: `GET /api/recipes`, `GET /api/recipes/:id`, `POST /api/recipes`, `PATCH /api/recipes/:id`, `DELETE /api/recipes/:id`. Photo: `POST/DELETE /api/recipes/:id/photo`. Versioning: `POST /api/recipes/:id/version`. Print: `GET /api/recipes/:id/print`. Cost recalc: `POST /api/recipes/recalculate-costs`.
 - Recipe ingredient suggestion: `GET /api/ingredients/suggest?category=X&loc=west` — lives in `routes/recipes.ts`, mounted under `/api`. Don't look for it in `routes/ingredients.ts`.
-- Ingredient endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`, `/api/ingredients/stock`, `/api/ingredients/stock/bulk`, `/api/ingredients/target-stock`
+- Ingredient endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`, `/api/ingredients/stock`, `/api/ingredients/stock/bulk`, `/api/ingredients/target-stock`, `POST /api/ingredients/target-stock/copy` (`{fromLocation, toLocation, overwrite?}` — bulk-copies standard-inventory targets in ONE server-side jsonb statement; skip-existing unless `overwrite`; ACTIVE `toLocation` only. Powers "preload this event location with Sering West's standard order" from the event-location create modal + the "⬇ Copy Sering West's standard order" button on an event's Orders → Set Standard Inventory tab)
 - Supplier upload: `POST /api/ingredients/upload-supplier` (XLSX).
 - Ingredient DB stores JSON fields: `types`, `storageLocations`, `stock`, `nutrition`, `priceHistory`, `targetStock` (Prisma Json type)
 - Ingredient constants in state.ts: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `PRICE_LEVELS`

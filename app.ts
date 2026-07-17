@@ -165,6 +165,7 @@ import suppliesRouter from './routes/supplies';
 import accessRouter from './routes/access';
 import drinksRouter from './routes/drinks';
 import eventLocationsRouter from './routes/event-locations';
+import ordersRouter from './routes/orders';
 
 app.use('/api/data',              dataRouter);
 app.use('/api/batches',           batchesRouter);
@@ -182,6 +183,7 @@ app.use('/api/supplies',          suppliesRouter);
 app.use('/api/access',            accessRouter);
 app.use('/api/drinks',            drinksRouter);
 app.use('/api/event-locations',   eventLocationsRouter);
+app.use('/api/orders',            ordersRouter);
 
 import adminRouter from './routes/admin';
 app.use('/api/admin',             adminRouter);

@@ -57,5 +57,11 @@
     "batch_ship",
     "shipment_mark_arrived"
   ],
-  "test/event-locations.test.ts": []
+  "test/event-locations.test.ts": [],
+  "test/target-stock-copy.test.ts": [
+    "target-stock-copy"
+  ],
+  "test/orders-export.test.ts": [
+    "order_export_excel"
+  ]
 }

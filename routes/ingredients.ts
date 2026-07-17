@@ -6,6 +6,7 @@ import { prisma, dbAppendLog, recalcRecipeCostsForIngredient, recalcAllRecipeCos
 import { addBackendEvent } from './telemetry';
 import { broadcast } from './events';
 import { requireScreenEdit } from './auth';
+import { isActiveLocation } from '../lib/locations';
 import ingredientsImportRouter from './ingredients-import';
 import type { Ingredient, LocationStock } from '../shared/types';
 
@@ -293,6 +294,53 @@ router.post('/', requireScreenEdit('orders'), asyncHandler(async (req: Request, 
 // Update target stock for a single ingredient at one location.
 // withWriteLock prevents the read-modify-write on the JSON targetStock column
 // from racing with a concurrent edit.
+// Bulk-copy the standard-inventory targets from one location to another —
+// the "preload this event with Sering West's standard order" step. For every
+// ingredient with targetStock[fromLocation] > 0, copy that target onto
+// targetStock[toLocation]. Skip-existing so it's safe to re-run on an event
+// whose list is already partly set up (won't clobber hand-edited targets).
+// One transaction; a single bulk-reload broadcast (many ingredients change).
+router.post('/target-stock/copy', requireScreenEdit('orders'), asyncHandler(async (req: Request, res: Response) => {
+  const { fromLocation, toLocation, overwrite } = req.body;
+  if (typeof fromLocation !== 'string' || typeof toLocation !== 'string' || !fromLocation || !toLocation) {
+    return res.status(400).json({ error: 'fromLocation and toLocation required' });
+  }
+  if (fromLocation === toLocation) return res.status(400).json({ error: 'fromLocation and toLocation must differ' });
+  // Only ever seed an ACTIVE location (never an archived/unknown slug).
+  if (!isActiveLocation(toLocation)) return res.status(400).json({ error: 'invalid toLocation' });
+
+  const copied = await withWriteLock(async () => {
+    // Single server-side jsonb merge: copy target_stock->fromLocation onto
+    // ->toLocation for every ingredient whose source target is a positive
+    // number. Skip rows that already have a positive toLocation target unless
+    // overwrite=true (keeps hand-edited festival targets). One statement
+    // touches all matching rows — a per-row loop over ~1000 ingredients took
+    // tens of seconds against a remote DB. target_stock is jsonb (verified).
+    const keepExisting = overwrite
+      ? Prisma.empty
+      : Prisma.sql` AND (target_stock -> ${toLocation}) IS NULL`;
+    const rows = await prisma.$queryRaw<{ id: string }[]>`
+      UPDATE ingredients
+      SET target_stock = jsonb_set(
+        COALESCE(target_stock, '{}'::jsonb),
+        ARRAY[${toLocation}],
+        target_stock -> ${fromLocation}
+      )
+      WHERE jsonb_typeof(target_stock -> ${fromLocation}) = 'number'
+        AND (target_stock ->> ${fromLocation})::numeric > 0
+        ${keepExisting}
+      RETURNING id`;
+    return rows.length;
+  });
+
+  const user = req.user || { email: 'anonymous', name: 'Anonymous' };
+  dbAppendLog(user.email, user.name, 'target-stock-copy', `${fromLocation}→${toLocation}: ${copied} items`);
+  // Too many ingredients to enumerate in a patch — trigger a bulk reload so
+  // every client re-fetches the slim ingredient shape.
+  broadcast(user.email, 'patch', { user: user.name, ingredientsBulkReload: true });
+  res.json({ ok: true, copied });
+}));
+
 router.post('/target-stock', requireScreenEdit('orders'), asyncHandler(async (req: Request, res: Response) => {
   const { ingredientId, location, amount } = req.body;
   if (!ingredientId || !location) return res.status(400).json({ error: 'ingredientId and location required' });

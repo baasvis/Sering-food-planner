@@ -12,7 +12,7 @@
 
 import type { AccessRequestDTO, RoleDTO, PagePermission, EventLocationDTO, StorageArea } from '@shared/types';
 import { NAV_SCREENS, S, DEFAULT_STORAGE_CONFIG, setEventLocationsState } from './state';
-import { apiGet, apiPost, toast, saveStorageConfig } from './utils';
+import { apiGet, apiPost, toast, saveStorageConfig, loadIngredientDb } from './utils';
 import { registerRenderer, rerenderCurrentView } from './navigate';
 import { esc, showModal, closeModal } from './modal';
 import { isServicePast, rebuildPlanner } from './core';
@@ -458,6 +458,8 @@ export function evlocCreate(): void {
         <select id="evloc-hanos"><option value="west" selected>Sering West</option><option value="centraal">Sering Centraal</option></select></div>
       <div class="fr"><label for="evloc-areas">Storage areas to start with</label>
         <select id="evloc-areas"><option value="event" selected>Event default (Koelwagen / Dry / Freezer)</option><option value="west">Copy from Sering West</option></select></div>
+      <div class="fr"><label for="evloc-si">Standard inventory to start with</label>
+        <select id="evloc-si"><option value="west" selected>Copy Sering West's standard order</option><option value="empty">Start empty</option></select></div>
       <div class="modal-actions">
         <button class="btn" onclick="closeModal()">Cancel</button>
         <button class="btn btn-purple" data-testid="evloc-create-confirm" onclick="saveNewEventLocation()">Create</button>
@@ -494,6 +496,16 @@ export async function saveNewEventLocation(): Promise<void> {
         // warning the location silently inherits West's walk-in shelves for
         // everyone else (getStorageConfigForLoc west-fallback).
         toast(`Created ${name}, but saving its storage areas failed — set them via Orders → Storage Locations`);
+      }
+      // Preload the standard-inventory targets from West so the on-site Orders
+      // screen isn't a blank list on day one.
+      if (val('evloc-si') !== 'empty') {
+        try {
+          const r = await apiPost('/api/ingredients/target-stock/copy', { fromLocation: 'west', toLocation: created.slug });
+          if (r && r.copied) { await loadIngredientDb(); toast(`Copied ${r.copied} standard-order items from Sering West`); }
+        } catch (_e: unknown) {
+          toast(`Created ${name}, but copying the standard order failed — add items on the Orders screen`);
+        }
       }
     }
     toast(`Created ${name} — it now has its own planner tab`);
