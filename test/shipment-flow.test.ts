@@ -21,12 +21,17 @@
 try { require('dotenv').config(); } catch (_e) {}
 const request = require('supertest');
 const app = require('../app').default;
-const { prisma } = require('../lib/db');
+const { prisma, dbLoadEventLocations } = require('../lib/db');
 const { flushBuffer } = require('../routes/telemetry');
 
 const T = 'test-ship-' + Date.now() + '-';
 let nextId = 0;
 const tid = (suffix: string) => `${T}${suffix}-${++nextId}`;
+
+// A throwaway ACTIVE event location so we can exercise the hub-and-spoke ship
+// guard (spoke↔spoke is forbidden — only West↔spoke). Created before app use
+// and torn down after; the registry cache is refreshed both times.
+const EV_SHIP = 'ev-testship-' + Date.now();
 
 // Same rationale as migration.test.ts: each test makes one or more supertest
 // calls against the test DB (Railway staging proxy in local use). RTT to
@@ -74,8 +79,19 @@ async function createBatch(overrides: Partial<BatchPayload> & { name?: string } 
   return res.body;
 }
 
+beforeAll(async () => {
+  await prisma.eventLocation.upsert({
+    where: { id: EV_SHIP },
+    update: { archived: false },
+    create: { id: EV_SHIP, name: 'ShipTest Fest', startDate: '2026-07-01', endDate: '2026-12-31', archived: false },
+  });
+  await dbLoadEventLocations(); // hydrate the in-process registry cache
+});
+
 afterAll(async () => {
   await prisma.batch.deleteMany({ where: { id: { startsWith: T } } });
+  try { await prisma.eventLocation.delete({ where: { id: EV_SHIP } }); } catch (_e) { /* best-effort */ }
+  await dbLoadEventLocations();
   // Drain any leftover telemetry rows the assertion test wrote — keeps the
   // telemetryEvent table free of test data. Safe to delete by name+source
   // since prod feature_use rows from these endpoints arrive identically named
@@ -261,6 +277,44 @@ describe('POST /api/batches/:id/ship', () => {
       .post('/api/batches/nonexistent/ship')
       .send({ toLoc: 'centraal', qty: 5 });
     expect(res.status).toBe(404);
+  });
+});
+
+// ── Hub-and-spoke ship guard ──────────────────────────────────────────────
+//
+// West is the production hub. Stock may move West <-> a spoke (Centraal or an
+// event location) in EITHER direction, but never directly between two spokes.
+// So festival food can only be returned to West, never shipped on to Centraal.
+
+describe('POST /api/batches/:id/ship — hub-and-spoke lane guard', () => {
+  it('ALLOWS West → event location', async () => {
+    const b = await createBatch({ inventory: [{ loc: 'west', storage: 'Gastro', qty: 30, cookDate: '01/05/2026' }] });
+    const res = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: EV_SHIP, qty: 10 });
+    expect(res.status).toBe(200);
+    expect(res.body.batch.shipments[0].fromLoc).toBe('west');
+    expect(res.body.batch.shipments[0].toLoc).toBe(EV_SHIP);
+  });
+
+  it('ALLOWS event location → West (return leftovers)', async () => {
+    const b = await createBatch({ inventory: [{ loc: EV_SHIP, storage: 'Gastro', qty: 20, cookDate: '01/05/2026' }] });
+    const res = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: 'west', qty: 5 });
+    expect(res.status).toBe(200);
+    expect(res.body.batch.shipments[0].fromLoc).toBe(EV_SHIP);
+    expect(res.body.batch.shipments[0].toLoc).toBe('west');
+  });
+
+  it('REJECTS event location → Centraal (spoke → spoke)', async () => {
+    const b = await createBatch({ inventory: [{ loc: EV_SHIP, storage: 'Gastro', qty: 20, cookDate: '01/05/2026' }] });
+    const res = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: 'centraal', qty: 5 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/route it through Sering West/i);
+  });
+
+  it('REJECTS Centraal → event location (spoke → spoke)', async () => {
+    const b = await createBatch({ inventory: [{ loc: 'centraal', storage: 'Gastro', qty: 20, cookDate: '01/05/2026' }] });
+    const res = await request(app).post(`/api/batches/${b.id}/ship`).send({ toLoc: EV_SHIP, qty: 5 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/route it through Sering West/i);
   });
 });
 
@@ -485,6 +539,17 @@ describe('POST /api/batches/:id/transfer', () => {
       .send({ fromLoc: 'west', fromStorage: 'NotAStorage', toLoc: 'centraal', toStorage: 'Gastro', qty: 5 });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid fromStorage/i);
+  });
+
+  it('rejects a direct spoke → spoke cross-location transfer (hub-and-spoke)', async () => {
+    // The instant-move backdoor must honour the same lane rule as /ship:
+    // event → Centraal directly is forbidden; it has to go via West.
+    const b = await createBatch({ inventory: [{ loc: EV_SHIP, storage: 'Gastro', qty: 20, cookDate: '01/05/2026' }] });
+    const res = await request(app)
+      .post(`/api/batches/${b.id}/transfer`)
+      .send({ fromLoc: EV_SHIP, fromStorage: 'Gastro', toLoc: 'centraal', toStorage: 'Gastro', qty: 5 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/route it through Sering West/i);
   });
 });
 

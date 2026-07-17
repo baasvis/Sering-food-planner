@@ -1,4 +1,4 @@
-import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor, allActiveLocations } from './state';
+import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor, allActiveLocations, shipDestinationsFrom } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet, todayIso } from './utils';
 import { pushUndo } from './undo';
 import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, cateringActive, diffStr, computeCoverage, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
@@ -1013,10 +1013,12 @@ function renderSendModal(id: string, toLoc: Location) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   const inv = (d.inventory || []).filter(e => e.qty > 0);
-  // Source candidates = entries NOT at toLoc (you can't ship-to-self).
+  // Source candidates = entries NOT at toLoc (you can't ship-to-self), AND
+  // legal under the hub-and-spoke rule: shipping to a spoke (Centraal / event)
+  // may only source from West; only a West destination accepts spoke stock.
   const sourceCandidates = inv
     .map((e, idx) => ({ entry: e, idx }))
-    .filter(x => x.entry.loc !== toLoc);
+    .filter(x => x.entry.loc !== toLoc && (toLoc === 'west' || x.entry.loc === 'west'));
   if (sourceCandidates.length === 0) {
     toast(`No stock outside ${locName(toLoc)} to send from`);
     return;
@@ -1051,7 +1053,7 @@ function renderSendModal(id: string, toLoc: Location) {
 /** Re-render the send modal when the To dropdown changes (so source
  *  candidates update). Exposed for the inline onchange handler. */
 export function rerenderSendModal(id: string, toLoc: string) {
-  if (toLoc !== 'west' && toLoc !== 'centraal') return;
+  if (!allActiveLocations().includes(toLoc)) return;
   renderSendModal(id, toLoc as Location);
 }
 
@@ -1448,11 +1450,11 @@ function renderInventoryEditor(id: string) {
         const freezeBtn = e.storage === 'Frozen'
           ? ''
           : `<button class="btn btn-sm" onclick="setInvAction('${id}',${i},'freeze')" title="Freeze some of this stock">❄️ Freeze</button>`;
-        // One Send button per OTHER active location (west, centraal, and any
-        // active event location). Previously binary west↔centraal only, so
-        // event locations like a festival were unreachable from this modal.
-        const sendBtns = allActiveLocations()
-          .filter(dest => dest !== e.loc)
+        // One Send button per LEGAL destination under the hub-and-spoke rule:
+        // from West → any spoke; from a spoke (Centraal / event) → West only.
+        // So a festival row offers only "→ Sering West" (return leftovers),
+        // never "→ Sering Centraal" — event food can't leave except back to West.
+        const sendBtns = shipDestinationsFrom(e.loc)
           .map(dest => `<button class="btn btn-sm" onclick="setInvAction('${id}',${i},'send','${dest}')" title="Send some of this stock to ${esc(locName(dest))}">→ ${esc(locName(dest))}</button>`)
           .join('');
         const removeBtn = `<button class="btn btn-sm btn-danger" onclick="removeInventoryEntry('${id}',${i})" title="Remove this row entirely">×</button>`;
