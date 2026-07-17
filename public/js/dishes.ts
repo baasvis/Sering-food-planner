@@ -1696,8 +1696,12 @@ export function updateInventoryField(id: string, idx: number, field: string, val
   if (!d || !d.inventory || idx < 0 || idx >= d.inventory.length) return;
   const entry = d.inventory[idx];
   let mergeKeyChanged = false;
-  if (field === 'loc' && (value === 'west' || value === 'centraal')) {
-    entry.loc = value;
+  // Accept ANY active location (west, centraal, or an active event location).
+  // Previously hardcoded to west/centraal, so picking an event location like a
+  // festival from the dropdown was silently dropped and the row snapped back
+  // to its default 'west' on the next render/save.
+  if (field === 'loc' && allActiveLocations().includes(value as Location)) {
+    entry.loc = value as Location;
     mergeKeyChanged = true;
   }
   else if (field === 'storage' && (value === 'Gastro' || value === 'Frozen' || value === 'Vac-packed')) {
