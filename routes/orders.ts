@@ -44,7 +44,10 @@ router.post('/export', asyncHandler(async (req: Request, res: Response) => {
   for (const raw of items as OrderExportItem[]) {
     const qty = num(raw.quantity);
     const price = num(raw.price);
-    const line = qty * price;
+    // Round each line to cents and sum the ROUNDED lines, so the Total foots
+    // exactly against the visible line totals (summing the raw products could
+    // disagree by a cent).
+    const line = Math.round(qty * price * 100) / 100;
     total += line;
     rows.push([str(raw.name, 200), str(raw.orderCode, 100), qty, str(raw.unitLabel, 50), money(price), money(line)]);
   }

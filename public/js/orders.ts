@@ -1336,8 +1336,35 @@ export function isHanosEnabled() {
   return (hanosStatus as unknown as Record<string, boolean>)[loc] || false;
 }
 
-/** Collect all Hanos items from the combined order table that need ordering */
-export function collectHanosItems(storageCat: string | null | undefined): HanosItem[] {
+// True when a code is a real Hanos order code (not an "order link" URL).
+export function hasHanosCode(db: { orderCode?: string } | null | undefined): boolean {
+  return !!(db && db.orderCode && !db.orderCode.startsWith('http'));
+}
+
+/** Build an order line for one ingredient given its to-order amount (base
+ *  units). Coded items with an order unit get order-unit quantities + price
+ *  (the Hanos-cart shape). With `includeUncoded`, items WITHOUT an order unit
+ *  (incl. those with no Hanos code at all) fall back to a base-unit quantity
+ *  and no price — so an Excel order sheet lists everything that needs buying,
+ *  not just the Hanos-orderable subset. Returns null when there is nothing to
+ *  order (or an uncoded item on the cart-only path). */
+export function buildOrderItem(db: { name: string; orderCode?: string; orderUnit?: string; orderPrice?: number; orderUnitSize: number; unit?: string }, toOrderBase: number, includeUncoded: boolean): HanosItem | null {
+  const coded = hasHanosCode(db);
+  const calc = calcOrderUnits(toOrderBase, db);
+  if (calc && calc.units > 0) {
+    return { name: db.name, orderCode: coded ? db.orderCode as string : '', quantity: calc.units, unit: 'ST', unitLabel: db.orderUnit || '', price: db.orderPrice || 0 };
+  }
+  if (includeUncoded && toOrderBase > 0) {
+    const f = formatAmount(toOrderBase, db.unit || 'g');
+    return { name: db.name, orderCode: coded ? db.orderCode as string : '', quantity: f.amount, unit: db.unit || 'g', unitLabel: f.unit, price: 0 };
+  }
+  return null;
+}
+
+/** Collect order items from the combined order table. By default (cart path)
+ *  only Hanos-coded items; with `includeUncoded` (Excel path) every item that
+ *  needs ordering, coded or not. */
+export function collectHanosItems(storageCat: string | null | undefined, includeUncoded = false): HanosItem[] {
   const rows = document.querySelectorAll('.ing-table tr[data-combined-key]');
   const items: HanosItem[] = [];
   rows.forEach(rowEl => {
@@ -1349,7 +1376,8 @@ export function collectHanosItems(storageCat: string | null | undefined): HanosI
     }
     const dbName = row.dataset.dbname;
     const db = dbName ? lookupIngredient(dbName) : null;
-    if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
+    if (!db) return;
+    if (!includeUncoded && !hasHanosCode(db)) return; // cart path: coded only
 
     // Calculate order units for this row — stock values are in order units, convert to base
     const neededBase = parseFloat(row.dataset.needed) || 0;
@@ -1361,17 +1389,8 @@ export function collectHanosItems(storageCat: string | null | undefined): HanosI
       : dbStock;
     const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
-    const calc = calcOrderUnits(toOrderBase, db);
-    if (!calc || calc.units <= 0) return;
-
-    items.push({
-      name: db.name,
-      orderCode: db.orderCode,
-      quantity: calc.units,
-      unit: 'ST',
-      unitLabel: db.orderUnit || '',
-      price: db.orderPrice || 0,
-    });
+    const item = buildOrderItem(db, toOrderBase, includeUncoded);
+    if (item) items.push(item);
   });
   return items;
 }
@@ -1426,16 +1445,20 @@ export async function hanosAddSingle(orderCode: string | undefined, name: string
 /** Show confirmation modal for bulk Hanos add (combined order) */
 export function hanosConfirmBulk(storageCat?: string) {
   trackEvent('hanos_send_bulk');
-  const items = collectHanosItems(storageCat);
+  // Broad set (coded + uncoded): the modal previews everything that needs
+  // ordering and the Excel export includes it all; the Hanos-cart button
+  // inside sends only the coded subset.
+  const items = collectHanosItems(storageCat, true);
   if (!items.length) {
-    toast('No items with order codes and quantities to send');
+    toast('Nothing to order');
     return;
   }
   showHanosConfirmModal(items, storageCat, 'combined');
 }
 
-/** Collect Hanos items from batch ingredients tab */
-export function collectHanosBatchItems(storageCat: string | null | undefined): HanosItem[] {
+/** Collect order items from the batch-ingredients tab. Coded-only by default
+ *  (cart); all items needing order with `includeUncoded` (Excel). */
+export function collectHanosBatchItems(storageCat: string | null | undefined, includeUncoded = false): HanosItem[] {
   const rows = document.querySelectorAll('.ing-table tr[data-stock-key]');
   const items: HanosItem[] = [];
   rows.forEach(rowEl => {
@@ -1447,7 +1470,8 @@ export function collectHanosBatchItems(storageCat: string | null | undefined): H
     const key = row.dataset.stockKey;
     const ingName = row.dataset.ingName || key || '';
     const db = key ? lookupIngredient(key) : null;
-    if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
+    if (!db) return;
+    if (!includeUncoded && !hasHanosCode(db)) return; // cart path: coded only
 
     const neededBase = parseFloat(row.dataset.needed) || 0;
     const dbStock = getDbStockForLoc(db, S.currentLoc);
@@ -1458,26 +1482,17 @@ export function collectHanosBatchItems(storageCat: string | null | undefined): H
       : dbStock;
     const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
-    const calc = calcOrderUnits(toOrderBase, db);
-    if (!calc || calc.units <= 0) return;
-
-    items.push({
-      name: db.name,
-      orderCode: db.orderCode,
-      quantity: calc.units,
-      unit: 'ST',
-      unitLabel: db.orderUnit || '',
-      price: db.orderPrice || 0,
-    });
+    const item = buildOrderItem(db, toOrderBase, includeUncoded);
+    if (item) items.push(item);
   });
   return items;
 }
 
 /** Show confirmation modal for batch ingredients Hanos add */
 export function hanosConfirmBulkBatches(storageCat?: string) {
-  const items = collectHanosBatchItems(storageCat);
+  const items = collectHanosBatchItems(storageCat, true);
   if (!items.length) {
-    toast('No items with order codes and quantities to send');
+    toast('Nothing to order');
     return;
   }
   showHanosConfirmModal(items, storageCat, 'batches');
@@ -1501,10 +1516,11 @@ export function showHanosConfirmModal(items: HanosItem[], storageCat: string | u
   const listHtml = items.map(i => {
     const total = i.price ? i.quantity * i.price : 0;
     const isExpensive = total > 200;
+    const noCode = !i.orderCode;
     return `<tr${isExpensive ? ' style="background:var(--red-bg, #fde8e8);"' : ''}>
       <td style="font-weight:500;">${esc(i.name)}</td>
-      <td style="font-family:monospace;font-size:12px;">${esc(i.orderCode)}</td>
-      <td style="text-align:right;font-weight:600;">${i.quantity}x</td>
+      <td style="font-family:monospace;font-size:12px;">${noCode ? '<span style="color:var(--text3);font-family:inherit;">no code</span>' : esc(i.orderCode)}</td>
+      <td style="text-align:right;font-weight:600;">${i.quantity}${i.unit === 'ST' ? 'x' : ''}</td>
       <td style="font-size:12px;color:var(--text2);">${esc(i.unitLabel)}</td>
       <td style="text-align:right;font-size:12px;${isExpensive ? 'color:var(--red);font-weight:600;' : ''}">${total > 0 ? '\u20AC' + total.toFixed(2) : ''}</td>
     </tr>`;
@@ -1512,19 +1528,29 @@ export function showHanosConfirmModal(items: HanosItem[], storageCat: string | u
 
   const label = storageCat ? esc(storageCat) : 'all groups';
   const totalCost = items.reduce((sum: number, i: HanosItem) => sum + (i.price ? i.quantity * i.price : 0), 0);
+  // Only Hanos-coded items can go to the cart; uncoded items are Excel-only.
+  const codedCount = items.filter(i => i.orderCode).length;
+  const uncodedCount = items.length - codedCount;
 
   // Where would the Hanos cart go? The resolved account for the current
   // location (event locations resolve to a permanent account, West by
   // default \u2014 this is the "West card" the cook thinks of).
   const account = hanosStatus.locations?.[S.currentLoc]?.account || 'west';
   const cartLabel = locName(account);
-  const cartBtn = isHanosEnabled()
-    ? `<button class="btn btn-sm" data-testid="order-to-hanos" style="background:var(--blue);color:#fff;border-color:var(--blue);" onclick="hanosExecuteFromModal('${esc(source)}','${esc(storageCat || '')}')">\uD83D\uDED2 ${expensiveItems.length ? 'Confirm &amp; add' : 'Add'} to ${esc(cartLabel)}'s Hanos cart</button>`
-    : `<span style="font-size:12px;color:var(--text2);align-self:center;">Hanos isn't connected for ${esc(locName(S.currentLoc))} \u2014 download the order instead.</span>`;
+  const cartBtn = (isHanosEnabled() && codedCount > 0)
+    ? `<button class="btn btn-sm" data-testid="order-to-hanos" style="background:var(--blue);color:#fff;border-color:var(--blue);" onclick="hanosExecuteFromModal('${esc(source)}','${esc(storageCat || '')}')">\uD83D\uDED2 ${expensiveItems.length ? 'Confirm &amp; add' : 'Add'} ${codedCount} to ${esc(cartLabel)}'s Hanos cart</button>`
+    : `<span style="font-size:12px;color:var(--text2);align-self:center;">${isHanosEnabled() ? 'No Hanos-coded items here' : `Hanos isn't connected for ${esc(locName(S.currentLoc))}`} \u2014 download the order instead.</span>`;
+
+  // Note when the Excel sheet is broader than the cart (uncoded items ride
+  // along on the sheet only).
+  const uncodedNote = (uncodedCount > 0 && isHanosEnabled() && codedCount > 0)
+    ? `<p style="font-size:12px;color:var(--text2);margin-bottom:10px;">The Hanos cart takes the ${codedCount} coded item(s); the Excel sheet includes all ${items.length}, including ${uncodedCount} without a Hanos code.</p>`
+    : '';
 
   showModal(`
     <h3 style="margin-bottom:12px;">Place order</h3>
-    <p style="font-size:13px;margin-bottom:12px;"><strong>${items.length} item(s)</strong> from ${label}. Add them to the Hanos cart, or download an Excel order sheet:</p>
+    <p style="font-size:13px;margin-bottom:12px;"><strong>${items.length} item(s)</strong> from ${label} that need ordering. Add them to the Hanos cart, or download an Excel order sheet:</p>
+    ${uncodedNote}
     ${warningHtml}
     <div style="max-height:300px;overflow-y:auto;margin-bottom:12px;">
       <table class="ing-table" style="font-size:12px;">
@@ -1545,9 +1571,11 @@ export function showHanosConfirmModal(items: HanosItem[], storageCat: string | u
  *  offline alternative to adding it to the Hanos cart. Works regardless of
  *  whether Hanos is connected. */
 export async function exportOrderExcel(source: string, storageCat: string) {
+  // includeUncoded=true: the sheet lists everything that needs ordering, not
+  // just the Hanos-coded subset the cart can take.
   const items = source === 'batches'
-    ? collectHanosBatchItems(storageCat || null)
-    : collectHanosItems(storageCat || null);
+    ? collectHanosBatchItems(storageCat || null, true)
+    : collectHanosItems(storageCat || null, true);
   if (!items.length) { toast('Nothing to export'); return; }
   trackEvent('order_export_excel', source, { count: items.length });
   try {

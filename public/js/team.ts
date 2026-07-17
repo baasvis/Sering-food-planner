@@ -476,6 +476,11 @@ export async function saveNewEventLocation(): Promise<void> {
   const endDate = val('evloc-end');
   const hanosAccount = val('evloc-hanos') === 'centraal' ? 'centraal' : 'west';
   const areasSeed = val('evloc-areas');
+  // Capture BEFORE closeModal() destroys the modal DOM — reading a control
+  // after the modal is torn down returns '' and silently ignores the choice
+  // (this bit the "Start empty" option, which always copied). areasSeed above
+  // is likewise read here for the same reason.
+  const siSeed = val('evloc-si');
   if (!name) { toast('Enter a name'); return; }
   if (!startDate || !endDate) { toast('Pick the first and last day'); return; }
   try {
@@ -499,7 +504,7 @@ export async function saveNewEventLocation(): Promise<void> {
       }
       // Preload the standard-inventory targets from West so the on-site Orders
       // screen isn't a blank list on day one.
-      if (val('evloc-si') !== 'empty') {
+      if (siSeed !== 'empty') {
         try {
           const r = await apiPost('/api/ingredients/target-stock/copy', { fromLocation: 'west', toLocation: created.slug });
           if (r && r.copied) { await loadIngredientDb(); toast(`Copied ${r.copied} standard-order items from Sering West`); }

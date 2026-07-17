@@ -97,6 +97,9 @@ test.describe.serial('event location lifecycle', () => {
     await page.locator('#evloc-name').fill(RUN);
     await page.locator('#evloc-start').fill(iso(today));
     await page.locator('#evloc-end').fill(iso(end));
+    // Start empty — the "Copy West standard order" preload would write an order
+    // target onto every West-stocked ingredient in the shared test DB.
+    await page.locator('#evloc-si').selectOption('empty');
     const created = page.waitForResponse(r => r.url().includes('/api/event-locations') && r.request().method() === 'POST');
     await page.getByTestId('evloc-create-confirm').click();
     expect((await created).status()).toBe(201);

@@ -288,14 +288,16 @@ router.delete('/:slug', requireDirector, asyncHandler(async (req: Request, res: 
         throw new AppError(400, `Cannot delete: supply "${s.name}" still has stock recorded at this location. Zero it first.`);
       }
     }
-    // Ingredient DB: counted stock or order targets at this location block —
-    // same silent-inheritance risk for a recreated slug.
-    const ingredients = await prisma.ingredient.findMany({ select: { name: true, stock: true, targetStock: true } });
+    // Ingredient DB: COUNTED stock at this location blocks (losing a real
+    // count is data loss). Order TARGETS do NOT block — a target is a
+    // regenerable order template (the "Copy West standard order" preload
+    // writes one onto every ingredient by default), so blocking on it would
+    // make every preloaded event undeletable. Targets are purged below.
+    const ingredients = await prisma.ingredient.findMany({ select: { name: true, stock: true } });
     for (const ing of ingredients) {
       const stock = (ing.stock ?? {}) as Record<string, { amount?: number } | undefined>;
-      const target = (ing.targetStock ?? {}) as Record<string, number | undefined>;
-      if ((stock[slug]?.amount ?? 0) > 0 || (target[slug] ?? 0) > 0) {
-        throw new AppError(400, `Cannot delete: ingredient "${ing.name}" still has stock or an order target at this location. Zero it first (or leave the event archived).`);
+      if ((stock[slug]?.amount ?? 0) > 0) {
+        throw new AppError(400, `Cannot delete: ingredient "${ing.name}" still has counted stock at this location. Zero it first (or leave the event archived).`);
       }
     }
 
@@ -314,24 +316,15 @@ router.delete('/:slug', requireDirector, asyncHandler(async (req: Request, res: 
         await prisma.storageConfig.update({ where: { id: 'default' }, data: { config: cfg as object } });
       }
     }
-    // Zero-amount stock keys (0 blocks nothing above) are cleaned too.
-    for (const s of await prisma.supply.findMany({ select: { id: true, stock: true } })) {
-      const stock = (s.stock ?? {}) as Record<string, unknown>;
-      if (slug in stock) {
-        const next = { ...stock };
-        delete next[slug];
-        await prisma.supply.update({ where: { id: s.id }, data: { stock: next as object } });
-      }
-    }
-    for (const ing of await prisma.ingredient.findMany({ select: { id: true, stock: true, targetStock: true } })) {
-      const stock = (ing.stock ?? {}) as Record<string, unknown>;
-      const target = (ing.targetStock ?? {}) as Record<string, unknown>;
-      if (slug in stock || slug in target) {
-        const nextStock = { ...stock }; delete nextStock[slug];
-        const nextTarget = { ...target }; delete nextTarget[slug];
-        await prisma.ingredient.update({ where: { id: ing.id }, data: { stock: nextStock as object, targetStock: nextTarget as object } });
-      }
-    }
+    // Strip the slug key from the location-keyed jsonb columns in one
+    // statement each (the ingredient target-stock preload writes a key onto
+    // ~94 rows, so a per-row loop over ~1170 ingredients was needlessly slow).
+    // Supply/ingredient STOCK keys here are zero-amount (positive amounts
+    // block above); ingredient TARGET keys (order templates) are always
+    // purged. The `- key` operator removes a top-level jsonb key.
+    await prisma.$executeRaw`UPDATE supplies SET stock = stock - ${slug} WHERE jsonb_exists(stock, ${slug})`;
+    await prisma.$executeRaw`UPDATE ingredients SET stock = stock - ${slug} WHERE jsonb_exists(stock, ${slug})`;
+    await prisma.$executeRaw`UPDATE ingredients SET target_stock = target_stock - ${slug} WHERE jsonb_exists(target_stock, ${slug})`;
     await prisma.eventLocation.delete({ where: { id: slug } });
   });
 

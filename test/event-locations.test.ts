@@ -68,6 +68,7 @@ function fullBatch(id: string, over: Record<string, unknown> = {}) {
 afterAll(async () => {
   await prisma.batch.deleteMany({ where: { id: { startsWith: T } } });
   await prisma.supply.deleteMany({ where: { id: { startsWith: T } } });
+  await prisma.ingredient.deleteMany({ where: { id: { startsWith: T } } });
   // Guest rows written by the round-trip test: without this, leftover
   // "ev-zzz-evloc-*" Guest rows from a past run outlive their (deleted)
   // registry rows and surface as unknown keys in every later GET /api/data.
@@ -411,6 +412,27 @@ describe('DELETE /api/event-locations/:slug', () => {
     expect(isKnownLocation(created.slug)).toBe(false);
     const rows = await prisma.guest.findMany({ where: { location: created.slug } });
     expect(rows).toHaveLength(0);
+  });
+
+  it('deletes a preloaded event (order TARGETS only, no counted stock) and purges the targets', async () => {
+    const cookie = await loginDirector();
+    const created = await createEventLoc(cookie);
+
+    // Simulate the "Copy West standard order" preload: an order target keyed
+    // by the new slug, but NO counted stock. This must NOT block delete.
+    const ingId = tid('tsonly');
+    await prisma.ingredient.create({
+      data: { id: ingId, name: 'Evloc Target Only', targetStock: { [created.slug]: 42 } },
+    });
+
+    await request(app).post(`/api/event-locations/${created.slug}/archive`).set('Cookie', cookie);
+    const ok = await request(app).delete(`/api/event-locations/${created.slug}`).set('Cookie', cookie);
+    expect(ok.status).toBe(200);
+
+    // Registry gone and the order target purged (no orphan key survives).
+    expect(isKnownLocation(created.slug)).toBe(false);
+    const ing = await prisma.ingredient.findUnique({ where: { id: ingId } });
+    expect((ing.targetStock as Record<string, unknown>)[created.slug]).toBeUndefined();
   });
 
   it('403 without a director session', async () => {
