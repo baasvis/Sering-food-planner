@@ -1410,6 +1410,7 @@ export function openEditDish(id: string, mode: 'normal' | 'power' = 'normal') {
 interface PendingInvAction {
   rowIdx: number;
   kind: 'freeze' | 'send';
+  toLoc?: Location; // send destination (undefined for freeze)
 }
 let _invPending: PendingInvAction | null = null;
 
@@ -1434,7 +1435,6 @@ function renderInventoryEditor(id: string) {
   const d = S.batches.find(x => x.id === id);
   if (!d) return;
   const inv = d.inventory || [];
-  const otherLoc = (loc: Location): Location => (loc === 'west' ? 'centraal' : 'west');
 
   // Card-per-entry layout (rather than the old table). Daan's smoke
   // surfaced two issues with the table version: (a) per-row action
@@ -1448,7 +1448,13 @@ function renderInventoryEditor(id: string) {
         const freezeBtn = e.storage === 'Frozen'
           ? ''
           : `<button class="btn btn-sm" onclick="setInvAction('${id}',${i},'freeze')" title="Freeze some of this stock">❄️ Freeze</button>`;
-        const sendBtn = `<button class="btn btn-sm" onclick="setInvAction('${id}',${i},'send')" title="Send some of this stock to ${locName(otherLoc(e.loc))}">→ ${locName(otherLoc(e.loc))}</button>`;
+        // One Send button per OTHER active location (west, centraal, and any
+        // active event location). Previously binary west↔centraal only, so
+        // event locations like a festival were unreachable from this modal.
+        const sendBtns = allActiveLocations()
+          .filter(dest => dest !== e.loc)
+          .map(dest => `<button class="btn btn-sm" onclick="setInvAction('${id}',${i},'send','${dest}')" title="Send some of this stock to ${esc(locName(dest))}">→ ${esc(locName(dest))}</button>`)
+          .join('');
         const removeBtn = `<button class="btn btn-sm btn-danger" onclick="removeInventoryEntry('${id}',${i})" title="Remove this row entirely">×</button>`;
         const isActive = _invPending && _invPending.rowIdx === i;
         const actionForm = isActive
@@ -1456,7 +1462,7 @@ function renderInventoryEditor(id: string) {
               <span style="font-size:12px;color:var(--text2);flex-basis:100%;">
                 ${_invPending!.kind === 'freeze'
                   ? `❄️ How many liters to freeze from <strong>${locName(e.loc)} ${e.storage}</strong>?`
-                  : `→ How many liters to send to <strong>${locName(otherLoc(e.loc))}</strong>?`}
+                  : `→ How many liters to send to <strong>${esc(locName(_invPending!.toLoc || e.loc))}</strong>?`}
               </span>
               <input type="number" id="inv-qty-${i}" step="0.5" min="0.1" max="${e.qty}" value="${e.qty.toFixed(1)}" style="width:80px;" autofocus
                 onkeydown="if(event.key==='Enter')confirmInvAction('${id}',${i});if(event.key==='Escape')cancelInvAction('${id}')" />
@@ -1478,7 +1484,7 @@ function renderInventoryEditor(id: string) {
             <span style="font-size:11px;color:var(--text3);font-family:monospace;margin-left:auto;">cooked ${esc(e.cookDate)}</span>
           </div>
           <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-            ${freezeBtn}${sendBtn}
+            ${freezeBtn}${sendBtns}
             <span style="flex:1;"></span>
             ${removeBtn}
           </div>
@@ -1496,12 +1502,16 @@ function renderInventoryEditor(id: string) {
 
 /** Per-row "Freeze" / "Send" button click → flip the inline qty form on
  *  that row. Clicking the same button again cancels. */
-export function setInvAction(id: string, rowIdx: number, kind: string) {
+export function setInvAction(id: string, rowIdx: number, kind: string, toLoc?: string) {
   if (kind !== 'freeze' && kind !== 'send') return;
-  if (_invPending && _invPending.rowIdx === rowIdx && _invPending.kind === kind) {
+  // Clicking the same button again cancels — for send that means same row,
+  // same kind AND same destination (a row now has one send button per loc).
+  const same = _invPending !== null && _invPending.rowIdx === rowIdx && _invPending.kind === kind
+    && (kind !== 'send' || _invPending.toLoc === toLoc);
+  if (same) {
     _invPending = null;
   } else {
-    _invPending = { rowIdx, kind };
+    _invPending = { rowIdx, kind, toLoc: kind === 'send' ? (toLoc as Location) : undefined };
   }
   renderInventoryEditor(id);
 }
@@ -1548,8 +1558,10 @@ export async function confirmInvAction(id: string, rowIdx: number) {
       }
       toast(res && res.warning ? res.warning : `Froze ${qty}L at ${locName(entry.loc)}`);
     } else {
-      // /ship to the other loc.
-      const toLoc: Location = entry.loc === 'west' ? 'centraal' : 'west';
+      // /ship to the chosen destination (any other active location, incl.
+      // event locations). action.toLoc is set by the per-loc Send button.
+      const toLoc = action.toLoc;
+      if (!toLoc) { toastError('No destination selected.'); return; }
       trackEvent('batch_ship', '', { batchId: id, toLoc, qty });
       const res = await apiPost(`/api/batches/${id}/ship`, {
         toLoc, qty, storage: entry.storage, fromInventoryIdx: rowIdx,
@@ -1684,8 +1696,12 @@ export function updateInventoryField(id: string, idx: number, field: string, val
   if (!d || !d.inventory || idx < 0 || idx >= d.inventory.length) return;
   const entry = d.inventory[idx];
   let mergeKeyChanged = false;
-  if (field === 'loc' && (value === 'west' || value === 'centraal')) {
-    entry.loc = value;
+  // Accept ANY active location (west, centraal, or an active event location).
+  // Previously hardcoded to west/centraal, so picking an event location like a
+  // festival from the dropdown was silently dropped and the row snapped back
+  // to its default 'west' on the next render/save.
+  if (field === 'loc' && allActiveLocations().includes(value as Location)) {
+    entry.loc = value as Location;
     mergeKeyChanged = true;
   }
   else if (field === 'storage' && (value === 'Gastro' || value === 'Frozen' || value === 'Vac-packed')) {
