@@ -98,3 +98,46 @@ describe('hasDbStockEntryForLoc', () => {
     expect(hasDbStockEntryForLoc(dbWestOnly, 'centraal')).toBe(false);
   });
 });
+
+// ── Event-location keys (all-locations aggregates) ───────────────────────────
+// Mirrors getDbStockTotal / hasDbStockEntry in public/js/orders.ts, which sum
+// over EVERY stock key so an event location's stocktake counts.
+
+function getDbStockTotal(db: MockDb): number {
+  if (!db || !db.stock) return 0;
+  let total = 0;
+  for (const entry of Object.values(db.stock)) {
+    if (entry) total += (entry.amount || 0);
+  }
+  return total;
+}
+
+function hasDbStockEntry(db: MockDb): boolean {
+  if (!db || !db.stock) return false;
+  return Object.values(db.stock).some(entry => !!entry?.date);
+}
+
+describe('all-locations aggregates with event keys', () => {
+  const db = {
+    stock: {
+      west:                  { amount: 4, date: '2026-07-10' },
+      centraal:              { amount: 2 },
+      'ev-landjuweel-2026':  { amount: 9, date: '2026-07-16' },
+    },
+  };
+
+  it('getDbStockTotal sums permanent + event keys', () => {
+    expect(getDbStockTotal(db)).toBe(15);
+  });
+
+  it('per-loc reads work for event keys', () => {
+    expect(getDbStockForLoc(db, 'ev-landjuweel-2026')).toBe(9);
+    expect(hasDbStockEntryForLoc(db, 'ev-landjuweel-2026')).toBe(true);
+  });
+
+  it('hasDbStockEntry counts an event-only stocktake', () => {
+    const onlyEvent = { stock: { 'ev-landjuweel-2026': { amount: 0, date: '2026-07-16' } } };
+    expect(hasDbStockEntry(onlyEvent)).toBe(true);
+    expect(hasDbStockEntry({ stock: { west: { amount: 3 } } })).toBe(false);
+  });
+});

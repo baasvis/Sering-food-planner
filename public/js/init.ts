@@ -1,6 +1,7 @@
-import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories, restoreGlobalLocation, screenPermission } from './state';
+import { S, NAV_SCREENS, setGlobalLocation, rebuildStorageCategories, restoreGlobalLocation, screenPermission, allActiveLocations, isEventLoc } from './state';
+import { locName, isPermanentLocation } from '@shared/location';
 import type { Location } from '@shared/types';
-import { loadData, connectLiveSync, saveState,
+import { loadData, connectLiveSync, saveState, toast, setOnRegistryChanged,
          loadIngredientDb, loadStorageConfig, loadKitchenEquipment, loadCookRhythm, loadCostTargets, loadRevenuePerGuest, loadClosedServices,
          loadGuestHistory, loadGuestsNextWeeks, loadInventoryCompletions,
          loadRitualCompletions, loadDrinks, loadDrinkSuppliers, loadDrinkConfig } from './utils';
@@ -8,7 +9,7 @@ import { flushUndo } from './undo';
 import { rebuildPlanner } from './core';
 import { renderDashboard, showScreen, getScreenFromHash } from './dashboard';
 import { checkSession, initGoogleSignIn } from './auth';
-import { closeModal, showModal } from './modal';
+import { closeModal, showModal, esc } from './modal';
 import { rerenderCurrentView } from './navigate';
 import { checkInventoryReminder } from './planner';
 import { checkPendingFmmSnapshots } from './fmm-snapshot';
@@ -28,10 +29,20 @@ export function toggleTheme() {
 }
 
 // ── GLOBAL LOCATION SWITCH ───────────────────────────────
-/** Inner HTML of the switcher pill: coloured dot + "Sering <Loc>" + swap hint. */
+/** Inner HTML of the switcher pill: coloured dot + "Sering <Loc>" + swap hint.
+ *  Event locations show their registry name (no "Sering" prefix). */
 function locTitleHtml(loc: Location): string {
-  const name = loc === 'west' ? 'West' : 'Centraal';
-  return `<span class="app-title-dot"></span>Sering <span class="app-title-loc">${name}</span><span class="app-title-swap" aria-hidden="true">⇄</span>`;
+  if (isPermanentLocation(loc)) {
+    const name = loc === 'west' ? 'West' : 'Centraal';
+    return `<span class="app-title-dot"></span>Sering <span class="app-title-loc">${name}</span><span class="app-title-swap" aria-hidden="true">⇄</span>`;
+  }
+  return `<span class="app-title-dot"></span><span class="app-title-loc">${esc(locName(loc))}</span><span class="app-title-swap" aria-hidden="true">⇄</span>`;
+}
+
+/** CSS class for the active location: permanent keys keep their own accent,
+ *  every event location shares the generic loc-event accent. */
+export function locThemeClass(loc: Location | string): string {
+  return loc === 'west' ? 'loc-west' : loc === 'centraal' ? 'loc-centraal' : 'loc-event';
 }
 
 /** Mirror the active location onto <body> so the accent colour (--loc-accent)
@@ -39,22 +50,43 @@ function locTitleHtml(loc: Location): string {
 export function applyLocationTheme(loc: Location): void {
   document.body.classList.toggle('loc-west', loc === 'west');
   document.body.classList.toggle('loc-centraal', loc === 'centraal');
+  document.body.classList.toggle('loc-event', isEventLoc(loc));
 }
 
 /** Step 1: clicking the switcher asks for confirmation — switching changes the
- *  whole app's location context, so it shouldn't happen on an accidental tap. */
+ *  whole app's location context, so it shouldn't happen on an accidental tap.
+ *  With only the two permanent locations the classic ⇄ confirm stays; with an
+ *  active event location there is no "the other", so a picker opens instead. */
 export function confirmSwitchLocation() {
-  const target: Location = S.currentLoc === 'west' ? 'centraal' : 'west';
-  const targetName = target === 'west' ? 'West' : 'Centraal';
-  const currentName = S.currentLoc === 'west' ? 'West' : 'Centraal';
+  const locs = allActiveLocations();
+  if (locs.length <= 2) {
+    const target: Location = S.currentLoc === 'west' ? 'centraal' : 'west';
+    const targetName = target === 'west' ? 'West' : 'Centraal';
+    const currentName = S.currentLoc === 'west' ? 'West' : 'Centraal';
+    showModal(`
+      <div class="loc-switch-modal loc-${target}">
+        <h3>Switch location?</h3>
+        <p class="modal-note">You're currently working in <strong>Sering ${currentName}</strong>.</p>
+        <p style="margin-top:8px;">Switch the whole app to <strong class="loc-switch-target">Sering ${targetName}</strong>?</p>
+        <div class="modal-actions">
+          <button class="btn" onclick="closeModal()">Cancel</button>
+          <button class="btn loc-switch-confirm" onclick="switchGlobalLocation('${target}')">Switch to Sering ${targetName}</button>
+        </div>
+      </div>
+    `);
+    return;
+  }
+  const btns = locs.map(l => {
+    const here = l === S.currentLoc;
+    return `<button class="btn loc-switch-confirm loc-pick-btn ${locThemeClass(l)}" data-testid="loc-pick-${esc(l)}" ${here ? 'disabled' : ''} onclick="switchGlobalLocation('${esc(l)}')">${esc(locName(l))}${here ? ' — you are here' : ''}</button>`;
+  }).join('');
   showModal(`
-    <div class="loc-switch-modal loc-${target}">
+    <div class="loc-switch-modal">
       <h3>Switch location?</h3>
-      <p class="modal-note">You're currently working in <strong>Sering ${currentName}</strong>.</p>
-      <p style="margin-top:8px;">Switch the whole app to <strong class="loc-switch-target">Sering ${targetName}</strong>?</p>
+      <p class="modal-note">You're currently working in <strong>${esc(locName(S.currentLoc))}</strong>. Pick where you're working:</p>
+      <div class="loc-pick-list" style="display:flex;flex-direction:column;gap:8px;margin:12px 0;">${btns}</div>
       <div class="modal-actions">
         <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn loc-switch-confirm" onclick="switchGlobalLocation('${target}')">Switch to Sering ${targetName}</button>
       </div>
     </div>
   `);
@@ -64,16 +96,22 @@ export function confirmSwitchLocation() {
  *  passes the exact target it displayed so the two can't drift). Falls back to
  *  toggling the current location if called without a valid target. */
 export function switchGlobalLocation(target?: Location) {
-  const newLoc: Location = (target === 'west' || target === 'centraal')
-    ? target
-    : (S.currentLoc === 'west' ? 'centraal' : 'west');
+  if (target && !allActiveLocations().includes(target)) {
+    // The picked location vanished under us (archived via SSE while the
+    // picker modal was open). Falling back to the binary toggle here would
+    // silently send the user to the WRONG restaurant — stay put and say so.
+    closeModal();
+    toast(`${locName(target)} is no longer active`);
+    return;
+  }
+  const newLoc: Location = target ?? (S.currentLoc === 'west' ? 'centraal' : 'west');
   setGlobalLocation(newLoc);
   applyLocationTheme(newLoc);
 
   // Update the switcher pill
   const title = document.getElementById('app-title');
   if (title) {
-    title.className = 'app-title ' + (newLoc === 'west' ? 'loc-west' : 'loc-centraal');
+    title.className = 'app-title ' + locThemeClass(newLoc);
     title.innerHTML = locTitleHtml(newLoc);
   }
 
@@ -103,7 +141,7 @@ export function buildNav() {
 
   // Top bar: title + nav buttons + save indicator + user menu
   topBar.innerHTML = `
-    <h1 class="app-title ${S.currentLoc === 'west' ? 'loc-west' : 'loc-centraal'}" id="app-title" onclick="confirmSwitchLocation()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();confirmSwitchLocation();}" title="Switch location" role="button" tabindex="0">${locTitleHtml(S.currentLoc)}</h1>
+    <h1 class="app-title ${locThemeClass(S.currentLoc)}" id="app-title" onclick="confirmSwitchLocation()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();confirmSwitchLocation();}" title="Switch location" role="button" tabindex="0">${locTitleHtml(S.currentLoc)}</h1>
     ${screens.map((s: any, i: any) =>
       `<button class="nav-btn${i === 0 ? ' active' : ''}" data-screen="${s.id}" onclick="showScreen('${s.id}')">${s.topLabel}</button>`
     ).join('')}
@@ -191,8 +229,46 @@ window.addEventListener('popstate', () => {
 // INIT
 // ═══════════════════════════════════════════════════════════════════
 
+/** Move the user home when their current location stops being active —
+ *  shared by the post-loadData boot check and the SSE registry-replace hook
+ *  (a director archiving the festival must not strand the on-site cook on a
+ *  location whose ritual/prep/inventory writes now silently 400). */
+function revalidateCurrentLocation(): void {
+  if (allActiveLocations().includes(S.currentLoc)) return;
+  const staleName = locName(S.currentLoc);
+  setGlobalLocation('west');
+  applyLocationTheme('west');
+  if (S.plannerSubTab && !allActiveLocations().includes(S.plannerSubTab)) S.plannerSubTab = 'west';
+  buildNav();
+  rerenderCurrentView();
+  toast(`Location "${staleName}" is archived — switched to Sering West`);
+}
+
 export async function initApp() {
+  // Registered at runtime (not module load): utils ↔ init sit in an import
+  // cycle, and a top-level call here runs while utils' module-level `let`s
+  // are still in their temporal dead zone.
+  setOnRegistryChanged(revalidateCurrentLocation);
   await loadData();
+  // Re-validate a tentatively-restored location now the registry is loaded
+  // (restoreGlobalLocation accepts "ev-…" slugs before loadData): a saved
+  // event slug that is archived/unknown falls back to West.
+  if (!allActiveLocations().includes(S.currentLoc)) {
+    const staleName = locName(S.currentLoc);
+    setGlobalLocation('west');
+    applyLocationTheme('west');
+    buildNav();
+    toast(`Location "${staleName}" is archived — switched to Sering West`);
+  } else {
+    // The registry may have arrived after buildNav (event name/theme unknown
+    // at boot) — repaint the pill/theme for an event location.
+    applyLocationTheme(S.currentLoc);
+    const title = document.getElementById('app-title');
+    if (title && !isPermanentLocation(S.currentLoc)) {
+      title.className = 'app-title ' + locThemeClass(S.currentLoc);
+      title.innerHTML = locTitleHtml(S.currentLoc);
+    }
+  }
   // Wait for cold-load resources (ingredient DB, storage config, etc.) before
   // SSE connects, so a remote patch can't land against half-loaded state and
   // be clobbered when the cold loader resolves. allSettled so a single

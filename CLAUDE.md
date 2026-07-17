@@ -7,7 +7,8 @@
 - **Google Sheets API**: used for external recipe sheet reading only (lib/recipe-sheets.ts)
 - **Hosting**: Railway (auto-deploy from main branch, Postgres plugin). Single dyno today —
   several pieces of state (SSE clients, write locks, Hanos client pool, Tebi sync
-  supervisor, telemetry buffer) assume single-replica and would need rework before scaling out.
+  supervisor, telemetry buffer, event-location registry cache in lib/locations.ts)
+  assume single-replica and would need rework before scaling out.
   Sessions are no longer in this list — they moved to the Postgres `sessions` table.
 - **Node**: `>=20.19.0` (`engines.node` in package.json). `npm install` triggers a `postinstall`
   that runs `prisma generate` and downloads Chromium (~300 MB) for the Tebi Playwright scraper.
@@ -22,7 +23,11 @@ shared/
   drink-order.ts       — Drinks ordering helpers (pure): suggested qty (par−stock), deposits, received-stock deltas, demand nudge
   drink-production.ts  — Drinks production helpers (pure): produced units (bottles/litres), consumed building blocks, expiry
   dates.ts             — Single source of truth for "format Date as local YYYY-MM-DD" + derived date helpers (replaced 4 drifting copies)
-  location.ts          — Location display helpers (loc → "Sering West"/"Sering Centraal"), single source
+  location.ts          — Location helpers, single source: PERMANENT_LOCATIONS, isPermanentLocation,
+                         the process-local event-location registry (setLocationRegistry) and the
+                         registry-aware display names locName/shortLocName. `Location` itself widened
+                         to `PermanentLocation | (string & {})` — event-location slugs ("ev-…") are
+                         validated at runtime against the registry, not by the type system
   recipe-cost.ts       — Per-100g price estimate for flexible ("open amount") recipe ingredients; shared by backend cost calc + frontend editor preview
   supply-demand.ts     — Pure forward supply-demand + price-per-guest (prep checklist, dashboard Supplies card, Supplies screen)
   units.ts             — Canonical unit → base-unit conversion (replaced 3 drifting toGrams copies)
@@ -32,7 +37,17 @@ types/
   multer.d.ts          — Multer module declaration
 lib/
   config.ts            — Env vars, AppError, asyncHandler, errMsg, redactSecrets, safeErrMsg, cookieOpts
-  db.ts                — Prisma client, row transformers, dbReadAll, validators, dbUpsertBatches, recipe cost/nutrition calc
+  locations.ts         — Event-location registry cache (single replica): isKnownLocation (permanent ∪
+                         ALL event slugs incl. archived — persisted state keeps validating after archive)
+                         vs isActiveLocation (permanent ∪ non-archived — targets for NEW writes).
+                         Hydrated at boot + write-through on registry writes + passively via dbReadAll
+  db.ts                — Prisma client, row transformers, dbReadAll, validators, dbUpsertBatches, recipe cost/nutrition calc.
+                         dbReadAll's guest scaffold includes every event-location slug (incl. archived) —
+                         load-bearing: writeGuests is deleteMany-then-createMany, so a key missing from the
+                         scaffold is destroyed on the next save. validateGuests TOLERATES unknown keys
+                         (whole-object round-trips must never brick on a stray row) and accepts SPARSE
+                         event-location blocks (permanent keys still require the full 7 days) — an SSE
+                         session builds an event's block one edited day at a time
   recipe-sheets.ts     — Google Sheets client (legacy recipe import only)
   hanos-parser.ts      — Hanos quantity parser (hoeveelheid → grams)
   hanos-client.ts      — Hanos OCC v2 OAuth client class (login pool, cart, product lookup)
@@ -87,6 +102,15 @@ routes/
                          DELETE /events/:id, POST /sync-chunks (admin actions staff-lead gated)
   supplies.ts          — Toppings/bread/ferment supplies CRUD: GET/POST/PATCH/DELETE /api/supplies,
                          plus /:id/prep and /:id/stock stock moves (standard ratio + one-off drip-feed)
+  event-locations.ts   — Temporary event locations (festivals/big caterings), director-only writes:
+                         GET /api/event-locations (+?activeOnly=1), POST (immutable auto-suffixed
+                         "ev-" slug), PATCH /:slug, POST /:slug/{archive,unarchive} (archive
+                         hard-blocks on un-arrived shipments, soft-warns on stock/services),
+                         DELETE /:slug (archived + zero-reference only — e2e/test hygiene).
+                         Every write refreshes lib/locations.ts and SSE-broadcasts the full list
+  orders.ts            — POST /api/orders/export: builds a downloadable .xlsx order sheet (xlsx lib)
+                         from a posted item list. The "download as Excel" alternative to the Hanos
+                         cart in the order-confirm modal — no prisma, DB-free
   drinks.ts            — Drinks module, all under /api/drinks: drink CRUD (+ /:id/photo, /:id/active,
                          /:id/area), /config + /storage-areas (editable areas; renames cascade to stock
                          rows + drink homes), /suppliers, /stock + /stock/bulk (per-area counts; consumes
@@ -356,7 +380,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Cannot delete a batch with inventory stock or pending shipments > 0 (real food exists)
 - Recipe v2: `GET /api/recipes`, `GET /api/recipes/:id`, `POST /api/recipes`, `PATCH /api/recipes/:id`, `DELETE /api/recipes/:id`. Photo: `POST/DELETE /api/recipes/:id/photo`. Versioning: `POST /api/recipes/:id/version`. Print: `GET /api/recipes/:id/print`. Cost recalc: `POST /api/recipes/recalculate-costs`.
 - Recipe ingredient suggestion: `GET /api/ingredients/suggest?category=X&loc=west` — lives in `routes/recipes.ts`, mounted under `/api`. Don't look for it in `routes/ingredients.ts`.
-- Ingredient endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`, `/api/ingredients/stock`, `/api/ingredients/stock/bulk`, `/api/ingredients/target-stock`
+- Ingredient endpoints: `/api/ingredients`, `/api/ingredients/full`, `/api/ingredients/:id`, `/api/ingredients/stock`, `/api/ingredients/stock/bulk`, `/api/ingredients/target-stock`, `POST /api/ingredients/target-stock/copy` (`{fromLocation, toLocation, overwrite?}` — bulk-copies standard-inventory targets in ONE server-side jsonb statement; skip-existing unless `overwrite`; ACTIVE `toLocation` only. Powers "preload this event location with Sering West's standard order" from the event-location create modal + the "⬇ Copy Sering West's standard order" button on an event's Orders → Set Standard Inventory tab)
 - Supplier upload: `POST /api/ingredients/upload-supplier` (XLSX).
 - Ingredient DB stores JSON fields: `types`, `storageLocations`, `stock`, `nutrition`, `priceHistory`, `targetStock` (Prisma Json type)
 - Ingredient constants in state.ts: `INGREDIENT_TYPES`, `INGREDIENT_CATEGORIES`, `PRICE_LEVELS`
@@ -379,6 +403,7 @@ Use the split-container pattern: put results in a separate `<div id="xxx-results
 - Competencies (Training): `GET /api/competencies` (chunks + people + events + `isStaffLead`), `POST /api/competencies/events`, `POST /api/competencies/people` (both open to any signed-in user — kiosk model), `PATCH /api/competencies/people/:id`, `DELETE /api/competencies/events/:id`, `POST /api/competencies/sync-chunks` (last three staff-lead gated via `STAFF_LEAD_EMAILS`). Chunk content pulls one-way from Notion (`lib/notion-sync.ts`)
 - Supplies (Toppings & bread): `GET/POST /api/supplies`, `PATCH/DELETE /api/supplies/:id`, `POST /api/supplies/:id/prep` (add to pool + stamp lastMakeDate), `POST /api/supplies/:id/stock` (set absolute; zeroing a one-off auto-archives it). `kind` is `standard` (per-guest ratio + prep horizon) or `oneoff` (drip-feed per service)
 - Access requests: `POST /api/auth/request-access` (unauthenticated — verifies a Google token, then records/looks-up a pending request; one row per email). Director-only review: `GET /api/access/requests`, `GET /api/access/pending-count`, `PATCH /api/access/requests/:id` (edit first/last name), `POST /api/access/requests/:id/{approve,deny,revoke}`. The effective login allowlist is `ALLOWED_EMAILS` (env, the bootstrap backbone) ∪ `access_requests` rows with status `approved` — see `isEmailAllowed()` in routes/auth.ts. Approving grants access with no env edit / redeploy; the prod fail-closed boot guard is unchanged. A denied login auto-records a pending request rather than dead-ending. The request form collects first + last name (a director can edit it via PATCH); approving also creates/links a Training (competencies) `Person` — deduped by name — so approved accounts seed the training roster. Stored in the `access_requests` table (`AccessRequest` model). Surfaced by the director-only **Team** screen + a dashboard "waiting for access" badge.
+- Event locations (temporary festival/catering sites): `GET /api/event-locations` (+`?activeOnly=1`), director-only `POST` / `PATCH /:slug` / `POST /:slug/{archive,unarchive}` / `DELETE /:slug` (archived + zero-reference only). The slug (`ev-…`) is the location KEY — immutable, never reused; referenced as a plain string by batch inventory/shipments/services, guest rows, supply stock JSON, standard inventory and prep checklists. Validation contract: persisted state validates against KNOWN (permanent ∪ all slugs incl. archived), NEW writes against ACTIVE (permanent ∪ non-archived) — see `lib/locations.ts`. An active event gets its own planner tab, guest card, dashboard, orders/stocktake and manual transport (ship West→event via the manual ship modal; leftovers return event→West; arrivals confirmed on the receiving dashboard's red block). **Fix My Menu never touches event locations** (strip/retire guards + capacity gate treat event stock/demand as their own spoke; `test/fmm-bench.test.ts` guards bit-identical west/centraal behaviour). Out of scope v1 (deliberately permanent-only, marked in code): POS/predictions ingest, finance/Tebi, drinks, competencies, closed-services, cost-per-guest surfaces.
 - Live sync: `GET /api/events` (SSE) — clients receive patches from other users in real-time. `broadcast()` in events.ts sends to all connected clients except the sender (matched by email). Frontend `applyRemotePatch()` merges into state and re-renders. Snapshot updates are targeted (only remote items), so unsaved local changes survive incoming patches.
 
 ## Testing

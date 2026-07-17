@@ -4,7 +4,13 @@
 
 // ── String literal unions ──
 
-export type Location = 'west' | 'centraal';
+export type PermanentLocation = 'west' | 'centraal';
+/** Location keys: the two permanent restaurants plus runtime event-location
+ *  slugs ("ev-…", temporary festival/catering sites). The `(string & {})`
+ *  keeps IDE autocomplete for the two literals while accepting registry
+ *  slugs; runtime validity is enforced against the registry — backend via
+ *  lib/locations.ts, frontend via S.eventLocations. */
+export type Location = PermanentLocation | (string & {});
 export type Meal = 'lunch' | 'dinner';
 export type DishType = 'Soup' | 'Main course' | 'Dessert';
 export type StorageType = 'Gastro' | 'Frozen' | 'Vac-packed';
@@ -449,6 +455,24 @@ export interface BatchRatings {
   banger: number;
 }
 
+// ── Event locations (temporary festival/catering sites) ──
+// Registry row for a temporary location. The slug is the location KEY —
+// referenced as a plain string from batch inventory/shipments/services,
+// guest rows, supply stock, standard inventory, prep checklists — so it is
+// IMMUTABLE and never reused, even after archive (renames change `name`
+// only). Archived rows stay in the registry so historical data keeps
+// validating and rendering; they're just hidden from pickers/tabs.
+export interface EventLocationDTO {
+  slug: string;                     // "ev-<slugified-name>"
+  name: string;
+  startDate: string;                // ISO YYYY-MM-DD
+  endDate: string;                  // ISO YYYY-MM-DD
+  hanosAccount: PermanentLocation;  // whose Hanos credentials on-site orders use
+  archived: boolean;
+  createdAt: string;                // ISO timestamp
+  archivedAt: string | null;
+}
+
 // ── API shapes ──
 
 export interface DataResponse {
@@ -458,6 +482,7 @@ export interface DataResponse {
   caterings: Catering[];
   transportItems: TransportItem[];
   supplies: Supply[];
+  eventLocations: EventLocationDTO[];
 }
 
 export interface PatchRequest {

@@ -1,4 +1,4 @@
-import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS, rebuildStorageCategories } from './state';
+import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS, rebuildStorageCategories, isEventLoc } from './state';
 import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ingredientDbLoaded, ingredientDbError, todayIso } from './utils';
 import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, batchHasRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
@@ -49,7 +49,17 @@ function ingredientDb(): IngredientRuntime[] {
  * default to 'west' which matches the default cook location.
  */
 function batchCookLoc(b: Batch): Location {
-  return (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west');
+  if (b.inventory && b.inventory.length > 0) return b.inventory[0].loc;
+  // Uncooked batch whose services are ALL at one event location → it will be
+  // cooked on-site there, so its ingredient demand belongs on that location's
+  // Orders tab. Restricted to event locations so west/centraal tab contents
+  // are provably unchanged (any all-west or mixed batch still defaults west).
+  const svcs = b.services || [];
+  if (svcs.length > 0) {
+    const first = svcs[0].loc;
+    if (isEventLoc(first) && svcs.every(s => s.loc === first)) return first;
+  }
+  return 'west';
 }
 
 /** A single item in a Hanos cart request */
@@ -106,7 +116,7 @@ interface StocktakeOrderInfo {
 export let orderStock: Record<string, number> = {};
 export let currentOrdersTab = 'combined'; // 'combined' | 'standard' | 'batches' | 'ingredientDb'
 export let siSearchQuery = '';
-export let hanosStatus = { configured: false, west: false, centraal: false };
+export let hanosStatus: { configured: boolean; west: boolean; centraal: boolean; locations?: Record<string, { configured: boolean; account: 'west' | 'centraal' }> } = { configured: false, west: false, centraal: false };
 export let hanosStatusChecked = false;
 export let combinedIncludeDishes = true; // toggle: include dish ingredients in combined order
 export let batchIngredientToggles = {}; // { batchId: true/false } for Batch Ingredients tab
@@ -168,9 +178,11 @@ export function lookupIngredient(name: string): IngredientRuntime | null {
 
 export function getDbStockTotal(db: IngredientRuntime | null | undefined) {
   if (!db || !db.stock) return 0;
+  // Sum every location key — event-location stocktakes write their own keys.
   let total = 0;
-  if (db.stock.west) total += (db.stock.west.amount || 0);
-  if (db.stock.centraal) total += (db.stock.centraal.amount || 0);
+  for (const entry of Object.values(db.stock as Record<string, { amount?: number } | undefined>)) {
+    if (entry) total += (entry.amount || 0);
+  }
   return total;
 }
 
@@ -193,8 +205,10 @@ export function getDbStockForLoc(db: IngredientRuntime | null | undefined, loc: 
 /** Check if stock has been explicitly counted (even if amount is 0) */
 export function hasDbStockEntry(db: IngredientRuntime | null | undefined) {
   if (!db || !db.stock) return false;
-  // Stock entries have a `date` field when explicitly counted via stocktake
-  return !!(db.stock.west?.date || db.stock.centraal?.date);
+  // Stock entries have a `date` field when explicitly counted via stocktake —
+  // any location's count (incl. an event location's) qualifies.
+  return Object.values(db.stock as Record<string, { date?: string } | undefined>)
+    .some(entry => !!entry?.date);
 }
 
 /** Whether stock for a specific location has been explicitly counted */
@@ -293,6 +307,22 @@ export function hideSiSuggestions() {
     const input = document.getElementById('si-search-input') as HTMLInputElement | null;
     if (input) input.value = '';
   }, 200);
+}
+
+/** One-click "preload from West" on an event location's standard-inventory
+ *  tab: copies every ingredient in West's standard order (targetStock.west>0)
+ *  onto this location, skipping items already set here. */
+export async function copyStandardInventoryFromWest() {
+  const loc = S.currentLoc;
+  if (!isEventLoc(loc)) return;
+  try {
+    const r = await apiPost('/api/ingredients/target-stock/copy', { fromLocation: 'west', toLocation: loc });
+    await loadIngredientDb();
+    toast(r && r.copied ? `Added ${r.copied} item${r.copied === 1 ? '' : 's'} from Sering West` : 'Nothing to copy — already up to date');
+    renderOrders();
+  } catch (e: unknown) {
+    toastError('Copy failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
 }
 
 export async function addToStandardInventory(ingredientId: string) {
@@ -631,6 +661,7 @@ export function renderStandardInventoryTab() {
         ${totalValue > 0 ? `<span style="font-size:13px;font-weight:600;">Estimated order: \u20AC${totalValue.toFixed(2)}</span>` : ''}
       </div>
       <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">Set target stock levels for each ingredient. The order is calculated automatically from the deficit (target \u2212 current stock).</p>
+      ${isEventLoc(curLoc) ? `<div style="margin-bottom:12px;"><button class="btn btn-sm" data-testid="si-copy-west" onclick="copyStandardInventoryFromWest()" title="Add every ingredient in Sering West's standard order to this location's list (won't touch items you've already set)">\u2b07 Copy Sering West's standard order</button></div>` : ''}
       <div style="position:relative;margin-bottom:16px;">
         <input
           id="si-search-input"
@@ -852,7 +883,10 @@ export function renderBatchIngredientTable() {
   const storageCatOrder = Object.keys(STORAGE_CATEGORIES);
   const storageOrder = [...storageCatOrder.filter(c => byStorage[c]), ...Object.keys(byStorage).filter(c => !storageCatOrder.includes(c))];
 
-  const hanosAllBatchBtn = isHanosEnabled() && ingList.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulkBatches()" title="Send all batch ingredients to Hanos cart">🛒 Send all to Hanos</button>` : '';
+  // Order button is NOT gated on Hanos: the "Place order" modal it opens
+  // offers both the Hanos cart AND an Excel download, so it must be reachable
+  // even when Hanos isn't connected for this location (e.g. a festival).
+  const hanosAllBatchBtn = ingList.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulkBatches()" title="Add all batch ingredients to the Hanos cart, or download as Excel">🛒 Order all…</button>` : '';
   let html = `<div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
     <span style="font-weight:600;font-size:14px;">Ingredients (${ingList.length} items from ${activeBatches.length} batch${activeBatches.length !== 1 ? 'es' : ''})</span>
     ${hanosAllBatchBtn}
@@ -862,8 +896,8 @@ export function renderBatchIngredientTable() {
     const items = byStorage[storageCat];
     const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
     const catColor = getStorageColor(storageCat, curLoc);
-    const hanosItemsForCat = isHanosEnabled() ? items.filter(i => i.orderCode && !i.orderCode.startsWith('http')) : [];
-    const hanosBatchBtn = hanosItemsForCat.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulkBatches('${esc(storageCat)}')" title="Add all items to Hanos cart">🛒 Send to Hanos</button>` : '';
+    const orderableForCat = items.filter(i => i.orderCode && !i.orderCode.startsWith('http'));
+    const hanosBatchBtn = orderableForCat.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulkBatches('${esc(storageCat)}')" title="Add these to the Hanos cart, or download as Excel">🛒 Order…</button>` : '';
 
     html += `<div class="storage-group" data-storage-cat="${esc(storageCat)}" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
@@ -1063,7 +1097,7 @@ export function renderCombinedOrderTab() {
     </div>`;
   }
 
-  const hanosAllCombinedBtn = isHanosEnabled() && ingList.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk()" title="Send entire combined order to Hanos cart">🛒 Send all to Hanos</button>` : '';
+  const hanosAllCombinedBtn = ingList.length ? `<button class="hanos-bulk-btn" data-testid="order-all-btn" onclick="hanosConfirmBulk()" title="Add the whole order to the Hanos cart, or download as Excel">🛒 Order all…</button>` : '';
   html += `<div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <span>Combined Order &mdash; <span class="loc-accent-text">${esc(locName(curLoc))}</span></span>
       <div style="display:flex;align-items:center;gap:8px;">
@@ -1084,8 +1118,8 @@ export function renderCombinedOrderTab() {
     const codesForCopy = items.filter(i => i.orderCode && !i.orderCode.startsWith('http')).map(i => i.orderCode);
 
     const catColor = getStorageColor(storageCat, curLoc);
-    const hanosItems = isHanosEnabled() ? items.filter(i => i.orderCode && !i.orderCode.startsWith('http')) : [];
-    const hanosBulkBtn = hanosItems.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk('${esc(storageCat)}')" title="Add all items to Hanos cart">🛒 Send to Hanos</button>` : '';
+    const orderableItems = items.filter(i => i.orderCode && !i.orderCode.startsWith('http'));
+    const hanosBulkBtn = orderableItems.length ? `<button class="hanos-bulk-btn" onclick="hanosConfirmBulk('${esc(storageCat)}')" title="Add these to the Hanos cart, or download as Excel">🛒 Order…</button>` : '';
 
     html += `<div class="storage-group" data-storage-cat="${esc(storageCat)}" style="margin-bottom:16px;border-left:4px solid ${catColor};padding-left:10px;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
@@ -1294,11 +1328,43 @@ export async function checkHanosStatus() {
 
 export function isHanosEnabled() {
   const loc = S.currentLoc;
-  return hanosStatus[loc] || false;
+  // Per-location map covers event locations (they resolve to a permanent
+  // account server-side); the flat west/centraal fields remain the fallback
+  // for a mid-deploy stale server that doesn't send `locations` yet.
+  const perLoc = hanosStatus.locations?.[loc]?.configured;
+  if (perLoc !== undefined) return perLoc;
+  return (hanosStatus as unknown as Record<string, boolean>)[loc] || false;
 }
 
-/** Collect all Hanos items from the combined order table that need ordering */
-export function collectHanosItems(storageCat: string | null | undefined): HanosItem[] {
+// True when a code is a real Hanos order code (not an "order link" URL).
+export function hasHanosCode(db: { orderCode?: string } | null | undefined): boolean {
+  return !!(db && db.orderCode && !db.orderCode.startsWith('http'));
+}
+
+/** Build an order line for one ingredient given its to-order amount (base
+ *  units). Coded items with an order unit get order-unit quantities + price
+ *  (the Hanos-cart shape). With `includeUncoded`, items WITHOUT an order unit
+ *  (incl. those with no Hanos code at all) fall back to a base-unit quantity
+ *  and no price — so an Excel order sheet lists everything that needs buying,
+ *  not just the Hanos-orderable subset. Returns null when there is nothing to
+ *  order (or an uncoded item on the cart-only path). */
+export function buildOrderItem(db: { name: string; orderCode?: string; orderUnit?: string; orderPrice?: number; orderUnitSize: number; unit?: string }, toOrderBase: number, includeUncoded: boolean): HanosItem | null {
+  const coded = hasHanosCode(db);
+  const calc = calcOrderUnits(toOrderBase, db);
+  if (calc && calc.units > 0) {
+    return { name: db.name, orderCode: coded ? db.orderCode as string : '', quantity: calc.units, unit: 'ST', unitLabel: db.orderUnit || '', price: db.orderPrice || 0 };
+  }
+  if (includeUncoded && toOrderBase > 0) {
+    const f = formatAmount(toOrderBase, db.unit || 'g');
+    return { name: db.name, orderCode: coded ? db.orderCode as string : '', quantity: f.amount, unit: db.unit || 'g', unitLabel: f.unit, price: 0 };
+  }
+  return null;
+}
+
+/** Collect order items from the combined order table. By default (cart path)
+ *  only Hanos-coded items; with `includeUncoded` (Excel path) every item that
+ *  needs ordering, coded or not. */
+export function collectHanosItems(storageCat: string | null | undefined, includeUncoded = false): HanosItem[] {
   const rows = document.querySelectorAll('.ing-table tr[data-combined-key]');
   const items: HanosItem[] = [];
   rows.forEach(rowEl => {
@@ -1310,7 +1376,8 @@ export function collectHanosItems(storageCat: string | null | undefined): HanosI
     }
     const dbName = row.dataset.dbname;
     const db = dbName ? lookupIngredient(dbName) : null;
-    if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
+    if (!db) return;
+    if (!includeUncoded && !hasHanosCode(db)) return; // cart path: coded only
 
     // Calculate order units for this row — stock values are in order units, convert to base
     const neededBase = parseFloat(row.dataset.needed) || 0;
@@ -1322,17 +1389,8 @@ export function collectHanosItems(storageCat: string | null | undefined): HanosI
       : dbStock;
     const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
-    const calc = calcOrderUnits(toOrderBase, db);
-    if (!calc || calc.units <= 0) return;
-
-    items.push({
-      name: db.name,
-      orderCode: db.orderCode,
-      quantity: calc.units,
-      unit: 'ST',
-      unitLabel: db.orderUnit || '',
-      price: db.orderPrice || 0,
-    });
+    const item = buildOrderItem(db, toOrderBase, includeUncoded);
+    if (item) items.push(item);
   });
   return items;
 }
@@ -1387,16 +1445,20 @@ export async function hanosAddSingle(orderCode: string | undefined, name: string
 /** Show confirmation modal for bulk Hanos add (combined order) */
 export function hanosConfirmBulk(storageCat?: string) {
   trackEvent('hanos_send_bulk');
-  const items = collectHanosItems(storageCat);
+  // Broad set (coded + uncoded): the modal previews everything that needs
+  // ordering and the Excel export includes it all; the Hanos-cart button
+  // inside sends only the coded subset.
+  const items = collectHanosItems(storageCat, true);
   if (!items.length) {
-    toast('No items with order codes and quantities to send');
+    toast('Nothing to order');
     return;
   }
   showHanosConfirmModal(items, storageCat, 'combined');
 }
 
-/** Collect Hanos items from batch ingredients tab */
-export function collectHanosBatchItems(storageCat: string | null | undefined): HanosItem[] {
+/** Collect order items from the batch-ingredients tab. Coded-only by default
+ *  (cart); all items needing order with `includeUncoded` (Excel). */
+export function collectHanosBatchItems(storageCat: string | null | undefined, includeUncoded = false): HanosItem[] {
   const rows = document.querySelectorAll('.ing-table tr[data-stock-key]');
   const items: HanosItem[] = [];
   rows.forEach(rowEl => {
@@ -1408,7 +1470,8 @@ export function collectHanosBatchItems(storageCat: string | null | undefined): H
     const key = row.dataset.stockKey;
     const ingName = row.dataset.ingName || key || '';
     const db = key ? lookupIngredient(key) : null;
-    if (!db || !db.orderCode || db.orderCode.startsWith('http')) return;
+    if (!db) return;
+    if (!includeUncoded && !hasHanosCode(db)) return; // cart path: coded only
 
     const neededBase = parseFloat(row.dataset.needed) || 0;
     const dbStock = getDbStockForLoc(db, S.currentLoc);
@@ -1419,26 +1482,17 @@ export function collectHanosBatchItems(storageCat: string | null | undefined): H
       : dbStock;
     const hasStockValue = hasManual || hasDbStockEntryForLoc(db, S.currentLoc);
     const toOrderBase = hasStockValue ? Math.max(0, neededBase - effectiveStockBase) : neededBase;
-    const calc = calcOrderUnits(toOrderBase, db);
-    if (!calc || calc.units <= 0) return;
-
-    items.push({
-      name: db.name,
-      orderCode: db.orderCode,
-      quantity: calc.units,
-      unit: 'ST',
-      unitLabel: db.orderUnit || '',
-      price: db.orderPrice || 0,
-    });
+    const item = buildOrderItem(db, toOrderBase, includeUncoded);
+    if (item) items.push(item);
   });
   return items;
 }
 
 /** Show confirmation modal for batch ingredients Hanos add */
 export function hanosConfirmBulkBatches(storageCat?: string) {
-  const items = collectHanosBatchItems(storageCat);
+  const items = collectHanosBatchItems(storageCat, true);
   if (!items.length) {
-    toast('No items with order codes and quantities to send');
+    toast('Nothing to order');
     return;
   }
   showHanosConfirmModal(items, storageCat, 'batches');
@@ -1462,10 +1516,11 @@ export function showHanosConfirmModal(items: HanosItem[], storageCat: string | u
   const listHtml = items.map(i => {
     const total = i.price ? i.quantity * i.price : 0;
     const isExpensive = total > 200;
+    const noCode = !i.orderCode;
     return `<tr${isExpensive ? ' style="background:var(--red-bg, #fde8e8);"' : ''}>
       <td style="font-weight:500;">${esc(i.name)}</td>
-      <td style="font-family:monospace;font-size:12px;">${esc(i.orderCode)}</td>
-      <td style="text-align:right;font-weight:600;">${i.quantity}x</td>
+      <td style="font-family:monospace;font-size:12px;">${noCode ? '<span style="color:var(--text3);font-family:inherit;">no code</span>' : esc(i.orderCode)}</td>
+      <td style="text-align:right;font-weight:600;">${i.quantity}${i.unit === 'ST' ? 'x' : ''}</td>
       <td style="font-size:12px;color:var(--text2);">${esc(i.unitLabel)}</td>
       <td style="text-align:right;font-size:12px;${isExpensive ? 'color:var(--red);font-weight:600;' : ''}">${total > 0 ? '\u20AC' + total.toFixed(2) : ''}</td>
     </tr>`;
@@ -1473,10 +1528,29 @@ export function showHanosConfirmModal(items: HanosItem[], storageCat: string | u
 
   const label = storageCat ? esc(storageCat) : 'all groups';
   const totalCost = items.reduce((sum: number, i: HanosItem) => sum + (i.price ? i.quantity * i.price : 0), 0);
+  // Only Hanos-coded items can go to the cart; uncoded items are Excel-only.
+  const codedCount = items.filter(i => i.orderCode).length;
+  const uncodedCount = items.length - codedCount;
+
+  // Where would the Hanos cart go? The resolved account for the current
+  // location (event locations resolve to a permanent account, West by
+  // default \u2014 this is the "West card" the cook thinks of).
+  const account = hanosStatus.locations?.[S.currentLoc]?.account || 'west';
+  const cartLabel = locName(account);
+  const cartBtn = (isHanosEnabled() && codedCount > 0)
+    ? `<button class="btn btn-sm" data-testid="order-to-hanos" style="background:var(--blue);color:#fff;border-color:var(--blue);" onclick="hanosExecuteFromModal('${esc(source)}','${esc(storageCat || '')}')">\uD83D\uDED2 ${expensiveItems.length ? 'Confirm &amp; add' : 'Add'} ${codedCount} to ${esc(cartLabel)}'s Hanos cart</button>`
+    : `<span style="font-size:12px;color:var(--text2);align-self:center;">${isHanosEnabled() ? 'No Hanos-coded items here' : `Hanos isn't connected for ${esc(locName(S.currentLoc))}`} \u2014 download the order instead.</span>`;
+
+  // Note when the Excel sheet is broader than the cart (uncoded items ride
+  // along on the sheet only).
+  const uncodedNote = (uncodedCount > 0 && isHanosEnabled() && codedCount > 0)
+    ? `<p style="font-size:12px;color:var(--text2);margin-bottom:10px;">The Hanos cart takes the ${codedCount} coded item(s); the Excel sheet includes all ${items.length}, including ${uncodedCount} without a Hanos code.</p>`
+    : '';
 
   showModal(`
-    <h3 style="margin-bottom:12px;">Add to Hanos Cart</h3>
-    <p style="font-size:13px;margin-bottom:12px;">Send <strong>${items.length} item(s)</strong> from ${label} to the Hanos cart:</p>
+    <h3 style="margin-bottom:12px;">Place order</h3>
+    <p style="font-size:13px;margin-bottom:12px;"><strong>${items.length} item(s)</strong> from ${label} that need ordering. Add them to the Hanos cart, or download an Excel order sheet:</p>
+    ${uncodedNote}
     ${warningHtml}
     <div style="max-height:300px;overflow-y:auto;margin-bottom:12px;">
       <table class="ing-table" style="font-size:12px;">
@@ -1485,13 +1559,49 @@ export function showHanosConfirmModal(items: HanosItem[], storageCat: string | u
       </table>
     </div>
     ${totalCost > 0 ? `<p style="font-size:13px;font-weight:600;margin-bottom:12px;">Total estimated: \u20AC${totalCost.toFixed(2)}</p>` : ''}
-    <div style="display:flex;gap:8px;justify-content:flex-end;">
+    <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
       <button class="btn btn-sm" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-sm" style="background:var(--blue);color:#fff;border-color:var(--blue);" onclick="hanosExecuteFromModal('${esc(source)}','${esc(storageCat || '')}')">
-        ${expensiveItems.length ? 'Confirm & Send' : 'Send to Hanos'}
-      </button>
+      <button class="btn btn-sm" data-testid="order-to-excel" onclick="exportOrderExcel('${esc(source)}','${esc(storageCat || '')}')">\u2B07 Download as Excel</button>
+      ${cartBtn}
     </div>
   `);
+}
+
+/** Download the order (the same items the modal lists) as an .xlsx file \u2014 the
+ *  offline alternative to adding it to the Hanos cart. Works regardless of
+ *  whether Hanos is connected. */
+export async function exportOrderExcel(source: string, storageCat: string) {
+  // includeUncoded=true: the sheet lists everything that needs ordering, not
+  // just the Hanos-coded subset the cart can take.
+  const items = source === 'batches'
+    ? collectHanosBatchItems(storageCat || null, true)
+    : collectHanosItems(storageCat || null, true);
+  if (!items.length) { toast('Nothing to export'); return; }
+  trackEvent('order_export_excel', source, { count: items.length });
+  try {
+    // Raw fetch (not apiPost) so we can read the binary body. Same-origin, so
+    // the session cookie rides along automatically.
+    const res = await fetch('/api/orders/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ items, title: locName(S.currentLoc), location: S.currentLoc }),
+    });
+    if (!res.ok) throw new Error(`server returned ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `order-${String(locName(S.currentLoc)).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'order'}-${todayIso()}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    closeModal();
+    toast(`Downloaded an order sheet with ${items.length} item${items.length === 1 ? '' : 's'}`);
+  } catch (e: unknown) {
+    toastError('Excel export failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+  }
 }
 
 /** Execute from the shared modal */

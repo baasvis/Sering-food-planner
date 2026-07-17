@@ -131,6 +131,8 @@ export async function runDataQualityChecks(): Promise<DataQualityReport> {
   const guestDaySet = new Set(existingGuests
     .filter(g => g.lunch > 0 || g.dinner > 0)
     .map(g => `${g.location}:${g.day}`));
+  // DELIBERATELY permanent-only: data-quality checks cover the two
+  // restaurants; temporary event locations are out of scope for AI analysis.
   const missingGuestDays = futureDayPairs.flatMap(({ weekday, iso }) =>
     ['west', 'centraal']
       .filter(loc => !guestDaySet.has(`${loc}:${weekday}`))

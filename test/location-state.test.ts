@@ -89,3 +89,21 @@ describe('bootstrap label bug regression', () => {
     expect(S.currentLoc).toBe('centraal'); // nav label would render correctly
   });
 });
+
+describe('event-location slugs (tentative restore)', () => {
+  it('tentatively accepts a saved "ev-" slug before the registry loads', () => {
+    localStorage.setItem('sering-location', 'ev-landjuweel-2026');
+    S.currentLoc = 'west';
+    expect(restoreGlobalLocation()).toBe(true);
+    expect(S.currentLoc).toBe('ev-landjuweel-2026');
+    // initApp re-validates against allActiveLocations() after loadData and
+    // falls back to west when the slug turns out archived/unknown.
+  });
+
+  it('still rejects arbitrary junk that is not an ev- slug', () => {
+    localStorage.setItem('sering-location', 'noord');
+    S.currentLoc = 'west';
+    expect(restoreGlobalLocation()).toBe(false);
+    expect(S.currentLoc).toBe('west');
+  });
+});

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import express, { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma, validateBatch, withWriteLock, dbAppendLog, toBatchRow, mapBatchRow } from '../lib/db';
+import { isActiveLocation, isKnownLocation } from '../lib/locations';
 import { asyncHandler, AppError } from '../lib/config';
 import { broadcast } from './events';
 import { addBackendEvent } from './telemetry';
@@ -9,7 +10,9 @@ import type { Batch, InventoryEntry, Shipment, Location, StorageType } from '../
 
 const router = express.Router();
 
-const VALID_LOCATIONS: Location[] = ['west', 'centraal'];
+// Location validity: ship/transfer DESTINATIONS must be ACTIVE (permanent ∪
+// non-archived event locations); a transfer SOURCE only needs to be KNOWN so
+// leftover stock can still be evacuated from a just-archived event location.
 const VALID_STORAGE: StorageType[] = ['Gastro', 'Frozen', 'Vac-packed'];
 
 // ── Inventory / shipment helpers (private to this router) ──
@@ -165,7 +168,7 @@ router.post('/:id/ship', asyncHandler(async (req: Request, res: Response) => {
   const storage = body.storage;
   const fromInventoryIdx = body.fromInventoryIdx;
 
-  if (typeof toLoc !== 'string' || !VALID_LOCATIONS.includes(toLoc as Location)) {
+  if (typeof toLoc !== 'string' || !isActiveLocation(toLoc)) {
     throw new AppError(400, 'invalid toLoc');
   }
   if (typeof qty !== 'number' || !Number.isFinite(qty) || qty <= 0 || qty > 99999) {
@@ -185,14 +188,25 @@ router.post('/:id/ship', asyncHandler(async (req: Request, res: Response) => {
     const inv = parseInventory(existing.inventory);
     const ship = parseShipments(existing.shipments);
 
-    // TODO(checkpoint-3): refine multi-entry source selection if cook UX
-    // needs it — frontend currently passes fromInventoryIdx explicitly.
+    // Re-validate the destination INSIDE the write lock: a ship queued behind
+    // a concurrent archive must not create a pending shipment to a location
+    // that just became archived (the exact stranded-in-transit state the
+    // archive guard exists to prevent).
+    if (!isActiveLocation(toLoc)) throw new AppError(400, 'invalid toLoc');
+
     let srcIdx = -1;
     if (typeof fromInventoryIdx === 'number') {
       const candidate = inv[fromInventoryIdx];
       if (candidate && candidate.loc !== toLoc && candidate.qty > 0
           && (storage === undefined || candidate.storage === storage)) {
         srcIdx = fromInventoryIdx;
+      } else {
+        // An explicit source that no longer matches is a STALE reference
+        // (concurrent edit / double-send). With 3+ locations, silently
+        // auto-picking "any entry whose loc differs" could drain a DIFFERENT
+        // site's stock and mint a phantom cross-site shipment — fail instead
+        // so the client refreshes and retries.
+        throw new AppError(400, 'stale inventory reference — refresh and retry');
       }
     }
     if (srcIdx < 0) {
@@ -330,13 +344,13 @@ router.post('/:id/transfer', asyncHandler(async (req: Request, res: Response) =>
   const body = req.body as TransferBody;
   const { fromLoc, fromStorage, toLoc, toStorage, qty, fromInventoryIdx } = body;
 
-  if (typeof fromLoc !== 'string' || !VALID_LOCATIONS.includes(fromLoc as Location)) {
+  if (typeof fromLoc !== 'string' || !isKnownLocation(fromLoc)) {
     throw new AppError(400, 'invalid fromLoc');
   }
   if (typeof fromStorage !== 'string' || !VALID_STORAGE.includes(fromStorage as StorageType)) {
     throw new AppError(400, 'invalid fromStorage');
   }
-  if (typeof toLoc !== 'string' || !VALID_LOCATIONS.includes(toLoc as Location)) {
+  if (typeof toLoc !== 'string' || !isActiveLocation(toLoc)) {
     throw new AppError(400, 'invalid toLoc');
   }
   if (typeof toStorage !== 'string' || !VALID_STORAGE.includes(toStorage as StorageType)) {
@@ -355,6 +369,9 @@ router.post('/:id/transfer', asyncHandler(async (req: Request, res: Response) =>
   const result = await withWriteLock(async () => {
     const existing = await prisma.batch.findUnique({ where: { id: req.params.id as string } });
     if (!existing) throw new AppError(404, 'Batch not found');
+
+    // Same in-lock destination re-check as /ship (concurrent archive race).
+    if (!isActiveLocation(toLoc)) throw new AppError(400, 'invalid toLoc');
 
     const inv = parseInventory(existing.inventory);
     // Source selection mirrors /ship: explicit fromInventoryIdx wins (lets a

@@ -1,4 +1,4 @@
-import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor } from './state';
+import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, ACCOMPANIMENTS, getStorageColor, allActiveLocations } from './state';
 import { newId, scheduleSave, toast, toastError, apiPost, apiGet, todayIso } from './utils';
 import { pushUndo } from './undo';
 import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredAtService, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, cateringActive, diffStr, computeCoverage, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, chipClass, getToday, dateToStr, strToDate, openServedDialog, getGuests, toggleOrder, getTotalStock, getStockAt, getPendingFromShipments, addInventory, removeInventory, consolidateInventory, isStaleEntry } from './core';
@@ -9,7 +9,7 @@ import { addDishFromRecipe } from './recipes';
 import { openBatchRecipe } from './recipe-editor';
 import { batchDragStart, batchDragEnd, openReplaceBatch } from './planner';
 import type { Batch, CateringDish, DishType, Location, StorageType, Service, InventoryEntry, Shipment } from '@shared/types';
-import { locName } from '@shared/location';
+import { locName, shortLocName } from '@shared/location';
 
 /** Check if a batch has a v2 recipe with unresolved flexible ingredient slots */
 function hasUnresolvedFlexible(d: Batch): boolean {
@@ -36,13 +36,24 @@ interface BatchWithLegacy extends Batch {
 // (loc, storage) pairs PLUS pending shipments. These helpers produce the
 // short, compact strings tile rendering uses everywhere.
 
+/** <option> list for a location select: every ACTIVE location plus the
+ *  currently-selected value (so stock at an ARCHIVED event still displays as
+ *  itself instead of silently rendering — and on any touch, teleporting — as
+ *  "Sering West"). The old permanent-only LOCATIONS list did exactly that to
+ *  festival stock. */
+function locOptions(selected: string): string {
+  const locs = allActiveLocations();
+  if (selected && !locs.includes(selected)) locs.push(selected);
+  return locs.map(l => `<option value="${esc(l)}"${l === selected ? ' selected' : ''}>${esc(locName(l))}</option>`).join('');
+}
+
 /** Compact "where the food is" line, e.g. "55L West/Gastro · 25L Centraal/Gastro · +10L → Centraal pending". */
 function renderInventorySummary(d: Batch): string {
   const inv = (d.inventory || []).filter(e => e.qty > 0);
   const ship = (d.shipments || []).filter(s => !s.arrived);
   if (inv.length === 0 && ship.length === 0) return '<span style="color:var(--text3);font-size:11px;">empty</span>';
-  const invParts = inv.map(e => `${e.qty.toFixed(1)}L ${e.loc === 'centraal' ? 'C' : 'W'}/${e.storage}`);
-  const shipParts = ship.map(s => `+${s.qty.toFixed(1)}L &rarr; ${s.toLoc === 'centraal' ? 'C' : 'W'} pending`);
+  const invParts = inv.map(e => `${e.qty.toFixed(1)}L ${shortLocName(e.loc)}/${e.storage}`);
+  const shipParts = ship.map(s => `+${s.qty.toFixed(1)}L &rarr; ${shortLocName(s.toLoc)} pending`);
   return [...invParts, ...shipParts].join(' &middot; ');
 }
 
@@ -58,7 +69,8 @@ function renderLocChips(d: Batch): string {
   const cov = computeCoverage(d);
   const f1 = (n: number): string => n.toFixed(1);
   const chips: string[] = [];
-  for (const [loc, lc] of [['west', cov.west], ['centraal', cov.centraal]] as const) {
+  // byLoc iterates west, centraal, then any event locations the batch touches.
+  for (const [loc, lc] of Object.entries(cov.byLoc)) {
     const entries = (d.inventory || []).filter(e => e.loc === loc && e.qty > 0);
     const present = entries.reduce((s, e) => s + e.qty, 0);
     if (present <= 0.05) continue;                       // no stock physically here → no chip
@@ -66,7 +78,7 @@ function renderLocChips(d: Batch): string {
     // but computeCoverage counts it as positioned — so don't let frozen-only stock
     // masquerade as a green "+surplus" covered site.
     const serveable = entries.reduce((s, e) => s + (e.storage === 'Frozen' ? 0 : e.qty), 0);
-    const letter = loc === 'centraal' ? 'C' : 'W';
+    const letter = shortLocName(loc);
     const frozen = entries.some(e => e.storage === 'Frozen') ? '❄️ ' : '';
     let delta = '', cls = 'cov-idle', note = ', nothing needed here';
     if (lc.shortfall > 0.05) {                            // cooked here but still short / can't reach in time
@@ -79,18 +91,25 @@ function renderLocChips(d: Batch): string {
       else { note = `, needs ${f1(lc.demand)}L — just covered`; }
     }
     const storageBreak = entries.map(e => `${f1(e.qty)}L ${e.storage}`).join(', ');
-    chips.push(`<span class="cov-chip ${cls}" title="${locName(loc)}: ${f1(present)}L here (${storageBreak})${note}">${frozen}${letter} ${f1(present)}L${delta}</span>`);
+    chips.push(`<span class="cov-chip ${cls}" title="${esc(locName(loc))}: ${f1(present)}L here (${storageBreak})${note}">${frozen}${letter} ${f1(present)}L${delta}</span>`);
   }
   // In-transit shipments — about movement, kept as their own arrow chip.
   for (const s of (d.shipments || []).filter(sh => !sh.arrived)) {
-    chips.push(`<span class="cov-chip cov-transit" title="${f1(s.qty)}L on the way to ${locName(s.toLoc)}">&rarr; ${f1(s.qty)}L ${s.toLoc === 'centraal' ? 'C' : 'W'}</span>`);
+    chips.push(`<span class="cov-chip cov-transit" title="${f1(s.qty)}L on the way to ${esc(locName(s.toLoc))}">&rarr; ${f1(s.qty)}L ${shortLocName(s.toLoc)}</span>`);
   }
-  // Spare West stock that can't reach tonight's Centraal demand in time — the one
-  // genuinely actionable transport edge case (excludes stock the van already
-  // committed to a future Centraal service or a catering).
-  const stranded = Math.min(cov.west.leftover, cov.centraal.todayShortfall);
-  if (stranded > 0.05) {
-    chips.push(`<span class="cov-chip cov-stranded" title="${f1(stranded)}L sits at West but can't reach Centraal until tomorrow's morning van — tonight's Centraal demand must be filled from Centraal stock or a fresh cook">&#9888; ${f1(stranded)}L stuck at West</span>`);
+  // Spare West stock that can't reach TODAY's demand at a non-West site in
+  // time — the one genuinely actionable transport edge case (excludes stock
+  // the van already committed to a future cross-location service or a
+  // catering). One chip per short site, sharing the same West leftover.
+  let westSpare = cov.west.leftover;
+  for (const [loc, lc] of Object.entries(cov.byLoc)) {
+    if (loc === 'west' || westSpare <= 0.05) continue;
+    const stranded = Math.min(westSpare, lc.todayShortfall);
+    if (stranded > 0.05) {
+      const name = locName(loc).replace(/^Sering /, '');
+      chips.push(`<span class="cov-chip cov-stranded" title="${f1(stranded)}L sits at West but can't reach ${esc(name)} until tomorrow's morning van — tonight's ${esc(name)} demand must be filled from ${esc(name)} stock or a fresh cook">&#9888; ${f1(stranded)}L stuck at West</span>`);
+      westSpare -= stranded;
+    }
   }
   return chips.join(' ');
 }
@@ -395,8 +414,9 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
 
     // Build structured service data split by location
     interface SvcLine { day: string; meal: string; liters: string; served: boolean; shortfall: number }
-    const westSvcs: SvcLine[] = [];
-    const centraalSvcs: SvcLine[] = [];
+    // One column per location the batch serves — west/centraal first (their
+    // fixed order), event locations after, each labelled by its own name.
+    const svcCols = new Map<string, SvcLine[]>([['west', []], ['centraal', []]]);
     const cov = computeCoverage(d);
     const fullDayNames: Record<string, string> = { Mon:'Monday', Tue:'Tuesday', Wed:'Wednesday', Thu:'Thursday', Fri:'Friday', Sat:'Saturday', Sun:'Sunday' };
     (d.services || []).forEach(svc => {
@@ -418,7 +438,8 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
         shortfall = cs ? cs.shortfall : 0;
       }
       const line = { day: dayLabel, meal, liters, served: past, shortfall };
-      if (svc.loc === 'west') westSvcs.push(line); else centraalSvcs.push(line);
+      const col = svcCols.get(svc.loc);
+      if (col) col.push(line); else svcCols.set(svc.loc, [line]);
     });
 
     // Catering lines (go into a separate list)
@@ -436,24 +457,23 @@ export function renderBatchTile(d: Batch, opts: BatchTileOptions = {}) {
       ? '<div class="bx-svc-empty">—</div>'
       : lines.map(l => `<div class="bx-svc-line${l.served ? ' served' : ''}"><span class="bx-svc-day">${l.day}</span><span class="bx-svc-meal">${l.meal}</span>${l.served ? '<span class="bx-svc-liters">✓</span>' : `<span class="bx-svc-liters">${l.liters}${l.shortfall > 0 ? ` <span class="bx-svc-short" title="${l.shortfall.toFixed(1)}L can't reach this service in time">&#9888;${l.shortfall.toFixed(1)}</span>` : ''}</span>`}</div>`).join('');
 
-    const hasServices = westSvcs.length > 0 || centraalSvcs.length > 0;
-    const hasBothLocs = westSvcs.length > 0 && centraalSvcs.length > 0;
+    const activeCols = [...svcCols.entries()].filter(([, lines]) => lines.length > 0);
+    const colTitleCls = (loc: string): string =>
+      loc === 'west' ? 'loc-west-text' : loc === 'centraal' ? 'loc-centraal-text' : 'loc-event-text';
 
-    // Single- or dual-column service grid
+    // Single- or multi-column service grid (one column per served location)
     let servicesHtml = '';
-    if (!hasServices) {
+    if (activeCols.length === 0) {
       servicesHtml = '<span style="color:var(--red);font-weight:600;">No services assigned</span>';
-    } else if (hasBothLocs) {
+    } else if (activeCols.length > 1) {
       servicesHtml = `<div class="bx-svc-grid">
-        <div class="bx-svc-col"><div class="bx-svc-col-title loc-west-text">Sering West</div>${renderSvcCol(westSvcs)}</div>
-        <div class="bx-svc-col"><div class="bx-svc-col-title loc-centraal-text">Sering Centraal</div>${renderSvcCol(centraalSvcs)}</div>
+        ${activeCols.map(([loc, lines]) =>
+          `<div class="bx-svc-col"><div class="bx-svc-col-title ${colTitleCls(loc)}">${esc(locName(loc))}</div>${renderSvcCol(lines)}</div>`).join('')}
       </div>`;
     } else {
       // Only one location — no columns needed
-      const lines = westSvcs.length > 0 ? westSvcs : centraalSvcs;
-      const locName = westSvcs.length > 0 ? 'Sering West' : 'Sering Centraal';
-      const locCls2 = westSvcs.length > 0 ? 'loc-west-text' : 'loc-centraal-text';
-      servicesHtml = `<div class="bx-svc-single"><div class="bx-svc-col-title ${locCls2}">${locName}</div>${renderSvcCol(lines)}</div>`;
+      const [loc, lines] = activeCols[0];
+      servicesHtml = `<div class="bx-svc-single"><div class="bx-svc-col-title ${colTitleCls(loc)}">${esc(locName(loc))}</div>${renderSvcCol(lines)}</div>`;
     }
 
     // Recipe row — legacy v1 recipeSheetId fields removed in the unified
@@ -1011,7 +1031,7 @@ function renderSendModal(id: string, toLoc: Location) {
     </div>
     <div class="fr"><label>To</label>
       <select id="send-to-loc" onchange="rerenderSendModal('${id}',this.value)">
-        ${LOCATIONS.map(l => `<option value="${l}"${l === toLoc ? ' selected' : ''}>${locName(l)}</option>`).join('')}
+        ${locOptions(toLoc)}
       </select>
     </div>
     <div class="fr"><label>Storage at destination</label>
@@ -1448,7 +1468,7 @@ function renderInventoryEditor(id: string) {
         return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--bg);">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <select onchange="updateInventoryField('${id}',${i},'loc',this.value)" style="min-width:130px;">
-              ${LOCATIONS.map(l => `<option value="${l}"${e.loc === l ? ' selected' : ''}>${locName(l)}</option>`).join('')}
+              ${locOptions(e.loc)}
             </select>
             <select onchange="updateInventoryField('${id}',${i},'storage',this.value)" style="min-width:110px;">
               ${STORAGE.map(s => `<option value="${s}"${e.storage === s ? ' selected' : ''}>${s}</option>`).join('')}
@@ -1594,7 +1614,7 @@ function renderEditDish(id: string) {
         </tr></thead>
         <tbody>
           ${inv.length === 0 ? '<tr><td colspan="5" style="padding:8px;color:var(--text3);">No inventory</td></tr>' : inv.map((e, i) => `<tr>
-            <td style="padding:4px;"><select onchange="updateInventoryField('${id}',${i},'loc',this.value)">${LOCATIONS.map(l => `<option value="${l}"${e.loc === l ? ' selected' : ''}>${locName(l)}</option>`).join('')}</select></td>
+            <td style="padding:4px;"><select onchange="updateInventoryField('${id}',${i},'loc',this.value)">${locOptions(e.loc)}</select></td>
             <td style="padding:4px;"><select onchange="updateInventoryField('${id}',${i},'storage',this.value)">${STORAGE.map(s => `<option value="${s}"${e.storage === s ? ' selected' : ''}>${s}</option>`).join('')}</select></td>
             <td style="padding:4px;"><input type="number" value="${e.qty}" step="0.5" min="0" style="width:70px;" onchange="updateInventoryField('${id}',${i},'qty',this.value)" /></td>
             <td style="padding:4px;font-family:monospace;font-size:11px;">${esc(e.cookDate)}</td>
@@ -1608,7 +1628,7 @@ function renderEditDish(id: string) {
       ${ship.filter(s => !s.arrived).length === 0
         ? '<div style="font-size:12px;color:var(--text3);">No pending shipments</div>'
         : `<ul style="margin:0;padding-left:16px;font-size:12px;">${ship.filter(s => !s.arrived).map(s => `<li style="margin:4px 0;">
-            ${s.qty.toFixed(1)}L ${s.fromLoc === 'centraal' ? 'Centraal' : 'West'} → ${s.toLoc === 'centraal' ? 'Centraal' : 'West'}, ${s.storage} (cooked ${esc(s.cookDate)})
+            ${s.qty.toFixed(1)}L ${esc(locName(s.fromLoc))} → ${esc(locName(s.toLoc))}, ${s.storage} (cooked ${esc(s.cookDate)})
             <button class="btn btn-sm btn-danger" style="margin-left:8px;" onclick="cancelShipmentFromEdit('${id}','${s.id}')">Cancel</button>
           </li>`).join('')}</ul>`
       }

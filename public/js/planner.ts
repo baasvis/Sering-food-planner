@@ -1,5 +1,5 @@
 import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, Meal, Service, StorageType, Supply } from '@shared/types';
-import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor } from './state';
+import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor, activeEventLocations, allActiveLocations, isEventLoc } from './state';
 import { newId, scheduleSave, doSave, toast, toastError, apiPost, todayIso } from './utils';
 import { computeSupplyDemand } from '@shared/supply-demand';
 import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, getEffectiveGuests, chipClass, getToday, dateToStr, strToDate, diffStr, serviceShortfall, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory, consolidateInventory } from './core';
@@ -14,7 +14,8 @@ import { renderCaterings } from './caterings';
 import { rerenderCurrentView, registerRenderer } from './navigate';
 import { trackEvent } from './telemetry';
 import { pushUndo } from './undo';
-import { locName } from '@shared/location';
+import { locName, isPermanentLocation } from '@shared/location';
+import { openManualShipModal } from './transport-card';
 
 // ── WEEK PLAN (UNIFIED) ──────────────────────────────────
 
@@ -28,7 +29,6 @@ export function renderWeekPlan() {
     _plannerInitialLocApplied = true;
     S.plannerSubTab = S.currentLoc;
   }
-  const tab = S.plannerSubTab;
   const el = document.getElementById('screen-planner');
   // Visible count of items currently in transport, shown as a badge on the
   // sub-tab so users can immediately see when there's something to move
@@ -44,24 +44,33 @@ export function renderWeekPlan() {
   const tabs = [
     { id: 'west', label: 'Sering West' },
     { id: 'centraal', label: 'Sering Centraal' },
+    // Active event locations get their own tab between the permanent pair
+    // and the utility tabs. Archived events disappear (data stays).
+    ...activeEventLocations().map(e => ({ id: e.slug, label: esc(e.name) })),
     { id: 'transport', label: transportLabel },
     { id: 'caterings', label: 'Caterings' },
     { id: 'overview', label: 'Overview' },
   ];
+  // A remembered sub-tab pointing at a now-archived event falls back to the
+  // user's own location tab.
+  if (!tabs.some(t => t.id === S.plannerSubTab)) {
+    S.plannerSubTab = allActiveLocations().includes(S.currentLoc) ? S.currentLoc : 'west';
+  }
+  const activeTab = S.plannerSubTab;
   let html = `<div class="sub-tab-bar">`;
   tabs.forEach(t => {
-    // West/Centraal tabs get the location accent (dot + filled active); the
+    // Location tabs get the location accent (dot + filled active); the
     // Transport/Caterings/Overview tabs stay neutral. The tab matching the
     // user's current global location also shows a "your location" caption.
-    const isLoc = (t.id === 'west' || t.id === 'centraal');
-    const locCls = isLoc ? ` sub-tab-loc loc-${t.id}` : '';
+    const isLoc = allActiveLocations().includes(t.id);
+    const locCls = isLoc ? ` sub-tab-loc ${t.id === 'west' || t.id === 'centraal' ? `loc-${t.id}` : 'loc-event'}` : '';
     let label = t.label;
     if (isLoc) {
       const here = t.id === S.currentLoc;
       label = `<span class="stl-main"><span class="stl-dot"></span>${t.label}</span>` +
               (here ? `<span class="sub-tab-here-cap">your location</span>` : '');
     }
-    html += `<button class="sub-tab ${tab === t.id ? 'active' : ''}${locCls}" data-tab="${t.id}" onclick="setPlannerSubTab('${t.id}')">${label}</button>`;
+    html += `<button class="sub-tab ${activeTab === t.id ? 'active' : ''}${locCls}" data-tab="${t.id}" onclick="setPlannerSubTab('${t.id}')">${label}</button>`;
   });
   html += `</div><div id="planner-content"></div>`;
   el.innerHTML = html;
@@ -78,11 +87,11 @@ export function setPlannerSubTab(tab: string) {
 
 export function renderPlannerSubTab() {
   const tab = S.plannerSubTab;
-  if (tab === 'west') renderLocationPlan('west');
-  else if (tab === 'centraal') renderLocationPlan('centraal');
+  if (allActiveLocations().includes(tab)) renderLocationPlan(tab);
   else if (tab === 'transport') renderTransportView();
   else if (tab === 'caterings') renderCaterings();
   else if (tab === 'overview') renderDishesOverview();
+  else renderLocationPlan('west'); // stale key (archived event) — safe default
 }
 
 // Dispatcher: called by dishes.js and core.js instead of old renderDishes()
@@ -122,9 +131,17 @@ export function renderLocationPlan(loc: string) {
        <button class="btn btn-keq" onclick="openKitchenEquipmentModal()" title="Pots and burners — used by Fix My Menu to size batches">⚙️ Equipment</button>`
     : '';
 
-  html += `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
+  // Event-location tabs get manual transport shortcuts: festival food is
+  // shipped by hand (no automated pack card, no daily van schedule).
+  const eventShipBtns = isEventLoc(loc)
+    ? `<button class="btn" data-testid="event-ship-btn" onclick="openManualShipModal('${esc(loc)}')" title="Pick cooked West stock and send it to ${esc(locName(loc))}">🚚 Ship from West</button>
+       <button class="btn" data-testid="event-return-btn" onclick="openManualShipModal('west','${esc(loc)}')" title="Send leftover stock at ${esc(locName(loc))} back to West">↩ Return leftovers</button>`
+    : '';
+
+  html += `<div class="btn-row" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
     <button class="btn btn-primary" data-testid="new-batch-btn" onclick="openNewDish()">+ New batch</button>
     ${fixMenuBtn}
+    ${eventShipBtns}
     ${invBtn}
   </div>
   <div id="split-bar-area"></div>`;
@@ -141,7 +158,10 @@ export function renderLocationPlan(loc: string) {
     html += renderCostDrilldown(costDates);
   }
 
-  const otherLoc = loc === 'west' ? 'centraal' : 'west';
+  // Copy-day exists for the daily West↔Centraal mirroring rhythm; event
+  // locations are planned deliberately once, so their tabs get no copy
+  // buttons (assigning existing batches via the add-dish modal covers it).
+  const pairwise = isPermanentLocation(loc);
   const otherLabel = loc === 'west' ? 'Centraal' : 'West';
 
   typeGroups.forEach(tg => {
@@ -156,7 +176,10 @@ export function renderLocationPlan(loc: string) {
     days.forEach(d => {
       const dispDate = `${d.date.getDate()}/${d.date.getMonth()+1}`;
       const isoDate = dateToIso(d.date);
-      html += `<div class="day-hdr${d.isToday ? ' today-hdr' : ''}${d.isPast ? ' past-hdr' : ''}">${d.dayName}<span class="gt-date">${dispDate}</span><button class="copy-day-btn" onclick="event.stopPropagation();copyDayToOther('${loc}','${isoDate}')" title="Copy all ${d.dayName} batches to ${otherLabel}">&rarr; ${otherLabel}</button></div>`;
+      const copyBtn = pairwise
+        ? `<button class="copy-day-btn" onclick="event.stopPropagation();copyDayToOther('${loc}','${isoDate}')" title="Copy all ${d.dayName} batches to ${otherLabel}">&rarr; ${otherLabel}</button>`
+        : '';
+      html += `<div class="day-hdr${d.isToday ? ' today-hdr' : ''}${d.isPast ? ' past-hdr' : ''}">${d.dayName}<span class="gt-date">${dispDate}</span>${copyBtn}</div>`;
     });
 
     // Meal rows
@@ -197,9 +220,22 @@ export function renderLocationPlan(loc: string) {
           const stockHere = getStockAt(dish, loc as Location);
           const stockOther = getTotalStock(dish) - stockHere;
           const fromOther = stockHere === 0 && stockOther > 0;
-          const fromTag = fromOther
-            ? `<span class="chip-from">&larr; ${loc === 'west' ? 'Centraal' : 'West'}</span>`
-            : '';
+          // Label the site actually holding the most stock (was a binary
+          // West/Centraal guess — wrong once event locations hold food).
+          let fromTag = '';
+          if (fromOther) {
+            let bestLoc = '', bestQty = 0;
+            for (const e of (dish.inventory || [])) {
+              if (e.loc !== loc && (e.qty || 0) > bestQty) { bestQty = e.qty; bestLoc = e.loc; }
+            }
+            if (!bestLoc) {
+              for (const sh of (dish.shipments || [])) {
+                if (!sh.arrived && sh.toLoc !== loc && (sh.qty || 0) > bestQty) { bestQty = sh.qty; bestLoc = sh.toLoc; }
+              }
+            }
+            const fromLabel = bestLoc ? locName(bestLoc).replace(/^Sering /, '') : otherLabel;
+            fromTag = `<span class="chip-from">&larr; ${esc(fromLabel)}</span>`;
+          }
           // 📌 pin: lock THIS batch↔slot assignment against Fix My Menu's
           // redistribution (stripFutureServices keeps pinned entries). Only
           // meaningful on future services, so served chips skip it — and so
@@ -482,6 +518,11 @@ export function renderTransportView() {
 
   let html = '';
 
+  // Manual shipment entry point — destination picker over the active
+  // locations (Centraal + any event locations). The automated dashboard
+  // pack card stays Centraal-only; this is the by-hand lane.
+  html += `<div style="margin-bottom:10px;"><button class="btn" data-testid="transport-manual-ship" onclick="openManualShipSelect()" title="Pick cooked West stock and send it anywhere — Centraal or an event location">🚚 Send shipment…</button></div>`;
+
   // ── Transport items (custom free-text items) ──
   html += `<div class="type-section">`;
   html += `<div class="type-section-hdr">Items to transport</div>`;
@@ -693,6 +734,7 @@ export function toggleTypeCollapse(key: string) {
 }
 
 export function copyDayToOther(fromLoc: string, date: string) {
+  if (!isPermanentLocation(fromLoc)) return; // west↔centraal mirroring only
   const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
   const toLabel = locName(toLoc);
   const dayName = dateToDayName(date);
@@ -718,6 +760,7 @@ export function copyDayToOther(fromLoc: string, date: string) {
 }
 
 export function copySlotToOther(fromLoc: string, date: string, meal: string) {
+  if (!isPermanentLocation(fromLoc)) return; // west↔centraal mirroring only
   const toLoc = fromLoc === 'west' ? 'centraal' : 'west';
   const toLabel = locName(toLoc);
   const k = `${fromLoc}-${date}-${meal}`;
@@ -862,12 +905,14 @@ export function renderAddModal(loc: string, date: string, meal: string, existing
     `<button class="sub-tab ${tab === t.id ? 'active' : ''}" onclick="event.stopPropagation();switchAddModalTab('${t.id}')">${t.label} <span style="opacity:.6;font-size:11px;">${t.count}</span></button>`
   ).join('');
 
-  // Location toggle
+  // Location toggle — one button per active location (event locations get
+  // the shared loc-event accent).
   const slotLocLabel = locName(loc);
-  const locToggleHtml = `<div class="order-loc-bar" style="margin-bottom:10px;" id="add-modal-loc-toggle">
-    <button class="order-loc-btn loc-west${locFilter === 'west' ? ' active' : ''}" onclick="switchAddModalLoc('west')">Sering West</button>
-    <button class="order-loc-btn loc-centraal${locFilter === 'centraal' ? ' active' : ''}" onclick="switchAddModalLoc('centraal')">Sering Centraal</button>
-  </div>`;
+  const locBtns = allActiveLocations().map(l => {
+    const cls = isPermanentLocation(l) ? `loc-${l}` : 'loc-event';
+    return `<button class="order-loc-btn ${cls}${locFilter === l ? ' active' : ''}" onclick="switchAddModalLoc('${esc(l)}')">${esc(locName(l))}</button>`;
+  }).join('');
+  const locToggleHtml = `<div class="order-loc-bar" style="margin-bottom:10px;" id="add-modal-loc-toggle">${locBtns}</div>`;
 
   // If the modal is already open, only update the dynamic parts
   const existingModal = document.getElementById('add-modal-tabs');
@@ -1258,7 +1303,7 @@ export function getInventoryState(loc: string) {
   const lunchDeadline = 13 * 60 + 45; // 13:45
   const dinnerDeadline = 20 * 60 + 15; // 20:15
   const todayStr = dateToIso(now);
-  const inv = S.inventoryDone[loc] || {};
+  const inv = S.inventoryDone[loc] || { lunch: null, dinner: null };
   const lunchDone = inv.lunch === todayStr;
   const dinnerDone = inv.dinner === todayStr;
 
@@ -1526,7 +1571,9 @@ function renderSuppliesInvSection(loc: string): string {
     let hint = '';
     if (s.kind === 'standard') {
       const d = computeSupplyDemand(s, S.guests, S.caterings || [], todayStr, getEffectiveGuests);
-      const need = s.prepMode === 'centralized' ? d.west : (loc === 'centraal' ? d.centraal : d.west);
+      // Per-location demand for THIS location (event locs have their own
+      // bucket); centralized supplies always show West's roll-up.
+      const need = s.prepMode === 'centralized' ? d.west : (d[loc] ?? 0);
       if (need > 0) hint = `<span style="font-size:11px;color:var(--text2);">need ~${Math.ceil(need)}</span>`;
     }
     html += `<div class="inv-row" data-supply="${esc(s.id)}">

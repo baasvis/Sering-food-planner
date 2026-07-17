@@ -16,6 +16,7 @@
 
 import type { Batch } from '@shared/types';
 import { addDays } from '@shared/dates';
+import { locName } from '@shared/location';
 import { S } from './state';
 import { calcRequired, dateToDayName, dateToIso, getTotalStock, getToday, isServiceClosed, isServicePast } from './core';
 import type { Warning } from './menu-fixer';
@@ -46,7 +47,10 @@ export function emergencyDishAlarms(batches: Batch[], horizonEndIso: string): Wa
       .sort((a, z) => a.date === z.date ? mealRank[a.meal] - mealRank[z.meal] : (a.date < z.date ? -1 : 1));
     if (upcoming.length === 0) continue;
     const first = upcoming[0];
-    const locLabel = first.loc === 'centraal' ? 'Centraal' : 'West';
+    // Keep the exact short labels for the permanent pair; event locations
+    // render their registry name (the board stays a West production surface,
+    // but a festival emergency stand-in must not mislabel as "West").
+    const locLabel = first.loc === 'centraal' ? 'Centraal' : first.loc === 'west' ? 'West' : locName(first.loc);
     const slot = `${dateToDayName(first.date)} ${first.meal} at ${locLabel}` +
       (upcoming.length > 1 ? ` (+${upcoming.length - 1} more service${upcoming.length === 2 ? '' : 's'})` : '');
     alarms.push({

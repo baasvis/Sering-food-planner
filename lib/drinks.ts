@@ -16,6 +16,9 @@ import { DEFAULT_DRINK_STORAGE_AREAS } from '../shared/types';
 import { makeCostContext, drinkTotalCostExBtw, suggestedPriceInclBtw, targetMarkupFor, effectiveBtw } from '../shared/drink-cost';
 export { effectiveBtw };
 
+// DELIBERATELY permanent-only: the drinks module (stock, orders, menus) does
+// not extend to temporary event locations in v1 — see the event-locations
+// build plan. Widen via lib/locations.ts isActiveLocation if that changes.
 export const VALID_LOCATIONS = ['west', 'centraal'];
 export const VALID_DRINK_MODES: DrinkMode[] = ['catalogue', 'recipe'];
 export const VALID_DRINK_STATUSES: DrinkStatus[] = ['draft', 'published'];

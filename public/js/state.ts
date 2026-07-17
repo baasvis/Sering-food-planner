@@ -1,6 +1,7 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, CostTargets, Supply, PagePermission, Drink, DrinkSupplier, DrinkConfig, DrinkOrder, Assortment, DrinkMenu } from '@shared/types';
+import type { Batch, Catering, TransportItem, RecipeFull, Ingredient, GuestsData, GuestDay, AppUser, Location, Meal, DishType, StorageType, StorageArea, StorageConfig, BatchRatings, KitchenEquipment, CookRhythmConfig, CookRhythmDay, ClosedServicesConfig, CostTargets, Supply, PagePermission, Drink, DrinkSupplier, DrinkConfig, DrinkOrder, Assortment, DrinkMenu, EventLocationDTO } from '@shared/types';
+import { setLocationRegistry } from '@shared/location';
 
 export const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const;
 export const MEALS: Meal[] = ['lunch','dinner'];
@@ -218,6 +219,11 @@ export interface AppState {
   drinksSubTab: string;
   drinksFilters: { mode: string; category: string; location: string };
   drinksSearch: string;
+  /** Event-location registry (temporary festival/catering sites), hydrated
+   *  from GET /api/data and replaced wholesale by SSE `eventLocations`
+   *  patches. Includes archived rows — use activeEventLocations() for
+   *  picker/tab surfaces. */
+  eventLocations: EventLocationDTO[];
   archive?: Array<Record<string, unknown>>;
   openBatchPools?: Set<string>;
   _addModalState?: { loc: string; date: string; meal: string; existing: string[]; typeFilter: string; tab: string; locFilter: string } | null;
@@ -286,7 +292,52 @@ export let S: AppState = {
   drinksSubTab: 'catalogue',
   drinksFilters: { mode: 'all', category: 'all', location: 'west' },
   drinksSearch: '',
+  eventLocations: [],
 };
+
+// ── Event-location registry helpers ──────────────────────────────
+// LOCATIONS above stays the PERMANENT pair (west/centraal) — sites that mean
+// "every location a user can currently work at" should use allActiveLocations().
+
+/** THE way to replace the event-location registry on the client: keeps
+ *  S.eventLocations and the shared display-name registry (locName /
+ *  shortLocName in shared/location.ts) in lockstep. Setting S.eventLocations
+ *  directly leaves locName resolving raw slugs. */
+export function setEventLocationsState(rows: EventLocationDTO[]): void {
+  S.eventLocations = rows;
+  setLocationRegistry(rows);
+  // Seed a zero guest week for any ACTIVE event missing from S.guests: a
+  // client that learns about a new event via SSE (no full reload) must be
+  // able to render its guest card and build a valid (sparse-merging) save
+  // payload without waiting for the next GET /api/data.
+  for (const e of rows) {
+    if (e.archived || S.guests[e.slug]) continue;
+    const week: Record<string, { lunch: number; dinner: number }> = {};
+    for (const d of DAYS) week[d] = { lunch: 0, dinner: 0 };
+    S.guests[e.slug] = week;
+  }
+}
+
+/** Non-archived event locations, in registry order. */
+export function activeEventLocations(): EventLocationDTO[] {
+  return S.eventLocations.filter((e: EventLocationDTO) => !e.archived);
+}
+
+/** Every location a user can currently select/work at:
+ *  ['west', 'centraal', ...active event slugs]. */
+export function allActiveLocations(): string[] {
+  return [...LOCATIONS, ...activeEventLocations().map((e: EventLocationDTO) => e.slug)];
+}
+
+/** True when `loc` is an event-location slug — active OR archived. (Guards
+ *  like Fix My Menu's must spare archived-event data too.) */
+export function isEventLoc(loc: string): boolean {
+  return S.eventLocations.some((e: EventLocationDTO) => e.slug === loc);
+}
+
+export function eventLocById(loc: string): EventLocationDTO | undefined {
+  return S.eventLocations.find((e: EventLocationDTO) => e.slug === loc);
+}
 
 // ── Global location helpers ──────────────────────────────────────
 const LOC_STORAGE_KEY = 'sering-location';
@@ -296,10 +347,18 @@ export function setGlobalLocation(loc: Location): void {
   localStorage.setItem(LOC_STORAGE_KEY, loc);
 }
 
-/** Restore location from localStorage. Returns true if a saved value was found. */
+/** Restore location from localStorage. Returns true if a saved value was found.
+ *  Permanent keys are accepted immediately. An event-location slug ("ev-…")
+ *  is TENTATIVELY accepted — this runs before loadData, so the registry isn't
+ *  known yet; initApp re-validates after data load and falls back to west when
+ *  the saved slug turns out archived/unknown. Anything else is rejected. */
 export function restoreGlobalLocation(): boolean {
   const saved = localStorage.getItem(LOC_STORAGE_KEY);
   if (saved === 'west' || saved === 'centraal') {
+    S.currentLoc = saved;
+    return true;
+  }
+  if (saved && saved.startsWith('ev-')) {
     S.currentLoc = saved;
     return true;
   }

@@ -144,9 +144,10 @@ function cooksDone(ctx: RitualContext): boolean {
     (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west') === ctx.loc);
 }
 
-/** No shipment is still in flight toward Centraal. */
+/** No shipment is still in flight toward THIS location (Centraal's daily van,
+ *  or manual sends to an event location). */
 function noPendingArrivals(ctx: RitualContext): boolean {
-  return !ctx.batches.some(b => (b.shipments || []).some(s => s.toLoc === 'centraal' && !s.arrived));
+  return !ctx.batches.some(b => (b.shipments || []).some(s => s.toLoc === ctx.loc && !s.arrived));
 }
 
 /** No generated placeholder (generated && no recipe) still has an upcoming
@@ -240,8 +241,41 @@ const CENTRAAL_STEPS: RitualStep[] = [
     done: (c) => c.ritualDone('hanos-order') },
 ];
 
+// Event locations: a trimmed serve-side day. Confirm inbound shipments, set
+// up services, count food, order — no pack-for-Centraal step (event transport
+// is manual) and no Fix-My-Menu steps (FMM never plans event locations).
+const EVENT_STEPS: RitualStep[] = [
+  { key: 'arrivals', label: 'Confirm transport arrived', phase: 'morning', overdueAfter: null, action: 'arrivals',
+    why: 'Say yes when food arrives from West. It goes into your stock, so your numbers stay correct.',
+    done: noPendingArrivals },
+  { key: 'service-lunch', label: 'Set up lunch service', phase: 'morning', overdueAfter: null, action: null, manual: true, window: 'lunch',
+    why: 'Set up lunch before the guests come.',
+    done: (c) => c.ritualDone('service-lunch') },
+  { key: 'inv-lunch', label: 'Cooked-food inventory', phase: 'lunch-close', overdueAfter: LUNCH_OVERDUE, action: 'inventory', window: 'lunch',
+    why: 'After lunch, count the cooked food. The planning for tonight and tomorrow depends on these numbers. Count both the cold food, and the food still in pots.',
+    done: (c) => inventoryFresh(c, 'lunch') || inventoryFresh(c, 'dinner') },
+  { key: 'service-dinner', label: 'Set up dinner service', phase: 'afternoon', overdueAfter: null, action: null, manual: true, window: 'dinner',
+    why: 'Set up dinner before the evening.',
+    done: (c) => c.ritualDone('service-dinner') },
+  // NOT orderDayOnly (unlike west/centraal): the permanent kitchens order on
+  // the fixed Mon/Tue/Thu rhythm, but a festival takes deliveries most days
+  // and may run entirely over a weekend — gating these on ORDER_DAYS hid the
+  // ordering steps for weekend-run events altogether.
+  { key: 'stocktake', label: 'Ingredient stocktake', phase: 'afternoon', overdueAfter: null, action: 'orders', manual: true,
+    why: 'Count your ingredients before you order. Then the amount to order is correct.',
+    done: (c) => c.ritualDone('stocktake') },
+  { key: 'inv-dinner', label: 'Cooked-food inventory', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'inventory', window: 'dinner',
+    why: 'At the end of the day, count the cooked food that is left. The plan for tomorrow — and what West ships next — depends on these numbers.',
+    done: (c) => inventoryFresh(c, 'dinner') },
+  { key: 'hanos-order', label: 'Place Hanos order', phase: 'dinner-close', overdueAfter: DINNER_OVERDUE, action: 'orders', manual: true,
+    why: 'Order now. The ingredients arrive on location the next day.',
+    done: (c) => c.ritualDone('hanos-order') },
+];
+
 export function stepsForLocation(loc: Location): RitualStep[] {
-  return loc === 'west' ? WEST_STEPS : CENTRAAL_STEPS;
+  if (loc === 'west') return WEST_STEPS;
+  if (loc === 'centraal') return CENTRAAL_STEPS;
+  return EVENT_STEPS;
 }
 
 // ── Compute the panel's view model ───────────────────────────────────────

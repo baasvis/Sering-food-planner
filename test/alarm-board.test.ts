@@ -17,7 +17,7 @@
  */
 
 import type { Batch, Catering, DishType, Service } from '../shared/types';
-import { S } from '../public/js/state';
+import { S, setEventLocationsState } from '../public/js/state';
 import { rebuildPlanner } from '../public/js/core';
 import { collectLiveAlarms, emergencyDishAlarms } from '../public/js/alarm-board';
 
@@ -283,5 +283,44 @@ describe('reused collectWarnings checks through the live path', () => {
     const alarms = alarmsOf('catering-no-dishes');
     expect(alarms).toHaveLength(1);
     expect(alarms[0].anchor).toEqual({ kind: 'catering', cateringId: 'c-end' });
+  });
+});
+
+// ─── Event locations on the live board ───────────────────────────────────────
+// The board stays a West production surface, but alarms about event-location
+// services must label the event by its registry name (not fall back to the
+// old binary "West" bucket) — and the registry setup must not change any
+// west/centraal alarm.
+
+describe('event-location labelling', () => {
+  const EV = 'ev-boardfest-2026';
+  beforeEach(() => {
+    setEventLocationsState([{
+      slug: EV, name: 'Boardfest 2026', startDate: '2026-05-01', endDate: '2026-05-15',
+      hanosAccount: 'west', archived: false, createdAt: '2026-05-01T00:00:00.000Z', archivedAt: null,
+    }]);
+  });
+  afterEach(() => { setEventLocationsState([]); });
+
+  test('an emergency stand-in serving an event slot names the event', () => {
+    const b = mk('Soup', [{ loc: EV, date: '2026-05-06', meal: 'lunch' }], {
+      generated: true, cookNotes: 'Emergency stand-in', name: 'Emergency soup',
+    });
+    const alarms = emergencyDishAlarms([b], '2026-05-10');
+    expect(alarms).toHaveLength(1);
+    expect(alarms[0].message).toContain('at Boardfest 2026');
+    expect(alarms[0].message).not.toContain('at West');
+  });
+
+  test('west/centraal emergency labels are unchanged by a populated registry', () => {
+    const w = mk('Soup', [{ loc: 'west', date: '2026-05-06', meal: 'lunch' }], {
+      generated: true, cookNotes: 'Emergency stand-in', name: 'W emergency',
+    });
+    const c = mk('Soup', [{ loc: 'centraal', date: '2026-05-06', meal: 'dinner' }], {
+      generated: true, cookNotes: 'Emergency stand-in', name: 'C emergency',
+    });
+    const alarms = emergencyDishAlarms([w, c], '2026-05-10');
+    expect(alarms[0].message).toContain('at West');
+    expect(alarms[1].message).toContain('at Centraal');
   });
 });

@@ -4,6 +4,7 @@
 
 import crypto from 'crypto';
 import { CONFIG } from './config';
+import { getEventLocation } from './locations';
 import { parseHanosQuantityGrams } from './hanos-parser';
 
 // ── Constants (from Hanos SPA JS bundle) ────────────────────────────────────
@@ -232,15 +233,32 @@ export class HanosClient {
 
 // ── Per-location credentials ────────────────────────────────────────────────
 
-export function getCredentials(location: string) {
+/** Which permanent Hanos account a location key resolves to. Event-location
+ *  slugs use their registry-configured `hanosAccount` (default west); unknown
+ *  keys fall back to west (pre-registry behaviour, preserved). */
+export function resolveHanosAccount(location: string): 'west' | 'centraal' {
   const loc = (location || '').toLowerCase();
-  if (loc === 'centraal') {
+  if (loc === 'centraal') return 'centraal';
+  if (loc === 'west') return 'west';
+  const ev = getEventLocation(location);
+  return ev?.hanosAccount === 'centraal' ? 'centraal' : 'west';
+}
+
+export function getCredentials(location: string) {
+  if (resolveHanosAccount(location) === 'centraal') {
     return { user: CONFIG.HANOS_USER_CENTRAAL, pass: CONFIG.HANOS_PASS_CENTRAAL };
   }
   return { user: CONFIG.HANOS_USER_WEST, pass: CONFIG.HANOS_PASS_WEST };
 }
 
 // ── Per-location singleton clients ──────────────────────────────────────────
+//
+// The pool is keyed by raw location string, so an event-location slug gets
+// its own HanosClient (own OAuth session/failure isolation). HONEST LIMIT:
+// Hanos carts are server-side per ACCOUNT — an event location that shares
+// West's account resolves to the same physical hanos.nl cart as West. The
+// delivery address for an on-site delivery is chosen at hanos.nl checkout,
+// not here.
 
 const _clients: Record<string, HanosClient> = {};
 const _clientTimes: Record<string, number> = {};

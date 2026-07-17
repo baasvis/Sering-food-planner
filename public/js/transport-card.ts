@@ -13,7 +13,8 @@
 // browser.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Batch, Service, Location, DishType } from '@shared/types';
-import { S } from './state';
+import { S, allActiveLocations } from './state';
+import { locName } from '@shared/location';
 import { isBatchCooked, calcRequiredAtService, isServicePast, getToday, dateToIso, rebuildPlanner, getStockAt, getServeableStockAt, getPendingFromShipments } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { trackEvent } from './telemetry';
@@ -805,13 +806,13 @@ interface PendingArrivalRef {
   shipmentId: string;
 }
 
-/** All not-yet-arrived shipments heading to Centraal, plus a liter total. */
-export function pendingCentraalArrivals(batches: Batch[]): { refs: PendingArrivalRef[]; liters: number } {
+/** All not-yet-arrived shipments heading to `loc`, plus a liter total. */
+export function pendingArrivalsFor(batches: Batch[], loc: string): { refs: PendingArrivalRef[]; liters: number } {
   const refs: PendingArrivalRef[] = [];
   let liters = 0;
   for (const b of batches) {
     for (const s of (b.shipments || [])) {
-      if (s.arrived || s.toLoc !== 'centraal') continue;
+      if (s.arrived || s.toLoc !== loc) continue;
       refs.push({ batchId: b.id, shipmentId: s.id });
       liters += s.qty || 0;
     }
@@ -819,35 +820,51 @@ export function pendingCentraalArrivals(batches: Batch[]): { refs: PendingArriva
   return { refs, liters: round1(liters) };
 }
 
-/** Inner HTML for the red arrival block. Empty string unless the current loc
- *  is Centraal AND something is actually in transit — a permanent red block
- *  with nothing to confirm would just be noise. */
-export function renderCentraalArrivalBlock(): string {
-  if (S.currentLoc !== 'centraal') return '';
-  const { refs, liters } = pendingCentraalArrivals(S.batches);
+/** Back-compat wrapper (unit tests + external callers). */
+export function pendingCentraalArrivals(batches: Batch[]): { refs: PendingArrivalRef[]; liters: number } {
+  return pendingArrivalsFor(batches, 'centraal');
+}
+
+/** Inner HTML for the red arrival block — shipments heading to the CURRENT
+ *  location (Centraal's daily van, an event location's manual sends, or
+ *  leftovers returning to West). Empty string when nothing is in transit —
+ *  a permanent red block with nothing to confirm would just be noise.
+ *  Behaviour at Centraal is identical to the old Centraal-only block. */
+export function renderArrivalBlock(): string {
+  const loc = S.currentLoc;
+  const { refs, liters } = pendingArrivalsFor(S.batches, loc);
   if (refs.length === 0) return '';
   const n = refs.length;
+  // Name the sending side(s) — usually just one.
+  const fromLocs = new Set<string>();
+  for (const b of S.batches) {
+    for (const s of (b.shipments || [])) {
+      if (!s.arrived && s.toLoc === loc) fromLocs.add(s.fromLoc);
+    }
+  }
+  const fromLabel = [...fromLocs].map(l => locName(l)).join(' + ') || 'the other kitchen';
   return `<div class="dash-arrival-block" role="button" tabindex="0"
-      onclick="confirmCentraalArrivals()"
-      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();confirmCentraalArrivals();}">
+      onclick="confirmArrivals()"
+      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();confirmArrivals();}">
     <span class="dash-arrival-icon">🚚</span>
     <div class="dash-arrival-text">
       <div class="dash-arrival-title">Did the transport arrive today?</div>
-      <div class="dash-arrival-sub">${n} batch${n === 1 ? '' : 'es'} (${liters} L) on the way from Sering West — tap to confirm it's here.</div>
+      <div class="dash-arrival-sub">${n} batch${n === 1 ? '' : 'es'} (${liters} L) on the way from ${esc(fromLabel)} — tap to confirm it's here.</div>
     </div>
   </div>`;
 }
 
-/** Mark every pending Centraal-bound shipment arrived in one go. Mirrors
- *  confirmTransportPlan: per-shipment POST, local state updated from each
- *  response, an individual failure doesn't abort the loop. */
-export async function confirmCentraalArrivals(): Promise<void> {
-  const { refs } = pendingCentraalArrivals(S.batches);
+/** Mark every shipment pending at the CURRENT location arrived in one go.
+ *  Mirrors confirmTransportPlan: per-shipment POST, local state updated from
+ *  each response, an individual failure doesn't abort the loop. */
+export async function confirmArrivals(): Promise<void> {
+  const loc = S.currentLoc;
+  const { refs } = pendingArrivalsFor(S.batches, loc);
   if (refs.length === 0) {
     toast('Nothing in transit');
     return;
   }
-  trackEvent('centraal_arrivals_confirmed', '', { count: refs.length });
+  trackEvent('centraal_arrivals_confirmed', loc, { count: refs.length });
   let okCount = 0;
   for (const ref of refs) {
     try {
@@ -859,7 +876,7 @@ export async function confirmCentraalArrivals(): Promise<void> {
       okCount++;
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown error';
-      console.error('confirmCentraalArrivals: /arrived failed for shipment', ref.shipmentId, message);
+      console.error('confirmArrivals: /arrived failed for shipment', ref.shipmentId, message);
     }
   }
   const failed = refs.length - okCount;
@@ -868,9 +885,143 @@ export async function confirmCentraalArrivals(): Promise<void> {
     // so the cook can tap again — but tell them, don't show a plain success.
     toastError(`${okCount} confirmed, ${failed} couldn't be — tap again to retry the rest.`);
   } else if (okCount > 0) {
-    toast(`${okCount} shipment${okCount > 1 ? 's' : ''} arrived at Sering Centraal`);
+    toast(`${okCount} shipment${okCount > 1 ? 's' : ''} arrived at ${locName(loc)}`);
   } else {
     toastError('Could not confirm arrivals — try the Transport tab');
+  }
+  rebuildPlanner();
+  rerenderCurrentView();
+}
+
+/** Back-compat alias (old window bindings / tests). */
+export const confirmCentraalArrivals = confirmArrivals;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Manual shipment modal — event locations (festival logistics).
+//
+// The automated "Pack for Centraal" card above encodes the daily van rhythm
+// and stays Centraal-only. Event locations ship BY HAND: pick cooked stock at
+// the source, type litres, send. Same POST /api/batches/:id/ship endpoint,
+// with an EXPLICIT fromInventoryIdx per entry — /ship's auto-pick takes the
+// first entry whose loc ≠ toLoc, which could drain the wrong site when a
+// batch holds stock at several locations.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _manualShip: { fromLoc: string; toLoc: string } | null = null;
+
+/** Transport-tab entry point: pick a destination first (skips the picker when
+ *  Centraal is the only non-West option). */
+export function openManualShipSelect(): void {
+  const dests = allActiveLocations().filter(l => l !== 'west');
+  if (dests.length === 1) { openManualShipModal(dests[0]); return; }
+  const opts = dests.map(l => `<option value="${esc(l)}">${esc(locName(l))}</option>`).join('');
+  showModal(`<h3>Send shipment from West</h3>
+    <p style="font-size:13px;color:var(--text2);">Where is this shipment going?</p>
+    <select id="manual-ship-dest" class="re-inline-input" style="width:100%;margin:10px 0;">${opts}</select>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="openManualShipModal(document.getElementById('manual-ship-dest').value)">Next</button>
+    </div>`);
+}
+
+/** List every cooked batch with stock at `fromLoc`, litres input per row.
+ *  Reached from the event planner tab ("Ship from West" presets toLoc to the
+ *  event; "Return leftovers" flips the direction) and the Transport tab. */
+export function openManualShipModal(toLoc: string, fromLoc: string = 'west'): void {
+  if (!toLoc || toLoc === fromLoc) return;
+  rebuildPlanner();
+  _manualShip = { fromLoc, toLoc };
+  const candidates = S.batches.filter(b => isBatchCooked(b) && getStockAt(b, fromLoc as Location) > 0);
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  candidates.sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
+
+  if (candidates.length === 0) {
+    showModal(`<h3>Ship to ${esc(locName(toLoc))}</h3>
+      <p style="color:var(--text2);">No cooked dishes with stock at ${esc(locName(fromLoc))} to ship.</p>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+    return;
+  }
+
+  const rowsHtml = candidates.map(b => {
+    const avail = round1(getStockAt(b, fromLoc as Location));
+    return `<div class="pack-edit-row">
+      <div class="pack-edit-name">${esc(b.name)} <span class="pack-edit-avail">${avail} L at ${esc(locName(fromLoc))}</span></div>
+      <div class="pack-edit-qty">
+        <input type="number" min="0" step="0.5" max="${avail}" placeholder="0" data-manual-ship="${esc(b.id)}" class="re-inline-input re-inline-num" style="width:80px;" />
+        <span>L</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  showModal(`<h3>Ship ${esc(locName(fromLoc))} &rarr; ${esc(locName(toLoc))}</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:10px;">Set how many litres of each dish to send. Food travels as an in-transit shipment until someone confirms arrival at ${esc(locName(toLoc))} (their dashboard shows a red confirm block).</p>
+    <div class="pack-edit-list">${rowsHtml}</div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" data-testid="manual-ship-confirm" onclick="confirmManualShip()">Send shipment</button>
+    </div>`);
+}
+
+/** Confirm the manual-ship modal: per batch, ship per source inventory entry
+ *  (largest first) with an explicit fromInventoryIdx. /ship reduces entry qty
+ *  in place (no splice), so indexes captured up front stay valid across the
+ *  sequential POSTs. Per-row failures don't abort the loop. */
+export async function confirmManualShip(): Promise<void> {
+  if (!_manualShip) return;
+  const { fromLoc, toLoc } = _manualShip;
+  const rows: { batchId: string; qty: number }[] = [];
+  document.querySelectorAll('[data-manual-ship]').forEach(el => {
+    const input = el as HTMLInputElement;
+    const id = input.getAttribute('data-manual-ship');
+    const v = parseFloat(input.value);
+    if (id && v && v > 0) rows.push({ batchId: id, qty: Math.round(v * 10) / 10 });
+  });
+  if (rows.length === 0) { toast('Nothing to send'); return; }
+  closeModal();
+  trackEvent('manual_ship_confirmed', toLoc, { rowCount: rows.length, fromLoc });
+
+  let okCount = 0;
+  let failCount = 0;
+  let cappedCount = 0;
+  for (const row of rows) {
+    let sentAny = false;
+    try {
+      const b = S.batches.find(x => x.id === row.batchId);
+      const entries = (b?.inventory || [])
+        .map((e, idx) => ({ e, idx }))
+        .filter(x => x.e.loc === fromLoc && x.e.qty > 0)
+        .sort((a, z) => z.e.qty - a.e.qty);
+      let remaining = row.qty;
+      for (const { e, idx } of entries) {
+        if (remaining <= 0) break;
+        const sendQty = Math.min(remaining, round1(e.qty));
+        const res = await apiPost(`/api/batches/${row.batchId}/ship`, {
+          toLoc, qty: sendQty, storage: e.storage, fromInventoryIdx: idx,
+        });
+        if (res && res.batch) {
+          const bidx = S.batches.findIndex(x => x.id === row.batchId);
+          if (bidx >= 0) S.batches[bidx] = res.batch;
+        }
+        if (res && res.warning) cappedCount++;
+        remaining = Math.round((remaining - sendQty) * 10) / 10;
+        sentAny = true;
+      }
+      // A row that issued NO POST (stale modal — stock changed under us)
+      // must not count as sent: the cook typed litres expecting them shipped.
+      if (sentAny) okCount++; else failCount++;
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      console.error('manual ship failed for batch', row.batchId, message);
+      if (sentAny) okCount++; // partial: some litres of this row did ship
+      failCount++;
+    }
+  }
+  _manualShip = null;
+  if (failCount > 0) {
+    toastError(`${okCount > 0 ? `Sent ${okCount}, but ` : ''}${failCount} batch${failCount > 1 ? 'es' : ''} could not be sent — refresh and check the Transport tab before retrying.`);
+  } else if (okCount > 0) {
+    const cappedNote = cappedCount > 0 ? ' (some capped to available)' : '';
+    toast(`Sent ${okCount} batch${okCount > 1 ? 'es' : ''} to ${locName(toLoc)}${cappedNote}`);
   }
   rebuildPlanner();
   rerenderCurrentView();

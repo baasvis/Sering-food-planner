@@ -1,9 +1,10 @@
 // UUID GENERATION
 // ═══════════════════════════════════════════════════════════════════
 
-import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen } from './state';
-import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply, Drink, DrinkSupplier, DrinkConfig } from '@shared/types';
+import { S, DEFAULT_STORAGE_CONFIG, rebuildStorageCategories, canEditScreen, setEventLocationsState, allActiveLocations } from './state';
+import type { StorageArea, Batch, Catering, TransportItem, GuestsData, GuestDay, PatchRequest, SaveSnapshot, SaveState, Location, KitchenEquipment, CookRhythmConfig, CostTargets, ClosedServicesConfig, RecipeFull, Ingredient, StorageConfig, Supply, Drink, DrinkSupplier, DrinkConfig, EventLocationDTO } from '@shared/types';
 import { BATCH_SCHEMA_VERSION } from '@shared/types';
+import { setLocationRegistry } from '@shared/location';
 import { doLogout } from './auth';
 import { rebuildPlanner } from './core';
 import { predictGuests } from './predictions';
@@ -22,6 +23,14 @@ export function setOnBatchesChanged(fn: () => void) { _onBatchesChanged = fn; }
 // Callback to flush pending undo before remote patch (avoids circular import with undo.ts)
 let _flushUndo: (() => void) | null = null;
 export function setFlushUndo(fn: () => void) { _flushUndo = fn; }
+
+// Callback fired after an SSE eventLocations patch replaces the registry —
+// init.ts registers a revalidator that moves the user home (with a toast)
+// when their CURRENT location was just archived, so their ritual/prep/
+// inventory writes don't silently 400 for the rest of the session. Setter
+// pattern avoids a utils → init circular import.
+let _onRegistryChanged: (() => void) | null = null;
+export function setOnRegistryChanged(fn: () => void) { _onRegistryChanged = fn; }
 
 // Callback fired after a remote SSE patch is applied — refreshes an open
 // inventory modal so its embedded row indices don't go stale. Registered by
@@ -295,6 +304,7 @@ export async function loadData(): Promise<void> {
     if (data.caterings) S.caterings = data.caterings;
     if (data.transportItems) S.transportItems = data.transportItems;
     if (data.supplies) S.supplies = data.supplies;
+    if (data.eventLocations) setEventLocationsState(data.eventLocations);
     takeSnapshot();
     rebuildPlanner();
     // Cold loaders (ingredient DB, storage config, kitchen equipment, guest
@@ -800,6 +810,7 @@ interface RemotePatchMessage {
   cookRhythm?: CookRhythmConfig;
   costTargets?: CostTargets;
   closedServices?: ClosedServicesConfig;
+  eventLocations?: EventLocationDTO[];
   // Partial slot-keyed
   prepChecklist?: { loc: string; date: string; checked: string[] };
   inventoryCompletion?: { loc: string; window: 'lunch' | 'dinner'; completedAt: string };
@@ -843,6 +854,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
           supplies, deletedSupplies,
           drinks, deletedDrinks, drinkSuppliers, deletedDrinkSuppliers, drinkConfig, drinksReload,
           storageConfig, kitchenEquipment, cookRhythm, costTargets, closedServices,
+          eventLocations,
           prepChecklist, inventoryCompletion, ritualCompletion,
           guestsNextWeeks,
           ingredientsBulkReload, guestHistoryReload, recipesReload } = msg;
@@ -865,9 +877,11 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     changed = true;
   }
 
-  // Merge guests
+  // Merge guests. Iterate the payload's own keys (not a fixed location list)
+  // so event-location guest edits from other users merge too — the server
+  // already validated every key against the registry.
   if (guests) {
-    for (const loc of ['west', 'centraal']) {
+    for (const loc of Object.keys(guests)) {
       if (!guests[loc]) continue;
       if (!S.guests[loc]) S.guests[loc] = {};
       for (const day of Object.keys(guests[loc])) {
@@ -994,6 +1008,15 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
     changed = true;
   }
 
+  // Event-location registry (full-replace — the table is tiny, the server
+  // broadcasts the whole fresh list on every registry write). Feeds demand
+  // via event-window clamps and the planner tab bar, so rebuild + rerender.
+  if (eventLocations) {
+    setEventLocationsState(eventLocations);
+    if (_onRegistryChanged) _onRegistryChanged();
+    changed = true;
+  }
+
   // Prep checklist (only apply if the patch is for today's date)
   if (prepChecklist && prepChecklist.date === todayIso()) {
     S.prepChecklist[prepChecklist.loc] = new Set(prepChecklist.checked);
@@ -1072,6 +1095,7 @@ export function applyRemotePatch(msg: RemotePatchMessage): void {
       || ingredients || deletedIngredients
       || guestsNextWeeks
       || closedServices
+      || eventLocations // event-window clamps feed getGuests; tab bar/pickers rerender
       || costTargets); // reservePercent feeds the allocation cache (reserveFactor)
     if (needsPlanner) rebuildPlanner();
     rerenderCurrentView();
@@ -1107,7 +1131,10 @@ function updateSnapshotForRemote(msg: RemotePatchMessage): void {
   }
   if (msg.guests) {
     const snapshotGuests = JSON.parse(_lastSaved.guests);
-    for (const loc of ['west', 'centraal']) {
+    // Mirror applyRemotePatch: iterate the payload's own keys. Merging only
+    // west/centraal here while S.guests gained an event key left a permanent
+    // phantom diff — the client re-sent the whole guests object on every save.
+    for (const loc of Object.keys(msg.guests)) {
       if (!msg.guests[loc]) continue;
       if (!snapshotGuests[loc]) snapshotGuests[loc] = {};
       for (const day of Object.keys(msg.guests[loc])) {
@@ -1152,7 +1179,9 @@ export async function loadInventoryCompletions(): Promise<void> {
   try {
     const data = await apiGet('/api/inventory-completions/latest');
     if (data && typeof data === 'object') {
-      for (const loc of ['west', 'centraal'] as const) {
+      // Server scaffolds permanent + active event locations — mirror its keys
+      // so an event location's freshness counter works on its own dashboard.
+      for (const loc of Object.keys(data)) {
         const slot = data[loc] || {};
         S.inventoryCompletions[loc] = {
           lunch: typeof slot.lunch === 'string' ? slot.lunch : null,
@@ -1223,7 +1252,11 @@ export function schedulePrepSave(loc: string): void {
 /** Hydrate S.ritualCompletions for both locations from today's rows. */
 export async function loadRitualCompletions(): Promise<void> {
   const date = todayIso();
-  await Promise.all((['west', 'centraal'] as const).map(async (loc) => {
+  // All active locations, not just the permanent pair: at an event location
+  // a west/centraal-only hydration left the Today panel unticked after every
+  // reload, and the next manual tick wholesale-overwrote the server row —
+  // erasing the location's saved ritual steps for every device.
+  await Promise.all(allActiveLocations().map(async (loc) => {
     try {
       const data = await apiGet(`/api/ritual-completions?loc=${loc}&date=${date}`);
       S.ritualCompletions[loc] = new Set(Array.isArray(data) ? data : []);

@@ -3,6 +3,12 @@ import { loginAsDev } from './helpers';
 
 const TEST_FEEDBACK_PREFIX = 'e2e-test-feedback-';
 
+// Every step round-trips the remote staging DB (login alone is ~10s on a
+// residential connection), and the body + cleanup hooks share one budget —
+// the default 30s times out in the afterEach on slow links while CI's
+// faster network sails through. Give this spec headroom.
+test.setTimeout(60_000);
+
 test.describe('Feedback submit', () => {
   // The /api/feedback API has no DELETE endpoint — only POST and PATCH for
   // marking processed. After the test, mark our feedback as processed so it
