@@ -381,6 +381,239 @@ export function effectivePackRows(): TransportRow[] {
   return computeTransportPlan(_mode, S.batches);
 }
 
+// ── Pack for an event location ───────────────────────────────────────────
+//
+// A festival is packed a WHOLE DAY at a time — one delivery run covers that
+// day's lunch + dinner. That differs from Centraal's rolling "next 3 service
+// slots" (and bulk-mode consolidation), so this is its own function rather
+// than a parameterization of computeTransportPlan, which stays exactly the
+// Centraal path. Source is always West: hub-and-spoke means only West ships
+// to an event location.
+//
+// Netting mirrors Centraal: demand at the destination minus what is already
+// there (serveable) and already on its way (pending shipments), deduped by
+// dish identity so two West batches of the same dish don't both claim the
+// same pile.
+
+/** Every ISO date inside an event location's window, for the day picker. */
+export function eventPackDates(toLoc: string): string[] {
+  const ev = S.eventLocations.find(e => e.slug === toLoc);
+  if (!ev) return [];
+  const out: string[] = [];
+  const d = new Date(ev.startDate + 'T12:00:00');
+  const end = new Date(ev.endDate + 'T12:00:00');
+  while (d.getTime() <= end.getTime()) {
+    out.push(dateToIso(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+
+/** Default pack day: tomorrow (West ships to an event next-morning), clamped
+ *  into the event window — before it starts pack the first day, after it ends
+ *  fall back to the last day. */
+export function defaultEventPackDate(toLoc: string, now: Date = getToday()): string {
+  const dates = eventPackDates(toLoc);
+  if (dates.length === 0) return dateToIso(now);
+  const t = new Date(now);
+  t.setDate(t.getDate() + 1);
+  const tomorrow = dateToIso(t);
+  if (dates.includes(tomorrow)) return tomorrow;
+  const future = dates.find(d => d >= tomorrow);
+  return future || dates[dates.length - 1];
+}
+
+/** Rows to pack at West for `toLoc` on `dateIso` (that day's lunch + dinner).
+ *  Requires a prior rebuildPlanner() — calcRequiredAtService reads the
+ *  family-allocation cache. Pure + exported for unit testing. */
+export function computeEventPackPlan(batches: Batch[], toLoc: string, dateIso: string): TransportRow[] {
+  interface Accum { batch: Batch; demand: number; services: Array<{ date: string; meal: string }> }
+  const acc: Accum[] = [];
+
+  for (const b of batches) {
+    if (getStockAt(b, 'west') <= 0) continue;   // only West stock is packable
+    if (!isBatchCooked(b)) continue;
+    let demand = 0;
+    const svcs: Array<{ date: string; meal: string }> = [];
+    for (const svc of b.services || []) {
+      if (svc.loc !== toLoc) continue;
+      if (svc.date !== dateIso) continue;
+      if (isServicePast(svc)) continue;
+      const liters = calcRequiredAtService(b, svc);
+      if (liters <= 0) continue;
+      demand += liters;
+      svcs.push({ date: svc.date, meal: svc.meal });
+    }
+    if (demand > 0) acc.push({ batch: b, demand, services: svcs });
+  }
+
+  const destStockByIdentity = new Map<string, number>();
+  for (const b of batches) {
+    if (!isBatchCooked(b)) continue;
+    const settled = getServeableStockAt(b, toLoc);
+    const inFlight = getPendingFromShipments(b, toLoc);
+    if (settled + inFlight <= 0) continue;
+    const key = dishIdentity(b);
+    destStockByIdentity.set(key, (destStockByIdentity.get(key) || 0) + settled + inFlight);
+  }
+
+  const rows: TransportRow[] = [];
+  const usedByIdentity = new Map<string, number>();
+  for (const a of acc) {
+    const identity = dishIdentity(a.batch);
+    const total = destStockByIdentity.get(identity) || 0;
+    const already = usedByIdentity.get(identity) || 0;
+    const available = Math.max(0, total - already);
+    const consumed = Math.min(available, a.demand);
+    // Reserve the destination pile BEFORE the sendQty<=0 early-out, so a dish
+    // already fully covered on site doesn't leave its pile claimable by a
+    // later row of the same dish.
+    usedByIdentity.set(identity, already + consumed);
+    const netDemand = Math.max(0, a.demand - available);
+    const sendQty = Math.min(roundUpPack(netDemand), getStockAt(a.batch, 'west'));
+    if (sendQty <= 0) continue;
+    rows.push({
+      batchId: a.batch.id,
+      name: a.batch.name,
+      type: a.batch.type,
+      totalDemand: round1(a.demand),
+      destStock: round1(consumed),
+      sendQty: round1(sendQty),
+      services: [...a.services].sort(compareSlots),
+      future: false,
+    });
+  }
+
+  const typeOrder: Record<string, number> = { 'Soup': 0, 'Main course': 1, 'Dessert': 2 };
+  rows.sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9) || a.name.localeCompare(b.name));
+  return rows;
+}
+
+// ── "Pack for <event>" card (West dashboard) ─────────────────────────────
+
+// Chosen pack day per event slug. Module-local + non-persisted, like _mode.
+const _eventPackDay: Record<string, string> = {};
+
+export function eventPackDay(toLoc: string): string {
+  if (!_eventPackDay[toLoc]) _eventPackDay[toLoc] = defaultEventPackDate(toLoc);
+  return _eventPackDay[toLoc];
+}
+
+/** Day-picker onchange. Ignores anything outside the event window. */
+export function setEventPackDay(toLoc: string, dateIso: string): void {
+  if (!eventPackDates(toLoc).includes(dateIso)) return;
+  _eventPackDay[toLoc] = dateIso;
+  rerenderCurrentView();
+}
+
+function packDayLabel(iso: string): string {
+  const d = new Date(iso + 'T12:00:00');
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+function eventPackRowHtml(r: TransportRow): string {
+  const b = S.batches.find(x => x.id === r.batchId);
+  const avail = b ? round1(getStockAt(b, 'west')) : 0;
+  const meals = r.services.map(s => (s.meal === 'lunch' ? '☀️' : '🌙')).join('');
+  const already = r.destStock > 0 ? ` · ${r.destStock} L already there` : '';
+  return `<div class="pack-edit-row">
+    <div class="pack-edit-name">${esc(r.name)} ${meals}
+      <span class="pack-edit-avail">needs ${r.totalDemand} L${already} · ${avail} L at West</span>
+    </div>
+    <div class="pack-edit-qty">
+      <input type="number" min="0" step="0.5" max="${avail}" value="${r.sendQty}"
+        data-event-pack-qty="${esc(r.batchId)}" class="re-inline-input re-inline-num" style="width:80px;" />
+      <span>L</span>
+    </div>
+  </div>`;
+}
+
+function renderOneEventPackCard(slug: string, name: string): string {
+  const dates = eventPackDates(slug);
+  if (dates.length === 0) return '';
+  const day = eventPackDay(slug);
+  const rows = computeEventPackPlan(S.batches, slug, day);
+  const total = round1(rows.reduce((s, r) => s + r.sendQty, 0));
+
+  const dayPicker = `<select class="re-inline-input" style="margin-left:auto;max-width:180px;"
+      onchange="setEventPackDay('${esc(slug)}',this.value)" data-testid="event-pack-day">
+      ${dates.map(d => `<option value="${d}"${d === day ? ' selected' : ''}>${esc(packDayLabel(d))}</option>`).join('')}
+    </select>`;
+
+  const handBtn = `<button class="btn btn-sm tcard-edit" onclick="openManualShipModal('${esc(slug)}')" title="Pack dishes by hand instead">✏️ Pack by hand</button>`;
+
+  const body = rows.length === 0
+    ? `<div class="tcard-empty">Nothing to pack for ${esc(packDayLabel(day))} — either no dishes are assigned to that day's slots yet, or it's all on site already. ${handBtn}</div>`
+    : `<div class="pack-edit-list">${rows.map(eventPackRowHtml).join('')}</div>
+       <div class="tcard-footer">
+         <div class="tcard-total"><span class="tcard-total-label">Total to pack</span> <span class="tcard-total-qty">${total} L</span></div>
+         <div class="tcard-actions">
+           ${handBtn}
+           <button class="btn btn-primary tcard-confirm" data-testid="event-pack-confirm"
+             onclick="confirmEventPack('${esc(slug)}')">Food is packed for ${esc(name)}</button>
+         </div>
+       </div>`;
+
+  return `<div class="dash-card tcard" data-event-pack="${esc(slug)}">
+    <div class="dash-card-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span class="dash-card-icon">🎪</span> Pack for ${esc(name)}
+      ${dayPicker}
+    </div>
+    ${body}
+  </div>`;
+}
+
+/** "Pack for <event>" cards — one per ACTIVE event location, on the West
+ *  dashboard beside Pack for Centraal (you're standing at West when you pack,
+ *  and hub-and-spoke means West is always the source). Returns '' anywhere
+ *  else, and when there are no active events. */
+export function renderEventPackCards(): string {
+  if (S.currentLoc !== 'west') return '';
+  const events = S.eventLocations.filter(e => !e.archived);
+  if (events.length === 0) return '';
+  // calcRequiredAtService reads the family-allocation cache — same contract as
+  // renderTransportCard, which rebuilds defensively before computing.
+  rebuildPlanner();
+  return events.map(ev => renderOneEventPackCard(ev.slug, ev.name)).join('');
+}
+
+// /ship pack-accumulates into a matching pending shipment, so a double-click
+// would DOUBLE the shipment rather than be a no-op. Guard the in-flight send.
+let _eventPackBusy = false;
+
+/** Ship the (possibly hand-adjusted) pack list for one event location. */
+export async function confirmEventPack(toLoc: string): Promise<void> {
+  if (S.currentLoc !== 'west') return;
+  if (_eventPackBusy) return;
+
+  const card = document.querySelector(`[data-event-pack="${toLoc}"]`);
+  if (!card) return;
+  const rows: Array<{ batchId: string; qty: number }> = [];
+  card.querySelectorAll('[data-event-pack-qty]').forEach(el => {
+    const input = el as HTMLInputElement;
+    const id = input.getAttribute('data-event-pack-qty');
+    const v = parseFloat(input.value);
+    if (id && v && v > 0) rows.push({ batchId: id, qty: Math.round(v * 10) / 10 });
+  });
+  if (rows.length === 0) { toast('Nothing to pack'); return; }
+
+  _eventPackBusy = true;
+  trackEvent('event_pack_confirmed', toLoc, { rowCount: rows.length, day: eventPackDay(toLoc) });
+  try {
+    const { okCount, failCount, cappedCount } = await shipRowsFrom('west', toLoc, rows);
+    if (failCount > 0) {
+      toastError(`${okCount > 0 ? `Sent ${okCount}, but ` : ''}${failCount} batch${failCount > 1 ? 'es' : ''} could not be sent — refresh and check the Transport tab before retrying.`);
+    } else if (okCount > 0) {
+      const cappedNote = cappedCount > 0 ? ' (some capped to available)' : '';
+      toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for ${locName(toLoc)}${cappedNote}`);
+    }
+  } finally {
+    _eventPackBusy = false;
+  }
+  rebuildPlanner();
+  rerenderCurrentView();
+}
+
 /** Count batches that *would* be in the lean plan if they were cooked —
  *  i.e. they have a Centraal service in the next-3-slot horizon and
  *  `isBatchCooked` is currently false.
@@ -962,24 +1195,20 @@ export function openManualShipModal(toLoc: string, fromLoc: string = 'west'): vo
     </div>`);
 }
 
-/** Confirm the manual-ship modal: per batch, ship per source inventory entry
- *  (largest first) with an explicit fromInventoryIdx. /ship reduces entry qty
- *  in place (no splice), so indexes captured up front stay valid across the
- *  sequential POSTs. Per-row failures don't abort the loop. */
-export async function confirmManualShip(): Promise<void> {
-  if (!_manualShip) return;
-  const { fromLoc, toLoc } = _manualShip;
-  const rows: { batchId: string; qty: number }[] = [];
-  document.querySelectorAll('[data-manual-ship]').forEach(el => {
-    const input = el as HTMLInputElement;
-    const id = input.getAttribute('data-manual-ship');
-    const v = parseFloat(input.value);
-    if (id && v && v > 0) rows.push({ batchId: id, qty: Math.round(v * 10) / 10 });
-  });
-  if (rows.length === 0) { toast('Nothing to send'); return; }
-  closeModal();
-  trackEvent('manual_ship_confirmed', toLoc, { rowCount: rows.length, fromLoc });
-
+/** Ship {batchId, qty} rows from `fromLoc` to `toLoc`, splitting each row over
+ *  that batch's source inventory entries (largest first) with an EXPLICIT
+ *  fromInventoryIdx and each entry's REAL storage. Both matter: /ship's
+ *  auto-pick is "first entry whose loc ≠ toLoc", which for a batch holding
+ *  stock at several sites can drain the wrong one, and a hardcoded storage
+ *  400s when the stock is Frozen. /ship reduces entry qty in place (no splice),
+ *  so indexes captured up front stay valid across the sequential POSTs.
+ *  Per-row failures don't abort the loop. Shared by the manual-ship modal and
+ *  the event pack card. */
+async function shipRowsFrom(
+  fromLoc: string,
+  toLoc: string,
+  rows: Array<{ batchId: string; qty: number }>,
+): Promise<{ okCount: number; failCount: number; cappedCount: number }> {
   let okCount = 0;
   let failCount = 0;
   let cappedCount = 0;
@@ -1006,16 +1235,35 @@ export async function confirmManualShip(): Promise<void> {
         remaining = Math.round((remaining - sendQty) * 10) / 10;
         sentAny = true;
       }
-      // A row that issued NO POST (stale modal — stock changed under us)
-      // must not count as sent: the cook typed litres expecting them shipped.
+      // A row that issued NO POST (stale view — stock changed under us) must
+      // not count as sent: the cook expected those litres to ship.
       if (sentAny) okCount++; else failCount++;
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown error';
-      console.error('manual ship failed for batch', row.batchId, message);
+      console.error('ship failed for batch', row.batchId, message);
       if (sentAny) okCount++; // partial: some litres of this row did ship
       failCount++;
     }
   }
+  return { okCount, failCount, cappedCount };
+}
+
+/** Confirm the manual-ship modal — delegates to shipRowsFrom. */
+export async function confirmManualShip(): Promise<void> {
+  if (!_manualShip) return;
+  const { fromLoc, toLoc } = _manualShip;
+  const rows: { batchId: string; qty: number }[] = [];
+  document.querySelectorAll('[data-manual-ship]').forEach(el => {
+    const input = el as HTMLInputElement;
+    const id = input.getAttribute('data-manual-ship');
+    const v = parseFloat(input.value);
+    if (id && v && v > 0) rows.push({ batchId: id, qty: Math.round(v * 10) / 10 });
+  });
+  if (rows.length === 0) { toast('Nothing to send'); return; }
+  closeModal();
+  trackEvent('manual_ship_confirmed', toLoc, { rowCount: rows.length, fromLoc });
+
+  const { okCount, failCount, cappedCount } = await shipRowsFrom(fromLoc, toLoc, rows);
   _manualShip = null;
   if (failCount > 0) {
     toastError(`${okCount > 0 ? `Sent ${okCount}, but ` : ''}${failCount} batch${failCount > 1 ? 'es' : ''} could not be sent — refresh and check the Transport tab before retrying.`);

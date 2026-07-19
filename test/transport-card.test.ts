@@ -42,6 +42,9 @@ import {
   roundUpPack,
   pendingArrivalsFor,
   pendingCentraalArrivals,
+  computeEventPackPlan,
+  eventPackDates,
+  defaultEventPackDate,
 } from '../public/js/transport-card';
 import { recomputeBatchAllocations } from '../public/js/core';
 import { S } from '../public/js/state';
@@ -749,5 +752,188 @@ describe('pendingArrivalsFor', () => {
   it('pendingCentraalArrivals stays a Centraal-scoped wrapper', () => {
     const batches = [makeBatch({ type: 'Soup', id: 'b1', shipments: [ship('centraal', 7), ship(EV, 9)] })];
     expect(pendingCentraalArrivals(batches).liters).toBe(7);
+  });
+});
+
+// ── Pack for an event location (whole-day festival pack) ────────────────────
+
+describe('computeEventPackPlan', () => {
+  const EV = 'ev-fest-2026';
+  const DAY = '2026-05-04';      // Monday, inside the window, future vs pinned clock
+  const OTHER_DAY = '2026-05-05';
+
+  beforeEach(() => {
+    S.eventLocations = [{
+      slug: EV, name: 'Fest 2026', startDate: '2026-05-02', endDate: '2026-05-10',
+      hanosAccount: 'west', archived: false, createdAt: '2026-05-01T00:00:00.000Z', archivedAt: null,
+    }] as any;
+    (S.guests as any)[EV] = {
+      Mon:{lunch:100,dinner:200}, Tue:{lunch:100,dinner:200}, Wed:{lunch:100,dinner:200},
+      Thu:{lunch:100,dinner:200}, Fri:{lunch:100,dinner:200}, Sat:{lunch:100,dinner:200},
+      Sun:{lunch:100,dinner:200},
+    };
+  });
+
+  test('a cooked West batch serving the event that day is packable', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(500, 'west')],
+      services: [{ loc: EV, date: DAY, meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    const plan = computeEventPackPlan([b], EV, DAY);
+    expect(plan).toHaveLength(1);
+    expect(plan[0].batchId).toBe(b.id);
+    expect(plan[0].totalDemand).toBeGreaterThan(0);
+    expect(plan[0].sendQty).toBeGreaterThan(0);
+  });
+
+  test('covers BOTH meals of the chosen day', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(500, 'west')],
+      services: [{ loc: EV, date: DAY, meal: 'lunch' }, { loc: EV, date: DAY, meal: 'dinner' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    const plan = computeEventPackPlan([b], EV, DAY);
+    expect(plan[0].services.map(s => s.meal)).toEqual(['lunch', 'dinner']);
+  });
+
+  test('services on a DIFFERENT day are excluded (whole-day scoping)', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(500, 'west')],
+      services: [{ loc: EV, date: OTHER_DAY, meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    expect(computeEventPackPlan([b], EV, DAY)).toEqual([]);
+    expect(computeEventPackPlan([b], EV, OTHER_DAY)).toHaveLength(1);
+  });
+
+  test('Centraal services never leak into an event pack', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(500, 'west')],
+      services: [{ loc: 'centraal', date: DAY, meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    expect(computeEventPackPlan([b], EV, DAY)).toEqual([]);
+  });
+
+  test('only WEST stock is packable — event-held stock is not a source', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(500, EV)],   // all of it already on site, none at West
+      services: [{ loc: EV, date: DAY, meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    expect(computeEventPackPlan([b], EV, DAY)).toEqual([]);
+  });
+
+  test('stock already at the event reduces what to pack', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(500, 'west'), inv(10, EV)],
+      services: [{ loc: EV, date: DAY, meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    const plan = computeEventPackPlan([b], EV, DAY);
+    expect(plan).toHaveLength(1);
+    expect(plan[0].destStock).toBeGreaterThan(0);
+    expect(plan[0].sendQty).toBeLessThan(plan[0].totalDemand);
+  });
+
+  test('in-flight shipment to the event also reduces what to pack', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(500, 'west')],
+      shipments: [ship(10, EV, 'west')],   // pending, not arrived
+      services: [{ loc: EV, date: DAY, meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    const plan = computeEventPackPlan([b], EV, DAY);
+    expect(plan[0].destStock).toBe(10);
+  });
+
+  test('demand fully covered on site → row drops out', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(500, 'west'), inv(5000, EV)],
+      services: [{ loc: EV, date: DAY, meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    expect(computeEventPackPlan([b], EV, DAY)).toEqual([]);
+  });
+
+  test('two West batches of the same dish do not double-consume one event pile', () => {
+    const a = makeBatch({
+      type: 'Soup', name: 'Tomato', inventory: [inv(500, 'west')],
+      services: [{ loc: EV, date: DAY, meal: 'lunch' }],
+    });
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato', inventory: [inv(500, 'west')],
+      services: [{ loc: EV, date: DAY, meal: 'dinner' }],
+    });
+    const onSite = makeBatch({ type: 'Soup', name: 'Tomato', inventory: [inv(12, EV)] });
+    rebuildPlannerFromBatches([a, b, onSite]);
+    const plan = computeEventPackPlan([a, b, onSite], EV, DAY);
+    const totalSubtracted = plan.reduce((s, r) => s + r.destStock, 0);
+    expect(totalSubtracted).toBeLessThanOrEqual(12 + 0.1);
+  });
+
+  test('sendQty is capped at the available West stock', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato',
+      inventory: [inv(4, 'west')],   // far less than the day's demand
+      services: [{ loc: EV, date: DAY, meal: 'lunch' }, { loc: EV, date: DAY, meal: 'dinner' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    const plan = computeEventPackPlan([b], EV, DAY);
+    expect(plan[0].sendQty).toBeLessThanOrEqual(4);
+  });
+
+  test('an uncooked batch is not packable', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Tomato', cookDate: null,
+      inventory: [], shipments: [],
+      services: [{ loc: EV, date: DAY, meal: 'lunch' }],
+    });
+    rebuildPlannerFromBatches([b]);
+    expect(computeEventPackPlan([b], EV, DAY)).toEqual([]);
+  });
+});
+
+describe('eventPackDates / defaultEventPackDate', () => {
+  const EV = 'ev-fest-2026';
+  const setWindow = (startDate: string, endDate: string) => {
+    S.eventLocations = [{
+      slug: EV, name: 'Fest', startDate, endDate,
+      hanosAccount: 'west', archived: false, createdAt: '2026-05-01T00:00:00.000Z', archivedAt: null,
+    }] as any;
+  };
+
+  test('enumerates every day in the window inclusive', () => {
+    setWindow('2026-05-02', '2026-05-05');
+    expect(eventPackDates(EV)).toEqual(['2026-05-02', '2026-05-03', '2026-05-04', '2026-05-05']);
+  });
+
+  test('unknown location → no dates', () => {
+    setWindow('2026-05-02', '2026-05-05');
+    expect(eventPackDates('ev-nope')).toEqual([]);
+  });
+
+  test('defaults to tomorrow when tomorrow is inside the window', () => {
+    setWindow('2026-05-02', '2026-05-10');   // clock pinned to 2026-05-01
+    expect(defaultEventPackDate(EV)).toBe('2026-05-02');
+  });
+
+  test('before the event starts → first day', () => {
+    setWindow('2026-06-01', '2026-06-10');
+    expect(defaultEventPackDate(EV)).toBe('2026-06-01');
+  });
+
+  test('after the event ends → last day', () => {
+    setWindow('2026-04-10', '2026-04-20');
+    expect(defaultEventPackDate(EV)).toBe('2026-04-20');
   });
 });

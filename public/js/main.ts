@@ -30,7 +30,7 @@ import { executeUndo, flushUndo } from './undo';
 import { fixMyMenu, openKitchenEquipmentModal, keqAddPotFromInput, keqRemovePot, keqUpdateBurners, keqSave, fixMenuGoto, fixMenuAction, openCookRhythmModal, crUpdateField, crToggleClosed, crResetDefaults, crSave } from './menu-fixer';
 import { openAlarmBoard } from './alarm-board';
 import { toggleRitualStep, toggleRitualWhy, ritualScrollToArrivals } from './today-panel';
-import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals, confirmArrivals, openPackEditor, savePackEditor, resetPackEditor, openManualShipModal, openManualShipSelect, confirmManualShip } from './transport-card';
+import { setTransportMode, confirmTransportPlan, confirmCentraalArrivals, confirmArrivals, openPackEditor, savePackEditor, resetPackEditor, openManualShipModal, openManualShipSelect, confirmManualShip, setEventPackDay, confirmEventPack } from './transport-card';
 import { renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent } from './competencies';
 import { approveAccess, denyAccess, revokeAccess, editAccessName, saveAccessName, assignUserRole, roleSetLevel, roleSetDefault, roleCreate, saveNewRole, roleRename, saveRoleName, roleDelete, confirmRoleDelete, duplicateRole, evlocCreate, saveNewEventLocation, evlocArchive, confirmEvlocArchive, evlocUnarchive } from './team';
 import { openCostTargets, saveCostTargetsForm, ctRecalcTotal, setReservePercent } from './cost';
@@ -138,6 +138,7 @@ Object.assign(window, {
   // transport-card
   setTransportMode, confirmTransportPlan, confirmCentraalArrivals, confirmArrivals, openPackEditor, savePackEditor, resetPackEditor,
   openManualShipModal, openManualShipSelect, confirmManualShip,
+  setEventPackDay, confirmEventPack,
 
   // competencies
   renderCompetencies, openCompLogModal, selectCompTeacher, submitCompLog, openCompAddPerson, submitCompAddPerson, setCompStationFilter, openCompPerson, compBackToGrid, openCompChunk, openCompAdmin, compSyncNotion, compRenamePerson, submitCompRename, compTogglePersonActive, compDeleteEvent, confirmCompDeleteEvent,
