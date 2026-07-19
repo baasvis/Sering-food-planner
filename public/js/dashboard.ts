@@ -17,7 +17,7 @@ import { trackScreenView } from './telemetry';
 import { showModal, closeModal } from './modal';
 import { getStorageConfigForLoc } from './state';
 import { locName } from '@shared/location';
-import { renderTransportCard, renderArrivalBlock } from './transport-card';
+import { renderTransportCard, renderArrivalBlock, renderEventPackCards } from './transport-card';
 import { renderTodayPanel } from './today-panel';
 import { openBatchRecipe } from './recipe-editor';
 import { computeSupplyDemand, supplyPricePerGuest } from '@shared/supply-demand';
@@ -1175,6 +1175,7 @@ export function renderDashboardContent() {
         </div>
         ${renderSuppliesCard(loc, todayStr)}
         ${renderTransportCard()}
+        ${renderEventPackCards()}
       </div>
 
       <!-- RIGHT: CHEF TO-DOS -->
