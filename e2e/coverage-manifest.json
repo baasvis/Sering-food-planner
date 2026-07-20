@@ -63,5 +63,9 @@
   ],
   "test/orders-export.test.ts": [
     "order_export_excel"
+  ],
+  "transport-card.spec.ts": [
+    "transport_card_shown",
+    "transport_card_mode_toggled"
   ]
 }
