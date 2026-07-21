@@ -499,10 +499,17 @@ export function eventPackDay(toLoc: string): string {
   return _eventPackDay[toLoc];
 }
 
+// What was last packed for each event, so a successful send stays VISIBLE on
+// the card. Without this the row correctly disappears and the card falls back
+// to "Nothing to pack", which reads as "the button did nothing" — and invites
+// a second click that /ship would pack-accumulate into a doubled shipment.
+const _eventPackJustSent: Record<string, { batches: number; liters: number; day: string }> = {};
+
 /** Day-picker onchange. Ignores anything outside the event window. */
 export function setEventPackDay(toLoc: string, dateIso: string): void {
   if (!eventPackDates(toLoc).includes(dateIso)) return;
   _eventPackDay[toLoc] = dateIso;
+  delete _eventPackJustSent[toLoc]; // the confirmation belongs to the old day
   rerenderCurrentView();
 }
 
@@ -542,9 +549,17 @@ function renderOneEventPackCard(slug: string, name: string): string {
 
   const handBtn = `<button class="btn btn-sm tcard-edit" onclick="openManualShipModal('${esc(slug)}')" title="Pack dishes by hand instead">✏️ Pack by hand</button>`;
 
+  // A successful pack must stay on screen: the packed rows drop out of the
+  // plan (they're now in flight), so without this the card would just say
+  // "nothing to pack" and the send would look like it never happened.
+  const sent = _eventPackJustSent[slug];
+  const sentNote = sent && sent.day === day
+    ? `<div class="tcard-edited-note" style="color:var(--green,#2e7d32);">✓ Packed ${sent.batches} dish${sent.batches > 1 ? 'es' : ''} — ${sent.liters} L on its way to ${esc(name)}. Confirm arrival on their dashboard.</div>`
+    : '';
+
   const body = rows.length === 0
-    ? `<div class="tcard-empty">Nothing to pack for ${esc(packDayLabel(day))} — either no dishes are assigned to that day's slots yet, or it's all on site already. ${handBtn}</div>`
-    : `<div class="pack-edit-list">${rows.map(eventPackRowHtml).join('')}</div>
+    ? `<div class="tcard-empty">${sentNote}Nothing left to pack for ${esc(packDayLabel(day))} — either no dishes are assigned to that day's slots yet, or it's all sent or on site already. ${handBtn}</div>`
+    : `${sentNote}<div class="pack-edit-list">${rows.map(eventPackRowHtml).join('')}</div>
        <div class="tcard-footer">
          <div class="tcard-total"><span class="tcard-total-label">Total to pack</span> <span class="tcard-total-qty">${total} L</span></div>
          <div class="tcard-actions">
@@ -583,30 +598,52 @@ let _eventPackBusy = false;
 
 /** Ship the (possibly hand-adjusted) pack list for one event location. */
 export async function confirmEventPack(toLoc: string): Promise<void> {
-  if (S.currentLoc !== 'west') return;
-  if (_eventPackBusy) return;
+  // NEVER fail silently. A button that does nothing, with no feedback, reads as
+  // broken — every bail-out below says why instead of returning quietly.
+  if (_eventPackBusy) { toast('Still sending the last pack — one moment.'); return; }
+  if (S.currentLoc !== 'west') {
+    toastError(`Switch to ${locName('west')} to pack — food ships from West.`);
+    return;
+  }
 
   const card = document.querySelector(`[data-event-pack="${toLoc}"]`);
-  if (!card) return;
+  if (!card) { toastError('That pack list is no longer on screen — refresh and try again.'); return; }
+
   const rows: Array<{ batchId: string; qty: number }> = [];
   card.querySelectorAll('[data-event-pack-qty]').forEach(el => {
     const input = el as HTMLInputElement;
     const id = input.getAttribute('data-event-pack-qty');
     const v = parseFloat(input.value);
-    if (id && v && v > 0) rows.push({ batchId: id, qty: Math.round(v * 10) / 10 });
+    if (id && v > 0) rows.push({ batchId: id, qty: Math.round(v * 10) / 10 });
   });
-  if (rows.length === 0) { toast('Nothing to pack'); return; }
+  if (rows.length === 0) { toast('Nothing to pack — set litres on at least one dish first.'); return; }
 
+  // Set the guard and do EVERYTHING else inside the try: a throw between the
+  // flag and the try (telemetry, a helper) would strand it true and wedge the
+  // button until a page reload — an invisible "it just stopped working".
   _eventPackBusy = true;
-  trackEvent('event_pack_confirmed', toLoc, { rowCount: rows.length, day: eventPackDay(toLoc) });
+  // Immediate acknowledgement: the POSTs take a moment, and an unchanged
+  // button reads as "nothing happened" — which invites a second click that
+  // /ship would pack-accumulate into a doubled shipment. The closing
+  // rerenderCurrentView() rebuilds the button, so this needs no undo.
+  const btn = card.querySelector('[data-testid="event-pack-confirm"]') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
   try {
-    const { okCount, failCount, cappedCount } = await shipRowsFrom('west', toLoc, rows);
+    trackEvent('event_pack_confirmed', toLoc, { rowCount: rows.length, day: eventPackDay(toLoc) });
+    const { okCount, failCount, cappedCount, sentLiters } = await shipRowsFrom('west', toLoc, rows);
+    if (okCount > 0) {
+      _eventPackJustSent[toLoc] = { batches: okCount, liters: sentLiters, day: eventPackDay(toLoc) };
+    }
     if (failCount > 0) {
       toastError(`${okCount > 0 ? `Sent ${okCount}, but ` : ''}${failCount} batch${failCount > 1 ? 'es' : ''} could not be sent — refresh and check the Transport tab before retrying.`);
     } else if (okCount > 0) {
       const cappedNote = cappedCount > 0 ? ' (some capped to available)' : '';
-      toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} for ${locName(toLoc)}${cappedNote}`);
+      toast(`Packed ${okCount} batch${okCount > 1 ? 'es' : ''} — ${sentLiters} L on its way to ${locName(toLoc)}${cappedNote}`);
     }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    console.error('event pack failed', msg);
+    toastError('Packing failed: ' + msg);
   } finally {
     _eventPackBusy = false;
   }
@@ -1208,10 +1245,11 @@ async function shipRowsFrom(
   fromLoc: string,
   toLoc: string,
   rows: Array<{ batchId: string; qty: number }>,
-): Promise<{ okCount: number; failCount: number; cappedCount: number }> {
+): Promise<{ okCount: number; failCount: number; cappedCount: number; sentLiters: number }> {
   let okCount = 0;
   let failCount = 0;
   let cappedCount = 0;
+  let sentLiters = 0;
   for (const row of rows) {
     let sentAny = false;
     try {
@@ -1232,6 +1270,7 @@ async function shipRowsFrom(
           if (bidx >= 0) S.batches[bidx] = res.batch;
         }
         if (res && res.warning) cappedCount++;
+        sentLiters = Math.round((sentLiters + sendQty) * 10) / 10;
         remaining = Math.round((remaining - sendQty) * 10) / 10;
         sentAny = true;
       }
@@ -1245,7 +1284,7 @@ async function shipRowsFrom(
       failCount++;
     }
   }
-  return { okCount, failCount, cappedCount };
+  return { okCount, failCount, cappedCount, sentLiters };
 }
 
 /** Confirm the manual-ship modal — delegates to shipRowsFrom. */
