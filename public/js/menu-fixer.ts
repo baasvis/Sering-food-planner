@@ -21,6 +21,7 @@ import {
   getServeableStockAt, getServeableTotalStock, getServeablePendingTo, westReachesCentraal, westReaches,
   getPendingFromShipments,
   consolidateInventory,
+  batchCookLoc,
 } from './core';
 import { rerenderCurrentView } from './navigate';
 import { showModal, closeModal, esc } from './modal';
@@ -138,6 +139,12 @@ export function snapshotBatches(batches: Batch[], window: PlanDay[]): BatchSnaps
   for (const b of batches) {
     if (!TYPES_TO_PLAN.includes(b.type)) continue;            // skip Desserts entirely
     if (!b.cookDate) continue;                                // unscheduled, ignore
+    // Event-cooked dishes are NOT part of the restaurant plan: they must not
+    // fill a West rhythm slot (suppressing a placeholder West really needs),
+    // consume a West pot in allocatePotCaps, or enter the assignment window
+    // (Daan 2026-07-21: festival dishes aren't Fix My Menu's to use). With no
+    // event locations this check is always false — bench unchanged.
+    if (isEventLoc(batchCookLoc(b))) continue;
     const bucket = cookEventsByCookDate.get(b.cookDate);
     if (!bucket) continue;                                    // outside window
     bucket[b.type as 'Soup' | 'Main course'].push(b);
@@ -458,7 +465,16 @@ function diffDaysIso(aIso: string, bIso: string): number {
  * inventory placeholders (default cook location).
  */
 function primaryLoc(b: Batch): Location {
-  return (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west');
+  // Shared core.ts cook-location rule. Differs from the old inline version in
+  // ONE event-gated case: an UNCOOKED batch whose services are all at a single
+  // event location resolves to that event, not 'west' — so isServableBy's
+  // event rules exclude it from every west/centraal slot and Fix My Menu never
+  // drafts a festival dish into the restaurant rotation (Daan 2026-07-21:
+  // "dishes cooked at landjuweel also shouldnt be used for fix my menu").
+  // Emergency batches carry a 0-qty inventory entry, so they keep resolving to
+  // their slot's loc; with no event locations this is byte-identical to the
+  // old rule (fmm-bench unaffected).
+  return batchCookLoc(b);
 }
 
 /** Distinct event-location slugs this batch touches — via a service, settled

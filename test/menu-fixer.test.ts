@@ -1638,6 +1638,52 @@ describe('event-location exclusion guards', () => {
     }
   });
 
+  test('snapshotBatches excludes event-cooked dishes (they are not FMM\'s to use)', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }, // rhythm 1+1
+    ]);
+    // Uncooked, services all at the festival → cooked on-site → excluded.
+    const festivalOnly = makeBatch({
+      type: 'Soup', cookDate: '05/05/2026', name: 'Festival soup',
+      services: [{ loc: EV, date: '2026-05-06', meal: 'lunch' }],
+    });
+    // Cooked AT the festival (inventory[0].loc = EV) → excluded.
+    const cookedAtEvent = makeBatch({
+      type: 'Main course', cookDate: '05/05/2026', name: 'On-site main',
+      inventory: [inv(40, EV as Location)],
+      services: [{ loc: EV, date: '2026-05-06', meal: 'dinner' }],
+    });
+    // West-cooked with a festival service among MIXED services → still West's.
+    const mixed = makeBatch({
+      type: 'Soup', cookDate: '05/05/2026', name: 'Shared soup',
+      inventory: [inv(40, 'west')],
+      services: [
+        { loc: 'west', date: '2026-05-06', meal: 'lunch' },
+        { loc: EV, date: '2026-05-06', meal: 'dinner' },
+      ],
+    });
+    const snap = snapshotBatches([festivalOnly, cookedAtEvent, mixed], window);
+    expect(snap.inWindow.map(b => b.id)).toEqual([mixed.id]);
+    const bucket = snap.cookEventsByCookDate.get('05/05/2026')!;
+    expect(bucket['Soup'].map(b => b.id)).toEqual([mixed.id]);
+    expect(bucket['Main course']).toEqual([]);
+  });
+
+  test('a festival dish does not fill a West rhythm slot — the placeholder West needs is still generated', () => {
+    const window = makeWindow([
+      { iso: '2026-05-05', dayName: 'Tue', cookDate: '05/05/2026' }, // rhythm 1 soup + 1 main
+    ]);
+    // Tuesday's only existing soup is festival-only: FMM must NOT count it as
+    // Tuesday's soup cook, or West silently loses its soup that day.
+    const festivalSoup = makeBatch({
+      type: 'Soup', cookDate: '05/05/2026', name: 'Festival soup',
+      services: [{ loc: EV, date: '2026-05-06', meal: 'lunch' }],
+    });
+    const snap = snapshotBatches([festivalSoup], window);
+    const placeholders = generateMissingPlaceholders(window, snap);
+    expect(placeholders.map(p => p.type).sort()).toEqual(['Main course', 'Soup']);
+  });
+
   test('isServableBy: event slot reachable from West next-morning only; never from Centraal; event food stays put', () => {
     // West cook Wed -> event slot Thu OK, Wed (same-day) NO — even dinner, even Sunday.
     expect(isServableBy('06/05/2026', '2026-05-07', 'lunch', EV, 'west')).toBe(true);
