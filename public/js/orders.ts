@@ -274,7 +274,15 @@ export function updateSiSearch(val: string) {
     : [];
   let html = suggestions.map(ing => {
     const isAdded = addedIds.has(ing.id);
-    return `<div class="si-suggestion${isAdded ? ' si-suggestion-added' : ''}" ${!isAdded ? `onclick="addToStandardInventory('${esc(ing.id)}')"` : ''}>
+    // pointerdown, NOT click: the search input's onblur hides this dropdown
+    // 200ms after focus leaves, and on touch devices the tap's click event
+    // regularly lands AFTER that — the dropdown was destroyed under the
+    // user's finger and the add silently never fired (Daan at the festival:
+    // "I cant add items to the standard inventory of the landjuweel
+    // kitchen"; 0 failed POSTs in telemetry because the request never left
+    // the browser). pointerdown fires BEFORE blur on both mouse and touch;
+    // preventDefault keeps the input focused so the hide timer never starts.
+    return `<div class="si-suggestion${isAdded ? ' si-suggestion-added' : ''}" ${!isAdded ? `onpointerdown="event.preventDefault();addToStandardInventory('${esc(ing.id)}')"` : ''}>
       <span class="si-sug-name">${esc(ing.name)}</span>
       <span class="si-sug-meta">${ing.supplier ? esc(ing.supplier) + ' · ' : ''}${ing.orderCode ? esc(ing.orderCode) + ' · ' : ''}${ing.unit || 'g'}</span>
       ${isAdded ? '<span style="color:var(--green);font-size:11px;font-weight:600;">\u2713 added</span>' : ''}
