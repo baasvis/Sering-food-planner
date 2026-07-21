@@ -4,7 +4,7 @@ import { S, DAYS, MEALS, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, allActiveLocation
 /** Batch with optional dashboard-only starch selection (not persisted in shared type) */
 type DashBatch = Batch & { starch?: string | null };
 import { scheduleSave, toast, toastError, loadPrepChecklist, schedulePrepSave, todayIso, loadData, connectLiveSync, newId, formatRelativeTime, apiGet } from './utils';
-import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, isBatchCooked, getGuests, getEffectiveGuests, getToday, dateToStr, chipClass, getStockAt, getPendingFromShipments } from './core';
+import { rebuildPlanner, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, calcRequired, calcRequiredBreakdown, calcTotalGuests, calcIngredientsFromRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, isBatchCooked, batchCookLoc, getGuests, getEffectiveGuests, getToday, dateToStr, chipClass, getStockAt, getPendingFromShipments } from './core';
 import { getVisibleDays, getMondayKeyForDate, localDateStr, renderDayNav, AGG_MEALS, buildFlowDistribution } from './predictions';
 import { calcRequiredForLoc, confirmCooked, inlineAddAllergenStart, inlineRemoveAllergen } from './dishes';
 import { esc } from './modal';
@@ -145,7 +145,10 @@ export function isChoppableIngredient(name: string) {
  * find batches scheduled to cook at a kitchen on a given date.
  */
 function batchPrimaryLoc(b: Batch): Location {
-  return (b.inventory && b.inventory.length > 0 ? b.inventory[0].loc : 'west');
+  // Shared core.ts rule — includes the event exception (uncooked + services
+  // all at one event location → cooked on-site), so West's "to cook" lists
+  // don't show festival-cooked dishes and the event dashboard does.
+  return batchCookLoc(b);
 }
 
 export function isDishAtLocation(dish: Batch, loc: Location) {

@@ -1,7 +1,7 @@
 // CORE LOGIC
 // ═══════════════════════════════════════════════════════════════════
 
-import { S, DAYS, allActiveLocations, eventLocById } from './state';
+import { S, DAYS, allActiveLocations, eventLocById, isEventLoc } from './state';
 import type { InventoryDone } from './state';
 import type { Batch, Service, Catering, CateringDish, Location, Meal, DishType, StorageType, BatchRatings, InventoryEntry } from '@shared/types';
 import { scheduleSave, apiPost } from './utils';
@@ -23,6 +23,30 @@ export function isBatchCooked(d: Batch): boolean {
   // arrived at destination — the batch lifecycle is past PLANNED.
   return (d.inventory || []).some(e => (e.qty || 0) > 0)
       || (d.shipments || []).some(s => !s.arrived && (s.qty || 0) > 0);
+}
+
+/** Where a batch is (or will be) COOKED — the single source of truth, shared
+ *  by the planner pool, the dashboard cook lists, and the Orders tab so a
+ *  dish never appears "to cook" at one location while its ingredient demand
+ *  sits at another.
+ *
+ *  Cooked batches: `inventory[0].loc` (sticky from the first confirmCooked —
+ *  the "primary location" decision). Uncooked batches default to 'west', with
+ *  ONE exception: services ALL at a single EVENT location → it will be cooked
+ *  on-site there (Daan 2026-07-19: festival-cooked dishes must not clutter the
+ *  West planner). Restricted to event locations so west/centraal behaviour is
+ *  provably unchanged — any all-west, all-centraal or mixed batch still
+ *  defaults to 'west'. A festival dish meant to be cooked AT WEST reappears at
+ *  West the moment it's confirmed cooked there (inventory wins over the
+ *  heuristic). */
+export function batchCookLoc(b: Batch): Location {
+  if (b.inventory && b.inventory.length > 0) return b.inventory[0].loc;
+  const svcs = b.services || [];
+  if (svcs.length > 0) {
+    const first = svcs[0].loc;
+    if (isEventLoc(first) && svcs.every(s => s.loc === first)) return first;
+  }
+  return 'west';
 }
 
 // ── Inventory helpers (unified-batch model) ────────────────────────────────

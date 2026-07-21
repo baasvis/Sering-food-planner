@@ -81,3 +81,94 @@ describe('getPoolBatches cooked-here visibility', () => {
     expect(getPoolBatches('west').map(x => x.id)).not.toContain(b.id);
   });
 });
+
+// ── Event locations: where does a festival dish live? (Daan 2026-07-19) ─────
+//
+// Rule: an UNCOOKED dish whose services are ALL at one event location is
+// cooked on-site → it lives on the event tab only, not West's. A dish that
+// ALSO has a West service always stays visible at West (a service here always
+// wins). Once cooked, inventory decides.
+
+describe('getPoolBatches event-location visibility', () => {
+  const EV = 'ev-fest-2026';
+
+  beforeEach(() => {
+    S.eventLocations = [{
+      slug: EV, name: 'Fest 2026', startDate: '2026-05-02', endDate: '2026-05-10',
+      hanosAccount: 'west', archived: false, createdAt: '2026-05-01T00:00:00.000Z', archivedAt: null,
+    }];
+  });
+  afterEach(() => { S.eventLocations = []; });
+
+  test('uncooked dish served ONLY at the event is hidden from West, shown at the event', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Fest soup', cookDate: '04/05/2026', inventory: [],
+      services: [
+        { loc: EV, date: '2026-05-04', meal: 'lunch' },
+        { loc: EV, date: '2026-05-05', meal: 'dinner' },
+      ],
+    });
+    S.batches = [b];
+    expect(getPoolBatches('west').map(x => x.id)).not.toContain(b.id);
+    expect(getPoolBatches(EV).map(x => x.id)).toContain(b.id); // cooks on-site
+  });
+
+  test('uncooked dish assigned to BOTH West and the event stays visible at West (and the event)', () => {
+    const b = makeBatch({
+      type: 'Main course', name: 'Shared main', cookDate: '04/05/2026', inventory: [],
+      services: [
+        { loc: 'west', date: '2026-05-04', meal: 'lunch' },
+        { loc: EV, date: '2026-05-05', meal: 'dinner' },
+      ],
+    });
+    S.batches = [b];
+    expect(getPoolBatches('west').map(x => x.id)).toContain(b.id);
+    expect(getPoolBatches(EV).map(x => x.id)).toContain(b.id);
+  });
+
+  test('dish COOKED at the event but with a West service still shows at West', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Fest-cooked, west-served', cookDate: '03/05/2026',
+      inventory: [{ loc: EV, storage: 'Gastro', qty: 30, cookDate: '03/05/2026' }],
+      services: [
+        { loc: 'west', date: '2026-05-05', meal: 'lunch' },
+        { loc: EV, date: '2026-05-05', meal: 'dinner' },
+      ],
+    });
+    S.batches = [b];
+    expect(getPoolBatches('west').map(x => x.id)).toContain(b.id); // West service wins
+    expect(getPoolBatches(EV).map(x => x.id)).toContain(b.id);
+  });
+
+  test('dish cooked AND served only at the event never appears at West', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'Pure fest soup', cookDate: '03/05/2026',
+      inventory: [{ loc: EV, storage: 'Gastro', qty: 30, cookDate: '03/05/2026' }],
+      services: [{ loc: EV, date: '2026-05-05', meal: 'dinner' }],
+    });
+    S.batches = [b];
+    expect(getPoolBatches('west').map(x => x.id)).not.toContain(b.id);
+    expect(getPoolBatches(EV).map(x => x.id)).toContain(b.id);
+  });
+
+  test('festival dish confirmed cooked AT WEST reappears at West (inventory beats the heuristic)', () => {
+    const b = makeBatch({
+      type: 'Soup', name: 'West-cooked fest soup', cookDate: '03/05/2026',
+      inventory: [{ loc: 'west', storage: 'Gastro', qty: 40, cookDate: '03/05/2026' }],
+      services: [{ loc: EV, date: '2026-05-05', meal: 'dinner' }],
+    });
+    S.batches = [b];
+    expect(getPoolBatches('west').map(x => x.id)).toContain(b.id); // stock at West
+    expect(getPoolBatches(EV).map(x => x.id)).toContain(b.id);     // upcoming service
+  });
+
+  test('west/centraal-only batches are untouched by the event rule (regression)', () => {
+    const b = makeBatch({
+      type: 'Main course', name: 'Normal main', cookDate: '04/05/2026', inventory: [],
+      services: [{ loc: 'centraal', date: '2026-05-05', meal: 'lunch' }],
+    });
+    S.batches = [b];
+    expect(getPoolBatches('west').map(x => x.id)).toContain(b.id); // cooked-here default west
+    expect(getPoolBatches('centraal').map(x => x.id)).toContain(b.id);
+  });
+});
