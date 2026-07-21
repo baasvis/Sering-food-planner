@@ -2,7 +2,7 @@ import type { Batch, InventoryEntry, Shipment, RecipeFull, DishType, Location, M
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, ACCOMPANIMENTS, getStorageColor, activeEventLocations, allActiveLocations, isEventLoc } from './state';
 import { newId, scheduleSave, doSave, toast, toastError, apiPost, todayIso } from './utils';
 import { computeSupplyDemand } from '@shared/supply-demand';
-import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, getEffectiveGuests, chipClass, getToday, dateToStr, strToDate, diffStr, serviceShortfall, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory, consolidateInventory } from './core';
+import { rebuildPlanner, isBatchCooked, isBatchAllFrozen, batchCookLoc, getAmsterdamNow, dateToDayName, dateToIso, isServicePast, isServiceClosed, rollWarning, calcRequired, calcRequiredBreakdown, calcTotalGuests, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, cycleType, getGuests, getEffectiveGuests, chipClass, getToday, dateToStr, strToDate, diffStr, serviceShortfall, openServedDialog, openServedDialogForLoc, sortByCookDate, getTotalStock, getStockAt, getPendingFromShipments, isStaleEntry, addInventory, consolidateInventory } from './core';
 import { isServableBy } from './menu-fixer';
 import { getVisibleDays, localDateStr, renderDayNav } from './predictions';
 import { renderCostBar, renderCostDrilldown, renderReserveControl, costStatus, dishTypeTarget } from './cost';
@@ -299,9 +299,12 @@ export function getPoolBatches(loc: string) {
     const incomingHere = getPendingFromShipments(d, loc as Location) > 0;
     const hasUpcomingSvcHere = (d.services || []).some(s =>
       s.loc === loc && !isServicePast(s));
-    // Cook location (unified model): inventory[0].loc, defaulting to 'west' for
-    // empty placeholders (cooking happens at West by default).
-    const cookLoc = (d.inventory && d.inventory.length > 0) ? d.inventory[0].loc : 'west';
+    // Cook location — the shared core.ts rule (inventory[0].loc; uncooked
+    // defaults 'west' EXCEPT services all at one event location → cooked
+    // on-site). So an uncooked festival dish lives on the event's tab, not
+    // West's (Daan: West-planner clutter). Once confirmed cooked at West it
+    // reappears at West via inventory.
+    const cookLoc = batchCookLoc(d);
     let cookedHere = false;
     if (cookLoc === loc) {
       const cookD = d.cookDate ? strToDate(d.cookDate) : null;

@@ -1,6 +1,6 @@
 import { S, DAYS, MEALS, STORAGE, LOCATIONS, ALLERGENS, INGREDIENT_TYPES, INGREDIENT_CATEGORIES, INGREDIENT_TYPE_TO_GROUP, ALL_CATEGORIES, PRICE_LEVELS, STORAGE_CATEGORIES, getStorageConfigForLoc, getStorageColor, ACCOMPANIMENTS, rebuildStorageCategories, isEventLoc } from './state';
 import { scheduleSave, toast, toastError, apiGet, apiPost, loadIngredientDb, ingredientDbLoaded, ingredientDbError, todayIso } from './utils';
-import { rebuildPlanner, isBatchCooked, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, batchHasRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
+import { rebuildPlanner, isBatchCooked, batchCookLoc, calcRequired, calcRequiredBreakdown, calcIngredientsFromRecipe, batchHasRecipe, storageBadge, storageBadgeClass, typeBadge, typeBadgeClass, TYPES, getToday, dateToStr, strToDate, chipClass } from './core';
 import { showModal, closeModal, esc } from './modal';
 import { openIngredientModal, openStoragePopover, renderIngredientDbTab } from './ingredient-db';
 import { trackEvent } from './telemetry';
@@ -42,25 +42,10 @@ function ingredientDb(): IngredientRuntime[] {
   return S.ingredientDb as unknown as IngredientRuntime[];
 }
 
-/**
- * Cook location for ingredient-order purposes. In the unified-batch model the
- * cook location is `inventory[0].loc` (sticky from first confirmCooked per the
- * plan's Primary location decision). Uncooked batches have empty inventory; we
- * default to 'west' which matches the default cook location.
- */
-function batchCookLoc(b: Batch): Location {
-  if (b.inventory && b.inventory.length > 0) return b.inventory[0].loc;
-  // Uncooked batch whose services are ALL at one event location → it will be
-  // cooked on-site there, so its ingredient demand belongs on that location's
-  // Orders tab. Restricted to event locations so west/centraal tab contents
-  // are provably unchanged (any all-west or mixed batch still defaults west).
-  const svcs = b.services || [];
-  if (svcs.length > 0) {
-    const first = svcs[0].loc;
-    if (isEventLoc(first) && svcs.every(s => s.loc === first)) return first;
-  }
-  return 'west';
-}
+// Cook location for ingredient-order purposes now lives in core.ts
+// (batchCookLoc) so the Orders tab, the planner pool, and the dashboard cook
+// lists all agree on WHERE a dish will be cooked — including the event-location
+// rule (uncooked + all services at one event → cooked on-site there).
 
 /** A single item in a Hanos cart request */
 interface HanosItem {
