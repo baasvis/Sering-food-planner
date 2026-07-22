@@ -282,7 +282,7 @@ export function updateSiSearch(val: string) {
     // kitchen"; 0 failed POSTs in telemetry because the request never left
     // the browser). pointerdown fires BEFORE blur on both mouse and touch;
     // preventDefault keeps the input focused so the hide timer never starts.
-    return `<div class="si-suggestion${isAdded ? ' si-suggestion-added' : ''}" ${!isAdded ? `onpointerdown="event.preventDefault();addToStandardInventory('${esc(ing.id)}')"` : ''}>
+    return `<div class="si-suggestion${isAdded ? ' si-suggestion-added' : ''}" onpointerdown="event.preventDefault();${isAdded ? 'revealExistingSiItem' : 'addToStandardInventory'}('${esc(ing.id)}')">
       <span class="si-sug-name">${esc(ing.name)}</span>
       <span class="si-sug-meta">${ing.supplier ? esc(ing.supplier) + ' · ' : ''}${ing.orderCode ? esc(ing.orderCode) + ' · ' : ''}${ing.unit || 'g'}</span>
       ${isAdded ? '<span style="color:var(--green);font-size:11px;font-weight:600;">\u2713 added</span>' : ''}
@@ -318,6 +318,31 @@ export async function copyStandardInventoryFromWest() {
   }
 }
 
+/** Scroll the ingredient's row into view and flash it. A successful add used
+ *  to be INVISIBLE: no toast, and the new row lands in whatever storage group
+ *  it sorts into — often "Unsorted" at the very bottom of a long list (event
+ *  locations have no storage assignment for most ingredients). Daan, on a
+ *  computer at the festival, concluded adding was broken while at least one
+ *  add had actually persisted. Never let a click end without visible effect. */
+export function revealSiItem(ingredientId: string) {
+  const row = document.querySelector(`tr[data-si-id="${ingredientId}"]`) as HTMLElement | null;
+  if (!row) return;
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.classList.remove('si-row-flash');
+  // Force a reflow so re-adding the class restarts the animation on repeat.
+  void row.offsetWidth;
+  row.classList.add('si-row-flash');
+}
+
+/** Already-in-the-list suggestion clicked: show WHERE it is instead of doing
+ *  nothing (a dead "✓ added" row reads as "adding is broken"). */
+export function revealExistingSiItem(ingredientId: string) {
+  const ing = ingredientDb().find(i => i.id === ingredientId);
+  toast(`${ing ? ing.name : 'That item'} is already in the list — highlighted below`);
+  hideSiSuggestions();
+  revealSiItem(ingredientId);
+}
+
 export async function addToStandardInventory(ingredientId: string) {
   const loc = S.currentLoc;
   const ing = ingredientDb().find(i => i.id === ingredientId);
@@ -328,8 +353,10 @@ export async function addToStandardInventory(ingredientId: string) {
   siSearchQuery = '';
   try {
     await apiPost('/api/ingredients/target-stock', { ingredientId, location: loc, amount: 1 });
+    toast(`Added ${ing.name} — set its target below`);
   } catch (e: unknown) { toastError('Failed to add: ' + (e instanceof Error ? e.message : 'Unknown error')); }
   renderOrders();
+  revealSiItem(ingredientId);
 }
 
 export async function removeSiItem(ingredientId: string) {
