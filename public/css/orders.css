@@ -25,7 +25,12 @@
   .si-suggestion{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);}
   .si-suggestion:last-child{border-bottom:none;}
   .si-suggestion:hover:not(.si-suggestion-added){background:var(--bg2);}
-  .si-suggestion-added{opacity:.55;cursor:default;}
+  .si-suggestion-added{opacity:.55;cursor:pointer;}
+  /* Flash the row a just-added (or already-present) ingredient lands on, so
+     an add is never invisible — the row often sits in "Unsorted" at the very
+     bottom of a long list. */
+  .si-row-flash{animation:siRowFlash 1.8s ease-out;}
+  @keyframes siRowFlash{0%{background:var(--green-bg,#dcf3dc);}60%{background:var(--green-bg,#dcf3dc);}100%{background:transparent;}}
   .si-sug-name{flex:1;font-weight:500;}
   .si-sug-meta{font-size:11px;color:var(--text2);}
 
