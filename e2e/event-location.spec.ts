@@ -250,7 +250,13 @@ test.describe.serial('event location lifecycle', () => {
     const qty = page.locator('.pack-edit-row', { hasText: BATCH }).locator('[data-manual-ship]');
     await expect(qty).toBeVisible();
     await qty.fill('5');
+    // Await the return /ship POST before navigating: confirmManualShip closes
+    // the modal first and POSTs after, so on a slow runner West's transport
+    // tab could render before the shipment exists (no SSE self-refresh) and
+    // the card assertion below would miss it on every retry.
+    const returnShipped = page.waitForResponse(r => r.url().includes('/ship') && r.request().method() === 'POST');
     await page.getByTestId('manual-ship-confirm').click();
+    expect((await returnShipped).status()).toBe(200);
     // West confirms the return via the Transport tab's PER-ROW button — the
     // dashboard block confirms EVERY pending west-bound shipment at once,
     // which on the shared staging DB would mutate unrelated batches.
